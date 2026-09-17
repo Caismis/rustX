@@ -70,34 +70,10 @@ pub struct RuntimeAttachment {
 }
 
 impl RuntimeAttachment {
-    /// Read the bound user-default document through its native owner.
-    /// # Errors
-    /// Closed attachments or unavailable document authority.
-    pub async fn defaults_read(
-        &self,
-        scope: super::settings::DefaultScope,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(false)?.defaults_read(scope).await
-    }
-
-    /// Save a captured native value with the document's revision check.
-    /// # Errors
-    /// Closed attachments, stale revisions or native write failures.
-    pub async fn defaults_save(
-        &self,
-        scope: super::settings::DefaultScope,
-        revision: String,
-        target: super::settings::DefaultTarget,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(true)?
-            .defaults_save(scope, revision, target)
-            .await
-    }
     native_control!(model_get, false);
     native_control!(model_catalog, false);
     native_control!(capability, false);
     native_control!(model_set, true, config: crate::model::session::SessionModelConfig);
-    native_control!(approval_mode_set, true, mode: crate::runtime::types::ApprovalMode);
     native_control!(goal_control, true, control: crate::goal::GoalControl);
     native_control!(trace_page, false, before: Option<super::trace::TraceCursor>, limit: usize);
     native_control!(transcript_page, false, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
@@ -182,8 +158,8 @@ impl RuntimeAttachment {
     /// Publish a new native resource generation at its existing admission boundary.
     /// # Errors
     /// Closed attachments or native reload failures.
-    pub async fn reload_resources(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(true)?.reload_resources().await
+    pub async fn reload_configuration(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?.reload_configuration().await
     }
 
     /// Cancel exactly one pending interaction at its authoritative coordinator.
@@ -261,7 +237,7 @@ impl RuntimeAttachment {
             RuntimeClientRequest::CompactContext { .. } => {
                 unreachable!("manual compaction is handled asynchronously")
             }
-            RuntimeClientRequest::ReloadResources { .. } => {
+            RuntimeClientRequest::ReloadConfiguration { .. } => {
                 unreachable!("resource reload is handled asynchronously")
             }
             RuntimeClientRequest::InteractionRespond { .. } => {
@@ -286,13 +262,8 @@ impl RuntimeAttachment {
             }
             RuntimeClientRequest::CapabilityGet { .. } => inner.capability(),
             RuntimeClientRequest::ModelCatalogGet { .. } => inner.model_catalog(),
-            RuntimeClientRequest::DefaultsRead { .. }
-            | RuntimeClientRequest::DefaultSave { .. } => {
-                unreachable!("default document operations are asynchronous")
-            }
             RuntimeClientRequest::ModelGet { .. } => inner.model_get(),
             RuntimeClientRequest::ModelSet { config, .. } => inner.model_set(*config),
-            RuntimeClientRequest::ApprovalModeSet { mode, .. } => inner.approval_mode_set(mode),
             RuntimeClientRequest::SessionDeletePreview { .. }
             | RuntimeClientRequest::SessionDelete { .. }
             | RuntimeClientRequest::SessionDeleteRecover { .. }
@@ -361,19 +332,7 @@ impl RuntimeAttachment {
                 },
             );
         }
-        if matches!(
-            request,
-            RuntimeClientRequest::DefaultsRead { .. } | RuntimeClientRequest::DefaultSave { .. }
-        ) {
-            return match inner.defaults_request(request).await {
-                Ok(result) => RuntimeClientResponse {
-                    id,
-                    result: Some(result),
-                    error: None,
-                },
-                Err(error) => Self::error_response(id, error),
-            };
-        }
+
         if !matches!(request, RuntimeClientRequest::Shutdown { .. }) {
             if matches!(request, RuntimeClientRequest::CompactContext { .. }) {
                 let result = inner.compact_context().await;
@@ -386,8 +345,8 @@ impl RuntimeAttachment {
                     Err(error) => Self::error_response(id, error),
                 };
             }
-            if matches!(request, RuntimeClientRequest::ReloadResources { .. }) {
-                let result = inner.reload_resources().await;
+            if matches!(request, RuntimeClientRequest::ReloadConfiguration { .. }) {
+                let result = inner.reload_configuration().await;
                 return match result {
                     Ok(result) => RuntimeClientResponse {
                         id,

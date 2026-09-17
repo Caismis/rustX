@@ -1337,7 +1337,9 @@ mod tests {
         .expect("skill manifest");
         let workspace =
             crate::tools::workspace::Workspace::new(&workspace_root).expect("workspace");
-        let conversation_id = crate::runtime::identity::ConversationId::new("probe-drop");
+        let conversation_id = crate::runtime::identity::ConversationId::new(
+            "conv_fd9167a6-27cc-73fd-8f96-c869d89b1489",
+        );
         let mut control = RunnerTestControl::new();
         control.pause_at_shell_exit = true;
         let hook = control.lifecycle.clone();

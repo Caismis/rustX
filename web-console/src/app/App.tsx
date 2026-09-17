@@ -6,7 +6,7 @@ import { createWorkspaceSession, WorkspaceSessionNavigation } from '../workspace
 import { Trajectory } from './Trajectory';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
-import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../../protocol/app-server/v5';
+import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../../protocol/app-server/v6';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { NavigationEpoch } from './commands/native';
 import { available, commands } from './commands/registry';
@@ -157,7 +157,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
     else setError(`Delete preview: ${json(result.result)}`);
   });
   return <AppFrame navigation={<Sidebar footer={<>
-    <p className="muted">Native App Server · protocol v5</p><a href="https://github.com/Caismis/rustX" target="_blank" rel="noreferrer">rustX source</a>
+    <p className="muted">Native App Server · protocol v6</p><a href="https://github.com/Caismis/rustX" target="_blank" rel="noreferrer">rustX source</a>
     <p className="muted">UI source adapted from DeepSeek Harness. <a href="/LICENSE-DeepSeek-Harness.txt" target="_blank" rel="noreferrer">MIT notice</a></p>
   </>}>
     <section className="connection-form" aria-label="Connection">
@@ -181,7 +181,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
   </Sidebar>} dockLabel="Developer inspector" dock={<Inspector client={client} state={state} view={view} />}>
     <header className="console-header"><div><div className="eyebrow">DEVELOPER WEB CONSOLE</div><h1>Sessions, in motion.</h1></div><Pill>{state.connection}</Pill></header>
     <nav className="tabs" role="tablist" aria-label="Open Session views" onKeyDown={navigateTabs}>{tabs.map(id => <div className="tab" key={id}>
-      <Pill role="tab" id={`session-tab-${id}`} aria-controls="session-view" tabIndex={selected === id ? 0 : -1} active={selected === id} aria-selected={selected === id} onClick={() => focusSession(id)}>{state.sessions.find(item => item.id === id)?.name ?? id.slice(0, 16)}</Pill>
+      <Pill role="tab" aria-label={state.sessions.find(item => item.id === id)?.name ?? id} title={id} id={`session-tab-${id}`} aria-controls="session-view" tabIndex={selected === id ? 0 : -1} active={selected === id} aria-selected={selected === id} onClick={() => focusSession(id)}>{state.sessions.find(item => item.id === id)?.name ?? id.slice(0, 16)}</Pill>
       <button className="close-tab" aria-label={`Close view ${id}`} onClick={() => {
         const remaining = tabs.filter(item => item !== id); setTabs(remaining); if (selected === id) focusSession(remaining[0]);
         run(() => client.release(id, false));

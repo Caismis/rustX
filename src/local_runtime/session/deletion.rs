@@ -42,19 +42,11 @@ impl DeletionScope {
         }
     }
     fn path(&self, root: &ProductRoot, session: &SessionId) -> PathBuf {
-        match self {
-            Self::Node {
-                conversation_id, ..
-            } => root
-                .root()
-                .join("sessions")
-                .join(session.as_str())
-                .join("conversations")
-                .join(conversation_id.as_str()),
-            Self::Child {
-                conversation_id, ..
-            } => root.root().join("subagents").join(conversation_id.as_str()),
-        }
+        root.root()
+            .join("sessions")
+            .join(session.as_str())
+            .join("conversations")
+            .join(self.conversation().as_str())
     }
     fn allocation(&self, root: &ProductRoot, session: &SessionId) -> std::io::Result<PathBuf> {
         root.confined(&self.path(root, session))
@@ -428,6 +420,15 @@ impl SessionCatalog {
         }
         let mut next = self.document.clone();
         next.deletions.remove(&frozen.session_id);
+        next.retired.sessions.insert(frozen.session_id.clone());
+        for scope in &frozen.scopes {
+            next.retired
+                .conversations
+                .insert(scope.conversation().clone());
+            if let DeletionScope::Node { node_id, .. } = scope {
+                next.retired.nodes.insert(node_id.clone());
+            }
+        }
         match self.commit(next) {
             Ok(()) => SessionDeleteResult::Deleted {
                 session_id: frozen.session_id.clone(),
@@ -513,33 +514,29 @@ impl SessionCatalog {
             {
                 (Some(*session), Some(*conversation))
             }
-            [kind, conversation, ..] if *kind == "subagents" => (None, Some(*conversation)),
             _ => (None, None),
         };
         let retired_session = session
-            .and_then(|s| s.to_str())
-            .and_then(|s| super::native_ordinal(s, "session-"))
-            .is_some_and(|n| {
-                n < catalog.document.next_session_ordinal
-                    && !catalog
-                        .document
-                        .sessions
-                        .contains_key(&SessionId::new(format!("session-{n}")))
-            });
-        let retired_conversation = conversation.and_then(|c| c.to_str()).is_some_and(|c| {
-            let base = c.split("-subagent-").next().expect("base identity");
-            let allocated = super::native_ordinal(base, "conversation-node-")
-                .is_some_and(|n| n < catalog.document.next_node_ordinal)
-                || super::native_ordinal(base, "conversation-")
-                    .is_some_and(|n| n < catalog.document.next_session_ordinal);
-            allocated
-                && !catalog
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| {
+                catalog
                     .document
+                    .retired
                     .sessions
-                    .values()
-                    .flat_map(|s| s.nodes.values())
-                    .any(|node| node.conversation_id.as_str() == base)
-        });
+                    .iter()
+                    .any(|id| id.as_str() == value)
+            });
+        let retired_conversation =
+            conversation
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| {
+                    catalog
+                        .document
+                        .retired
+                        .conversations
+                        .iter()
+                        .any(|id| id.as_str() == value)
+                });
         if retired_session || retired_conversation {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,

@@ -482,8 +482,6 @@ pub enum BackgroundDispatchError {
         /// The conversation whose runtime has not been activated.
         conversation_id: ConversationId,
     },
-    /// The execution sequence space is exhausted.
-    SequenceExhausted,
     /// The durable background-ownership fact could not be committed, so the
     /// detached execution must not begin (Issue #12, M9a).
     ///
@@ -529,7 +527,6 @@ impl core::fmt::Display for BackgroundDispatchError {
                 f,
                 "conversation {conversation_id} is not activated; a new background ownership commit cannot begin before the owning conversation runtime activates"
             ),
-            Self::SequenceExhausted => write!(f, "the execution sequence space is exhausted"),
             Self::Durable { detail } => write!(
                 f,
                 "the durable background ownership fact could not be committed, so no detached execution was started: {detail}"
@@ -675,7 +672,6 @@ struct PreparedRecord {
 
 /// The synchronized registry state.
 struct BackgroundRegistryState {
-    next_execution_sequence: u64,
     prepared: HashMap<ToolExecutionId, PreparedRecord>,
     records: Vec<BackgroundRecord>,
     index: HashMap<ToolExecutionId, usize>,
@@ -742,7 +738,6 @@ impl ConversationBackgroundRegistry {
         Self {
             conversation_id,
             inner: Arc::new(Mutex::new(BackgroundRegistryState {
-                next_execution_sequence: 0,
                 prepared: HashMap::new(),
                 records: Vec::new(),
                 index: HashMap::new(),
@@ -934,9 +929,8 @@ impl ConversationBackgroundRegistry {
     /// # Errors
     ///
     /// Returns [`BackgroundDispatchError::NotBackgroundInvocation`] for a
-    /// foreground invocation and
-    /// [`BackgroundDispatchError::SequenceExhausted`] when the sequence
-    /// space is exhausted.
+    /// foreground invocation. Identity collisions and output allocation failures
+    /// refuse preparation without overwriting an existing locator.
     pub fn prepare_dispatch(
         &self,
         invocation: &ToolInvocation,
@@ -978,26 +972,26 @@ impl ConversationBackgroundRegistry {
                 conversation_id: self.conversation_id.clone(),
             })?;
         let mut state = self.state();
-        let next = state
-            .next_execution_sequence
-            .checked_add(1)
-            .ok_or(BackgroundDispatchError::SequenceExhausted)?;
-        let execution_id = ToolExecutionId::background(next);
-        // Issue #86: the live-output file is allocated at dispatch time,
-        // strictly BEFORE the ownership commit, so the accepted result may
-        // advertise the absolute locator only because the path already
-        // exists and is owned by this execution. The sequence advances
-        // only after the allocation succeeds: a failed allocation consumes
-        // no execution identity and leaves no orphan file behind. A
-        // rollback (drop of the prepared dispatch, or any refused commit)
-        // discards the allocated file best-effort.
+        let execution_id = self
+            .resources
+            .tool_output
+            .execution_identity()
+            .map_err(|error| BackgroundDispatchError::Output {
+                detail: error.to_string(),
+            })?;
+        if state.prepared.contains_key(&execution_id) || state.index.contains_key(&execution_id) {
+            return Err(BackgroundDispatchError::Output {
+                detail: "execution identity already reserved".into(),
+            });
+        }
+        // create_new reserves the locator before acceptance. Any collision
+        // refuses admission and leaves the existing execution/output untouched.
         self.resources
             .tool_output
             .allocate_background_output(&execution_id)
             .map_err(|error| BackgroundDispatchError::Output {
                 detail: error.to_string(),
             })?;
-        state.next_execution_sequence = next;
         let cancellation = CancellationSignal::new();
         let gate = Arc::new(Notify::new());
         // The effective attempt environment is captured here, at prepare
@@ -1265,24 +1259,6 @@ impl ConversationBackgroundRegistry {
             }),
             Ok(result) => result,
         }
-    }
-
-    /// Reseeds the deterministic `exec_N` allocator above every ordinal that
-    /// already entered durable authority (Issue #12, M9a).
-    ///
-    /// The registry's execution counter is process-local, so a restart would
-    /// otherwise mint `exec_1` a second time for a different logical
-    /// execution. Startup recovery folds the durable
-    /// `BackgroundExecutionCommitted` facts and installs the watermark here,
-    /// while the runtime is still inactive and no dispatch can commit. The
-    /// allocator only ever moves forward.
-    ///
-    /// # Panics
-    ///
-    /// Panics only if the registry lock is poisoned.
-    pub(crate) fn restore_execution_sequence(&self, highest_durable_ordinal: u64) {
-        let mut state = self.state();
-        state.next_execution_sequence = state.next_execution_sequence.max(highest_durable_ordinal);
     }
 
     /// Requests cancellation of one execution and returns the canonical
@@ -1767,6 +1743,15 @@ impl ConversationBackgroundRegistry {
             .filter(|record| record.lifecycle.is_active() && !record.publication_abandoned)
             .map(snapshot_of)
             .collect()
+    }
+
+    pub(crate) fn configuration_busy(&self) -> bool {
+        let state = self.state();
+        !state.prepared.is_empty()
+            || state
+                .records
+                .iter()
+                .any(|record| record.lifecycle.is_active())
     }
 
     /// Holds the existing ownership lock across a Goal's idle frontier.
@@ -2588,14 +2573,25 @@ mod tests {
     /// reversed: the most recently allocated execution first.
     #[test]
     fn background_listing_is_newest_first_in_the_registrys_allocation_order() {
-        let plane = registry("conv-listing-order");
-        for id in ["e1", "e2", "e3"] {
+        let plane = registry("conv_3b3799ec-ed96-703a-86e9-da36ce2518b9");
+        for id in [
+            "exec_00000000-0000-7000-8000-000000000063",
+            "exec_00000000-0000-7000-8000-000000000062",
+            "exec_00000000-0000-7000-8000-000000000061",
+        ] {
             seed_record(&plane.registry, id, BackgroundLifecycle::Running);
         }
 
         let listing = plane.registry.listing(false, 16);
 
-        assert_eq!(listed_ids(&listing), vec!["e3", "e2", "e1"]);
+        assert_eq!(
+            listed_ids(&listing),
+            vec![
+                "exec_00000000-0000-7000-8000-000000000061",
+                "exec_00000000-0000-7000-8000-000000000062",
+                "exec_00000000-0000-7000-8000-000000000063"
+            ]
+        );
         assert_eq!(listing.matched, 3);
     }
 
@@ -2603,24 +2599,50 @@ mod tests {
     /// which `PublishingTerminal` is still active.
     #[test]
     fn background_listing_active_only_uses_the_domains_own_classification() {
-        let plane = registry("conv-listing-active");
-        seed_record(&plane.registry, "e1", BackgroundLifecycle::Starting);
-        seed_record(&plane.registry, "e2", BackgroundLifecycle::Succeeded);
+        let plane = registry("conv_cfa2065c-060d-7e05-9af5-4453f632beb2");
         seed_record(
             &plane.registry,
-            "e3",
+            "exec_00000000-0000-7000-8000-000000000063",
+            BackgroundLifecycle::Starting,
+        );
+        seed_record(
+            &plane.registry,
+            "exec_00000000-0000-7000-8000-000000000062",
+            BackgroundLifecycle::Succeeded,
+        );
+        seed_record(
+            &plane.registry,
+            "exec_00000000-0000-7000-8000-000000000061",
             BackgroundLifecycle::PublishingTerminal,
         );
-        seed_record(&plane.registry, "e4", BackgroundLifecycle::Cancelled);
-        seed_record(&plane.registry, "e5", BackgroundLifecycle::Cancelling);
+        seed_record(
+            &plane.registry,
+            "exec_00000000-0000-7000-8000-000000000060",
+            BackgroundLifecycle::Cancelled,
+        );
+        seed_record(
+            &plane.registry,
+            "exec_00000000-0000-7000-8000-00000000005f",
+            BackgroundLifecycle::Cancelling,
+        );
 
         assert_eq!(
             listed_ids(&plane.registry.listing(true, 16)),
-            vec!["e5", "e3", "e1"]
+            vec![
+                "exec_00000000-0000-7000-8000-00000000005f",
+                "exec_00000000-0000-7000-8000-000000000061",
+                "exec_00000000-0000-7000-8000-000000000063"
+            ]
         );
         assert_eq!(
             listed_ids(&plane.registry.listing(false, 16)),
-            vec!["e5", "e4", "e3", "e2", "e1"]
+            vec![
+                "exec_00000000-0000-7000-8000-00000000005f",
+                "exec_00000000-0000-7000-8000-000000000060",
+                "exec_00000000-0000-7000-8000-000000000061",
+                "exec_00000000-0000-7000-8000-000000000062",
+                "exec_00000000-0000-7000-8000-000000000063"
+            ]
         );
     }
 
@@ -2629,23 +2651,40 @@ mod tests {
     /// without the registry ever building an unbounded response.
     #[test]
     fn background_listing_counts_matches_before_its_materialization_bound() {
-        let plane = registry("conv-listing-bound");
+        let plane = registry("conv_6ea98e8f-3661-7844-a0aa-a982c3fc2d79");
         for ordinal in 1..=9 {
             let lifecycle = if ordinal % 3 == 0 {
                 BackgroundLifecycle::Succeeded
             } else {
                 BackgroundLifecycle::Running
             };
-            seed_record(&plane.registry, &format!("e{ordinal}"), lifecycle);
+            seed_record(
+                &plane.registry,
+                &format!("exec_00000000-0000-7000-8000-{:012x}", 100 - ordinal),
+                lifecycle,
+            );
         }
 
         let all = plane.registry.listing(false, 2);
         assert_eq!(all.matched, 9);
-        assert_eq!(listed_ids(&all), vec!["e9", "e8"]);
+        assert_eq!(
+            listed_ids(&all),
+            vec![
+                "exec_00000000-0000-7000-8000-00000000005b",
+                "exec_00000000-0000-7000-8000-00000000005c"
+            ]
+        );
 
         let active = plane.registry.listing(true, 3);
         assert_eq!(active.matched, 6);
-        assert_eq!(listed_ids(&active), vec!["e8", "e7", "e5"]);
+        assert_eq!(
+            listed_ids(&active),
+            vec![
+                "exec_00000000-0000-7000-8000-00000000005c",
+                "exec_00000000-0000-7000-8000-00000000005d",
+                "exec_00000000-0000-7000-8000-00000000005f"
+            ]
+        );
 
         // A zero bound still reports the whole matching population.
         let none = plane.registry.listing(false, 0);
@@ -2656,11 +2695,15 @@ mod tests {
     /// Listing is a pure read: it changes no lifecycle and no settlement.
     #[test]
     fn background_listing_mutates_neither_lifecycle_nor_settlement() {
-        let plane = registry("conv-listing-pure");
-        seed_record(&plane.registry, "e1", BackgroundLifecycle::Running);
+        let plane = registry("conv_7262a935-6df4-75f3-952f-fde907534948");
         seed_record(
             &plane.registry,
-            "e2",
+            "exec_00000000-0000-7000-8000-000000000063",
+            BackgroundLifecycle::Running,
+        );
+        seed_record(
+            &plane.registry,
+            "exec_00000000-0000-7000-8000-000000000062",
             BackgroundLifecycle::PublishingTerminal,
         );
         let before = plane.registry.all_snapshots();
@@ -2868,7 +2911,7 @@ mod tests {
     /// activation transition restores normal dispatch.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn commit_is_refused_while_the_owning_runtime_is_inactive() {
-        let fixture = registry("conv-bg-gated");
+        let fixture = registry("conv_5229248d-eb62-70e9-8cd9-7c339ef1e603");
         let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
         let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
         // Claim the registry's mailbox exactly as
@@ -2888,7 +2931,7 @@ mod tests {
         assert_eq!(
             refused,
             super::BackgroundDispatchError::ConversationInactive {
-                conversation_id: ConversationId::new("conv-bg-gated"),
+                conversation_id: ConversationId::new("conv_5229248d-eb62-70e9-8cd9-7c339ef1e603"),
             }
         );
         assert_eq!(
@@ -2929,7 +2972,7 @@ mod tests {
     /// race is proven without timing assumptions.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancellation_observable_at_the_commit_boundary_rolls_back() {
-        let fixture = registry("conv-bg");
+        let fixture = registry("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
         let (executor, mut started, _release) = IgnoreCancellationExecutor::new(success());
         let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
         let prepared = prepare(&fixture, &executor);
@@ -2985,7 +3028,7 @@ mod tests {
     /// conversation-owned runner.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn commit_wins_and_later_attempt_cancellation_cannot_reclaim() {
-        let fixture = registry("conv-bg");
+        let fixture = registry("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
         let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
         let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
         let prepared = prepare(&fixture, &executor);
@@ -3034,7 +3077,7 @@ mod tests {
     /// the runner's start gate.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn runtime_drain_wins_background_ownership_boundary() {
-        let fixture = registry("conv-bg-drain-first");
+        let fixture = registry("conv_b8a79d0d-7164-7df2-87a6-81d0d1a98ab4");
         let lifecycle = crate::runtime::types::ConversationLifecycle::new();
         fixture.mailbox.bind_inactive(&lifecycle);
         assert!(lifecycle.activate(), "the runtime lifecycle is running");
@@ -3068,7 +3111,7 @@ mod tests {
         assert_eq!(
             result,
             super::BackgroundDispatchError::ConversationInactive {
-                conversation_id: ConversationId::new("conv-bg-drain-first"),
+                conversation_id: ConversationId::new("conv_b8a79d0d-7164-7df2-87a6-81d0d1a98ab4"),
             }
         );
         lifecycle.wait_for_no_admissions().await;
@@ -3089,7 +3132,7 @@ mod tests {
     /// waits for the existing registry terminal/publication state machine.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn background_ownership_boundary_wins_runtime_drain() {
-        let fixture = registry("conv-bg-ownership-first");
+        let fixture = registry("conv_7870f0d8-bc08-7838-abf3-638d0f5eef7d");
         let lifecycle = crate::runtime::types::ConversationLifecycle::new();
         fixture.mailbox.bind_inactive(&lifecycle);
         assert!(lifecycle.activate(), "the runtime lifecycle is running");
@@ -3165,7 +3208,7 @@ mod tests {
     /// `Succeeded` with `ToolExecutionStatus::Success` — never `Cancelled`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancellation_intent_preserves_an_executor_proven_success() {
-        let fixture = registry("conv-bg");
+        let fixture = registry("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
         let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
         let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
         let prepared = prepare(&fixture, &executor);
@@ -3233,7 +3276,7 @@ mod tests {
     /// provisional reason and phase.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancellation_intent_canonicalizes_an_executor_proven_cancellation() {
-        let fixture = registry("conv-bg-proven-cancel");
+        let fixture = registry("conv_f5ee60f1-f778-779f-879d-92f282e152be");
         let proven = ToolExecutionResult {
             status: ToolExecutionStatus::Cancelled {
                 reason: crate::runtime::types::CancellationReason::ParentCancelled,
@@ -3304,7 +3347,7 @@ mod tests {
     /// the stored result keeps its unknown status.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn outcome_unknown_settles_as_outcome_unknown_not_failed() {
-        let fixture = registry("conv-bg-unknown");
+        let fixture = registry("conv_5977bd2b-f716-7747-bbdc-9e0d573554de");
         let unknown = ToolExecutionResult {
             status: ToolExecutionStatus::OutcomeUnknown {
                 detail: "remote termination could not be confirmed".to_owned(),
@@ -3347,7 +3390,7 @@ mod tests {
     /// under `TimedOut`, not under the generic `Failed`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn timed_out_settles_as_timed_out_not_failed() {
-        let fixture = registry("conv-bg-timed-out");
+        let fixture = registry("conv_b4656cbc-4ef4-7109-81cb-beddfc802ac8");
         let timed_out = ToolExecutionResult {
             status: ToolExecutionStatus::TimedOut,
             ..success()
@@ -3383,7 +3426,7 @@ mod tests {
     /// is not a confirmed cancellation) nor collapsed into `Failed`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancellation_winner_preserves_an_unconfirmed_outcome_unknown() {
-        let fixture = registry("conv-bg-cancel-unknown");
+        let fixture = registry("conv_80ff6e84-42c6-7500-b9aa-34057d02f303");
         let unknown = ToolExecutionResult {
             status: ToolExecutionStatus::OutcomeUnknown {
                 detail: "cancellation was requested after dispatch, but remote termination could not be confirmed"
@@ -3478,7 +3521,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[allow(clippy::too_many_lines)] // One settlement path, asserted end to end.
     async fn first_publication_failure_is_retried_by_the_production_runner() {
-        let fixture = file_registry("conv-bg-retry");
+        let fixture = file_registry("conv_9322b284-dad8-7d4c-bca9-737a4585658c");
         let observer = Arc::new(CollectingObserver::default());
         fixture
             .registry
@@ -3613,7 +3656,7 @@ mod tests {
     /// further publication attempts.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn exhausted_publication_budget_retains_candidate_and_reports_failure() {
-        let fixture = file_registry("conv-bg-fault");
+        let fixture = file_registry("conv_db8fb642-5db8-7a94-ba32-ec583e6b458a");
         let observer = Arc::new(CollectingObserver::default());
         fixture
             .registry
@@ -3709,7 +3752,7 @@ mod tests {
     /// delivery survives a reopen (process restart).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn successful_terminal_settlement_implies_durable_inbound_ownership() {
-        let fixture = file_registry("conv-bg-durable");
+        let fixture = file_registry("conv_9332f327-f50a-7424-8d79-03312b58bac0");
         let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
         let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
         let prepared = fixture
@@ -3748,7 +3791,7 @@ mod tests {
         // A second connection over the same database file (the process
         // restart boundary) observes the same durable delivery.
         let reopened = crate::durable::SqliteConversationStore::open(
-            ConversationId::new("conv-bg-durable"),
+            ConversationId::new("conv_9332f327-f50a-7424-8d79-03312b58bac0"),
             fixture.store_path(),
         )
         .expect("reopen");
@@ -3793,7 +3836,7 @@ mod tests {
         let workspace_root = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace_root).expect("workspace");
         let artifacts = dir.path().join("artifacts");
-        let conversation = ConversationId::new("conv-bg");
+        let conversation = ConversationId::new("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
         let mailbox = ConversationInboundMailbox::new(conversation.clone());
         let registry = ConversationBackgroundRegistry::new(
             conversation.clone(),
@@ -3911,7 +3954,7 @@ mod tests {
     /// moves on.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn background_execution_keeps_the_attempt_tool_environment() {
-        let fixture = registry("conv-bg-environment");
+        let fixture = registry("conv_1aa45b76-00b5-7ed6-8bfb-0d97f8d64d36");
         let admitted = ToolEnvironment::from_authorized(vec![(
             "RUSTX_ADMITTED".to_owned(),
             "attempt-a".to_owned(),
@@ -3997,17 +4040,16 @@ mod tests {
     /// pre-commit dispatch leaves an orphan file behind.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_live_output_file_exists_from_prepare_and_rolls_back_cleanly() {
-        let fixture = registry("conv-live-alloc");
+        let fixture = registry("conv_fbd950ff-9626-79cc-af4c-2c99c9542f16");
         let executor: Arc<dyn ToolExecutor> = Arc::new(InstantExecutor(success()));
-        let execution_id = ToolExecutionId::background(1);
+        assert!(fixture.registry.all_snapshots().is_empty());
+        let prepared = prepare(&fixture, &executor);
+        let first_id = prepared.execution_id.clone();
         let output_path = fixture
             .registry
             .resources()
             .tool_output
-            .background_output_path(&execution_id);
-        assert!(!output_path.exists(), "no file before prepare");
-
-        let prepared = prepare(&fixture, &executor);
+            .background_output_path(&first_id);
         assert!(
             output_path.exists() && std::fs::read(&output_path).expect("read").is_empty(),
             "the live-output file exists, empty, from the prepare stage on"
@@ -4022,7 +4064,8 @@ mod tests {
         // A fresh prepare gets the next identity (the sequence never
         // reuses a prepared id) and allocates its own live-output file.
         let prepared = prepare(&fixture, &executor);
-        assert_eq!(prepared.execution_id.as_str(), "exec_2");
+        assert_ne!(prepared.execution_id, first_id);
+        let second_id = prepared.execution_id.clone();
         let output_path = fixture
             .registry
             .resources()
@@ -4043,7 +4086,7 @@ mod tests {
         else {
             panic!("accepted");
         };
-        assert_eq!(execution_id.as_str(), "exec_2");
+        assert_eq!(execution_id, second_id);
         let accepted = match &result.content[0] {
             crate::tools::types::ToolResultContent::Json { value } => value.clone(),
             other => panic!("expected JSON, got {other:?}"),
@@ -4052,7 +4095,7 @@ mod tests {
         assert_eq!(advertised, output_path.to_str().expect("utf8 path"));
         assert!(std::path::Path::new(advertised).is_absolute());
         assert!(
-            advertised.ends_with("tasks/exec_2.output"),
+            advertised.ends_with(&format!("tasks/{execution_id}.output")),
             "the live-output locator shape: {advertised}"
         );
         assert!(
@@ -4074,7 +4117,7 @@ mod tests {
     /// identity.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_output_allocation_failure_refuses_the_dispatch_pre_commit() {
-        let fixture = registry("conv-alloc-fail");
+        let fixture = registry("conv_c7242776-e0dc-71a7-b909-e30a9f2a5a99");
         fixture
             .registry
             .resources()
@@ -4097,14 +4140,16 @@ mod tests {
             .registry
             .resources()
             .tool_output
-            .background_output_path(&ToolExecutionId::background(1));
+            .background_output_path(&ToolExecutionId::new(
+                "exec_01900000-0000-7000-8000-000000000001",
+            ));
         assert!(!output_path.exists(), "no orphan output file");
         assert!(
             fixture.registry.all_snapshots().is_empty(),
             "no execution record exists"
         );
-        // The failure consumed no identity: after the failure condition is
-        // lifted, the next dispatch is still exec_1.
+        // A refused preparation creates no accepted work. A subsequent allocation
+        // obtains its own durable identity after the storage failure is lifted.
         fixture
             .registry
             .resources()
@@ -4121,7 +4166,12 @@ mod tests {
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
             panic!("accepted");
         };
-        assert_eq!(execution_id.as_str(), "exec_1");
+        assert_eq!(
+            uuid::Uuid::parse_str(execution_id.as_str().strip_prefix("exec_").unwrap())
+                .unwrap()
+                .get_version_num(),
+            7
+        );
         let terminal = wait_for_terminal(&fixture, &execution_id).await;
         assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
     }
@@ -4138,7 +4188,7 @@ mod tests {
     async fn background_live_output_is_readable_while_running_and_reused_at_settlement() {
         use crate::tools::types::ToolResultContent;
 
-        let fixture = registry("conv-live-read");
+        let fixture = registry("conv_0907d190-8db0-7774-9bd6-d370a8da311c");
         let workspace = fixture.registry.resources().workspace.clone();
         let tool_output = fixture.registry.resources().tool_output.clone();
         // The deterministic barrier: the command prints line A, then blocks
@@ -4296,7 +4346,8 @@ mod tests {
             other => panic!("grep returns text, got {other:?}"),
         };
         assert_eq!(
-            grep_text, "exec_1.output:1: line-A",
+            grep_text,
+            format!("{execution_id}.output:1: line-A"),
             "Grep finds the committed prefix in the live file while the execution runs"
         );
 
@@ -4364,7 +4415,7 @@ mod tests {
     async fn small_background_output_still_owns_a_live_output_file() {
         use crate::tools::types::ToolResultContent;
 
-        let fixture = registry("conv-tiny");
+        let fixture = registry("conv_e7ec41bc-3788-7c33-8aae-3434a8061b4a");
         let executor: Arc<dyn ToolExecutor> =
             Arc::new(crate::tools::native::BashTool::with_test_control(
                 crate::tools::native::BashTestControl::new(),
@@ -4443,7 +4494,7 @@ mod tests {
     async fn a_background_output_write_failure_is_truthful_at_settlement() {
         use crate::tools::types::ToolResultContent;
 
-        let fixture = registry("conv-sink-fail");
+        let fixture = registry("conv_49f5727e-5c61-7861-92e5-e1f0c3538e94");
         let tool_output = fixture.registry.resources().tool_output.clone();
         // Every append to the live-output file fails.
         tool_output.fail_writes_after(0);
@@ -4548,7 +4599,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[allow(clippy::too_many_lines)] // the settlement assertion is deliberately exhaustive
     async fn a_background_sink_open_failure_retains_the_advertised_locator_as_partial() {
-        let fixture = registry("conv-sink-open-fail");
+        let fixture = registry("conv_f1048835-d941-7b66-9ca2-d9571392b3d1");
         let executor: Arc<dyn ToolExecutor> =
             Arc::new(crate::tools::native::BashTool::with_test_control(
                 crate::tools::native::BashTestControl::new(),
@@ -4673,7 +4724,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_background_spawn_failure_settles_failed_with_complete_empty_output() {
-        let fixture = registry("conv-spawn-fail");
+        let fixture = registry("conv_b5ff86eb-e225-7696-b2d4-ec5c80cb094a");
         let executor: Arc<dyn ToolExecutor> =
             Arc::new(crate::tools::native::BashTool::with_test_control(
                 crate::tools::native::BashTestControl::new().fail_supervisor_spawn(),
@@ -4776,7 +4827,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_background_input_parse_failure_retains_the_advertised_locator() {
-        let fixture = registry("conv-parse-fail");
+        let fixture = registry("conv_33e74e7d-4e40-7170-bd4a-d375953c6cc9");
         let executor: Arc<dyn ToolExecutor> =
             Arc::new(crate::tools::native::BashTool::with_test_control(
                 crate::tools::native::BashTestControl::new(),
@@ -4878,7 +4929,7 @@ mod tests {
     /// the canonical terminal message.
     #[test]
     fn the_terminal_projection_retains_the_locator_under_bounding() {
-        let path = "/tmp/rustx-test/tool-output/tasks/exec_9.output";
+        let path = "/owned/conversation/tool-output/tasks/exec_01900000-0000-7000-8000-000000000009.output";
         // \u0001 serializes as \u0001 in JSON (6 chars per byte): an
         // escape-expensive body that crosses the projection bound many
         // times over.
@@ -4915,7 +4966,7 @@ mod tests {
         // runtime-generated execution id and the registry-resolved tool
         // name.
         let message = super::terminal_inbound_message(
-            &ToolExecutionId::background(9),
+            &ToolExecutionId::new("exec_01900000-0000-7000-8000-000000000009"),
             "bash",
             BackgroundLifecycle::Succeeded,
             &result,
@@ -4925,7 +4976,7 @@ mod tests {
             [crate::message::types::UserContentBlock::Text(text)] => text.text.clone(),
             blocks => panic!("text-only: {blocks:?}"),
         };
-        let header = "Background execution exec_9 (bash) settled: succeeded\n\nResult:\n";
+        let header = "Background execution exec_01900000-0000-7000-8000-000000000009 (bash) settled: succeeded\n\nResult:\n";
         assert!(
             text.starts_with(header),
             "the fixed-format outer header frames the projection: {text}"
@@ -4957,7 +5008,7 @@ mod tests {
     /// synthetic continuation section is created from them.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn arbitrary_tool_json_is_never_reinterpreted_as_continuation_metadata() {
-        let fixture = registry("conv-json-collision");
+        let fixture = registry("conv_5e7d13ff-6d5d-77fb-8d90-d430583c99da");
         let business = serde_json::json!({
             "full_output": "business-full-output",
             "partial_output": 123,
@@ -5036,7 +5087,7 @@ mod tests {
     #[test]
     fn the_continuation_cannot_exceed_the_projection_bound() {
         let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
-        let path = "/tmp/rustx-test/tool-output/tasks/exec_7.output";
+        let path = "/owned/conversation/tool-output/tasks/exec_01900000-0000-7000-8000-000000000007.output";
         // A byte-expensive diagnostic: every 'é' costs two bytes, and the
         // payload is many times the projection bound.
         let enormous = "é".repeat(bound * 4);

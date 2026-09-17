@@ -41,7 +41,7 @@ use support::fake::{
 fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {
         agent_id: AgentId::new("agent-a"),
-        conversation_id: ConversationId::new("conv-1"),
+        conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         attempt_id: AttemptId::new("attempt-1"),
         conversation: rustx::conversation::ConversationState::from_messages(vec![
             MessageBlock::User(UserMessageBlock {
@@ -84,7 +84,7 @@ async fn run(
     tools: ToolRegistry,
     cancellation: &AgentCancellation,
 ) -> common::DurableExecutionAudit {
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(

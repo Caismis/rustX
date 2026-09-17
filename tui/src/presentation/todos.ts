@@ -83,7 +83,7 @@ export function selectTodos(
 export function isTodoComposed(
   state: PresentationState | undefined,
 ): boolean {
-  return state?.effectiveExtensions?.todo != null;
+  return state?.effectivePlugins?.todo != null;
 }
 
 /** Tasks that are neither completed nor tombstoned. */

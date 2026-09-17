@@ -11,8 +11,7 @@ use rustx::model::session::SessionModelConfig;
 use rustx::runtime::identity::McpServerId;
 use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
 use rustx::runtime_client::settings::{
-    EffectiveAgentStatusExtension, EffectiveBackgroundStatus, EffectiveNativeAgentExtensions,
-    EffectiveTimeStatus, SettingsBoundary,
+    EffectiveAgentStatusExtension, EffectiveBackgroundStatus, EffectivePlugins, EffectiveTimeStatus,
 };
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
 
@@ -20,49 +19,52 @@ const MODELS: &str = r#"[providers.local]
 base_url = "http://127.0.0.1:9/v1"
 api_key = "$RUSTX_ISSUE96_KEY"
 
-[[providers.local.models]]
+[models."local/model-a"]
+provider = "local"
 id = "model-a"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
-[providers.local.models.capabilities]
+[models."local/model-a".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/model-a".compat]
 chat_reasoning_replay = "omit"
 
-[[providers.local.models]]
+[models."local/model-b"]
+provider = "local"
 id = "model-b"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
-[providers.local.models.capabilities]
+[models."local/model-b".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/model-b".compat]
 chat_reasoning_replay = "omit"
 
-[[providers.local.models]]
+[models."local/model-c"]
+provider = "local"
 id = "model-c"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
-[providers.local.models.capabilities]
+[models."local/model-c".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/model-c".compat]
 chat_reasoning_replay = "omit"
 "#;
 
@@ -70,16 +72,9 @@ fn paths(root: &std::path::Path, config: &std::path::Path) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     LaunchFixture {
-        models: root.join("models.toml"),
         config: config.to_path_buf(),
-        skill_paths: Vec::new(),
-        no_automatic_skills: false,
-        no_builtin_tools: false,
-        no_direct_tools: false,
         startup_session: rustx::local_runtime::StartupSession::Empty,
         session_name: None,
-        tools: None,
-        exclude_tools: Vec::new(),
         workspace,
         runtime_root: root.join("runtime"),
     }
@@ -101,20 +96,9 @@ fn config_json(
     timezone: &str,
     environment_value: &str,
     builtin_tools: &[&str],
-    include_old_mcp: bool,
+    _include_old_mcp: bool,
 ) -> String {
-    let mcp_servers = if include_old_mcp {
-        serde_json::json!({
-            "old": {
-                "enabled": true,
-                    "type": "stdio",
-                "command": "missing-rustx-issue96-mcp"
-            }
-        })
-    } else {
-        serde_json::json!({})
-    };
-    toml::to_string_pretty(&serde_json::json!({"schema_version": 8, "agent_id": "agent-issue96", "context": {"reserve_tokens": reserve_tokens, "keep_recent_tokens": 4096}, "mcp_servers": mcp_servers, "environment": {"ISSUE96_CURRENT": environment_value}, "agent": {"model": {"model": model}, "extensions": {
+    let profile = toml::to_string_pretty(&serde_json::json!({"schema_version": 9, "agent_id": "agent-issue96", "context": {"reserve_tokens": reserve_tokens, "keep_recent_tokens": 4096}, "environment": {"ISSUE96_CURRENT": environment_value}, "agent": {"skills": "all", "model": {"model": model}, "plugins": {
             "todo": {"enabled": true},
             "agent_status": {
                 "enabled": true,
@@ -122,7 +106,8 @@ fn config_json(
                 "background": {"enabled": true}
             }
         }, "tools": {"builtin": builtin_tools}}}))
-    .unwrap()
+    .unwrap();
+    format!("{profile}\n{MODELS}")
 }
 
 fn write_skill(root: &std::path::Path, name: &str, description: &str) {
@@ -146,7 +131,6 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     let config_path = root.path().join("rustx.toml");
     let skills_root = root.path().join("workspace/.agents/skills");
     write_skill(&skills_root, "old-skill", "Old current resource");
-    std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     std::fs::write(
         &config_path,
         config_json("local/model-a", 11, "UTC", "v1", &["read"], true),
@@ -207,7 +191,11 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
 
     let resumed_startup = LaunchFixture {
         startup_session: rustx::local_runtime::StartupSession::Select {
-            session: rustx::local_runtime::SessionId::new("session-1"),
+            session: rustx::local_runtime::SessionCatalog::open_existing(&startup.runtime_root)
+                .unwrap()
+                .unwrap()
+                .persisted_session_ids()[0]
+                .clone(),
             node: None,
         },
         ..startup.clone()
@@ -270,7 +258,12 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
             .any(|tool| tool.name == "todo"),
         "and it is not an ordinary available capability, so no selector can name it"
     );
-    assert!(snapshot.skill_catalog().is_none());
+    assert!(
+        snapshot
+            .skill_catalog()
+            .unwrap()
+            .contains("<name>new-skill</name>")
+    );
     assert!(!snapshot.available_tools().tools().is_empty());
 
     let resumed_endpoint = resumed.endpoint();
@@ -367,7 +360,6 @@ async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
     let config_path = root.path().join("rustx.toml");
     let skills_root = root.path().join("workspace/.agents/skills");
     std::fs::create_dir_all(&skills_root).expect("Skill root");
-    std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     std::fs::write(
         &config_path,
         config_json("local/model-a", 11, "UTC", "v1", &["read"], false),
@@ -402,7 +394,6 @@ async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
     let config_path = root.path().join("rustx.toml");
     let skills_root = root.path().join("workspace/.agents/skills");
     std::fs::create_dir_all(&skills_root).expect("Skill root");
-    std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     let startup = paths(root.path(), &config_path);
 
     std::fs::write(
@@ -449,53 +440,11 @@ async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
 async fn commented_configuration_documents_compose_a_runtime() {
     let root = tempfile::tempdir().expect("root");
     let config_path = root.path().join("rustx.toml");
-    std::fs::write(
-        root.path().join("models.toml"),
-        r#"[providers.local]
-base_url = "http://127.0.0.1:9/v1"
-api_key = "$RUSTX_ISSUE96_KEY"
-
-[[providers.local.models]]
-id = "model-a"
-protocol = "openai_chat_completions"
-context_window = 128000
-max_output_tokens = 512
-
-[providers.local.models.capabilities]
-input_modalities = ["text"]
-output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
-[providers.local.models.compat]
-chat_reasoning_replay = "omit"
-"#,
-    )
-    .expect("commented models");
-    std::fs::write(
-        &config_path,
-        r#"schema_version = 8
-agent_id = "agent-issue96"
-
-[context]
-reserve_tokens = 11
-keep_recent_tokens = 4096
-
-
-[mcp_servers]
-
-
-
-[agent]
-[agent.model]
-model = "local/model-a"
-
-
-[agent.tools]
-builtin = ["read"]
-"#,
-    )
-    .expect("commented config");
+    let source = format!(
+        "# Authored runtime and Provider/Model definitions share one document.\n{}",
+        config_json("local/model-a", 11, "UTC", "comments", &["read"], false)
+    );
+    std::fs::write(&config_path, source).unwrap();
     let startup = paths(root.path(), &config_path);
 
     let product = (startup)
@@ -520,7 +469,6 @@ builtin = ["read"]
 async fn malformed_toml_fails_before_composition() {
     let root = tempfile::tempdir().expect("root");
     let config_path = root.path().join("rustx.toml");
-    std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     let startup = paths(root.path(), &config_path);
 
     std::fs::write(
@@ -543,7 +491,7 @@ model = "local/model-a"
 /// Writes a launch document whose only variable is the closed native Agent
 /// Extension composition.
 fn extension_config(enabled: bool, timezone: &str) -> String {
-    toml::to_string_pretty(&serde_json::json!({"schema_version": 8, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "extensions": {
+    let profile = toml::to_string_pretty(&serde_json::json!({"schema_version": 9, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"skills": "all", "model": {"model": "local/model-a"}, "plugins": {
             "todo": {"enabled": true},
             "agent_status": {
                 "enabled": enabled,
@@ -551,7 +499,8 @@ fn extension_config(enabled: bool, timezone: &str) -> String {
                 "background": {"enabled": true}
             }
         }, "tools": {"builtin": ["read"]}}}))
-    .unwrap()
+    .unwrap();
+    format!("{profile}\n{MODELS}")
 }
 
 /// Attaches one `LocalSessionClient` endpoint and returns the
@@ -559,13 +508,13 @@ fn extension_config(enabled: bool, timezone: &str) -> String {
 fn attached_projection(
     endpoint: &rustx::runtime_client::RuntimeClientEndpoint,
     request_id: u64,
-) -> Option<EffectiveNativeAgentExtensions> {
+) -> Option<EffectivePlugins> {
     let response = endpoint.handle_request(RuntimeClientRequest::Initialize {
         id: RequestId::new(request_id),
         protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
     match response.result {
-        Some(RuntimeClientResult::Initialized { snapshot, .. }) => snapshot.effective_extensions,
+        Some(RuntimeClientResult::Initialized { snapshot, .. }) => snapshot.effective_plugins,
         other => panic!("initialize returned an unexpected result: {other:?}"),
     }
 }
@@ -576,12 +525,12 @@ fn attached_projection(
 fn product_projection(
     endpoint: &rustx::runtime_client::RuntimeClientEndpoint,
     request_id: u64,
-) -> Option<EffectiveNativeAgentExtensions> {
+) -> Option<EffectivePlugins> {
     let response = endpoint.handle_request(RuntimeClientRequest::SnapshotGet {
         id: RequestId::new(request_id),
     });
     match response.result {
-        Some(RuntimeClientResult::Snapshot { snapshot, .. }) => snapshot.effective_extensions,
+        Some(RuntimeClientResult::Snapshot { snapshot, .. }) => snapshot.effective_plugins,
         other => panic!("snapshot_get returned an unexpected result: {other:?}"),
     }
 }
@@ -597,20 +546,13 @@ fn composed_timezone(runtime: &rustx::runtime::ConversationRuntime) -> Option<ch
         .timezone
 }
 
-/// Issue #256 regressions 4 and 5.
-///
-/// The native Agent Extension composition is **launch-scoped**. A resource
-/// reload republishes a whole new `RuntimeResourceSnapshot` — proven here by
-/// the advanced revision — and still cannot install, remove, or reconfigure
-/// the Agent Status extension of the already-composed runtime. Only the next
-/// launch resolves the current document through the ordinary resolver, and
-/// that restart preserves the existing Session history byte for byte.
+/// Save is inert, reload replaces Plugins atomically, and cold resume reads current
+/// files while preserving the same durable Conversation history.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
-async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
+async fn cfg3_reload_recomposes_plugins_and_cold_resume_preserves_history() {
     let root = tempfile::tempdir().expect("root");
     let config_path = root.path().join("rustx.toml");
-    std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     std::fs::write(&config_path, extension_config(true, "UTC")).expect("config v1");
     let startup = paths(root.path(), &config_path);
 
@@ -632,7 +574,7 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
     // its contributor configuration.
     std::fs::write(&config_path, extension_config(false, "Asia/Shanghai")).expect("config v2");
     runtime
-        .reload_resources()
+        .reload_configuration()
         .await
         .expect("the resource generation republishes");
     let r2 = runtime.runtime_resources().revision();
@@ -640,18 +582,16 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
         r2.get() > r1.get(),
         "the reload really did publish a new resource generation"
     );
-    assert_eq!(
-        composed_timezone(runtime),
-        Some(chrono_tz::UTC),
-        "reload cannot uninstall or reconfigure a launch-scoped extension"
+    assert!(
+        runtime.context_config().status_engine.is_none(),
+        "the published profile disables Agent Status"
     );
     // Regression 4: a published resource generation does not change the
-    // existing live effective-extension projection either. The projection
-    // has no reload seam at all — it is installed once, from the runtime.
+    // native effective Plugin projection belongs to the same generation.
     assert_eq!(
         product_projection(&endpoint, 100),
-        Some(composed(true, Some(chrono_tz::UTC), true)),
-        "publishing R2 cannot change an already-composed effective projection"
+        Some(agent_status_absent()),
+        "the effective projection follows the complete published generation"
     );
 
     // Durable Session work, so the restart below has history to preserve.
@@ -730,7 +670,11 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
     // publishes as active.
     let mut restart = paths(root.path(), &config_path);
     restart.startup_session = rustx::local_runtime::StartupSession::Select {
-        session: rustx::local_runtime::SessionId::new("session-1"),
+        session: rustx::local_runtime::SessionCatalog::open_existing(&startup.runtime_root)
+            .unwrap()
+            .unwrap()
+            .persisted_session_ids()[0]
+            .clone(),
         node: None,
     };
     let resumed = (restart)
@@ -766,8 +710,7 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
     drop(resumed_endpoint);
     drop(resumed);
 
-    // The symmetric direction: a launch that composes nothing cannot have
-    // the extension installed into it by a reload.
+    // The symmetric direction installs the explicitly authored Plugin at reload.
     std::fs::write(&config_path, extension_config(false, "UTC")).expect("config v3");
     let empty = (startup)
         .compose(&dependencies())
@@ -777,17 +720,17 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
     std::fs::write(&config_path, extension_config(true, "Asia/Shanghai")).expect("config v4");
     empty
         .runtime()
-        .reload_resources()
+        .reload_configuration()
         .await
         .expect("the resource generation republishes");
-    assert!(
-        empty.runtime().context_config().status_engine.is_none(),
-        "reload cannot install a launch-scoped extension into a composed runtime"
+    assert_eq!(
+        composed_timezone(empty.runtime()),
+        Some(chrono_tz::Asia::Shanghai)
     );
     assert_eq!(
         attached_projection(&empty.endpoint(), 6),
-        Some(agent_status_absent()),
-        "and cannot install one into the effective projection either"
+        Some(composed(true, Some(chrono_tz::Asia::Shanghai), true)),
+        "Plugin installation and its effective projection publish together"
     );
 }
 
@@ -806,13 +749,13 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
 /// independently and compared.
 fn projected_extensions(
     runtime: &rustx::local_runtime::composition::LocalConversationRuntime,
-) -> Option<EffectiveNativeAgentExtensions> {
+) -> Option<EffectivePlugins> {
     runtime
         .host()
         .snapshot()
         .expect("the host projects its snapshot")
         .0
-        .effective_extensions
+        .effective_plugins
 }
 
 /// A composition with the given Agent Status contributors and the Todo
@@ -823,12 +766,8 @@ fn projected_extensions(
 /// default — which since Issue #259 composes Todo. That is exactly the point
 /// of the migration: the default is owned by extension composition, not by
 /// `agent.tools.builtin`, whose fixtures here select only `read`.
-fn composed(
-    time: bool,
-    timezone: Option<chrono_tz::Tz>,
-    background: bool,
-) -> EffectiveNativeAgentExtensions {
-    EffectiveNativeAgentExtensions {
+fn composed(time: bool, timezone: Option<chrono_tz::Tz>, background: bool) -> EffectivePlugins {
+    EffectivePlugins {
         goal: None,
         agent_status: Some(EffectiveAgentStatusExtension {
             time: EffectiveTimeStatus {
@@ -847,8 +786,8 @@ fn composed(
 ///
 /// The two members are independent axes: switching Agent Status off says
 /// nothing about Todo, and this value is what proves it on the wire.
-fn agent_status_absent() -> EffectiveNativeAgentExtensions {
-    EffectiveNativeAgentExtensions {
+fn agent_status_absent() -> EffectivePlugins {
+    EffectivePlugins {
         goal: None,
         agent_status: None,
         todo: Some(rustx::runtime_client::settings::EffectiveTodoExtension {}),
@@ -856,8 +795,8 @@ fn agent_status_absent() -> EffectiveNativeAgentExtensions {
 }
 
 /// The composition with no native Agent Extension at all.
-fn uncomposed() -> EffectiveNativeAgentExtensions {
-    EffectiveNativeAgentExtensions {
+fn uncomposed() -> EffectivePlugins {
+    EffectivePlugins {
         goal: None,
         agent_status: None,
         todo: None,
@@ -887,12 +826,11 @@ fn uncomposed() -> EffectiveNativeAgentExtensions {
 async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition() {
     let root = tempfile::tempdir().expect("root");
     let config_path = root.path().join("rustx.toml");
-    std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     // Every contributor field is deliberately non-default, so a projection
     // that quietly substituted built-in defaults could not pass.
     std::fs::write(
         &config_path,
-        toml::to_string_pretty(&serde_json::json!({"schema_version": 8, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "extensions": {"todo": {"enabled": true}, "agent_status": {
+        toml::to_string_pretty(&serde_json::json!({"schema_version": 9, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {
                 "enabled": true,
                 "time": {"enabled": true, "timezone": "Asia/Shanghai"},
                 "background": {"enabled": false}
@@ -900,6 +838,8 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
         .unwrap(),
     )
     .expect("config v1");
+    let source = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(&config_path, format!("{source}\n{MODELS}")).unwrap();
     let fixture = paths(root.path(), &config_path);
 
     let live = rustx::local_runtime::composition::LocalConversationRuntime::compose(
@@ -911,23 +851,20 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
 
     let (snapshot, _) = live.host().snapshot().expect("snapshot");
     assert_eq!(
-        snapshot.effective_extensions,
+        snapshot.effective_plugins,
         Some(composed(true, Some(chrono_tz::Asia::Shanghai), false)),
         "the projection is the exact frozen composition, contributor by contributor"
     );
     // One source of truth: the wire projection and the runtime's own frozen
     // composition are the same value, not two independently maintained ones.
     assert_eq!(
-        snapshot.effective_extensions,
-        Some(EffectiveNativeAgentExtensions::project(
+        snapshot.effective_plugins,
+        Some(EffectivePlugins::project(
             &live.runtime().native_extensions()
         )),
     );
     // A root composition is launch-frozen, and the lifetime says so.
-    assert_eq!(
-        snapshot.settings_lifetimes.extensions,
-        SettingsBoundary::LaunchCapture
-    );
+
     assert_eq!(
         snapshot.settings_evidence,
         rustx::runtime_client::settings::SettingsEvidence::LiveSession
@@ -943,10 +880,12 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     // The deliberate divergence with the prospective configuration surface.
     std::fs::write(
         &config_path,
-        toml::to_string_pretty(&serde_json::json!({"schema_version": 8, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "extensions": {"todo": {"enabled": true}, "agent_status": {"enabled": false}}, "tools": {"builtin": ["read"]}}}))
+        toml::to_string_pretty(&serde_json::json!({"schema_version": 9, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {"enabled": false}}, "tools": {"builtin": ["read"]}}}))
         .unwrap(),
     )
     .expect("config v2");
+    let source = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(&config_path, format!("{source}\n{MODELS}")).unwrap();
     let prospective = paths(root.path(), &config_path).resolve();
     assert!(
         prospective

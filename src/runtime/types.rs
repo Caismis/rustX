@@ -29,17 +29,6 @@ pub enum ApprovalMode {
     FullAccess,
 }
 
-/// The authoritative effective/desired `ApprovalMode` control-plane view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ApprovalModeState {
-    /// The mode admitted by the current attempt boundary.
-    pub effective: ApprovalMode,
-    /// The latest requested mode.
-    pub desired: ApprovalMode,
-    /// Monotonic runtime-control revision; idempotent requests do not advance it.
-    pub revision: u64,
-}
-
 /// The authoritative lifecycle state of one conversation runtime.
 ///
 /// `Running -> Draining` is the single drain linearization point. The

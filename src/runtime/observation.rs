@@ -272,6 +272,8 @@ pub(crate) enum ConversationObservation {
     /// that only rewrites project instruction files advances the resource
     /// revision and leaves the capability revision exactly where it was.
     Resources {
+        model: Box<crate::model::session::SessionModelView>,
+        approval_mode: crate::runtime::ApprovalMode,
         /// The published immutable resource generation. Its
         /// `capability()` is the capability snapshot committed by the same
         /// reload.
@@ -292,17 +294,6 @@ pub(crate) enum ConversationObservation {
     SessionModelChanged {
         /// The redacted session model state after the update.
         model: Box<SessionModelView>,
-    },
-    /// The runtime approval control state changed. `effective` is the mode
-    /// admitted by the current attempt boundary; `pending` is the latest
-    /// desired mode when it differs and the runtime is busy.
-    ApprovalModeChanged {
-        /// The authoritative effective mode.
-        effective: ApprovalMode,
-        /// The pending desired mode, when reconciliation waits for settlement.
-        pending: Option<ApprovalMode>,
-        /// The monotonic control-plane revision.
-        revision: u64,
     },
     /// Runtime drain began and new semantic admission closed.
     Shutdown,
@@ -940,7 +931,7 @@ mod tests {
             schema_version: 1,
             event_id: EventId::new(format!("receipt-{sequence}")),
             sequence,
-            conversation_id: ConversationId::new("publication-order"),
+            conversation_id: ConversationId::new("conv_8307904d-d256-77de-8e8a-63789f0ed1a5"),
             attempt_id: Some(AttemptId::new("attempt")),
             turn_id: None,
             timestamp: chrono::DateTime::UNIX_EPOCH,
@@ -982,7 +973,9 @@ mod tests {
         SubagentSnapshot {
             subagent_id: SubagentId::new(subagent_id),
             child_agent_id: AgentId::new("agent-child"),
-            child_conversation_id: ConversationId::new(subagent_id),
+            child_conversation_id: crate::scripted_suites::common::identity::child_conversation_id(
+                subagent_id,
+            ),
             tool_call_id: ToolCallId::new("call-1"),
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),
@@ -1024,7 +1017,10 @@ mod tests {
         let queue = PendingObservations::new();
         for revision in 1..=5 {
             queue.push(ConversationObservation::SubagentActivity(
-                subagent_snapshot("conv-1-subagent-1", revision),
+                subagent_snapshot(
+                    "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-1",
+                    revision,
+                ),
             ));
         }
         assert_eq!(queue.queued(), 1, "the activity lane holds the latest only");
@@ -1032,7 +1028,10 @@ mod tests {
         assert_eq!(drained.len(), 1);
         match &drained[0] {
             ConversationObservation::SubagentActivity(snapshot) => {
-                assert_eq!(snapshot.subagent_id, SubagentId::new("conv-1-subagent-1"));
+                assert_eq!(
+                    snapshot.subagent_id,
+                    SubagentId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-1")
+                );
                 assert_eq!(snapshot.observation.revision, 5, "only the latest survives");
             }
             other => panic!("expected an activity observation, got {other:?}"),
@@ -1077,10 +1076,10 @@ mod tests {
     fn a_lifecycle_snapshot_evicts_the_queued_activity() {
         let queue = PendingObservations::new();
         queue.push(ConversationObservation::SubagentActivity(
-            subagent_snapshot("conv-1-subagent-1", 3),
+            subagent_snapshot("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-1", 3),
         ));
         queue.push(ConversationObservation::SubagentLifecycle(
-            subagent_snapshot("conv-1-subagent-1", 4),
+            subagent_snapshot("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-1", 4),
         ));
         assert_eq!(
             queue.queued(),
@@ -1088,7 +1087,7 @@ mod tests {
             "the lifecycle push evicted the stale activity"
         );
         queue.push(ConversationObservation::SubagentActivity(
-            subagent_snapshot("conv-1-subagent-1", 5),
+            subagent_snapshot("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-1", 5),
         ));
         let drained = queue.drain();
         assert_eq!(drained.len(), 2);
@@ -1112,7 +1111,10 @@ mod tests {
         queue.park();
         for revision in 1..=4 {
             queue.push(ConversationObservation::SubagentActivity(
-                subagent_snapshot("conv-1-subagent-1", revision),
+                subagent_snapshot(
+                    "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-1",
+                    revision,
+                ),
             ));
         }
         queue.push(ConversationObservation::Shutdown);
@@ -1136,12 +1138,12 @@ mod tests {
         let queue = PendingObservations::new();
         queue.push(ConversationObservation::Shutdown);
         queue.push(ConversationObservation::SubagentActivity(
-            subagent_snapshot("conv-1-subagent-1", 1),
+            subagent_snapshot("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-1", 1),
         ));
         queue.close();
         assert_eq!(queue.queued(), 0);
         queue.push(ConversationObservation::SubagentActivity(
-            subagent_snapshot("conv-1-subagent-1", 2),
+            subagent_snapshot("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-1", 2),
         ));
         assert_eq!(queue.queued(), 0, "a closed queue accepts nothing");
         assert!(queue.is_closed());

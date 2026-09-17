@@ -36,7 +36,7 @@ use support::fake::{
 fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {
         agent_id: AgentId::new("agent-a"),
-        conversation_id: ConversationId::new("conv-1"),
+        conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         attempt_id: AttemptId::new("attempt-1"),
         conversation: rustx::conversation::ConversationState::from_messages(vec![
             MessageBlock::User(UserMessageBlock {
@@ -82,7 +82,7 @@ async fn run(
     common::DurableExecutionAudit,
     rustx::capabilities::CapabilityCoordinator,
 ) {
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let (lease, coordinator) = capability.into_lease_and_coordinator();
@@ -491,9 +491,17 @@ async fn mixed_foreground_background_group_does_not_wait_for_detached_terminal()
         rustx::tools::types::ToolResultContent::Json { value } => value.clone(),
         other => panic!("expected JSON accepted content, got {other:?}"),
     };
+    let execution_id: rustx::runtime::identity::ToolExecutionId =
+        serde_json::from_value(accepted_json["execution"]["id"].clone()).unwrap();
+    assert!(
+        accepted_json["output_path"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("tasks/{execution_id}.output"))
+    );
     assert_eq!(
         accepted_json["execution"],
-        serde_json::json!({"kind": "tool", "id": "exec_1"}),
+        serde_json::json!({"kind": "tool", "id": execution_id.as_str()}),
         "the accepted background result returns the typed execution handle"
     );
     assert_eq!(accepted_json["state"], "starting");
@@ -650,9 +658,17 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
         rustx::tools::types::ToolResultContent::Json { value } => value.clone(),
         other => panic!("expected JSON, got {other:?}"),
     };
+    let execution_id: rustx::runtime::identity::ToolExecutionId =
+        serde_json::from_value(accepted["execution"]["id"].clone()).unwrap();
+    assert!(
+        accepted["output_path"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("tasks/{execution_id}.output"))
+    );
     assert_eq!(
         accepted["execution"],
-        serde_json::json!({"kind": "tool", "id": "exec_1"})
+        serde_json::json!({"kind": "tool", "id": execution_id.as_str()})
     );
     assert!(matches!(
         messages[2].result.status,

@@ -32,7 +32,7 @@
 //! `println!` is never used for diagnostics anywhere in the process.
 
 pub(crate) mod agent_resources;
-mod authoring;
+pub mod authoring;
 pub mod cli;
 pub mod composition;
 pub mod config;
@@ -44,7 +44,8 @@ pub mod launch;
 #[cfg(test)]
 mod launch_tests;
 pub(crate) mod live_inspection;
-mod managed_python_resources;
+pub mod managed_python_resources;
+pub mod mcp_resources;
 #[cfg(all(test, unix))]
 mod preparation_e2e;
 mod probes;
@@ -72,7 +73,7 @@ pub use config::{
     AgentWorktreeDocument, CURRENT_RUNTIME_SCHEMA_VERSION, CurrentRuntimeConfig,
     CurrentRuntimeConfigError, McpServerDocument, McpTransportType, ModelTimeoutPolicyDocument,
 };
-pub use launch::{HostEnvironment, LaunchRequest, TrustAction, resolve};
+pub use launch::{HostEnvironment, LaunchRequest, resolve};
 pub use serve::{ProcessOutcome, run_process, serve};
 pub use session::{
     CatalogCommitError, HistoricalConversationSnapshot, SESSION_CATALOG_SCHEMA_VERSION,
@@ -96,3 +97,6 @@ pub use configuration::{
 };
 
 pub mod app_server_policy;
+
+#[cfg(test)]
+mod mcp_tests;

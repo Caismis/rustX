@@ -14,7 +14,8 @@
 #[tokio::test]
 async fn goal84_natural_intent_creates_from_human_with_stable_tools_and_current_context() {
     let extensions = NativeAgentExtensions::none().and_goal();
-    let (_dir, runtime) = todo_tool_runtime("goal-human", &extensions);
+    let (_dir, runtime) =
+        todo_tool_runtime("conv_e676044a-be02-7f84-92a4-1d66bc24ce9e", &extensions);
     let create = ScriptedCall {
         id: "create",
         tool_id: "native.create_goal",
@@ -97,7 +98,7 @@ async fn goal84_natural_intent_creates_from_human_with_stable_tools_and_current_
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn goal84_driver_uses_ordinary_admission_consumes_one_and_drain_disarms() {
     let extensions = NativeAgentExtensions::none().and_goal();
-    let (_dir, tools) = todo_tool_runtime("goal-driver", &extensions);
+    let (_dir, tools) = todo_tool_runtime("conv_5970e081-a90a-73aa-b7cb-3639af4f1113", &extensions);
     let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
     let capability =
         extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
@@ -170,7 +171,8 @@ use super::{common, support};
 async fn goal84_cancel_and_drain_win_before_the_gated_admission_frontier() {
     for draining in [false, true] {
         let extensions = NativeAgentExtensions::none().and_goal();
-        let (_dir, tools) = todo_tool_runtime("goal-gated-cancel", &extensions);
+        let (_dir, tools) =
+            todo_tool_runtime("conv_401bc8ab-5b35-78af-a36a-7996717e35b4", &extensions);
         tools
             .goal()
             .unwrap()
@@ -242,7 +244,7 @@ async fn goal84_cancel_and_drain_win_before_the_gated_admission_frontier() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn goal84_owned_background_is_awaited_without_polling_or_blocking_goal() {
     let extensions = NativeAgentExtensions::none().and_goal();
-    let (_dir, tools) = todo_tool_runtime("goal-waiting", &extensions);
+    let (_dir, tools) = todo_tool_runtime("conv_f99aedc7-a14e-7e14-9415-5dc73929b70c", &extensions);
     let capability =
         extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
             .published()
@@ -286,7 +288,7 @@ async fn goal84_owned_background_is_awaited_without_polling_or_blocking_goal() {
 async fn goal84_cancellation_before_admission_consumes_zero_and_human_turn_does_not_charge_budget()
 {
     let extensions = NativeAgentExtensions::none().and_goal();
-    let (_dir, tools) = todo_tool_runtime("goal-disarmed-human", &extensions);
+    let (_dir, tools) = todo_tool_runtime("conv_c2830545-37a2-79bf-b07a-d53ea15dd88e", &extensions);
     // A recovered Active snapshot: disarmed before ConversationRuntime owns admission.
     tools
         .goal()
@@ -349,7 +351,7 @@ async fn goal84_cancellation_before_admission_consumes_zero_and_human_turn_does_
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn goal84_disabled_reenabled_and_reconnect_never_rearm_or_start_a_request() {
     let enabled = NativeAgentExtensions::none().and_goal();
-    let (dir, initial) = todo_tool_runtime("goal-recovery", &enabled);
+    let (dir, initial) = todo_tool_runtime("conv_7b91cff3-13ea-7ca4-86dc-14dc50d19831", &enabled);
     let goal = initial
         .goal()
         .unwrap()
@@ -363,7 +365,9 @@ async fn goal84_disabled_reenabled_and_reconnect_never_rearm_or_start_a_request(
     drop(initial);
     for extensions in [NativeAgentExtensions::none(), enabled] {
         let tools = rustx::tools::runtime::ConversationToolRuntime::from_config(
-            rustx::runtime::identity::ConversationId::new("goal-recovery"),
+            rustx::runtime::identity::ConversationId::new(
+                "conv_7b91cff3-13ea-7ca4-86dc-14dc50d19831",
+            ),
             rustx::tools::runtime::ConversationRuntimeConfig::new(
                 dir.path().join("workspace"),
                 dir.path().join("artifacts"),
@@ -397,14 +401,10 @@ async fn goal84_disabled_reenabled_and_reconnect_never_rearm_or_start_a_request(
         assert_eq!(cursor.get(), 0);
         assert_eq!(
             snapshot.goal,
-            if extensions.goal().is_some() {
-                Some(rustx::goal::GoalView {
-                    current: Some(goal.clone()),
-                    armed: false,
-                })
-            } else {
-                None
-            }
+            Some(rustx::goal::GoalView {
+                current: Some(goal.clone()),
+                armed: false,
+            })
         );
         drop(attachment);
         let (reattached, _) = host
@@ -412,25 +412,28 @@ async fn goal84_disabled_reenabled_and_reconnect_never_rearm_or_start_a_request(
             .unwrap();
         drop(reattached);
         let view = composed.runtime.goal_view().unwrap();
-        if extensions.goal().is_some() {
-            assert_eq!(
-                view,
-                Some(rustx::goal::GoalView {
-                    current: Some(goal.clone()),
-                    armed: false
-                })
-            );
-        } else {
-            assert!(view.is_none());
-            assert!(tools.extension_tool_plane().tool_names().is_empty());
-            assert!(
-                composed
-                    .runtime
-                    .control_goal(rustx::goal::GoalControl::Show)
-                    .unwrap_err()
-                    .contains("disabled")
-            );
-        }
+        assert_eq!(
+            view,
+            Some(rustx::goal::GoalView {
+                current: Some(goal.clone()),
+                armed: false
+            })
+        );
+        assert_eq!(
+            composed
+                .runtime
+                .control_goal(rustx::goal::GoalControl::Show)
+                .unwrap(),
+            view.unwrap()
+        );
+        assert_eq!(
+            tools
+                .extension_tool_plane_for(&extensions)
+                .tool_names()
+                .iter()
+                .any(|name| name == "get_goal"),
+            extensions.goal().is_some()
+        );
         composed.runtime.shutdown().await.unwrap();
         assert!(model.requests().is_empty());
         assert_eq!(
@@ -1104,7 +1107,7 @@ fn todo_and_status(todo: bool, agent_status: bool) -> NativeAgentExtensions {
 /// activation policy, and the ordinary *available* catalog beside them.
 async fn published_tools(
     extensions: &NativeAgentExtensions,
-    policy: rustx::capabilities::AgentActivation,
+    mut policy: rustx::capabilities::AgentActivation,
 ) -> (Vec<String>, Vec<String>) {
     let fixture = common::native_fixture_with_extensions(
         Vec::new(),
@@ -1124,6 +1127,7 @@ async fn published_tools(
         rustx::tools::NativeToolPolicies::default(),
     )
     .expect("ordinary native registration");
+    policy.profile.extensions = common::plugin_document(extensions);
     let capability = common::capability_lease_with(ordinary, &fixture.runtime, policy).await;
     let snapshot = capability.snapshot().clone();
     let active = snapshot
@@ -1143,7 +1147,7 @@ async fn published_tools(
 
 /// Issue #259 regressions 1, 2 and 4.
 ///
-/// The extension-provided `todo` Tool is composed by `extensions.todo`, and
+/// The extension-provided `todo` Tool is composed by `plugins.todo`, and
 /// by nothing else:
 ///
 /// ```text
@@ -1179,15 +1183,27 @@ async fn ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_t
             ..Selection::default()
         },
         Selection {
-            tools: Some(vec!["read".to_owned()]),
+            profile: {
+                let mut profile = rustx::local_runtime::config::AgentProfileDocument::default();
+                profile.tools.builtin = vec!["read".to_owned()];
+                profile
+            },
             ..Selection::default()
         },
         Selection {
-            no_direct_tools: true,
+            profile: {
+                let mut profile = rustx::local_runtime::config::AgentProfileDocument::default();
+                profile.tools.builtin = Vec::new();
+                profile
+            },
             ..Selection::default()
         },
         Selection {
-            no_builtin_tools: true,
+            profile: {
+                let mut profile = rustx::local_runtime::config::AgentProfileDocument::default();
+                profile.tools.builtin = Vec::new();
+                profile
+            },
             ..Selection::default()
         },
     ] {
@@ -1213,7 +1229,11 @@ async fn ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_t
     let (no_direct_tools_with_todo, _) = published_tools(
         &enabled,
         Selection {
-            no_direct_tools: true,
+            profile: {
+                let mut profile = rustx::local_runtime::config::AgentProfileDocument::default();
+                profile.tools.builtin = Vec::new();
+                profile
+            },
             ..Selection::default()
         },
     )
@@ -1226,7 +1246,11 @@ async fn ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_t
     let (nothing, _) = published_tools(
         &todo_and_status(false, true),
         Selection {
-            no_direct_tools: true,
+            profile: {
+                let mut profile = rustx::local_runtime::config::AgentProfileDocument::default();
+                profile.tools.builtin = Vec::new();
+                profile
+            },
             ..Selection::default()
         },
     )
@@ -1250,7 +1274,7 @@ fn ext259_todo_is_rejected_on_every_ordinary_selection_surface() {
     use rustx::capabilities::AgentActivation as Selection;
 
     // Root configuration.
-    let config = r#"schema_version = 8
+    let config = r#"schema_version = 9
 agent_id = "agent-ext259"
 
 [context]
@@ -1270,7 +1294,7 @@ builtin = ["read", "todo"]
         .expect_err("agent.tools.builtin may not name an extension Tool");
     let rendered = error.to_string();
     assert!(
-        rendered.contains("Agent Extension") && rendered.contains("extensions.todo"),
+        rendered.contains("Plugin") && rendered.contains("plugins.todo"),
         "the refusal names the owning plane and the way to compose it: {rendered}"
     );
 
@@ -1287,11 +1311,11 @@ builtin = ["read", "todo"]
             ..Selection::default()
         },
         Selection {
-            tools: Some(vec!["todo".to_owned()]),
-            ..Selection::default()
-        },
-        Selection {
-            exclude_tools: vec!["todo".to_owned()],
+            profile: {
+                let mut profile = rustx::local_runtime::config::AgentProfileDocument::default();
+                profile.tools.builtin = vec!["todo".to_owned()];
+                profile
+            },
             ..Selection::default()
         },
     ] {
@@ -1299,7 +1323,7 @@ builtin = ["read", "todo"]
             .validate()
             .expect_err("an extension Tool is not an ordinary selector");
         assert!(
-            rendered.contains("Agent Extension"),
+            rendered.contains("Plugin"),
             "{policy:?} must be refused by name: {rendered}"
         );
     }
@@ -1312,7 +1336,7 @@ builtin = ["read", "todo"]
         .validate_spelling()
         .expect_err("tools.builtin may not name an extension Tool");
     assert!(
-        rendered.contains("Agent Extension") && rendered.contains("extensions.todo"),
+        rendered.contains("Plugin") && rendered.contains("plugins.todo"),
         "the shared vocabulary refuses it too: {rendered}"
     );
 
@@ -1322,7 +1346,11 @@ builtin = ["read", "todo"]
     assert!(ordinary.validate_spelling().is_ok());
     assert!(
         Selection {
-            tools: Some(vec!["read".to_owned()]),
+            profile: {
+                let mut profile = rustx::local_runtime::config::AgentProfileDocument::default();
+                profile.tools.builtin = vec!["read".to_owned()];
+                profile
+            },
             ..Selection::default()
         }
         .validate()
@@ -1350,7 +1378,13 @@ async fn ext259_the_todo_tool_schema_is_stable_across_list_mutations() {
     let capability = common::capability_lease_with(
         rustx::tools::executor::ToolRegistry::new(),
         &fixture.runtime,
-        rustx::capabilities::AgentActivation::default(),
+        rustx::capabilities::AgentActivation {
+            profile: rustx::local_runtime::config::AgentProfileDocument {
+                extensions: common::plugin_document(fixture.runtime.extensions()),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
     )
     .await;
     let (lease, coordinator) = capability.into_lease_and_coordinator();
@@ -1534,8 +1568,8 @@ async fn ext259_todo_and_agent_status_are_independent_and_change_no_loop_semanti
         // attempt calls `worker`, not `todo`.
         assert_eq!(
             fixture.runtime.todo_snapshot().map(|list| list.tasks.len()),
-            todo.then_some(1),
-            "a composition composes its list, or does not have one at all"
+            Some(1),
+            "current state remains independent of Plugin visibility"
         );
     }
 
@@ -1611,7 +1645,8 @@ async fn ext259_disabling_todo_preserves_history_and_re_enabling_reconstructs_it
     let dir = tempfile::tempdir().expect("lab");
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    let conversation = rustx::runtime::identity::ConversationId::new("conv-ext259-recovery");
+    let conversation =
+        rustx::runtime::identity::ConversationId::new("conv_b804ac0f-9015-746d-89ec-146a29f6b0c2");
     let store: Arc<dyn ConversationStore> = Arc::new(
         rustx::durable::SqliteConversationStore::open(
             conversation.clone(),
@@ -1666,12 +1701,14 @@ async fn ext259_disabling_todo_preserves_history_and_re_enabling_reconstructs_it
     // ---- Launch 2: Todo absent ----
     let second = launch(false);
     assert!(
-        second.todos().is_none() && second.todo_snapshot().is_none(),
-        "a Todo-disabled launch composes no current list at all"
+        second.todos().is_some() && second.todo_snapshot().as_ref() == Some(&accepted),
+        "disabling a Plugin preserves its independently owned current state"
     );
-    let extension_registry = second
-        .compose_model_tools(rustx::tools::executor::ToolRegistry::new())
-        .expect("an unmaterialized extension registers nothing");
+    let mut extension_registry = rustx::tools::executor::ToolRegistry::new();
+    second
+        .extension_tool_plane_for(second.extensions())
+        .register_into(&mut extension_registry)
+        .unwrap();
     assert!(
         extension_registry.names().is_empty(),
         "and publishes no current todo Tool"
@@ -1722,124 +1759,50 @@ async fn ext259_disabling_todo_preserves_history_and_re_enabling_reconstructs_it
     batch.discard();
 }
 
-/// Issue #259 regression 17: a resource reload cannot hot-install or
-/// hot-remove a Tool-providing extension.
-///
-/// The proof is structural rather than behavioural: the extension Tool set is
-/// composed once at coordinator construction and stored outside
-/// `CapabilityResourceInputs`, which is the *only* value a reload replaces.
-/// This drives a real reload through the coordinator's own publication
-/// boundary — a complete new resource-input generation that genuinely changes
-/// the ordinary capability plane, proven by the advanced revision — and shows
-/// the extension Tool surviving it unchanged in both directions.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ext259_a_resource_reload_cannot_install_or_remove_the_todo_extension() {
-    for composed in [true, false] {
-        let extensions = if composed {
-            NativeAgentExtensions::with_todo()
-        } else {
-            NativeAgentExtensions::none()
-        };
-        let fixture = common::native_fixture_with_extensions(
-            Vec::new(),
-            rustx::tools::native::NativeToolPolicies::default(),
-            &extensions,
-        );
-        let ordinary_base = || {
-            let mut registry = rustx::tools::executor::ToolRegistry::new();
-            rustx::tools::native::register_native_tools(
-                &mut registry,
-                rustx::tools::NativeToolResources {
-                    subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
-                    background: fixture.runtime.background().clone(),
-                    subagents: None,
-                },
-                rustx::tools::NativeToolPolicies::default(),
-            )
-            .expect("ordinary native registration");
-            registry
-        };
-        // The first generation activates the whole ordinary native plane.
-        let capability = common::capability_lease_with(
-            ordinary_base(),
-            &fixture.runtime,
-            rustx::capabilities::AgentActivation::default(),
-        )
-        .await;
-        let (lease, coordinator) = capability.into_lease_and_coordinator();
-        let names = |coordinator: &rustx::capabilities::CapabilityCoordinator| {
+/// CFG3 changes Plugin capability selection at publication while retaining state.
+#[tokio::test]
+async fn cfg3_plugin_publication_changes_tools_without_replacing_domain_state() {
+    let extensions = NativeAgentExtensions::with_todo();
+    let fixture = common::native_fixture_with_extensions(
+        Vec::new(),
+        crate::tools::NativeToolPolicies::default(),
+        &extensions,
+    );
+    let capability =
+        common::capability_lease(fixture.ordinary_registry.clone(), &fixture.runtime).await;
+    let (lease, coordinator) = capability.into_lease_and_coordinator();
+    let frozen = lease.snapshot().clone();
+    assert!(frozen.tool_registry().names().contains(&"todo"));
+    drop(lease);
+    for enabled in [false, true] {
+        let mut activation = rustx::capabilities::AgentActivation::default();
+        activation.profile.extensions.todo.enabled = enabled;
+        let candidate = coordinator
+            .prepare_candidate_with_inputs(rustx::capabilities::CapabilityResourceInputs {
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
+                base_tool_registry: Arc::new(fixture.ordinary_registry.clone()),
+                agent_activation: activation,
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
+                mcp_servers: std::collections::BTreeMap::default(),
+                base_environment: fixture.runtime.environment().clone(),
+            })
+            .await
+            .unwrap();
+        let before = coordinator.current_snapshot().revision();
+        coordinator.commit(candidate).unwrap();
+        assert!(coordinator.current_snapshot().revision() > before);
+        assert_eq!(
             coordinator
                 .current_snapshot()
                 .tool_registry()
                 .names()
-                .into_iter()
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        };
-        let before = names(&coordinator);
-        assert_eq!(before.contains(&"todo".to_owned()), composed);
-        assert!(before.contains(&"read".to_owned()));
-        let revision_before = coordinator.current_snapshot().revision();
-        // An attempt lease pins the published generation, so a reload is
-        // refused while one is held. Releasing it is the ordinary boundary,
-        // not a timing trick.
-        drop(lease);
-
-        // A genuinely new resource generation that empties the *ordinary*
-        // plane entirely — the strongest ordinary statement there is.
-        let candidate = coordinator
-            .prepare_candidate_with_inputs(rustx::capabilities::CapabilityResourceInputs {
-                source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-                base_tool_registry: Arc::new(ordinary_base()),
-                agent_activation: rustx::capabilities::AgentActivation {
-                    no_direct_tools: true,
-                    ..rustx::capabilities::AgentActivation::default()
-                },
-                skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
-                mcp_servers: std::collections::BTreeMap::new(),
-                base_environment: fixture.runtime.environment().clone(),
-            })
-            .await
-            .expect("the reload prepares a candidate");
-        coordinator.commit(candidate).expect("the reload publishes");
-        let after = names(&coordinator);
+                .contains(&"todo"),
+            enabled
+        );
+        assert!(fixture.runtime.todos().is_some());
         assert!(
-            coordinator.current_snapshot().revision() > revision_before,
-            "the reload really did publish a new capability generation"
-        );
-        assert!(
-            !after.contains(&"read".to_owned()),
-            "and it really did change the ordinary plane"
-        );
-        assert_eq!(
-            after.contains(&"todo".to_owned()),
-            composed,
-            "a resource reload cannot hot-remove a Tool-providing extension"
-        );
-
-        // The symmetric direction from the same coordinator: an ordinary
-        // plane that activates everything cannot install the extension into a
-        // composition that does not have it.
-        let candidate = coordinator
-            .prepare_candidate_with_inputs(rustx::capabilities::CapabilityResourceInputs {
-                source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-                base_tool_registry: Arc::new(ordinary_base()),
-                agent_activation: rustx::capabilities::AgentActivation::default(),
-                skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
-                mcp_servers: std::collections::BTreeMap::new(),
-                base_environment: fixture.runtime.environment().clone(),
-            })
-            .await
-            .expect("the second reload prepares a candidate");
-        coordinator
-            .commit(candidate)
-            .expect("the second reload publishes");
-        let restored = names(&coordinator);
-        assert!(restored.contains(&"read".to_owned()));
-        assert_eq!(
-            restored.contains(&"todo".to_owned()),
-            composed,
-            "and cannot hot-install one either"
+            frozen.tool_registry().names().contains(&"todo"),
+            "admitted snapshot stays frozen"
         );
     }
 }
@@ -1932,7 +1895,13 @@ fn extension_capability(
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: std::sync::Arc::new(rustx::tools::executor::ToolRegistry::new()),
             extension_tools,
-            agent_activation: rustx::capabilities::AgentActivation::default(),
+            agent_activation: rustx::capabilities::AgentActivation {
+                profile: rustx::local_runtime::config::AgentProfileDocument {
+                    extensions: common::plugin_document(tool_runtime.extensions()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
@@ -2019,6 +1988,7 @@ fn conversation_runtime_over_model(
         std::sync::Arc::new(rustx::context::DefaultTokenEstimator);
     let runtime =
         rustx::runtime::ConversationRuntime::new(rustx::runtime::RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: rustx::runtime::identity::AgentId::new("agent-extension-composition"),
             model: support::model::scripted_session_model(model),
             approval_mode: rustx::runtime::ApprovalMode::Policy,
@@ -2102,14 +2072,15 @@ fn todo_tool_runtime(
 async fn ext259_one_frozen_composition_decides_todo_state_tool_and_projection() {
     for composed in [true, false] {
         let extensions = composition(serde_json::json!({"todo": {"enabled": composed}}));
-        let (_dir, runtime) = todo_tool_runtime("conv-ext259-one-decision", &extensions);
+        let (_dir, runtime) =
+            todo_tool_runtime("conv_cb8257ee-cdd7-7aed-b02b-c582225ce1b4", &extensions);
 
         // Facet 1: the conversation-owned Todo state authority.
-        assert_eq!(runtime.todos().is_some(), composed);
-        assert_eq!(runtime.todo_snapshot().is_some(), composed);
+        assert!(runtime.todos().is_some());
+        assert!(runtime.todo_snapshot().is_some());
 
         // Facet 2: the extension Tool plane, derived from facet 1.
-        let plane = runtime.extension_tool_plane();
+        let plane = runtime.extension_tool_plane_for(&extensions);
         assert_eq!(
             plane.tool_names(),
             if composed {
@@ -2168,20 +2139,33 @@ async fn ext259_neither_mismatched_todo_runtime_can_be_constructed() {
         ExtensionToolPlane::none().tool_names().is_empty(),
         "the one public plane constructor cannot publish an extension Tool"
     );
-    let (_absent_dir, absent) =
-        todo_tool_runtime("conv-ext259-absent", &NativeAgentExtensions::none());
-    assert!(absent.todos().is_none() && absent.extension_tool_plane().tool_names().is_empty());
+    let (_absent_dir, absent) = todo_tool_runtime(
+        "conv_b1dfe066-27bb-7c0f-9d43-9ecafed89054",
+        &NativeAgentExtensions::none(),
+    );
+    assert!(
+        absent.todos().is_some()
+            && absent
+                .extension_tool_plane_for(absent.extensions())
+                .tool_names()
+                .is_empty()
+    );
 
     // ---- Todo state without the Todo Tool: refused at construction ----
     //
     // Both runtimes are real and individually coherent; the coordinator is
     // composed from the *wrong* one's materialization. That is the only way
     // left to spell the mismatch, and it fails closed.
-    let (_owning_dir, owning) =
-        todo_tool_runtime("conv-ext259-owning", &NativeAgentExtensions::with_todo());
+    let (_owning_dir, owning) = todo_tool_runtime(
+        "conv_10377eee-6780-75cf-9386-446246bbd01c",
+        &NativeAgentExtensions::with_todo(),
+    );
     assert!(owning.todos().is_some());
-    let mismatched =
-        conversation_runtime_with_extension_plane(&owning, absent.extension_tool_plane()).await;
+    let mismatched = conversation_runtime_with_extension_plane(
+        &owning,
+        absent.extension_tool_plane_for(absent.extensions()),
+    )
+    .await;
     assert!(
         matches!(
             mismatched,
@@ -2203,27 +2187,21 @@ async fn ext259_neither_mismatched_todo_runtime_can_be_constructed() {
     // conversation that owns no list may not be served a plane that offers
     // the Tool.
     let (_second_owner_dir, second_owner) = todo_tool_runtime(
-        "conv-ext259-second-owner",
+        "conv_753fa01e-54ae-75d1-b538-4de65bb9b298",
         &NativeAgentExtensions::with_todo(),
     );
     let reversed =
         conversation_runtime_with_extension_plane(&absent, second_owner.extension_tool_plane())
             .await;
+    let reversed = reversed.expect("an unselected backing plane grants no capability");
     assert!(
-        matches!(
-            reversed,
-            Err(
-                rustx::runtime::ConversationRuntimeError::ExtensionCompositionMismatch {
-                    composed_todo: false,
-                    materialized_todo_state: false,
-                    configured_todo_tool: true,
-                    active_todo_tool: true,
-                    ..
-                }
-            )
-        ),
-        "a conversation with no list may not be offered the todo Tool: {:?}",
-        reversed.err()
+        !reversed
+            .runtime
+            .capability()
+            .current_snapshot()
+            .tool_registry()
+            .names()
+            .contains(&"todo")
     );
 
     // And the coherent pairing of the same two facets constructs normally,
@@ -2268,7 +2246,7 @@ async fn ext259_neither_mismatched_todo_runtime_can_be_constructed() {
 async fn ext259_a_configured_but_unpublished_todo_tool_cannot_become_a_runtime() {
     // ---- Case A: configured, never published ----
     let (_dir, tool_runtime) = todo_tool_runtime(
-        "conv-ext259-unpublished",
+        "conv_9af20b57-8bf5-7fd2-a506-180663ec20b7",
         &NativeAgentExtensions::with_todo(),
     );
 
@@ -2327,8 +2305,10 @@ async fn ext259_a_configured_but_unpublished_todo_tool_cannot_become_a_runtime()
     // have consumed one-shot ownership — proved separately by
     // `ext259_a_refused_active_capability_check_consumes_no_ownership` — and
     // because one coordinator identity binds at most one runtime.
-    let (_published_dir, published_runtime) =
-        todo_tool_runtime("conv-ext259-published", &NativeAgentExtensions::with_todo());
+    let (_published_dir, published_runtime) = todo_tool_runtime(
+        "conv_cdbd1235-337b-7c0e-8612-1d7a9c9574b3",
+        &NativeAgentExtensions::with_todo(),
+    );
     let published = extension_capability(
         &published_runtime,
         published_runtime.extension_tool_plane(),
@@ -2360,7 +2340,7 @@ async fn ext259_a_configured_but_unpublished_todo_tool_cannot_become_a_runtime()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ext259_a_refused_active_capability_check_consumes_no_ownership() {
     let (_dir, tool_runtime) = todo_tool_runtime(
-        "conv-ext259-no-consume",
+        "conv_304ec7aa-a2c3-7eee-8c65-f04978745f3d",
         &NativeAgentExtensions::with_todo(),
     );
 
@@ -2416,7 +2396,8 @@ async fn ext259_the_effective_projection_cannot_disagree_with_the_tool_plane() {
             "todo": {"enabled": composed},
             "agent_status": {"enabled": false},
         }));
-        let (_dir, tool_runtime) = todo_tool_runtime("conv-ext259-projection", &extensions);
+        let (_dir, tool_runtime) =
+            todo_tool_runtime("conv_48c9607b-57a2-726f-ae90-73fc36c4287f", &extensions);
         let composed_runtime = conversation_runtime_with_extension_plane(
             &tool_runtime,
             tool_runtime.extension_tool_plane(),
@@ -2436,21 +2417,20 @@ async fn ext259_the_effective_projection_cannot_disagree_with_the_tool_plane() {
             "and it is the authoritative Todo answer"
         );
         assert_eq!(
-            rustx::runtime_client::settings::EffectiveNativeAgentExtensions::project(&projected)
+            rustx::runtime_client::settings::EffectivePlugins::project(&projected)
                 .todo
                 .is_some(),
             composed,
             "the wire projection carries exactly that fact"
         );
-        assert_eq!(
+        assert!(
             runtime.tool_runtime().todos().is_some(),
-            composed,
-            "beside the Todo state the same decision materialized"
+            "Conversation-owned current state remains available independently"
         );
         assert_eq!(
             runtime
                 .tool_runtime()
-                .extension_tool_plane()
+                .extension_tool_plane_for(&projected)
                 .tool_names()
                 .contains(&"todo".to_owned()),
             composed,
@@ -2518,7 +2498,7 @@ fn assert_goal_tool_result(result: &AgentExecutionResult, id: &str, error: Optio
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn goal84_human_authorization_survives_read_and_test_steps_before_create() {
     let extensions = NativeAgentExtensions::none().and_goal();
-    let (_dir, tools) = todo_tool_runtime("goal-delayed-create", &extensions);
+    let (_dir, tools) = todo_tool_runtime("conv_bdc47e57-43fd-7174-8d21-5ed2a01531bf", &extensions);
     let model = fake_model(vec![
         tool_turn(&[scripted("read", "goal-read", "read")]),
         tool_turn(&[scripted("test", "goal-bash", "bash")]),
@@ -2554,7 +2534,8 @@ async fn goal84_successful_create_consumes_authorization_even_within_one_tool_ba
     // before the enclosing ToolResult batch has settled.
     for same_batch in [false, true] {
         let extensions = NativeAgentExtensions::none().and_goal();
-        let (_dir, tools) = todo_tool_runtime("goal-consumed", &extensions);
+        let (_dir, tools) =
+            todo_tool_runtime("conv_f5c4d9b8-98e1-7ed5-81f0-ad6d90829090", &extensions);
         let mut second = goal_create_call();
         second.id = "second-create";
         let calls = [goal_create_call(), goal_complete_call(), second];
@@ -2598,7 +2579,7 @@ async fn goal84_successful_create_consumes_authorization_even_within_one_tool_ba
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn goal84_failed_create_retains_authorization_for_later_valid_create() {
     let extensions = NativeAgentExtensions::none().and_goal();
-    let (_dir, tools) = todo_tool_runtime("goal-rejected-create", &extensions);
+    let (_dir, tools) = todo_tool_runtime("conv_bf715f40-23c5-7fa9-b71f-7891e0a2410e", &extensions);
     let mut invalid = goal_create_call();
     invalid.id = "invalid-create";
     invalid.arguments["autonomous_round_budget"] = serde_json::json!(0);
@@ -2635,7 +2616,8 @@ async fn goal84_failed_create_retains_authorization_for_later_valid_create() {
 async fn goal84_recovery_authorizes_pending_human_but_does_not_infer_continuation_authority() {
     for already_adopted in [false, true] {
         let extensions = NativeAgentExtensions::none().and_goal();
-        let (_dir, tools) = todo_tool_runtime("goal-recovery-authority", &extensions);
+        let (_dir, tools) =
+            todo_tool_runtime("conv_3006f1b9-cb5a-7f6f-ac57-889774a1100e", &extensions);
         let store = tools.durable_store();
         store.initialize(&[]).unwrap();
         let human = inbound("recovered-human", "Keep working until tests pass");
@@ -2759,7 +2741,7 @@ async fn goal84_safe_boundary_runtime_input_preserves_human_authorization() {
 
 async fn goal_safe_boundary_origin(source: UserSource, newer_human: bool) {
     let extensions = NativeAgentExtensions::none().and_goal();
-    let (_dir, tools) = todo_tool_runtime("goal-origin-boundary", &extensions);
+    let (_dir, tools) = todo_tool_runtime("conv_75f4ca52-06ba-77e2-99fe-3830abcc01cc", &extensions);
     let (release, wait) = support::fake::model_release();
     let mut first = tool_turn(&[scripted("read-a", "goal-read", "read")]);
     first.insert(1, FakeStep::ParkUntilReleased(wait));
@@ -2875,7 +2857,7 @@ async fn goal_safe_boundary_origin(source: UserSource, newer_human: bool) {
 async fn goal84_runtime_client_projection_same_cursor_controls_activation_and_replay() {
     use rustx::goal::{GoalControl, GoalMutation};
     let extensions = NativeAgentExtensions::none().and_goal();
-    let (_dir, tools) = todo_tool_runtime("goal-cursors", &extensions);
+    let (_dir, tools) = todo_tool_runtime("conv_daf85bf4-ff53-7400-afbf-d4e4d8b4dc5b", &extensions);
     let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
     let capability =
         extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
@@ -3032,7 +3014,8 @@ async fn goal84_runtime_client_projection_same_cursor_controls_activation_and_re
 async fn goal84_runtime_client_subscriber_sees_model_create_block_and_complete() {
     for complete in [false, true] {
         let extensions = NativeAgentExtensions::none().and_goal();
-        let (_dir, tools) = todo_tool_runtime("goal-live-model", &extensions);
+        let (_dir, tools) =
+            todo_tool_runtime("conv_c5cf0c58-3ee4-79e6-a894-4f2daea7b44f", &extensions);
         let update = ScriptedCall {
             id: "update",
             tool_id: "native.update_goal",
@@ -3098,7 +3081,8 @@ async fn goal84_model_mutation_and_drain_have_one_owned_commit_order() {
     for inside in [false, true] {
         for update in [false, true] {
             let extensions = NativeAgentExtensions::none().and_goal();
-            let (_dir, tools) = todo_tool_runtime("goal-drain-tool", &extensions);
+            let (_dir, tools) =
+                todo_tool_runtime("conv_098ec358-50f6-79ee-8405-fa8496732020", &extensions);
             if update {
                 tools
                     .goal()

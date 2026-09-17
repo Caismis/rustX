@@ -993,7 +993,7 @@ async fn run(
     lifecycle: AttemptLifecycle,
     cancellation: &AgentCancellation,
 ) -> common::DurableExecutionAudit {
-    let tool_runtime = common::tool_runtime("conv-issue56");
+    let tool_runtime = common::tool_runtime("conv_393d0148-e012-70f2-88f3-59c22ab51ae1");
     let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
@@ -1216,7 +1216,7 @@ async fn cancellation_after_pending_pre_tool_error_does_not_fail_closed_as_denie
 async fn native_ask_cancellation_settles_through_the_real_coordinator() {
     let lifecycle = ConversationLifecycle::new();
     assert!(lifecycle.activate());
-    let conversation_id = ConversationId::new("conv-issue56");
+    let conversation_id = ConversationId::new("conv_393d0148-e012-70f2-88f3-59c22ab51ae1");
     let coordinator = Arc::new(InteractionCoordinator::new(
         conversation_id.clone(),
         lifecycle,
@@ -1312,7 +1312,7 @@ async fn native_ask_cancellation_settles_through_the_real_coordinator() {
 async fn requested_route_loss_fails_the_attempt_after_publication() {
     let lifecycle = ConversationLifecycle::new();
     assert!(lifecycle.activate());
-    let conversation_id = ConversationId::new("conv-issue56");
+    let conversation_id = ConversationId::new("conv_393d0148-e012-70f2-88f3-59c22ab51ae1");
     let audit = RecordingInteractionAudit::new(conversation_id.clone());
     let coordinator = Arc::new(InteractionCoordinator::new(
         conversation_id,
@@ -1412,7 +1412,7 @@ async fn requested_route_loss_fails_the_attempt_after_publication() {
 async fn settled_route_loss_is_not_a_healthy_waiter_release() {
     let lifecycle = ConversationLifecycle::new();
     assert!(lifecycle.activate());
-    let conversation_id = ConversationId::new("conv-issue56");
+    let conversation_id = ConversationId::new("conv_393d0148-e012-70f2-88f3-59c22ab51ae1");
     let audit = RecordingInteractionAudit::new(conversation_id.clone());
     let coordinator = Arc::new(InteractionCoordinator::new(
         conversation_id,
@@ -2648,27 +2648,36 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
     let order = Arc::new(Mutex::new(Vec::new()));
     let (tool, _handle) = GatedTool::new(impostor, Arc::clone(&order));
     tool.register(&mut tools);
-    let impostor_observer = Arc::new(RecordingObserver::new(Vec::new()));
-    let impostor_recorded = impostor_observer.recorded();
-    let impostor_model = fake_model(tool_turn_then_stop(&[ScriptedCall {
-        id: "call-read",
-        tool_id: "tool-mcp-read",
-        name: "read",
-        arguments: serde_json::json!({}),
-    }]));
-    let impostor_result = run(
-        &impostor_model,
-        tools,
-        ContextAssembly::new(),
-        native_lifecycle(impostor_observer),
-        &AgentCancellation::new(CancellationReason::UserRequested),
-    )
-    .await;
-    assert!(
-        matches!(impostor_result.outcome, AttemptOutcome::Failed { .. }),
-        "an undefined source cannot acquire authority from registration alone"
+    let source = rustx::capabilities::ToolSourceId::Mcp(
+        rustx::runtime::identity::McpServerId::new("mcp-fs"),
     );
-    assert!(impostor_recorded.lock().expect("recorded lock").is_empty());
+    let mut activation = rustx::capabilities::AgentActivation::default();
+    activation.profile.tools.sources.insert(
+        source,
+        rustx::capabilities::selection::SourceToolSelection::All,
+    );
+    let env = tempfile::tempdir().unwrap();
+    let coordinator = rustx::capabilities::CapabilityCoordinator::new(
+        rustx::capabilities::CapabilityCoordinatorConfig {
+            conversation_id: fixture.runtime.conversation_id().clone(),
+            workspace: fixture.runtime.workspace().clone(),
+            environment_store_root: env.path().join("environments"),
+            source_demand: crate::capabilities::source::ToolSourceDemand::default(),
+            base_tool_registry: Arc::new(tools),
+            extension_tools: rustx::extensions::ExtensionToolPlane::none(),
+            agent_activation: activation,
+            skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
+            mcp_servers: std::collections::BTreeMap::default(),
+            base_environment: crate::tools::ToolEnvironment::default(),
+        },
+    )
+    .unwrap();
+    let refusal = coordinator.prepare_candidate().await.unwrap_err();
+    assert!(format!("{refusal:?}").contains("Undefined"), "{refusal:?}");
+    assert!(
+        order.lock().unwrap().is_empty(),
+        "registration alone admits no external execution"
+    );
     let mut impostor = native[0].clone();
     impostor.origin = ToolOrigin::Mcp {
         server_id: rustx::runtime::identity::McpServerId::new("mcp-fs"),

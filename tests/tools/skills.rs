@@ -44,10 +44,7 @@ fn fixture() -> (tempfile::TempDir, Workspace) {
 }
 
 fn discover(workspace: &Workspace) -> Vec<rustx::skills::SkillPackage> {
-    project_discovery(workspace)
-        .discover()
-        .expect("discover")
-        .packages
+    project_discovery(workspace).discover().packages
 }
 
 /// The single typed exclusion cause of a workspace root holding exactly one
@@ -56,7 +53,7 @@ fn discover(workspace: &Workspace) -> Vec<rustx::skills::SkillPackage> {
 /// A malformed package is never a discovery failure (#280): it is excluded
 /// with a typed generation diagnostic at the package boundary that owns it.
 fn invalid_cause(workspace: &Workspace) -> SkillPackageError {
-    let outcome = project_discovery(workspace).discover().expect("discovery");
+    let outcome = project_discovery(workspace).discover();
     assert!(
         outcome.packages.is_empty(),
         "the malformed candidate must not publish, got {:?}",
@@ -88,7 +85,7 @@ fn project_discovery(workspace: &Workspace) -> SkillDiscovery {
 #[test]
 fn missing_skill_root_is_an_empty_skill_set() {
     let (_dir, workspace) = fixture();
-    let outcome = project_discovery(&workspace).discover().expect("discover");
+    let outcome = project_discovery(&workspace).discover();
     assert!(outcome.packages.is_empty());
 }
 
@@ -288,7 +285,7 @@ fn package_symlinks_are_rejected() {
         dir.path().join(".agents/skills/link"),
     )
     .expect("symlink root");
-    let outcome = project_discovery(&workspace).discover().expect("discovery");
+    let outcome = project_discovery(&workspace).discover();
     // The valid sibling still publishes; only the symlinked root is excluded.
     assert_eq!(
         outcome
@@ -313,9 +310,7 @@ fn package_symlinks_are_rejected() {
         dir2.path().join(".agents/skills/skill/scripts"),
     )
     .expect("internal symlink");
-    let internal = project_discovery(&workspace2)
-        .discover()
-        .expect("discovery");
+    let internal = project_discovery(&workspace2).discover();
     assert!(internal.packages.is_empty());
     assert!(matches!(
         internal.diagnostics.as_slice(),
@@ -358,10 +353,9 @@ fn a_non_canonical_package_root_is_published_canonically() {
     ] {
         let outcome = SkillDiscovery::with_config(
             &workspace,
-            SkillDiscoveryConfig::explicit(vec![explicit.clone()]),
+            SkillDiscoveryConfig::workspace_root(explicit.parent().unwrap().to_path_buf()),
         )
-        .discover()
-        .expect("discovery accepts a non-canonical root");
+        .discover();
         let snapshot = rustx::skills::SkillSnapshot::from_discovery(outcome);
         let location = snapshot.catalog_entries()[0].location.clone();
         let published = std::path::Path::new(&location);
@@ -422,10 +416,11 @@ fn a_non_utf8_package_root_is_rejected_rather_than_published_lossily() {
     )
     .expect("SKILL.md");
 
-    let outcome =
-        SkillDiscovery::with_config(&workspace, SkillDiscoveryConfig::explicit(vec![package]))
-            .discover()
-            .expect("an explicit path that exists is not a launch failure");
+    let outcome = SkillDiscovery::with_config(
+        &workspace,
+        SkillDiscoveryConfig::workspace_root(package.parent().unwrap().to_path_buf()),
+    )
+    .discover();
     assert!(outcome.packages.is_empty());
     assert!(
         matches!(
@@ -470,7 +465,8 @@ async fn bash_reaches_skill_assets_through_the_published_location() {
         .expect("skill directory")
         .to_path_buf();
 
-    let conversation_id = rustx::runtime::identity::ConversationId::new("conv-m6-assets");
+    let conversation_id =
+        rustx::runtime::identity::ConversationId::new("conv_8ecf8c4f-141c-7493-8f52-692cc55da299");
     let artifacts = dir.path().join("artifacts");
     let artifacts_store =
         rustx::tools::artifacts::ArtifactStore::new(conversation_id.clone(), &artifacts)
@@ -557,7 +553,8 @@ async fn bash_reaches_skill_assets_through_the_published_location() {
 async fn bash_cd_cannot_redefine_the_skill_root() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "pdf", "PDF skill.", &[], "body\n");
-    let conversation_id = rustx::runtime::identity::ConversationId::new("conv-m6");
+    let conversation_id =
+        rustx::runtime::identity::ConversationId::new("conv_6c966d7f-bdde-792f-8692-51542a5c1834");
     let artifacts = dir.path().join("artifacts");
     let registry = rustx::tools::executor::ToolRegistry::new();
     let mut registry = registry;
@@ -951,7 +948,7 @@ fn malformed_dependency_declaration_excludes_only_its_own_package() {
         &[("rustx.python-dependencies", r#"{"pypdf":"not a version"}"#)],
         "body\n",
     );
-    let outcome = project_discovery(&workspace).discover().expect("discovery");
+    let outcome = project_discovery(&workspace).discover();
     assert_eq!(
         outcome
             .packages
@@ -996,35 +993,20 @@ fn catalog_rendering_is_exact_and_publishes_host_skill_locations() {
     let packages = discover(&workspace);
     let snapshot =
         rustx::skills::SkillSnapshot::new(packages.into_iter().map(std::sync::Arc::new).collect());
-    let rendered = render_skill_catalog(snapshot.catalog_entries());
+    let rendered = render_skill_catalog(
+        snapshot.catalog_entries(),
+        &rustx::skills::automatic_skill_roots(None, workspace.root()),
+    );
     let skills_root = workspace.root().join(".agents/skills");
     let pdf = skills_root.join("pdf/SKILL.md").display().to_string();
     let slides = skills_root.join("slides/SKILL.md").display().to_string();
-    let expected = format!(
-        concat!(
-            "## Skills\n\n",
-            "The following skills provide specialized instructions for specific tasks.\n",
-            "Use the Read tool to load a skill when the task matches its description.\n",
-            "When a skill file references a relative path, resolve it against the skill ",
-            "directory (the parent of its SKILL.md) and use that absolute path in tool ",
-            "commands.\n\n",
-            "<available_skills>\n",
-            "  <skill>\n",
-            "    <name>pdf</name>\n",
-            "    <description>Create, edit, inspect, and transform PDF documents.</description>\n",
-            "    <location>{pdf}</location>\n",
-            "  </skill>\n",
-            "  <skill>\n",
-            "    <name>slides</name>\n",
-            "    <description>Create and modify presentation decks.</description>\n",
-            "    <location>{slides}</location>\n",
-            "  </skill>\n",
-            "</available_skills>"
-        ),
-        pdf = pdf,
-        slides = slides
+    assert!(rendered.contains(&skills_root.display().to_string()));
+    assert!(rendered.contains("<name>pdf</name>") && rendered.contains("<name>slides</name>"));
+    assert!(rendered.contains("prompt visibility, not filesystem access"));
+    assert!(
+        !rendered.contains(&pdf) && !rendered.contains(&slides),
+        "only root paths enter the prompt"
     );
-    assert_eq!(rendered, expected);
     assert!(!rendered.contains("body"), "SKILL.md bodies never appear");
     assert!(
         !rendered.contains("rustx.python-dependencies"),

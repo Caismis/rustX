@@ -7,13 +7,13 @@
 //! ```text
 //! managed tool-output root
 //!     |
-//!     +-- results/result_N.txt   ResultSpill: foreground result overflow
+//!     +-- results/result_<uuid-v7>.txt   ResultSpill: foreground result overflow
 //!     |                          storage. Allocated lazily, only when a
 //!     |                          textual result crosses the shared preview
 //!     |                          threshold. Small output never touches the
 //!     |                          filesystem.
 //!     |
-//!     +-- tasks/exec_N.output    BackgroundOutput: the live output channel
+//!     +-- tasks/exec_<uuid-v7>.output    BackgroundOutput: the live output channel
 //!                                of one accepted background execution.
 //!                                Allocated at the background dispatch
 //!                                commit point, before the accepted result
@@ -47,31 +47,16 @@
 //!
 //! # Allocation
 //!
-//! Result spills are allocated lazily under one monotonic sequence
-//! (`result_1.txt`, `result_2.txt`, ...). Background output files are
-//! allocated eagerly at dispatch under the execution identity itself
-//! (`exec_N.output`), because the execution id is already the unique,
-//! monotonic, restart-reseeded identity of the execution. All allocations
-//! open with `create_new` and never overwrite an existing file.
-//!
-//! The result-spill sequence is **restart safe** without being durable
-//! semantic state: construction seeds the process-local high-water mark
-//! from the existing `result_N.txt` names, so a reconstructed runtime over
-//! a retained storage root continues monotonically. Background execution
-//! ids are reseeded above every durably committed ordinal at startup
-//! recovery (Issue #12, M9a), so a new execution never reuses the identity
-//! — and therefore never the output path — of a durably owned execution.
-//! The one collision a background allocation can still observe is the
-//! residue of a pre-commit crash (the file was allocated but the durable
-//! ownership fact never committed, so the execution never existed); that
-//! stale file is replaced explicitly. The sequences themselves are
-//! auxiliary storage identity, not conversation state; nothing about them
-//! is persisted.
+//! Foreground spills use fresh `UUIDv7` names and bounded collision retries.
+//! Background output uses the execution identity without replacing collisions.
+//! Every allocation uses `create_new`; reconstruction never scans filenames.
 
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 
 use crate::runtime::identity::{ConversationId, ToolExecutionId};
 
@@ -86,8 +71,8 @@ pub enum ManagedOutputError {
     /// artifact root, or an arbitrary host directory), because its
     /// canonical path is an authorized read root.
     SymlinkRoot(String),
-    /// The result-spill sequence space is exhausted.
-    SequenceExhausted,
+    /// The bounded identity reservation attempts all collided.
+    IdentityCollision,
     /// An output file cannot be opened.
     OpenFailed(String),
     /// A model-originated mutation attempted to target the managed-output
@@ -105,8 +90,8 @@ impl core::fmt::Display for ManagedOutputError {
                 f,
                 "the managed tool-output root must be real directories, not symlinks: {message}"
             ),
-            Self::SequenceExhausted => {
-                write!(f, "the managed tool-output sequence space is exhausted")
+            Self::IdentityCollision => {
+                write!(f, "managed tool-output identity reservation exhausted")
             }
             Self::OpenFailed(message) => write!(f, "cannot open an output file: {message}"),
             Self::ModelMutationReadOnly(path) => write!(
@@ -125,9 +110,9 @@ const RESULTS_DIR: &str = "results";
 const TASKS_DIR: &str = "tasks";
 
 /// The synchronized allocation state of one managed tool-output store.
+#[cfg(test)]
 #[derive(Debug)]
 struct ManagedOutputState {
-    next: u64,
     /// Test-only seam: when set, every output allocation/open fails, so
     /// tests can prove producers represent output failure explicitly.
     /// Never set outside `#[cfg(test)]`.
@@ -150,7 +135,9 @@ pub struct ManagedToolOutput {
     lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     conversation_id: ConversationId,
     root: PathBuf,
+    #[cfg(test)]
     state: Arc<Mutex<ManagedOutputState>>,
+    identities: Arc<dyn crate::runtime::identity::UuidV7Generator>,
 }
 
 impl ManagedToolOutput {
@@ -174,10 +161,7 @@ impl ManagedToolOutput {
     /// because the canonical root becomes an authorized model-readable
     /// root and the runtime itself appends through these paths.
     ///
-    /// The result-spill sequence is seeded from the existing
-    /// `result_N.txt` names in `results/`, so reconstructing a store over
-    /// a retained storage root continues monotonically instead of
-    /// colliding with older spill files.
+    /// Reconstruction retains existing files and never scans names to derive identity.
     ///
     /// # Errors
     ///
@@ -204,13 +188,13 @@ impl ManagedToolOutput {
                 ManagedOutputError::RootUnavailable(format!("{}: {error}", subdirectory.display()))
             })?;
         }
-        let next = spill_high_water(&canonical.join(RESULTS_DIR))?;
         Ok(Self {
             lifecycle: None,
+            identities: Arc::new(crate::runtime::identity::SystemUuidV7Generator),
             conversation_id,
             root: canonical,
+            #[cfg(test)]
             state: Arc::new(Mutex::new(ManagedOutputState {
-                next,
                 #[cfg(test)]
                 force_open_failures: false,
                 #[cfg(test)]
@@ -244,14 +228,23 @@ impl ManagedToolOutput {
             .fail_writes_after = Some(bytes);
     }
 
-    /// Test-only seam: exhausts the result-spill sequence so the next
-    /// allocation fails explicitly. Only available under `#[cfg(test)]`.
-    #[cfg(test)]
-    pub(crate) fn exhaust_sequence(&self) {
-        self.state
-            .lock()
-            .expect("managed tool-output lock poisoned")
-            .next = u64::MAX;
+    /// Inject identity allocation to exercise collision paths deterministically.
+    #[must_use]
+    pub fn with_identity_generator(
+        mut self,
+        identities: Arc<dyn crate::runtime::identity::UuidV7Generator>,
+    ) -> Self {
+        self.identities = identities;
+        self
+    }
+
+    /// Allocate an execution identity using the same injectable identity authority.
+    /// The caller must reserve its output path before accepting the execution.
+    /// # Errors
+    /// Rejects an injected identity that is not a valid `UUIDv7`.
+    pub fn execution_identity(&self) -> Result<ToolExecutionId, ManagedOutputError> {
+        ToolExecutionId::from_uuid(self.identities.next_uuid())
+            .map_err(ManagedOutputError::OpenFailed)
     }
 
     /// The conversation this store belongs to.
@@ -293,25 +286,13 @@ impl ManagedToolOutput {
 
     /// Allocates and opens one result spill for streaming complete output.
     ///
-    /// A result spill is allocated lazily, only when a textual result has
-    /// crossed its model-facing bound. Allocation never overwrites an
-    /// existing spill: the file is opened with `create_new`, and when the
-    /// name already exists — stale spill of an earlier runtime lifetime
-    /// over this retained root, or a second store momentarily sharing the
-    /// root — the sequence advances to the next name instead of failing or
-    /// truncating. The high-water seeding at construction makes the common
-    /// restart case collision-free.
+    /// Allocation uses `UUIDv7` and `create_new`. A collision retries at most sixteen
+    /// times, then fails without touching any existing file.
     ///
     /// # Errors
-    ///
-    /// Returns [`ManagedOutputError::SequenceExhausted`] when the sequence
-    /// space is exhausted and [`ManagedOutputError::OpenFailed`] when the
-    /// file cannot be opened for any reason other than a name collision.
-    ///
+    /// Returns identity exhaustion or an I/O error without overwriting files.
     /// # Panics
-    ///
-    /// Panics only if the allocation lock is poisoned, which would mean a
-    /// previous operation panicked while holding the lock.
+    /// Test builds panic if the injected allocation-failure lock is poisoned.
     pub fn open_spill(&self) -> Result<ResultSpill, ManagedOutputError> {
         #[cfg(test)]
         let fail_writes_after = self
@@ -319,29 +300,28 @@ impl ManagedToolOutput {
             .lock()
             .expect("managed tool-output allocation lock poisoned")
             .fail_writes_after;
-        loop {
-            let sequence = {
-                let mut state = self
-                    .state
-                    .lock()
-                    .expect("managed tool-output allocation lock poisoned");
-                let next = state
-                    .next
-                    .checked_add(1)
-                    .ok_or(ManagedOutputError::SequenceExhausted)?;
-                #[cfg(test)]
-                if state.force_open_failures {
-                    return Err(ManagedOutputError::OpenFailed(
-                        "test-forced output open failure".to_owned(),
-                    ));
-                }
-                state.next = next;
-                next
-            };
+        for _ in 0..16 {
+            #[cfg(test)]
+            if self
+                .state
+                .lock()
+                .expect("managed output lock")
+                .force_open_failures
+            {
+                return Err(ManagedOutputError::OpenFailed(
+                    "test-forced output open failure".into(),
+                ));
+            }
+            let identity = self.identities.next_uuid();
+            if !crate::runtime::identity::is_uuid_v7(identity) {
+                return Err(ManagedOutputError::OpenFailed(
+                    "identity generator returned a non-UUIDv7 value".into(),
+                ));
+            }
             let path = self
                 .root
                 .join(RESULTS_DIR)
-                .join(format!("result_{sequence}.txt"));
+                .join(format!("result_{identity}.txt"));
             match File::options().create_new(true).write(true).open(&path) {
                 Ok(file) => {
                     return Ok(ResultSpill {
@@ -364,14 +344,14 @@ impl ManagedToolOutput {
                 }
             }
         }
+        Err(ManagedOutputError::IdentityCollision)
     }
 
     /// The canonical absolute live-output locator of one background
     /// execution, allocated or not.
     ///
     /// The path derives deterministically from the execution identity: the
-    /// execution id is already the unique monotonic identity of the
-    /// execution, so the output path needs no separate sequence.
+    /// execution identity is also the locator identity.
     #[must_use]
     pub fn background_output_path(&self, execution_id: &ToolExecutionId) -> PathBuf {
         self.root
@@ -387,13 +367,8 @@ impl ManagedToolOutput {
     /// append from byte zero. Allocation uses `create_new` and never
     /// overwrites.
     ///
-    /// The only possible name collision is the residue of a pre-commit
-    /// crash of an earlier runtime lifetime: the file was allocated but the
-    /// durable ownership fact never committed, so that execution never
-    /// existed durably and its allocated path is legitimately reclaimed.
-    /// A durably owned execution can never collide, because startup
-    /// recovery reseeds the execution sequence above every durable
-    /// ordinal.
+    /// An existing path always refuses allocation, including pre-commit residue.
+    /// The owner may retry with a new identity before accepting any execution.
     ///
     /// # Errors
     ///
@@ -422,30 +397,14 @@ impl ManagedToolOutput {
             ));
         }
         let path = self.background_output_path(execution_id);
-        for attempt in 0..2u32 {
-            match File::options().create_new(true).write(true).open(&path) {
-                Ok(_file) => return Ok(path),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && attempt == 0 => {
-                    // Pre-commit crash residue of an execution that never
-                    // committed durably (see the method documentation):
-                    // reclaim the path explicitly instead of appending to
-                    // or keeping a stale file.
-                    std::fs::remove_file(&path).map_err(|error| {
-                        ManagedOutputError::OpenFailed(format!("{}: {error}", path.display()))
-                    })?;
-                }
-                Err(error) => {
-                    return Err(ManagedOutputError::OpenFailed(format!(
-                        "{}: {error}",
-                        path.display()
-                    )));
-                }
-            }
-        }
-        Err(ManagedOutputError::OpenFailed(format!(
-            "{}: cannot reclaim the stale output file",
-            path.display()
-        )))
+        File::options()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .map_err(|error| {
+                ManagedOutputError::OpenFailed(format!("{}: {error}", path.display()))
+            })?;
+        Ok(path)
     }
 
     /// Discards the live-output file of a background dispatch that rolled
@@ -515,34 +474,6 @@ fn reject_symlink(path: &Path) -> Result<(), ManagedOutputError> {
         return Err(ManagedOutputError::SymlinkRoot(path.display().to_string()));
     }
     Ok(())
-}
-
-/// The high-water mark of the existing `result_N.txt` spill names in one
-/// canonical results directory, so a reconstructed store continues the
-/// sequence monotonically instead of colliding with spills of an earlier
-/// runtime lifetime.
-fn spill_high_water(results: &Path) -> Result<u64, ManagedOutputError> {
-    let mut high = 0u64;
-    let entries = std::fs::read_dir(results).map_err(|error| {
-        ManagedOutputError::RootUnavailable(format!("{}: {error}", results.display()))
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            ManagedOutputError::RootUnavailable(format!("{}: {error}", results.display()))
-        })?;
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        let Some(number) = name
-            .strip_prefix("result_")
-            .and_then(|rest| rest.strip_suffix(".txt"))
-        else {
-            continue;
-        };
-        if let Ok(number) = number.parse::<u64>() {
-            high = high.max(number);
-        }
-    }
-    Ok(high)
 }
 
 /// One open result spill: the complete textual content of one oversized
@@ -659,35 +590,37 @@ mod tests {
     use crate::runtime::identity::{ConversationId, ToolExecutionId};
 
     fn store(root: &std::path::Path) -> ManagedToolOutput {
-        ManagedToolOutput::new(ConversationId::new("conv-1"), root.join("tool-output"))
-            .expect("store")
+        ManagedToolOutput::new(
+            ConversationId::new("conv_01900000-0000-7000-8000-000000000001"),
+            root.join("tool-output"),
+        )
+        .expect("store")
     }
 
     #[test]
-    fn spill_allocation_is_monotonic_collision_safe_and_absolute() {
+    fn spill_allocation_has_distinct_uuid_v7_names_and_absolute_paths() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = store(dir.path());
         let first = store.open_spill().expect("first");
         let second = store.open_spill().expect("second");
         assert!(first.path().is_absolute());
-        assert!(first.path().ends_with("results/result_1.txt"));
-        assert!(second.path().ends_with("results/result_2.txt"));
+        assert_ne!(first.path(), second.path());
+        for path in [first.path(), second.path()] {
+            assert_eq!(path.parent(), Some(store.root().join("results").as_path()));
+            let name = path
+                .file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .strip_prefix("result_")
+                .unwrap();
+            assert_eq!(uuid::Uuid::parse_str(name).unwrap().get_version_num(), 7);
+        }
         assert!(
             first.path().starts_with(store.root()),
             "spill lives under the managed root"
         );
         assert_eq!(std::fs::read(first.path()).expect("read"), b"");
-    }
-
-    #[test]
-    fn sequence_exhaustion_fails_explicitly() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = store(dir.path());
-        store.exhaust_sequence();
-        assert_eq!(
-            store.open_spill().expect_err("exhausted"),
-            ManagedOutputError::SequenceExhausted
-        );
     }
 
     #[test]
@@ -697,9 +630,9 @@ mod tests {
         let mut spill = store.open_spill().expect("open");
         spill.write_all("hello\n").expect("write");
         spill.write_all("emoji: 😀\n").expect("write");
+        let path = spill.path().to_owned();
         drop(spill);
-        let text = std::fs::read_to_string(store.root().join("results/result_1.txt"))
-            .expect("the spill is valid UTF-8 text");
+        let text = std::fs::read_to_string(path).expect("the spill is valid UTF-8 text");
         assert_eq!(text, "hello\nemoji: 😀\n");
     }
 
@@ -711,18 +644,23 @@ mod tests {
     fn reconstruction_over_a_retained_root_never_collides_or_overwrites() {
         let dir = tempfile::tempdir().expect("temp dir");
         let root = dir.path().join("tool-output");
-        let first_store =
-            ManagedToolOutput::new(ConversationId::new("conv-1"), &root).expect("first store");
+        let first_store = ManagedToolOutput::new(
+            ConversationId::new("conv_01900000-0000-7000-8000-000000000001"),
+            &root,
+        )
+        .expect("first store");
         let mut first = first_store.open_spill().expect("first spill");
         first.write_all("first complete text").expect("write");
         let first_path = first.path().to_path_buf();
         drop(first);
         drop(first_store);
 
-        // A fresh store over the SAME directory: the in-memory sequence
-        // restarts, but allocation must not fail or overwrite the old file.
-        let second_store =
-            ManagedToolOutput::new(ConversationId::new("conv-1"), &root).expect("second store");
+        // A fresh store over the SAME directory: the allocator is reconstructed, but allocation must not fail or overwrite the old file.
+        let second_store = ManagedToolOutput::new(
+            ConversationId::new("conv_01900000-0000-7000-8000-000000000001"),
+            &root,
+        )
+        .expect("second store");
         let mut second = second_store.open_spill().expect("second spill");
         second.write_all("second complete text").expect("write");
         let second_path = second.path().to_path_buf();
@@ -742,20 +680,24 @@ mod tests {
     }
 
     /// Two stores momentarily sharing one root can never truncate each
-    /// other's spill: a name collision advances the sequence instead.
+    /// other's spill: a collision retries a fresh UUID without overwrite.
     #[test]
     fn concurrent_stores_sharing_one_root_never_overwrite() {
         let dir = tempfile::tempdir().expect("temp dir");
         let root = dir.path().join("tool-output");
-        let first =
-            ManagedToolOutput::new(ConversationId::new("conv-1"), &root).expect("first store");
-        let second =
-            ManagedToolOutput::new(ConversationId::new("conv-1"), &root).expect("second store");
+        let first = ManagedToolOutput::new(
+            ConversationId::new("conv_01900000-0000-7000-8000-000000000001"),
+            &root,
+        )
+        .expect("first store");
+        let second = ManagedToolOutput::new(
+            ConversationId::new("conv_01900000-0000-7000-8000-000000000001"),
+            &root,
+        )
+        .expect("second store");
         let mut a = first.open_spill().expect("spill a");
         a.write_all("a").expect("write a");
-        // `second` was constructed before `result_1.txt` existed, so its
-        // high-water mark is stale; the collision must advance, never
-        // truncate.
+        // Concurrent owners use create-new publication, never truncation.
         let mut b = second.open_spill().expect("spill b");
         b.write_all("b").expect("write b");
         assert_ne!(a.path(), b.path());
@@ -775,8 +717,11 @@ mod tests {
         std::fs::create_dir_all(&target).expect("target");
         let link = dir.path().join("tool-output");
         symlink(&target, &link).expect("symlink");
-        let error = ManagedToolOutput::new(ConversationId::new("conv-1"), &link)
-            .expect_err("a symlinked managed root is rejected");
+        let error = ManagedToolOutput::new(
+            ConversationId::new("conv_01900000-0000-7000-8000-000000000001"),
+            &link,
+        )
+        .expect_err("a symlinked managed root is rejected");
         assert!(
             matches!(error, ManagedOutputError::SymlinkRoot(_)),
             "got {error:?}"
@@ -795,8 +740,11 @@ mod tests {
         let target = dir.path().join("elsewhere");
         std::fs::create_dir_all(&target).expect("target");
         symlink(&target, root.join("tasks")).expect("symlink");
-        let error = ManagedToolOutput::new(ConversationId::new("conv-1"), &root)
-            .expect_err("a symlinked tasks directory is rejected");
+        let error = ManagedToolOutput::new(
+            ConversationId::new("conv_01900000-0000-7000-8000-000000000001"),
+            &root,
+        )
+        .expect_err("a symlinked tasks directory is rejected");
         assert!(
             matches!(error, ManagedOutputError::SymlinkRoot(_)),
             "got {error:?}"
@@ -829,12 +777,12 @@ mod tests {
     fn background_output_is_allocated_by_execution_identity_and_appends() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = store(dir.path());
-        let execution_id = ToolExecutionId::background(12);
+        let execution_id = ToolExecutionId::new("exec_01900000-0000-7000-8000-000000000012");
         let path = store
             .allocate_background_output(&execution_id)
             .expect("allocate");
         assert!(path.is_absolute());
-        assert!(path.ends_with("tasks/exec_12.output"));
+        assert!(path.ends_with(format!("tasks/{execution_id}.output")));
         assert!(path.starts_with(store.root()));
         assert_eq!(std::fs::read(&path).expect("read"), b"", "starts empty");
         // The pure path computation agrees with the allocation.
@@ -864,7 +812,7 @@ mod tests {
     fn a_new_execution_never_overwrites_a_retained_background_output() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = store(dir.path());
-        let first_id = ToolExecutionId::background(12);
+        let first_id = ToolExecutionId::new("exec_01900000-0000-7000-8000-000000000012");
         let first_path = store.allocate_background_output(&first_id).expect("first");
         store
             .open_background_output_sink(&first_id)
@@ -872,9 +820,8 @@ mod tests {
             .append("retained output")
             .expect("append");
 
-        // Startup recovery reseeds the execution sequence above the durable
-        // ordinal, so the next execution is exec_13, never exec_12 again.
-        let second_id = ToolExecutionId::background(13);
+        // Execution identities are independent of ordinal recovery.
+        let second_id = ToolExecutionId::new("exec_01900000-0000-7000-8000-000000000013");
         let second_path = store
             .allocate_background_output(&second_id)
             .expect("second");
@@ -886,30 +833,16 @@ mod tests {
         assert_eq!(std::fs::read(&second_path).expect("second"), b"");
     }
 
-    /// The one legitimate collision — pre-commit crash residue of an
-    /// execution that never committed durably — is reclaimed explicitly;
-    /// allocation never fails over it and never appends to it.
+    /// Any existing path is retained, including uncommitted crash residue.
     #[test]
-    fn pre_commit_crash_residue_is_reclaimed_not_reused() {
-        let dir = tempfile::tempdir().expect("temp dir");
+    fn pre_commit_crash_residue_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
         let store = store(dir.path());
-        let execution_id = ToolExecutionId::background(7);
-        let path = store
-            .allocate_background_output(&execution_id)
-            .expect("first allocation");
-        // Simulate a crash after allocation but before any durable commit:
-        // the sequence restarts below the durable watermark and the same
-        // execution id is minted again.
-        std::fs::write(&path, "stale residue").expect("stale");
-        let reclaimed = store
-            .allocate_background_output(&execution_id)
-            .expect("the stale residue is reclaimed");
-        assert_eq!(reclaimed, path);
-        assert_eq!(
-            std::fs::read(&reclaimed).expect("read"),
-            b"",
-            "the reclaimed file is empty, never appended to stale bytes"
-        );
+        let execution_id = store.execution_identity().unwrap();
+        let path = store.allocate_background_output(&execution_id).unwrap();
+        std::fs::write(&path, "stale residue").unwrap();
+        assert!(store.allocate_background_output(&execution_id).is_err());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "stale residue");
     }
 
     /// A rollback discard removes the allocated file best-effort, so a
@@ -918,7 +851,7 @@ mod tests {
     fn discard_removes_a_rolled_back_background_output() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = store(dir.path());
-        let execution_id = ToolExecutionId::background(3);
+        let execution_id = ToolExecutionId::new("exec_01900000-0000-7000-8000-000000000003");
         let path = store
             .allocate_background_output(&execution_id)
             .expect("allocate");
@@ -926,7 +859,9 @@ mod tests {
         store.discard_background_output(&execution_id);
         assert!(!path.exists(), "the rolled-back output file is removed");
         // Discarding an unknown execution is a no-op.
-        store.discard_background_output(&ToolExecutionId::background(99));
+        store.discard_background_output(&ToolExecutionId::new(
+            "exec_01900000-0000-7000-8000-000000000099",
+        ));
     }
 
     /// The forced-open-failure seam fails background allocation explicitly.
@@ -936,12 +871,16 @@ mod tests {
         let store = store(dir.path());
         store.set_force_open_failures(true);
         let error = store
-            .allocate_background_output(&ToolExecutionId::background(1))
+            .allocate_background_output(&ToolExecutionId::new(
+                "exec_01900000-0000-7000-8000-000000000001",
+            ))
             .expect_err("forced allocation failure");
         assert!(matches!(error, ManagedOutputError::OpenFailed(_)));
         assert!(
             !store
-                .background_output_path(&ToolExecutionId::background(1))
+                .background_output_path(&ToolExecutionId::new(
+                    "exec_01900000-0000-7000-8000-000000000001"
+                ))
                 .exists(),
             "a failed allocation leaves no file"
         );

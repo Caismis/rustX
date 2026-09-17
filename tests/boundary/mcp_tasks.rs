@@ -188,8 +188,6 @@ impl Harness {
         }
         let binding = McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -221,14 +219,14 @@ impl Harness {
             "the negotiated revision qualifies every proof below"
         );
         let tool_runtime = ConversationToolRuntime::new(
-            ConversationId::new("tasks"),
+            ConversationId::new("conv_08515408-4c74-7759-8104-bc42f51f59f6"),
             workspace_root,
             directory.path().join("artifacts"),
         )
         .expect("tool runtime");
         let lifecycle = ConversationLifecycle::new();
         assert!(lifecycle.activate());
-        let conversation_id = ConversationId::new("tasks");
+        let conversation_id = ConversationId::new("conv_08515408-4c74-7759-8104-bc42f51f59f6");
         let audit = RecordingInteractionAudit::new(conversation_id.clone());
         let coordinator = Arc::new(InteractionCoordinator::new(
             conversation_id,
@@ -1298,7 +1296,7 @@ async fn a_background_execution_drives_the_task_through_its_existing_owner() {
     let workspace_root = directory.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let artifacts = directory.path().join("artifacts");
-    let conversation = ConversationId::new("tasks-background");
+    let conversation = ConversationId::new("conv_7f2a3978-cfcf-7ec5-8371-9311b983a8c4");
     let mailbox = ConversationInboundMailbox::new(conversation.clone());
     let lifecycle = ConversationLifecycle::new();
     mailbox.bind_inactive(&lifecycle);
@@ -1518,7 +1516,7 @@ async fn cancellation_releases_the_in_flight_http_task_request() {
     .expect("the HTTP fixture connects");
     let cancel_release = runtime.hold_http_release(CANCEL_TASK);
     let tool_runtime = ConversationToolRuntime::new(
-        ConversationId::new("tasks-http"),
+        ConversationId::new("conv_e7268af6-36e3-794d-8356-ec3b5df02ccc"),
         workspace_root,
         directory.path().join("artifacts"),
     )

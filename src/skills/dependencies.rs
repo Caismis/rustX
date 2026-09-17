@@ -628,8 +628,7 @@ mod tests {
                 dir.path().join(".agents/skills"),
             ),
         )
-        .discover()
-        .expect("discover");
+        .discover();
         discovered.packages.remove(0)
     }
 }

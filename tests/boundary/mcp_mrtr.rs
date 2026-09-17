@@ -272,8 +272,6 @@ impl Harness {
         }
         let binding = McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -302,14 +300,14 @@ impl Harness {
             "MRTR requires the modern negotiated revision"
         );
         let tool_runtime = ConversationToolRuntime::new(
-            ConversationId::new("mrtr"),
+            ConversationId::new("conv_9a587f76-0a81-7e5d-8a49-fbfc515ab043"),
             workspace_root,
             directory.path().join("artifacts"),
         )
         .expect("tool runtime");
         let lifecycle = ConversationLifecycle::new();
         assert!(lifecycle.activate());
-        let conversation_id = ConversationId::new("mrtr");
+        let conversation_id = ConversationId::new("conv_9a587f76-0a81-7e5d-8a49-fbfc515ab043");
         let audit = RecordingInteractionAudit::new(conversation_id.clone());
         let coordinator = Arc::new(InteractionCoordinator::new(
             conversation_id,
@@ -1764,7 +1762,7 @@ async fn a_background_mcp_execution_advertises_nothing_and_settles_once() {
     let workspace_root = directory.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let artifacts = directory.path().join("artifacts");
-    let conversation = ConversationId::new("mrtr-background");
+    let conversation = ConversationId::new("conv_ed938929-581c-7959-8bf3-27b8f33fa2e8");
     let mailbox = ConversationInboundMailbox::new(conversation.clone());
     let lifecycle = ConversationLifecycle::new();
     mailbox.bind_inactive(&lifecycle);

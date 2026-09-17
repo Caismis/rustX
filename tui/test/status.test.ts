@@ -182,7 +182,7 @@ describe("working status", () => {
   it("keeps human Review distinct from tool permission and mixed waits", () => {
     const review = approvalInteraction();
     review.request.kind = { type: "review", subject_digest: "a".repeat(64), review: {
-      instance: { block: { run: { conversation_id: "conversation-1", attempt_id: "attempt-1", invocation: "1" }, definition: { workflow_id: "example", blocks: [] }, invocations: [0] }, node: "review", visit: 0 },
+      instance: { block: { run: { conversation_id: "conv_413055e0-cb3a-7c6d-b9b6-b446a98e0ad1", attempt_id: "attempt-1", invocation: "1" }, definition: { workflow_id: "example", blocks: [] }, invocations: [0] }, node: "review", visit: 0 },
       subject: { type: "plan", candidate: null, content: { plan: "fixed" } }, context: [],
     } };
     assert.equal(workingStatus(stateOf({ pending_interactions: [review] })), "Waiting for human review…");
@@ -226,17 +226,17 @@ describe("footer", () => {
       "connected",
       120,
       {
-        id: "session-7",
+        id: "ses_cef8bce5-49cd-7050-8b3d-a30f5672426b",
         name: "review branch",
         created_at: "2026-08-21T00:00:00Z",
         updated_at: "2026-08-21T00:00:00Z",
-        active_node: "node-3",
-        active_conversation_id: "conv-3",
+        active_node: "node_a84cfe8a-8631-726c-9ac1-92ef5c781daf",
+        active_conversation_id: "conv_95a4e75e-d053-7474-b90f-05e38b1dfd17",
         node_count: 1,
       },
     );
     assert.match(rendered, /session review branch/);
-    assert.doesNotMatch(rendered, /node node-3/);
+    assert.doesNotMatch(rendered, /node node_a84cfe8a-8631-726c-9ac1-92ef5c781daf/);
   });
 
   it("surfaces unavailable optional capabilities without dying (Issue #81)", () => {
@@ -330,9 +330,9 @@ describe("footer", () => {
   it("defers whole model detail when essential facts cannot fit, never inventing a shorter identity", () => {
     const rendered = footer(stateOf({
       model: sessionModel("provider/" + "long-model-identity".repeat(5)),
-      effective_approval_mode: "policy", pending_approval_mode: "full_access",
+      effective_approval_mode: "policy",
     }), "connected", 24);
-    assert.equal(rendered, "POLICY; next FULL ACCESS\nmodel: /settings");
+    assert.equal(rendered, "POLICY\nmodel: /settings");
   });
 
   it("omits settled outcomes from stable context", () => {
@@ -368,7 +368,7 @@ describe("footer", () => {
   it("does not duplicate pending inbound, background, and approval activity", () => {
     const rendered = footer(
       stateOf({
-        background: [backgroundExecution("exec-1", "running")],
+        background: [backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running")],
         pending_interactions: [approvalInteraction()],
         inbound: {
           pending: [
@@ -391,7 +391,7 @@ describe("footer", () => {
     assert.doesNotMatch(rendered, /human input 1/);
   });
 
-  it("names the effective approval mode and a pending desired mode truthfully", () => {
+  it("names the generation-owned effective approval mode", () => {
     assert.match(
       footer(stateOf({ effective_approval_mode: "policy" }), "connected"),
       /approval POLICY/,
@@ -400,17 +400,6 @@ describe("footer", () => {
       footer(stateOf({ effective_approval_mode: "full_access" }), "connected"),
       /approval FULL ACCESS/,
     );
-    // A desired mode applies to the next attempt; the running attempt keeps
-    // the effective one, and the footer must not imply otherwise.
-    const mixed = footer(
-      stateOf({
-        effective_approval_mode: "policy",
-        pending_approval_mode: "full_access",
-      }),
-      "connected",
-    );
-    assert.match(mixed, /approval POLICY/);
-    assert.match(mixed, /next attempt FULL ACCESS/);
   });
 
   it("reports drain and a closed transport without implying cancellation", () => {
@@ -428,7 +417,7 @@ describe("footer", () => {
         model: attemptModel("beta/model-b"),
         last_usage: { input_tokens: 12_500, output_tokens: 840, total_tokens: 13_340 },
       }),
-      background: [backgroundExecution("exec-1", "running")],
+      background: [backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running")],
       capabilities: { revision: "9" },
     });
 
@@ -454,11 +443,11 @@ describe("startup and context", () => {
   it("makes parent and inspected-child context explicit without changing projection state", () => {
     const state = stateOf();
     const parent = footer(state, "connected", 160, undefined, {
-      conversationId: "conversation-parent",
+      conversationId: "conv_da2992b1-4e15-7f04-87b8-c93e66c2450d",
     });
     const child = footer(state, "connected", 160, undefined, {
-      conversationId: "conversation-child",
-      parentConversationId: "conversation-parent",
+      conversationId: "conv_15cf935a-5ce7-72bc-89a4-dbf96abf5352",
+      parentConversationId: "conv_da2992b1-4e15-7f04-87b8-c93e66c2450d",
       readOnly: true,
     });
     assert.doesNotMatch(parent, /conversation-parent|parent /);
@@ -493,12 +482,12 @@ describe("startup and context", () => {
     });
     const rendered = plainText(
       renderStartup(state, {
-        id: "session-7",
+        id: "ses_cef8bce5-49cd-7050-8b3d-a30f5672426b",
         name: "review branch",
         created_at: "2026-08-21T00:00:00Z",
         updated_at: "2026-08-21T00:00:00Z",
-        active_node: "node-3",
-        active_conversation_id: "conv-3",
+        active_node: "node_a84cfe8a-8631-726c-9ac1-92ef5c781daf",
+        active_conversation_id: "conv_95a4e75e-d053-7474-b90f-05e38b1dfd17",
         node_count: 1,
       }),
     );
@@ -508,7 +497,7 @@ describe("startup and context", () => {
     assert.match(rendered, /provider alpha · Responses/);
     assert.match(rendered, /context —\/256k/);
     assert.match(rendered, /reasoning on \(profile medium\)/);
-    assert.match(rendered, /session review branch · node node-3/);
+    assert.match(rendered, /session review branch · node node_a84cfe8a-8631-726c-9ac1-92ef5c781daf/);
     assert.match(rendered, /Ctrl\+L model/);
     assert.match(rendered, /\/help commands/);
     assert.doesNotMatch(rendered, /attachment|conversation|cursor|cap r/i);
@@ -537,18 +526,18 @@ describe("activity area", () => {
       renderBackgroundSection(
         stateOf({
           background: [
-            backgroundExecution("exec-1", "running", {
+            backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running", {
               progress: { message: "step 2" },
             }),
-            backgroundExecution("exec-2", "succeeded", { result: toolResult() }),
+            backgroundExecution("exec_5d3d6a95-5f18-7b68-afa6-8d669cc7692d", "succeeded", { result: toolResult() }),
           ],
         }),
         prefs(),
       ),
     );
     assert.match(rendered, /Background · 1 active of 2 known/);
-    assert.match(rendered, /running exec-1/);
-    assert.match(rendered, /succeeded exec-2/);
+    assert.match(rendered, /running exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb/);
+    assert.match(rendered, /succeeded exec_5d3d6a95-5f18-7b68-afa6-8d669cc7692d/);
     assert.match(rendered, /step 2/);
   });
 
@@ -558,7 +547,7 @@ describe("activity area", () => {
     // as still pending.
     const unknown = plainText(
       renderBackground(
-        backgroundExecution("exec-u", "outcome_unknown", {
+        backgroundExecution("exec_dcf2482f-0967-712f-a8ac-303b64b041d2", "outcome_unknown", {
           result: toolResult({
             status: {
               type: "outcome_unknown",
@@ -569,7 +558,7 @@ describe("activity area", () => {
         prefs(),
       ),
     );
-    assert.match(unknown, /● .*outcome_unknown exec-u/);
+    assert.match(unknown, /● .*outcome_unknown exec_dcf2482f-0967-712f-a8ac-303b64b041d2/);
     assert.ok(!unknown.includes("◐"), "a terminal execution never wears the pending glyph");
     assert.ok(!unknown.includes("failed"), "an unknown outcome is not a known failure");
     // The runtime's prose explaining the unknown outcome rides the reason
@@ -578,13 +567,13 @@ describe("activity area", () => {
 
     const failed = plainText(
       renderBackground(
-        backgroundExecution("exec-f", "failed", {
+        backgroundExecution("exec_c91fe96e-c3a1-73c0-a1d4-ad8dfbf38f43", "failed", {
           result: toolResult({ status: { type: "failed", error: "exit 1" } }),
         }),
         prefs(),
       ),
     );
-    assert.match(failed, /● .*failed exec-f/);
+    assert.match(failed, /● .*failed exec_c91fe96e-c3a1-73c0-a1d4-ad8dfbf38f43/);
     assert.match(failed, /exit 1/);
   });
 
@@ -594,15 +583,15 @@ describe("activity area", () => {
     // `outcome_unknown` are proven terminal states and leave the active set.
     const state = stateOf({
       background: [
-        backgroundExecution("exec-run", "running"),
-        backgroundExecution("exec-pub", "publishing_terminal"),
-        backgroundExecution("exec-to", "timed_out"),
-        backgroundExecution("exec-unk", "outcome_unknown"),
+        backgroundExecution("exec_533a7ee2-9c1a-7b20-8e75-370fd586217a", "running"),
+        backgroundExecution("exec_7fb469e5-9b06-7cd0-a415-1043762abefb", "publishing_terminal"),
+        backgroundExecution("exec_c8fe6ab2-de4c-73e9-a357-07bf8b340edb", "timed_out"),
+        backgroundExecution("exec_ae0c9efe-be13-78ba-912b-98bb81d01e19", "outcome_unknown"),
       ],
     });
     assert.deepEqual(
       activeBackground(state).map((execution) => execution.execution_id),
-      ["exec-run", "exec-pub"],
+      ["exec_533a7ee2-9c1a-7b20-8e75-370fd586217a", "exec_7fb469e5-9b06-7cd0-a415-1043762abefb"],
     );
     assert.match(
       plainText(renderBackgroundSection(state, prefs())),
@@ -634,7 +623,7 @@ describe("activity area", () => {
         focused.interaction,
       ),
     );
-    assert.match(rendered, /Focused interaction: conv-test::attempt-1-interaction-a/);
+    assert.match(rendered, /Focused interaction: conv_01900000-0000-7000-8000-000000000002::attempt-1-interaction-a/);
   });
 
   it("surfaces an execution whose stream was dropped", () => {
@@ -716,11 +705,11 @@ describe("client collapse is finite and reversible", () => {
     expanded: boolean,
   ): string {
     const preferences = expanded
-      ? withExpandedBackgroundExecutions(prefs(), ["exec-1"])
+      ? withExpandedBackgroundExecutions(prefs(), ["exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb"])
       : prefs();
     return plainText(
       renderBackground(
-        backgroundExecution("exec-1", "failed", { result: toolResult(result) }),
+        backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "failed", { result: toolResult(result) }),
         preferences,
       ),
     );
@@ -762,7 +751,7 @@ describe("client collapse is finite and reversible", () => {
       `collapsed background card was ${collapsed.length} characters`,
     );
     assert.match(collapsed, /failed/, "the runtime settlement stays visible");
-    assert.match(collapsed, /exec-1/, "the identity stays visible");
+    assert.match(collapsed, /exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb/, "the identity stays visible");
     assert.ok(!collapsed.includes(HUGE));
 
     // The whole explanation, from the same already-held result.
@@ -882,9 +871,9 @@ it("absent metadata is omitted and footer never reads transcript history", () =>
 });
 
 it("unknown context window is omitted and snapshot replacement rebuilds approval/model truth", () => {
-  const before = stateOf({ model: sessionModel("old/model"), effective_approval_mode: "policy", pending_approval_mode: "full_access" });
+  const before = stateOf({ model: sessionModel("old/model"), effective_approval_mode: "policy" });
   const after = stateOf({ model: sessionModel("new/model"), effective_approval_mode: "full_access" });
-  assert.match(footer(before, "connected"), /next attempt FULL ACCESS/);
+  assert.match(footer(before, "connected"), /approval POLICY/);
   assert.match(footer(after, "connected"), /new\/model.*approval FULL ACCESS/);
   assert.doesNotMatch(footer(after, "connected"), /old\/model|next attempt/);
   const noWindow = stateOf({ model: { ...sessionModel("new/model"), effective: { ...sessionModel("new/model").effective, contextWindow: 0 } } });

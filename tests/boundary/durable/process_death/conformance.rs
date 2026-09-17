@@ -24,8 +24,6 @@ use crate::tools::types::ToolExecutionStatus;
 
 use super::child;
 use super::harness::{Durable, Lab};
-use crate::runtime::identity::ConversationId;
-use rustx::local_runtime::session::SessionId;
 
 // ---------------------------------------------------------------------------
 // Shared assertions
@@ -2219,19 +2217,16 @@ fn assert_cut_lineage(scenario: &str) {
 
     // The catalog is the durable authority for *which* lineage is active. The
     // cut made the new one active, and the source keeps its own identity.
-    let (active_session, active_node) =
-        lab.session_node(&SessionId::new(if scenario == child::SESSION_FORK {
-            "session-2"
-        } else {
-            "session-1"
-        }));
-    let source_conversation = ConversationId::new("conversation-1");
+    let catalog = lab.catalog();
+    let active = usize::from(scenario == child::SESSION_FORK);
+    let (active_session, active_node) = lab.session_node(&catalog.persisted_session_ids()[active]);
+    let (source_session, source_conversation) = lab.source_lineage();
     assert_ne!(
         active_node.conversation_id, source_conversation,
         "the cut published a new lineage and made it active"
     );
 
-    let source = lab.lineage(&SessionId::new("session-1"), &source_conversation);
+    let source = lab.lineage(&source_session, &source_conversation);
     let cut_lineage = lab.lineage(&active_session, &active_node.conversation_id);
 
     // ---- The source lineage is untouched by the cut. ----
@@ -2283,24 +2278,22 @@ fn assert_cut_lineage(scenario: &str) {
     // This is what makes the row non-vacuous: the copied prefix genuinely
     // carries the source's live ownership *identities*, as canonical text.
     let copied = canonical_text(&cut_lineage.canonical());
-    assert!(
-        copied.contains("exec_1"),
-        "the copied tool result names the source's background execution: {copied}"
-    );
-    assert!(
-        copied.contains("Background executions:")
-            && copied.contains("tool exec_1 | bash | running"),
-        "a copied Agent Status names the source's live execution: {copied}"
-    );
-    assert!(
-        copied.contains("conversation-1-subagent-1")
-            && copied.contains("agent-conversation-1-subagent-1"),
-        "the copied tool result names the source's subagent child and its agent identity: {copied}"
-    );
-    assert!(
-        copied.contains("conversations/conversation-1/"),
-        "the copied result even names the source lineage's private output path: {copied}"
-    );
+    let execution = source
+        .journal()
+        .iter()
+        .find_map(|entry| match &entry.event {
+            RuntimeEvent::BackgroundExecutionCommitted { execution_id, .. } => {
+                Some(execution_id.to_string())
+            }
+            _ => None,
+        })
+        .expect("source owns an execution");
+    assert!(copied.contains(&execution));
+    assert!(copied.contains(&format!("tool {execution} | bash | running")));
+    let children = owned_subagents(&source);
+    assert!(copied.contains(&children[0]));
+    assert!(copied.contains(&format!("agent-{}", children[0])));
+    assert!(copied.contains(&format!("conversations/{source_conversation}/")));
 
     // …and every one of those identities is inert. The destination Journal is
     // empty, so nothing was resolved, adopted, reattached, relaunched, or
@@ -2331,7 +2324,6 @@ fn assert_cut_lineage(scenario: &str) {
         report.background_classes().is_empty() && report.subagent_classes().is_empty(),
         "the cut lineage has no ownership to reconcile"
     );
-    assert_eq!(report.highest_background_ordinal(), 0);
     assert_eq!(report.highest_subagent_ordinal(), 0);
     assert_eq!(report.next_attempt_ordinal(), 0);
     assert!(
@@ -2388,22 +2380,12 @@ fn assert_cut_lineage(scenario: &str) {
 /// unrecoverable, and that is what the ordering forbids.
 #[test]
 fn death_before_the_fork_visibility_commit_keeps_the_source_active() {
-    assert_publication_is_atomic(
-        child::SESSION_FORK,
-        "before:publish_session",
-        false,
-        ("session-2", "conversation-2"),
-    );
+    assert_publication_is_atomic(child::SESSION_FORK, "before:publish_session", false);
 }
 
 #[test]
 fn death_after_the_fork_visibility_commit_publishes_the_whole_lineage() {
-    assert_publication_is_atomic(
-        child::SESSION_FORK,
-        "after:publish_session",
-        true,
-        ("session-2", "conversation-2"),
-    );
+    assert_publication_is_atomic(child::SESSION_FORK, "after:publish_session", true);
 }
 
 /// The branch-node publication is a **separate** catalog transaction with its
@@ -2411,22 +2393,12 @@ fn death_after_the_fork_visibility_commit_publishes_the_whole_lineage() {
 /// not follow from the Session one.
 #[test]
 fn death_before_the_branch_visibility_commit_keeps_the_source_active() {
-    assert_publication_is_atomic(
-        child::SESSION_BRANCH,
-        "before:publish_node",
-        false,
-        ("session-1", "conversation-node-2"),
-    );
+    assert_publication_is_atomic(child::SESSION_BRANCH, "before:publish_node", false);
 }
 
 #[test]
 fn death_after_the_branch_visibility_commit_publishes_the_whole_lineage() {
-    assert_publication_is_atomic(
-        child::SESSION_BRANCH,
-        "after:publish_node",
-        true,
-        ("session-1", "conversation-node-2"),
-    );
+    assert_publication_is_atomic(child::SESSION_BRANCH, "after:publish_node", true);
 }
 
 /// The shared body of the four publication-boundary rows.
@@ -2435,21 +2407,14 @@ fn death_after_the_branch_visibility_commit_publishes_the_whole_lineage() {
 /// `destination` is the `(Session, conversation)` the operation seeds: `/fork`
 /// creates a new Session, `/branch` adds a node under the active one, and the
 /// two allocate their identities from different domains.
-fn assert_publication_is_atomic(
-    scenario: &str,
-    boundary: &str,
-    committed: bool,
-    destination: (&str, &str),
-) {
+fn assert_publication_is_atomic(scenario: &str, boundary: &str, committed: bool) {
     let lab = Lab::new();
     let mut process = lab.spawn(scenario, Some(boundary));
     process.wait_reached(boundary);
     process.sigkill();
 
-    let source_session = SessionId::new("session-1");
-    let source_conversation = ConversationId::new("conversation-1");
-    let destination_session = SessionId::new(destination.0);
-    let destination_conversation = ConversationId::new(destination.1);
+    let (source_session, source_conversation) = lab.source_lineage();
+    let (destination_session, destination_conversation) = lab.seeded_cut();
     let (active_session, active_node) = lab.session_node(if committed {
         &destination_session
     } else {
@@ -2563,8 +2528,8 @@ fn a_cut_lineage_never_resolves_the_copied_source_identities() {
     assert_eq!(process.wait_note_prefixed("cut:"), "cut:ok");
     process.sigkill();
 
-    let source_conversation = ConversationId::new("conversation-1");
-    let source = lab.lineage(&SessionId::new("session-1"), &source_conversation);
+    let (source_session, source_conversation) = lab.source_lineage();
+    let source = lab.lineage(&source_session, &source_conversation);
     let source_subagents = owned_subagents(&source);
     assert_eq!(source_subagents.len(), 1);
     assert!(
@@ -2574,14 +2539,24 @@ fn a_cut_lineage_never_resolves_the_copied_source_identities() {
     );
 
     // The copied prefix really does name the source's live work.
-    let (active_session, active_node) = lab.session_node(&SessionId::new("session-2"));
+    let (active_session, active_node) = lab.session_node(&lab.catalog().persisted_session_ids()[1]);
     let seeded = lab.lineage(&active_session, &active_node.conversation_id);
     let copied = canonical_text(&seeded.canonical());
+    let owned = source
+        .journal()
+        .iter()
+        .filter_map(|entry| match &entry.event {
+            RuntimeEvent::BackgroundExecutionCommitted { execution_id, .. } => {
+                Some(execution_id.to_string())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let agent = format!("agent-{}", source_subagents[0]);
     for identity in [
-        "exec_1",
-        "tool exec_1 | bash | running",
+        owned[0].as_str(),
         source_subagents[0].as_str(),
-        "agent-conversation-1-subagent-1",
+        agent.as_str(),
     ] {
         assert!(
             copied.contains(identity),
@@ -2639,7 +2614,7 @@ fn a_cut_lineage_never_resolves_the_copied_source_identities() {
         "the resumed turn emits no new status when neither module has useful content"
     );
     assert!(
-        statuses.iter().any(|status| status.contains("exec_1")),
+        statuses.iter().any(|status| status.contains(&owned[0])),
         "…while the copied historical statuses still name it, by value"
     );
 

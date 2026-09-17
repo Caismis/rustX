@@ -62,7 +62,7 @@ use tempfile::TempDir;
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const CONVERSATION: &str = "conv-m9a";
+const CONVERSATION: &str = "conv_913f99b1-8948-7c08-a391-6a5251940cc1";
 
 fn fixed_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0)
@@ -2281,7 +2281,7 @@ fn commit_background_ownership(store: &SqliteConversationStore, execution: &Tool
 #[test]
 fn nonterminal_background_work_is_terminalized_exactly_once_and_never_relaunched() {
     let durable = Durable::new();
-    let execution = ToolExecutionId::background(1);
+    let execution = ToolExecutionId::new("exec_01900000-0000-7000-8000-000000000001");
     {
         let store = durable.open();
         store.initialize(&[]).expect("bootstrap");
@@ -2302,11 +2302,6 @@ fn nonterminal_background_work_is_terminalized_exactly_once_and_never_relaunched
     assert_eq!(
         report.reconciliation().background_terminals,
         vec![execution.clone()]
-    );
-    assert_eq!(
-        report.highest_background_ordinal(),
-        1,
-        "the allocator watermark is recovered from durable evidence"
     );
 
     let store = durable.open();
@@ -2361,7 +2356,7 @@ fn nonterminal_background_work_is_terminalized_exactly_once_and_never_relaunched
 fn the_terminal_publication_boundary_recovers_differently_on_each_side() {
     // --- pre-commit: the executor settled, the transaction did not commit ---
     let before = Durable::new();
-    let execution = ToolExecutionId::background(1);
+    let execution = ToolExecutionId::new("exec_01900000-0000-7000-8000-000000000001");
     {
         let store = before.open();
         store.initialize(&[]).expect("bootstrap");
@@ -2447,7 +2442,7 @@ fn the_terminal_publication_boundary_recovers_differently_on_each_side() {
 fn repeated_restarts_settle_once_and_then_change_nothing() {
     let durable = Durable::new();
     let attempt = AttemptId::for_conversation(&conversation_id(), 0);
-    let execution = ToolExecutionId::background(1);
+    let execution = ToolExecutionId::new("exec_01900000-0000-7000-8000-000000000001");
     {
         let store = durable.open();
         store.initialize(&[]).expect("bootstrap");
@@ -2548,7 +2543,10 @@ fn recovered_identity_allocators_never_collide_with_durable_history() {
                 .expect("attempt completed");
         }
         for ordinal in 1..=4 {
-            commit_background_ownership(&store, &ToolExecutionId::background(ordinal));
+            commit_background_ownership(
+                &store,
+                &ToolExecutionId::new(format!("exec_01900000-0000-7000-8000-{ordinal:012x}")),
+            );
         }
     }
 
@@ -2558,7 +2556,7 @@ fn recovered_identity_allocators_never_collide_with_durable_history() {
         3,
         "the next attempt ordinal is past every durable one"
     );
-    assert_eq!(report.highest_background_ordinal(), 4);
+    assert_eq!(report.background_classes().len(), 4);
     let next = AttemptId::for_conversation(&conversation, report.next_attempt_ordinal());
     for ordinal in 0..3 {
         assert_ne!(next, AttemptId::for_conversation(&conversation, ordinal));
@@ -3136,7 +3134,9 @@ fn commit_subagent_ownership(store: &SqliteConversationStore, subagent: &Subagen
             RuntimeEvent::SubagentOwnershipCommitted {
                 subagent_id: subagent.clone(),
                 child_agent_id: AgentId::new(format!("agent-{subagent}")),
-                child_conversation_id: ConversationId::new(subagent.as_str()),
+                child_conversation_id: crate::identity_fixture::child_conversation_id(
+                    subagent.as_str(),
+                ),
                 tool_call_id: ToolCallId::new("call-sub"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
@@ -3159,7 +3159,9 @@ fn commit_workflow_ownership(store: &SqliteConversationStore, subagent: &Subagen
             RuntimeEvent::SubagentOwnershipCommitted {
                 subagent_id: subagent.clone(),
                 child_agent_id: AgentId::new(format!("agent-{subagent}")),
-                child_conversation_id: ConversationId::new(subagent.as_str()),
+                child_conversation_id: crate::identity_fixture::child_conversation_id(
+                    subagent.as_str(),
+                ),
                 tool_call_id: ToolCallId::new("workflow-call"),
                 agent: "reviewer".to_owned(),
                 definition_digest: "sha256:workflow-definition".to_owned(),

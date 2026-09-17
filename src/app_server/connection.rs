@@ -555,11 +555,7 @@ impl AppServerConnection {
                     .read_settings(&session_id)
                     .await
                     .map_err(session_error)?;
-                Ok(MethodResult::Settings {
-                    project_trusted: self.host.manager().project_trusted(&settings).ok(),
-                    revision,
-                    settings,
-                })
+                Ok(MethodResult::Settings { revision, settings })
             }
             Method::SettingsReplace {
                 session_id,
@@ -735,12 +731,10 @@ impl Drop for AppServerConnection {
 
 fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
     match method {
-        Method::DefaultsRead { target, .. }
-        | Method::DefaultSave { target, .. }
+        Method::ConfigurationGet { target, .. }
         | Method::ModelGet { target, .. }
         | Method::ModelCatalog { target, .. }
         | Method::ModelSet { target, .. }
-        | Method::ApprovalModeSet { target, .. }
         | Method::Capability { target, .. }
         | Method::ArtifactRead { target, .. }
         | Method::SessionUpload { target, .. }
@@ -763,7 +757,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::TurnCancel { target, .. }
         | Method::InteractionRespond { target, .. }
         | Method::InteractionCancel { target, .. }
-        | Method::ResourcesReload { target, .. } => Some(target),
+        | Method::ConfigurationReload { target, .. } => Some(target),
         _ => None,
     }
 }
@@ -777,19 +771,9 @@ async fn dispatch_runtime(
     sessions: SessionController,
 ) -> Result<MethodResult, RpcError> {
     match method {
-        Method::DefaultsRead { target: _, scope } => {
-            native_result(authority.defaults_read(scope).await)
-        }
-        Method::DefaultSave {
-            target: _,
-            scope,
-            expected_revision,
-            setting,
-        } => native_result(
-            authority
-                .defaults_save(scope, expected_revision, setting)
-                .await,
-        ),
+        Method::ConfigurationGet { .. } => Ok(MethodResult::EffectiveConfiguration {
+            projection: Box::new(authority.configuration().map_err(client_error)?),
+        }),
         Method::ArtifactRead {
             target: _,
             artifact_id,
@@ -843,9 +827,6 @@ async fn dispatch_runtime(
         Method::ModelGet { target: _ } => native_result(authority.model_get()),
         Method::ModelCatalog { target: _ } => native_result(authority.model_catalog()),
         Method::ModelSet { target: _, config } => native_result(authority.model_set(*config)),
-        Method::ApprovalModeSet { target: _, mode } => {
-            native_result(authority.approval_mode_set(mode))
-        }
         Method::Capability { target: _ } => native_result(authority.capability()),
         Method::Trace {
             target: _,
@@ -954,7 +935,9 @@ async fn dispatch_runtime(
             target: _,
             interaction,
         } => native_result(authority.cancel_interaction(&interaction).await),
-        Method::ResourcesReload { target: _ } => native_result(authority.reload_resources().await),
+        Method::ConfigurationReload { target: _ } => {
+            native_result(authority.reload_configuration().await)
+        }
         _ => unreachable!("only admitted runtime methods"),
     }
 }
@@ -977,21 +960,10 @@ fn native_result(
     result: Result<RuntimeClientResult, RuntimeClientError>,
 ) -> Result<MethodResult, RpcError> {
     Ok(match result.map_err(client_error)? {
-        RuntimeClientResult::Defaults { document } => MethodResult::Defaults { document },
-        RuntimeClientResult::DefaultSaved { result } => MethodResult::DefaultSaved { result },
         RuntimeClientResult::Model { model } | RuntimeClientResult::ModelSet { model } => {
             MethodResult::Model { model }
         }
         RuntimeClientResult::ModelCatalog { catalog } => MethodResult::Models { catalog },
-        RuntimeClientResult::ApprovalModeSet {
-            effective_approval_mode,
-            pending_approval_mode,
-            revision,
-        } => MethodResult::ApprovalMode {
-            effective_approval_mode,
-            pending_approval_mode,
-            revision,
-        },
         RuntimeClientResult::Capability { capabilities } => {
             MethodResult::Capabilities { capabilities }
         }
@@ -1030,10 +1002,10 @@ fn native_result(
         RuntimeClientResult::InteractionResponseAccepted { interaction } => {
             MethodResult::InteractionSettled { interaction }
         }
-        RuntimeClientResult::ResourcesReloaded {
+        RuntimeClientResult::ConfigurationReloaded {
             resource_revision,
             capability_revision,
-        } => MethodResult::ResourcesReloaded {
+        } => MethodResult::ConfigurationReloaded {
             resource_revision,
             capability_revision,
         },
@@ -1042,6 +1014,12 @@ fn native_result(
 }
 fn client_error(error: RuntimeClientError) -> RpcError {
     domain(match error {
+        RuntimeClientError::ConfigurationReloadBusy { reason } => {
+            ErrorData::ConfigurationBusy { reason }
+        }
+        RuntimeClientError::ConfigurationReloadFailed { diagnostic } => {
+            ErrorData::ConfigurationFailed { diagnostic }
+        }
         RuntimeClientError::InteractionNotPending { interaction } => {
             ErrorData::InteractionNotPending { interaction }
         }
@@ -1121,7 +1099,6 @@ fn source_error(error: crate::local_runtime::configuration::settings::SettingsEr
             expected,
             actual,
         },
-        SettingsError::UntrustedWorkspace => ErrorData::UntrustedWorkspace,
         SettingsError::Invalid => ErrorData::InvalidParams,
         SettingsError::Io => ErrorData::OperationFailed,
         SettingsError::Committed => ErrorData::CommittedDurabilityUncertain,

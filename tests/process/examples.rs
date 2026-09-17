@@ -118,22 +118,15 @@ fn assert_example_resource_snapshot(resources: &RuntimeResourceSnapshot) {
 async fn checked_in_local_runtime_example_composes_its_real_resources() {
     let root = tempfile::tempdir().expect("temporary runtime root");
     let examples = examples_root();
-    let workspace = examples.join("workspace");
+    let workspace = examples.clone();
     assert_example_files_exist(&workspace);
     let runtime = HeadlessConversationRuntime::compose(
         &(LaunchFixture {
-            models: examples.join("models.toml"),
             config: examples.join("rustx.toml"),
             // Keep this test independent of the developer's home directory
             // while exercising the actual checked-in project Skill root.
-            skill_paths: vec![],
-            no_automatic_skills: false,
-            no_builtin_tools: false,
-            no_direct_tools: false,
             startup_session: StartupSession::Empty,
             session_name: None,
-            tools: None,
-            exclude_tools: Vec::new(),
             workspace,
             runtime_root: root.path().join("runtime-root"),
         })

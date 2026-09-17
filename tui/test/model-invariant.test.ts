@@ -186,8 +186,8 @@ describe("session model A -> B invariant", () => {
     const client = await connecting;
 
     const target: AttachmentTarget = {
-      session_id: "session-model",
-      conversation_id: "conv-1",
+      session_id: "ses_0a7e1c20-6bdf-7720-acad-22e2d65841be",
+      conversation_id: "conv_36524fd8-f674-7fc2-b125-06d01fee0e18",
       runtime_incarnation: "1",
       attachment_id: "att-1",
     };

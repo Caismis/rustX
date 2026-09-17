@@ -589,8 +589,6 @@ impl HttpFixture {
             .collect();
         crate::tools::mcp::McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
-            activation: crate::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::StreamableHttp {
                 endpoint: self.endpoint.clone(),
                 headers,

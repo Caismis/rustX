@@ -1,8 +1,8 @@
 import { startDogfood } from '../test/e2e/dogfood-server.ts';
 import { parseDogfoodArgs } from './dogfood-args.ts';
 
-const { scenario, trusted } = parseDogfoodArgs(process.argv.slice(2));
-const server = await startDogfood(scenario, trusted);
+const { scenario } = parseDogfoodArgs(process.argv.slice(2));
+const server = await startDogfood(scenario);
 // The Vite carrier will own this Host configuration. Do not leave a second
 // metadata writer running alongside it.
 await server.workspaceHost.stop();

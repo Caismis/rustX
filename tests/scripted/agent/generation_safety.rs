@@ -51,7 +51,7 @@ use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, success_result, tool_call_events,
 };
 
-const CONVERSATION: &str = "conv-203";
+const CONVERSATION: &str = "conv_5cdad274-a06f-7a35-8b6c-e0beb9470e1f";
 
 /// The repeating unit of every degenerate fixture. It is a marker so the
 /// discarded output can be searched for in canonical history and in every

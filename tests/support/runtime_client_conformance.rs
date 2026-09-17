@@ -1519,13 +1519,13 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
     let response = driver
         .request(RuntimeClientRequest::BackgroundStatus {
             id: RequestId::new(5),
-            execution_id: ToolExecutionId::new("exec_absent"),
+            execution_id: ToolExecutionId::new("exec_52f6ba2f-c6d4-7c0a-84b7-94d48bbf97a2"),
         })
         .await;
     assert_eq!(
         error(response),
         RuntimeClientError::UnknownBackgroundExecution {
-            execution_id: ToolExecutionId::new("exec_absent"),
+            execution_id: ToolExecutionId::new("exec_52f6ba2f-c6d4-7c0a-84b7-94d48bbf97a2"),
         }
     );
 
@@ -1678,7 +1678,12 @@ pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory)
         .tools(base)
         .native_tools()
         .agent_activation(rustx::capabilities::AgentActivation {
-            tools: Some(vec!["ls".to_owned(), "read".to_owned()]),
+            profile: {
+                let mut profile = rustx::capabilities::AgentActivation::default().profile;
+                profile.tools.builtin = vec!["ls".to_owned(), "read".to_owned()];
+                profile.skills = Some(rustx::runtime::agent_profile::AgentSkillSelection::All);
+                profile
+            },
             ..rustx::capabilities::AgentActivation::default()
         })
         .workspace_fixture(|workspace| {
@@ -1771,7 +1776,7 @@ pub async fn capability_projection_covers_python_origins() {
         eprintln!("uv unavailable; the Python capability origin is not exercised");
         return;
     }
-    let fixture = ConformanceFixture::builder("conv-38-python")
+    let fixture = ConformanceFixture::builder("conv_546b1efb-60d2-7124-9e5e-f4c0a6807ff6")
         .workspace_fixture(|workspace| {
             write_python_package(workspace, "py-echo", "Echoes arguments");
         })
@@ -1845,8 +1850,6 @@ pub async fn capability_projection_covers_mcp_origins(
         rustx::runtime::identity::McpServerId::new("fixture"),
         rustx::tools::mcp::McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -2035,7 +2038,7 @@ pub async fn resync_required_and_snapshot_repair(factory: &dyn DriverFactory) {
 /// scenario never share a runtime identity.
 #[must_use]
 fn conversation(factory: &dyn DriverFactory, scenario: &str) -> String {
-    format!("conv-38-{}-{scenario}", factory.name())
+    common::identity::child_conversation_id(&format!("{}-{scenario}", factory.name())).into_string()
 }
 
 /// Reads the snapshot, keeping the borrow local.

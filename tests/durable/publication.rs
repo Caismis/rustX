@@ -58,7 +58,7 @@ use tempfile::TempDir;
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const CONVERSATION: &str = "conv-fnd03";
+const CONVERSATION: &str = "conv_601cccec-75c7-703d-af18-cdf2cb42a8a1";
 
 fn fixed_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 24, 12, 0, 0)
@@ -2029,7 +2029,9 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
             "audited-background",
             "1",
             RuntimeEvent::BackgroundExecutionCommitted {
-                execution_id: rustx::runtime::identity::ToolExecutionId::new("exec-audited"),
+                execution_id: rustx::runtime::identity::ToolExecutionId::new(
+                    "exec_deb98904-49c7-7914-8acf-a96b97f78e4b",
+                ),
                 tool_call_id: call_id.clone(),
                 tool_id: ToolId::new("tool-alpha"),
                 tool_name: "alpha".to_owned(),
@@ -2054,7 +2056,9 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
             RuntimeEvent::SubagentOwnershipCommitted {
                 subagent_id: subagent_id.clone(),
                 child_agent_id: AgentId::new("child-audited"),
-                child_conversation_id: ConversationId::new("child-conversation"),
+                child_conversation_id: ConversationId::new(
+                    "conv_b520d0ec-730a-7133-8d51-7de417e31c5a",
+                ),
                 tool_call_id: call_id,
                 agent: "profile".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),

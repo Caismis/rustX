@@ -42,20 +42,21 @@ const MODELS_TOML: &str = r#"[providers.local]
 base_url = "https://local.fixture.invalid/v1"
 api_key = "$RUSTX_CONFORMANCE_KEY"
 
-[[providers.local.models]]
+[models."local/composed-model"]
+provider = "local"
 id = "composed-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 request_params = { temperature = 0.3 }
 
-[providers.local.models.capabilities]
+[models."local/composed-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/composed-model".compat]
 chat_reasoning_replay = "omit"
 "#;
 
@@ -86,21 +87,12 @@ model = "local/composed-model"
 fn startup(root: &std::path::Path, models: &str, config: &str) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    let models_path = root.join("models.toml");
     let config_path = root.join("rustx.toml");
-    std::fs::write(&models_path, models).expect("models.toml");
-    crate::launch_fixture::write_documents(&config_path, config, &["native_tools"]);
+    crate::launch_fixture::write_document(&config_path, &format!("{config}\n{models}"));
     LaunchFixture {
-        models: models_path,
         config: config_path,
-        skill_paths: Vec::new(),
-        no_automatic_skills: false,
-        no_builtin_tools: false,
-        no_direct_tools: false,
         startup_session: rustx::local_runtime::StartupSession::Empty,
         session_name: None,
-        tools: None,
-        exclude_tools: Vec::new(),
         workspace,
         runtime_root: root.join("private"),
     }
@@ -237,9 +229,9 @@ async fn interactive_and_headless_share_one_semantic_composition() {
         headless.tool_runtime(),
         headless.capability(),
     );
-    assert_eq!(
+    assert_ne!(
         interactive_projection.conversation_id, headless_projection.conversation_id,
-        "one conversation identity"
+        "independent cold launches allocate independent Conversation lineages"
     );
     assert_eq!(
         interactive_projection.agent_id,
@@ -257,17 +249,17 @@ async fn interactive_and_headless_share_one_semantic_composition() {
         interactive_projection.workspace_root, headless_projection.workspace_root,
         "the workspace boundary is the same"
     );
-    assert_eq!(
+    assert_ne!(
         interactive_projection.artifacts_root, headless_projection.artifacts_root,
-        "the artifact boundary is the same"
+        "each Conversation owns its artifact boundary"
     );
-    assert_eq!(
+    assert_ne!(
         interactive_projection.mailbox_conversation, headless_projection.mailbox_conversation,
-        "the canonical mailbox belongs to the same conversation"
+        "each canonical mailbox belongs to its own Conversation"
     );
-    assert_eq!(
+    assert_ne!(
         interactive_projection.background_conversation, headless_projection.background_conversation,
-        "the background registry belongs to the same conversation"
+        "each background registry belongs to its own Conversation"
     );
     assert_eq!(
         interactive_projection.capability_revision, headless_projection.capability_revision,
@@ -289,35 +281,19 @@ async fn interactive_and_headless_share_one_semantic_composition() {
 /// The catalog for the emulator-driven tests, mirroring the issue 47
 /// conformance shapes.
 fn emulator_models_json(emulator: &ProviderEmulator) -> String {
-    let window: u64 = 128_000;
     toml::to_string_pretty(&serde_json::json!({
-        "providers": {
-            "emulator": {
-                "base_url": emulator.openai_base_url(),
-                "api_key": format!("${CREDENTIAL_VARIABLE}"),
-                "models": [
-                    {
-                        "id": CHAT_MODEL,
-                        "protocol": "openai_chat_completions",
-                        "context_window": window,
-                        "max_output_tokens": 1024,
-                        "capabilities": {
-                            "input_modalities": ["text"],
-                            "output_modalities": ["text"],
-                            "tool_calls": true,
-                            "reasoning": true
-                        },
-                        "compat": {"chat_reasoning_replay": "omit"},
-                    },
-                ],
-            },
-        },
-    }))
-    .unwrap()
+        "providers": { "emulator": {"base_url": emulator.openai_base_url(), "api_key": format!("${CREDENTIAL_VARIABLE}")} },
+        "models": { format!("emulator/{CHAT_MODEL}"): {
+            "provider": "emulator", "id": CHAT_MODEL, "protocol": "openai_chat_completions",
+            "context_window": 128_000, "max_output_tokens": 1024,
+            "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"], "tool_calls": true, "reasoning": true},
+            "compat": {"chat_reasoning_replay": "omit"}
+        } }
+    })).unwrap()
 }
 
 fn emulator_session_json() -> String {
-    toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-headless", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192}, "agent": {"model": {"model": format!("emulator/{CHAT_MODEL}")}}}))
+    toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-headless", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192}, "agent": {"model": {"model": format!("emulator/{CHAT_MODEL}")}, "tools": {"builtin": ["read", "bash"]}, "plugins": {"agent_status": {"enabled": true}}}}))
     .unwrap()
 }
 
@@ -541,7 +517,7 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
     let response = endpoint
         .handle_request_async(RuntimeClientRequest::SessionDeletePreview {
             id: RequestId::new(3),
-            session_id: b.id.as_str().into(),
+            session_id: b.id.clone(),
         })
         .await;
     let Some(RuntimeClientResult::SessionDeletion {
@@ -553,7 +529,7 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
     let response = endpoint
         .handle_request_async(RuntimeClientRequest::SessionDelete {
             id: RequestId::new(4),
-            session_id: b.id.as_str().into(),
+            session_id: b.id.clone(),
             expected_target_revision: preview.target_revision,
         })
         .await;

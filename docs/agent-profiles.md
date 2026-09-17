@@ -1,186 +1,84 @@
-# Agent Profiles
+# Root and named Agent profiles
 
-See [Workflow admission and Agent selection](workflow-admission.md) for static capability ownership and atomic disable semantics.
-
-rustX has one semantic definition of an Agent. Root `rustx.toml` selects its
-profile under `[agent]`; `.agents/agents/<name>.toml` contains that same profile
-directly. The filename establishes the named resource identity. There is no
-root registry entry. Root and named profiles differ by selected values and
-execution scope.
+Configuration ownership, complete syntax and overlay rules are specified in
+[CFG3 configuration](configuration.md). Root selection lives in `rustx.toml`.
+Named profiles live in the two canonical `.agents/agents/<name>.toml` roots.
+Workspace replaces a same-name User profile completely, including when invalid.
 
 ```toml
-# rustx.toml
+# rustx.toml: the Root profile
 [agent]
-instructions = "Coordinate the review."
-# No positive Skill list: the root automatically sees every eligible Skill in
-# the effective catalog. Subtract one from root visibility only when needed:
-# disabled_skills = ["legacy-java"]
+instructions = "Coordinate review."
+skills = []
 agents = ["reviewer"]
-workflows = ["check"]
-
+workflows = []
 [agent.model]
-model = "local/reasoner"
-
+model = "review-model"
 [agent.tools]
 builtin = ["read"]
-
-[agent.extensions]
-# Explicit empty composition: no extensions.
-
-[agent.agents_md]
-inherit = true
 ```
 
 ```toml
-# .agents/agents/reviewer.toml
+# .agents/agents/reviewer.toml: a complete independent child profile
+# Omitted model inherits the invoking Attempt's frozen effective model.
 description = "Review changes"
 instructions = "Inspect the diff and report actionable findings."
 skills = ["review-guide"]
 timeout_ms = 120000
-
 [tools]
 builtin = ["read", "grep"]
-
 [tools.sources]
 github = ["get_diff"]
 "python:analysis" = "all"
-
-[extensions.todo]
+[plugins.todo]
 enabled = true
-
 [agents_md]
 inherit = true
-
 [worktree]
 enabled = true
 require_clean_parent = true
 ```
 
-## Authoring and capability decisions
-
-`AgentProfileDocument` is the strict shared TOML contract. It lowers to native
-`AgentProfile`; `resolve_agent_profile` resolves that intent into an owned,
-finite `ResolvedAgentProfile` against one admitted generation.
-
-| Dimension | Meaning |
+| Dimension | Owner and meaning |
 | --- | --- |
-| `tools.builtin` | Exact ordinary native Tool names. |
-| `tools.sources` | `ToolSourceId` to `"all"` or an exact name array, for both MCP and Managed Python. |
-| `skills` | **Named Agents only.** Exact admitted Skill names, in canonical order after resolution. |
-| `disabled_skills` | **Root only.** Skill identities hidden from root visibility. It removes nothing from the generation catalog: a named Agent that selects a disabled Skill explicitly still gets it. |
-| `extensions` | Closed native composition: Agent Status, Todo and Goal. Extension Tools belong to their composition, never ordinary selectors. |
-| `agents` | Named Agents this caller may delegate to. Catalog existence alone grants no delegation. |
-| `workflows` | Admitted named Workflows this caller may invoke. Static Workflow program admission remains a separate owner. |
-| `model` | Native model selection, including reasoning, request parameters and summary policy. A named profile omitting it uses the invoking attempt's frozen model. |
-| `instructions` | Primary Agent instructions. Named reusable Agents require nonempty instructions and description. |
-| `agents_md` | Whether to inherit canonical project guidance, plus bounded supplemental files within admitted workspace authority. |
-| `worktree` | Isolated child workspace policy; clean parent required by default. No arbitrary workspace path may be authored. |
-| `timeout_ms` | Optional whole-child lifecycle deadline. Root scope rejects child lifecycle/worktree requests. |
+| `model` | Root default or independent named selection. Omitted named selection inherits the invoking Attempt's complete frozen model. |
+| `tools.builtin` | Exact native whitelist; omission selects none. |
+| `tools.sources` | MCP identity or `python:<package>` to `"all"`, exact Tool names, or `[]`. Definition alone grants nothing. |
+| `skills` | `"all"`, exact names, or `[]`, for both Root and named Agents; default none. Prompt visibility only. |
+| `plugins` | Closed Rust-owned Agent Status, Todo and Goal vocabulary, default off. Each Root Plugin object overlays atomically. |
+| `agents`, `workflows` | Explicit delegation/invocation allowlists. Existing one-shot child scope limits remain enforced. |
+| `description`, `instructions` | Agent prose; named reusable profiles require nonempty values. Prose cannot change invocation policy. |
+| `agents_md` | Canonical project guidance and bounded supplemental files. |
+| `timeout_ms`, `worktree` | Named child lifecycle/workspace policy only. Root rejects these fields. |
 
-## Skill selection
+Root may delegate to reviewer while lacking reviewer's Grep or external Tools.
+There is no Root Tool or Plugin ceiling over the named profile. Invocation
+parameters remain bounded execution data under the existing override admission
+owner; they are never another persistent configuration layer.
 
-Skill selection is not Skill loading. Both polarities resolve against the same
-effective merged Skill catalog, produce the same frozen
-`SkillId`/`SkillVersionId` bindings, and feed the same lazy Read-based loading
-path. Only the *selection* differs:
+Skill discovery captures both absolute roots and shadows whole packages before
+parsing. A malformed Workspace winner never reveals the lower User package.
+Unused invalid resources produce ordered bounded diagnostics. Selecting an
+invalid or unavailable resource fails typed resolution/admission. Root and named
+Skills share progressive disclosure: the prompt identifies the two absolute
+roots and selected names/descriptions without enumerating absolute package paths.
+Skill visibility does not restrict a file-reading Tool's filesystem authority.
 
-```text
-root selection policy
-    -> every eligible catalog identity minus agent.disabled_skills
+Plugins are explicitly authored closed capabilities. Empty or omitted objects
+use their own product defaults, including `enabled = false`. No automatic Todo,
+Goal or Agent Status layer grants capabilities. Conversation Todo/Goal state is
+owned separately. Child scope restrictions on capabilities requiring ongoing
+Root coordination remain typed admission rules, not Root configuration ceilings.
 
-named selection policy
-    -> exactly the authored skills identities
-```
+Global Tool execution, concurrency, approval, deadlines and child capacity belong
+to the runtime generation. Agent profiles select availability; they cannot alter
+those policies. Catalog discovery does not connect MCP or prepare Python. Root
+composition prepares Root demand; child preparation materializes only the
+admitted child's finite demand through the existing source lifecycle owner.
 
-"Eligible" is the catalog's own Skill-level model-invocation filtering: a
-package declaring `disable-model-invocation: true` stays owned by the
-generation and is never widened into any Agent's selection, root included.
-
-The polarity is owned by the authoring boundary. A root document naming
-`skills` and a named document naming `disabled_skills` are both hard
-authoring errors, not silently ignored fields.
-
-Rejection is driven by **authored presence**, never by whether the decoded
-collection is empty:
-
-```text
-root  + omitted skills            -> valid
-root  + skills = []               -> hard authoring error
-root  + skills = ["x"]            -> hard authoring error
-
-named + omitted disabled_skills   -> valid
-named + disabled_skills = []      -> hard authoring error
-named + disabled_skills = ["x"]   -> hard authoring error
-```
-
-`skills = []` is the clearest possible statement of "no Skills", and root
-semantics are "every eligible Skill", so accepting it would silently invert
-the author's intent. Presence is preserved only at the authoring layer
-(including across configuration layering); lowering resolves it into the
-runtime selection polarity, which has no notion of an omitted field.
-
-A malformed Skill identity is a hard error in either polarity. A syntactically
-valid `disabled_skills` identity that the effective catalog does not contain is
-one generation-scoped `disabled_skill_absent` diagnostic and never a startup
-failure.
-
-A Workflow child or dynamic invocation override replaces the whole Skill
-dimension with an exact identity list; there is no deny-list override.
-
-Where Skills are *discovered* is a separate owner — the session
-`[skills].sources` policy and the discovery/merge pipeline documented in
-[runtime resources](runtime-resources.md#skill-sources-and-discovery).
-
-Resource existence is not Agent selection. Source enabled is not Agent exposure.
-Agent Tool ownership is not invocation approval. A profile cannot discover a
-missing package, activate a disabled or untrusted source, change credentials,
-widen host authority, or change native/MCP invocation policy.
-
-Malformed authoring is a hard error: unknown fields, wrong types, malformed
-identities, duplicate exact names, unknown Extensions and invalid extension
-configuration reject the document. For a valid profile, unavailable selections
-produce typed generation-scoped diagnostics and are suppressed. The remaining
-profile stays usable. Tool diagnostics distinguish unavailable builtins,
-undefined/inactive/unprepared/failed sources, and missing exact Tools in a ready
-source. Skills, Agents and Workflows have their own typed unavailable facts, and the
-root deny-list has its own typed absent fact.
-Diagnostics are canonically ordered and stored with the resolved generation,
-not emitted anew on every model turn.
-
-An omitted extension dimension selects no extensions, identically for root and
-named documents. Root product defaults explicitly compose Agent Status and Todo
-in a lower-priority profile layer. Authoring `[agent.extensions]` replaces that
-whole dimension, so an empty table composes none. Known Goal in a complete child
-profile is suppressed with a scope diagnostic. A dynamic request to compose an
-unsupported child Extension remains a typed refusal. One-shot child scope also
-suppresses delegation and Workflow invocation selections; it does not introduce
-nested child lifecycle support.
-
-## Defaults, overrides and freezing
-
-Named defaults resolve against generation-wide admitted resources, independently
-of the root toolbar. In the examples, root can delegate to reviewer but cannot
-call reviewer-only Grep or `github/get_diff` directly.
-
-Dynamic invocation overrides preserve per-dimension replacement for Tools,
-Skills and Extensions: absent means named default; present replaces the whole
-dimension. Explicit empty means empty. There is no union, recursive merge or
-inherit wildcard. Unauthorized additions are refused against the accepted union
-of named default authority and the invoking Agent's frozen delegation authority.
-The broader generation is not itself dynamic override authority. Warning and
-suppression never substitute for override authorization.
-
-The existing capability/resource candidate and commit owner publishes resolved
-profiles with the generation. Root attempts pin a capability lease. Child
-admission consumes the shared semantic profile and freezes exact Tool definitions,
-source bindings, Skill versions, complete model decision and execution policies
-into `ResolvedSubagentSpec`. That child contract additionally owns physical
-materialization and worktree acquisition. It does not reinterpret profile intent.
-Later resource publication or file edits cannot mutate these owned frozen values.
-
-Root model selection seeds a new Session. Persisted Session model state and
-attempt `FrozenModelSpec` retain their existing durable owners on resume and
-recovery; launch configuration does not overwrite history. Native extension
-owners remain launch-scoped, so changing root extension composition requires a
-new launch. Runtime child concurrency capacity and host execution/approval policy
-remain outside Agent Profiles.
+An Attempt pins one immutable generation. Child resolution consumes that Attempt's
+resource/catalog/model snapshot, then freezes exact Tool definitions, source
+bindings, Skill bytes and versions, model decision and policies. It does not read
+current files or current Root defaults. Subsequent Save or Reload cannot mutate
+that child. Cold composition rereads current sources and validates deliberate
+Session model intent; materialized Agent profiles are not Session persistence.

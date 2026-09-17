@@ -205,6 +205,8 @@ jobs:
           --test subagent
           --test tools
           --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
 
   # Platform coverage is intentional, not duplicated by habit. macOS runs
   # exactly the classes where OS semantics matter:
@@ -294,6 +296,8 @@ jobs:
           --test subagent
           --test tools
           --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
 
   # The TUI is a separate job on purpose: the Rust suites must never depend on
   # Node being present.

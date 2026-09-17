@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-commands/PopupSelectView.tsx; see PROVENANCE.md. */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { ApprovalMode, UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v5';
+import type { UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v6';
 import type { AppServerClient } from '../../client/app-server';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { Dialog } from '../../presentation/primitives/Dialog';
@@ -9,7 +9,7 @@ import { CommandSession, type HistoricalSelection, type HistoryAction } from './
 import type { CommandId } from './registry';
 import css from './Commands.module.css';
 
-type Choice = { kind: 'model'; model: string } | { kind: 'approval'; mode: ApprovalMode } | { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
+type Choice = { kind: 'model'; model: string } | { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
 interface Row { id: string; label: string; detail?: string; choice: Choice }
 export interface CommandRequest { id: Exclude<CommandId, 'new'> | 'retry' | 'tree'; messageId?: string }
 export function CommandPanel({ request, client, sessionId, current, close, succeeded, opened }: {
@@ -59,12 +59,6 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
           setDetail(`Current: ${result.current.configured.model}. Choosing a model uses its native defaults.`);
           setRows((result.catalog.models ?? []).map(model => ({ id: model.model, label: model.model, detail: model.model === result.current.configured.model ? 'Current' : undefined, choice: { kind: 'model', model: model.model } }))); break;
         }
-        case 'permission': {
-          await client.refresh(sessionId); if (!valid()) return;
-          const snapshot = client.getSnapshot().views[sessionId]?.snapshot;
-          setDetail(`Effective: ${snapshot?.effective_approval_mode ?? 'unavailable'}${snapshot?.pending_approval_mode ? ` · Pending: ${snapshot.pending_approval_mode}` : ''}. Full access bypasses approval policy.`);
-          setRows((['policy', 'full_access'] as const).map(mode => ({ id: mode, label: mode === 'policy' ? 'Policy' : 'Full access', choice: { kind: 'approval', mode } }))); break;
-        }
         case 'fork': case 'branch': case 'retry':
           setDetail(request.id === 'fork' ? 'Independent Session. Choose the exact User boundary; its prompt returns to the composer.' : request.id === 'retry' ? 'Create a native branch, switch the idle Session to it, and execute the selected prompt once. The original response remains in its original node.' : 'Create a native branch and switch the idle Session to it. The selected prompt returns to the composer.');
           await loadBoundaries(0); break;
@@ -84,7 +78,6 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     try {
       switch (choice.kind) {
         case 'model': await scope.setModel(choice.model); if (valid() && scope.current()) { succeeded(); close(); } break;
-        case 'approval': await scope.setApproval(choice.mode); if (valid() && scope.current()) { succeeded(); close(); } break;
         case 'node': if (await scope.openNode(choice.nodeId, choice.conversationId) && valid()) close(); break;
         case 'history': {
           const result = await scope.transition(choice.action, choice.selection);

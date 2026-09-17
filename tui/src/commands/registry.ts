@@ -26,8 +26,6 @@ export interface CommandSpec {
  */
 export const COMMANDS: readonly CommandSpec[] = [
   { name: "/settings", description: "Inspect native settings, captured sources, and application boundaries." },
-  { name: "/defaults", description: "Read the user default document and its revision (separate from live settings).", argumentHint: "user" },
-  { name: "/save-default", description: "Explicitly save selected model/profile or desired approval to user defaults; live state is unchanged.", argumentHint: "user <model|approval> <revision>" },
   { name: "/help", description: "List the available commands." },
   { name: "/goal", description: "Show, create, pause, resume, edit, or budget a persistent Goal." },
   {
@@ -111,10 +109,6 @@ export const COMMANDS: readonly CommandSpec[] = [
     description:
       "Request cancellation of the current attempt, or of a background execution.",
     argumentHint: "[execution-id]",
-  },
-  {
-    name: "/approval",
-    description: "Choose approval mode; Full access requires explicit confirmation.",
   },
   { name: "/quit", description: "Shut down the runtime and exit cleanly." },
 ];

@@ -30,15 +30,26 @@ pub(super) fn inspect(
     let Some(launch) = launch else {
         return report;
     };
-    if !launch.trusted {
-        report.validity = Validity::Incomplete;
+
+    // Inspecting a particular identity selects its diagnostic even when the
+    // malformed resource was harmless to unrelated offline composition.
+    if let Some(error) = launch.workflows.invalid().get(id) {
+        let failure = super::diagnostics::LaunchFailure::resource(error.clone());
+        report.validity = Validity::Invalid;
+        report.diagnostics.insert(0, *failure.diagnostic);
         return report;
     }
-    let source = launch
-        .locations
-        .workspace
-        .join(".agents/workflows")
-        .join(format!("{id}.yaml"));
+
+    let source = launch.workflows.locations.get(id).map_or_else(
+        || {
+            launch
+                .locations
+                .workspace
+                .join(".agents/workflows")
+                .join(format!("{id}.yaml"))
+        },
+        |location| location.path.clone(),
+    );
     let Some(admission) = launch.inspection.workflows.get(id) else {
         return Report::failure(
             operation,

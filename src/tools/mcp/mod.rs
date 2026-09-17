@@ -111,7 +111,7 @@ mod streamable_http;
 mod tasks;
 
 use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
@@ -398,13 +398,6 @@ pub struct McpServerBinding {
     /// Host-authorized references and private resolved instance state.
     #[serde(default)]
     pub credentials: crate::credentials::SourceCredentials,
-    /// Frozen source admission, independent of execution-domain Tool admission.
-    pub activation: crate::capabilities::activation::SourceActivation,
-    /// Project-origin local resources remain constrained on every connection,
-    /// including reconnection and frozen child materialization. Host bindings
-    /// carry no project restriction. This is not a project-configurable field.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resource_workspace: Option<PathBuf>,
     /// The configured transport.
     pub transport: McpTransportConfig,
     /// One origin-independent policy for all tools from this server.
@@ -415,9 +408,7 @@ impl std::fmt::Debug for McpServerBinding {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("McpServerBinding")
-            .field("activation", &self.activation)
             .field("credentials", &self.credentials)
-            .field("resource_workspace", &self.resource_workspace)
             .field("transport", &self.transport)
             .field("policy", &self.policy)
             .finish()
@@ -851,6 +842,7 @@ impl McpRuntimeGeneration {
     }
 
     /// The server identity this published generation serves.
+    #[cfg(test)]
     pub(crate) fn server_id(&self) -> &McpServerId {
         &self.inner.server_id
     }
@@ -2444,10 +2436,6 @@ impl McpServerRuntime {
             #[cfg(test)]
             ownership_pause,
         } = request;
-        binding
-            .activation
-            .admit()
-            .map_err(|reason| McpError::Configuration(format!("source {server_id}: {reason}")))?;
         let credentials = binding
             .credentials
             .resolve()
@@ -2487,19 +2475,6 @@ impl McpServerRuntime {
                     return Err(McpError::Configuration(
                         "stdio program must be non-empty".to_owned(),
                     ));
-                }
-                if let Some(root) = &binding.resource_workspace {
-                    if program.contains('/') {
-                        crate::runtime::resources::validate_project_resource_path(
-                            root,
-                            Path::new(program),
-                        )
-                        .map_err(|e| McpError::Configuration(e.to_string()))?;
-                    }
-                    if let Some(path) = cwd {
-                        crate::runtime::resources::validate_project_resource_path(root, path)
-                            .map_err(|e| McpError::Configuration(e.to_string()))?;
-                    }
                 }
                 let cwd = resolve_workspace_cwd(workspace, cwd.as_deref())?;
                 let mut explicit_environment =
@@ -6933,19 +6908,11 @@ fn resolve_workspace_cwd(workspace: &Workspace, cwd: Option<&Path>) -> Result<Pa
     let Some(cwd) = cwd else {
         return Ok(workspace.root().to_path_buf());
     };
-    if cwd.is_absolute()
-        || cwd.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(McpError::Configuration(
-            "stdio cwd must be a workspace-relative path without parent components".to_owned(),
-        ));
-    }
-    let resolved = workspace.root().join(cwd);
+    let resolved = if cwd.is_absolute() {
+        cwd.to_path_buf()
+    } else {
+        workspace.root().join(cwd)
+    };
     if !resolved.is_dir() {
         return Err(McpError::Configuration(
             "stdio cwd is not a directory".to_owned(),
@@ -7624,7 +7591,7 @@ mod tests {
     async fn mcp_tasks_poll_wait_preserves_hints_and_is_interruptible() {
         use futures_util::FutureExt as _;
         use std::time::Duration;
-        let (_directory, runtime) = runtime("task-clock");
+        let (_directory, runtime) = runtime("conv_d291e9cf-f815-71c6-a54a-0fcd24614d46");
         let context = context(&runtime, None, &NoProgress);
         for (hint, millis) in [
             (None, 500),
@@ -7688,7 +7655,7 @@ mod tests {
             serde_json::json!(null),
             serde_json::json!({"nested": true}),
         ] {
-            let (_directory, runtime) = runtime("mcp-structured-shapes");
+            let (_directory, runtime) = runtime("conv_469d6f38-f702-7a09-ad3e-64df30fb0cab");
             let progress = NoProgress;
             let mut call = CallToolResult::success(Vec::new());
             call.structured_content = Some(value.clone());
@@ -7717,7 +7684,7 @@ mod tests {
     /// translated as one ordinary successful tool result.
     #[test]
     fn mcp_2026_complete_result_framing_carries_content_and_structured_content() {
-        let (_directory, runtime) = runtime("mcp-2026-complete-framing");
+        let (_directory, runtime) = runtime("conv_882529ea-9e3c-7445-b7fb-e82d5d7aefa5");
         let progress = NoProgress;
         let value = serde_json::json!([1, 2, 3]);
         let call = CallToolResult::structured(value.clone());
@@ -7738,7 +7705,7 @@ mod tests {
 
     #[test]
     fn foreground_mcp_aggregate_budget_accepts_exact_text_image_boundary() {
-        let (_directory, runtime) = runtime("mcp-aggregate-exact");
+        let (_directory, runtime) = runtime("conv_6b37ff56-9e45-76b6-ad53-720d83646781");
         let text_bytes = crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
         let image_bytes = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES - text_bytes;
         let progress = NoProgress;
@@ -7765,7 +7732,7 @@ mod tests {
 
     #[test]
     fn foreground_mcp_multiple_images_share_the_aggregate_budget() {
-        let (_directory, runtime) = runtime("mcp-aggregate-images");
+        let (_directory, runtime) = runtime("conv_9805c367-479f-7441-9652-ecd2ca778da1");
         let image_bytes = 40 * 1024;
         let progress = NoProgress;
         let result = translate_result(
@@ -7791,7 +7758,7 @@ mod tests {
 
     #[test]
     fn foreground_mcp_text_and_image_share_the_aggregate_budget() {
-        let (_directory, runtime) = runtime("mcp-aggregate-text-image");
+        let (_directory, runtime) = runtime("conv_d16d93ad-07fe-7e30-b67d-2d55c93ea27e");
         let text_bytes = crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
         let image_bytes = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES - text_bytes + 1;
         let progress = NoProgress;
@@ -7823,7 +7790,7 @@ mod tests {
 
     #[test]
     fn foreground_mcp_structured_json_and_image_share_the_aggregate_budget() {
-        let (_directory, runtime) = runtime("mcp-aggregate-json-image");
+        let (_directory, runtime) = runtime("conv_9a23ba04-30a5-7fde-ac71-eeb10ae35a7b");
         let value = serde_json::json!({"payload": "x".repeat(1024)});
         let structured_bytes = serde_json::to_vec(&value).expect("structured JSON").len();
         let image_bytes = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES - structured_bytes + 1;
@@ -7853,7 +7820,7 @@ mod tests {
 
     #[test]
     fn foreground_mcp_image_before_overflow_text_preserves_order_and_spill() {
-        let (_directory, runtime) = runtime("mcp-order-image-text");
+        let (_directory, runtime) = runtime("conv_9945bc63-c737-7640-a9af-ea113d6a24d1");
         let text = "B".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1);
         let progress = NoProgress;
         let result = translate_result(
@@ -7887,7 +7854,7 @@ mod tests {
 
     #[test]
     fn foreground_mcp_text_image_text_overflow_preserves_order() {
-        let (_directory, runtime) = runtime("mcp-order-text-image-text");
+        let (_directory, runtime) = runtime("conv_d6ae35e5-4186-71fd-a6e0-e4a88245fd6a");
         let first_bytes = crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES / 2;
         let second_bytes = crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES - first_bytes;
         let first = "A".repeat(first_bytes);
@@ -7933,7 +7900,7 @@ mod tests {
 
     #[test]
     fn foreground_mcp_text_image_overflow_text_image_preserves_order() {
-        let (_directory, runtime) = runtime("mcp-order-text-image-text-image");
+        let (_directory, runtime) = runtime("conv_01c2f363-4cf5-771f-8ac3-361cd4d4e1c2");
         let first = "A".repeat(64);
         let second = "B".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1);
         let progress = NoProgress;
@@ -7986,7 +7953,7 @@ mod tests {
 
     #[test]
     fn foreground_mcp_aggregate_pressure_keeps_order_before_rejecting_late_image() {
-        let (_directory, runtime) = runtime("mcp-order-budget-pressure");
+        let (_directory, runtime) = runtime("conv_ae52e05c-bb61-7f6d-9baa-326b0908c733");
         let first = "A".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES / 2);
         let second = "B".repeat(
             crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES
@@ -8043,7 +8010,7 @@ mod tests {
 
     #[test]
     fn foreground_mcp_storage_allocation_failure_is_unavailable() {
-        let (_directory, runtime) = runtime("mcp-storage-allocation");
+        let (_directory, runtime) = runtime("conv_7d8a4876-dd29-7af8-bcf0-bcde5f8df913");
         runtime.tool_output().set_force_open_failures(true);
         let progress = NoProgress;
         let result = translate_result(
@@ -8066,7 +8033,7 @@ mod tests {
 
     #[test]
     fn foreground_mcp_storage_write_failure_is_partial() {
-        let (_directory, runtime) = runtime("mcp-storage-write");
+        let (_directory, runtime) = runtime("conv_5c577666-2ed8-7539-b8a0-46670c5c6b54");
         runtime.tool_output().fail_writes_after(0);
         let progress = NoProgress;
         let result = translate_result(
@@ -8085,7 +8052,7 @@ mod tests {
 
     #[test]
     fn foreground_mcp_utf8_boundary_keeps_preview_valid_and_spill_complete() {
-        let (_directory, runtime) = runtime("mcp-utf8-boundary");
+        let (_directory, runtime) = runtime("conv_92a48cd5-55c3-7bbe-871f-c113e2736868");
         let text = format!(
             "{}😀",
             "a".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES - 1)
@@ -8119,8 +8086,8 @@ mod tests {
 
     #[test]
     fn background_mcp_empty_terminal_reuses_the_dispatch_locator() {
-        let (_directory, runtime) = runtime("mcp-background-empty");
-        let execution_id = ToolExecutionId::background(11);
+        let (_directory, runtime) = runtime("conv_b9fa698c-d676-7a72-8ddf-b9a5eb8d09cf");
+        let execution_id = ToolExecutionId::new("exec_01900000-0000-7000-8000-00000000000b");
         let advertised = runtime
             .tool_output()
             .allocate_background_output(&execution_id)
@@ -8163,8 +8130,8 @@ mod tests {
     /// managed-output continuation as explicitly Partial.
     #[test]
     fn background_mcp_sink_open_failure_preserves_outcome_certainty() {
-        let (_directory, runtime) = runtime("mcp-background-sink-open");
-        let execution_id = ToolExecutionId::background(12);
+        let (_directory, runtime) = runtime("conv_e1de8e98-031f-7225-a705-b3c8b7bbd52a");
+        let execution_id = ToolExecutionId::new("exec_01900000-0000-7000-8000-00000000000c");
         let advertised = runtime
             .tool_output()
             .allocate_background_output(&execution_id)
@@ -8201,8 +8168,8 @@ mod tests {
     /// stays `Failed` and gains the storage diagnostic appended.
     #[test]
     fn background_mcp_sink_open_failure_appends_the_diagnostic_to_a_known_failure() {
-        let (_directory, runtime) = runtime("mcp-background-sink-open-failed");
-        let execution_id = ToolExecutionId::background(13);
+        let (_directory, runtime) = runtime("conv_b8aea0c2-995c-7b75-ae2d-babec6181e66");
+        let execution_id = ToolExecutionId::new("exec_01900000-0000-7000-8000-00000000000d");
         runtime
             .tool_output()
             .allocate_background_output(&execution_id)
@@ -8267,8 +8234,8 @@ mod tests {
 
     #[test]
     fn background_mcp_storage_write_failure_keeps_the_dispatch_locator_partial() {
-        let (_directory, runtime) = runtime("mcp-background-storage-write");
-        let execution_id = ToolExecutionId::background(4);
+        let (_directory, runtime) = runtime("conv_cf322b11-3d5e-788f-ab17-a026fb84e14f");
+        let execution_id = ToolExecutionId::new("exec_01900000-0000-7000-8000-000000000004");
         let advertised = runtime
             .tool_output()
             .allocate_background_output(&execution_id)

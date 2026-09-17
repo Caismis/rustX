@@ -1,4 +1,4 @@
-# Goal extension admission design
+# Goal Plugin admission design
 
 The round linearization point is the SQLite commit that both inserts
 ordinary Pending Inbound, updates Goal revision and consumed rounds, and records
@@ -39,15 +39,17 @@ Request Snapshot and attempt recovery; there is no Goal replay.
 
 ## State and command contract
 
-`extensions.goal.enabled` defaults to false and is frozen for the launch. With it
-disabled there is no GoalDomain composition, model Tool, context or driver, and
-`/goal` reports feature-disabled. Stored state remains untouched. Named child
+`agent.plugins.goal.enabled` defaults to false and is frozen per published
+configuration generation. `/reload` publishes Plugin composition at the safe
+boundary. When disabled, Goal Tools, context and driver are unavailable and
+`/goal` reports feature-disabled. Conversation-owned stored state remains
+untouched and can be projected when the Plugin is enabled again. Named child
 definitions and invocation overrides share the closed syntax, but effective
 enabled Goal fails `unsupported_child_scope` before child spawn. Workflow applies
 that same check; root Goal is never implicitly inherited.
 
 `goal_state` is one native singleton record inside the existing conversation
-SQLite database (schema 37; Goal storage introduced in schema 34). Its bounded JSON snapshot stores GoalRef, objective,
+SQLite database (schema 38; Goal storage introduced in schema 34). Its bounded JSON snapshot stores GoalRef, objective,
 phase, blocked reason, origin, autonomous budget/consumed count and the last
 round's ordinary MessageId. Identity is conversation-scoped. Complete is terminal;
 a subsequent create starts a new identity. Revision increases exactly once for
@@ -59,7 +61,7 @@ never automatically retried against a newer revision.
 The stable model Tool definitions are `get_goal`, `create_goal`, `update_goal`.
 ExtensionToolPlane is derived from materialized owners, and ConversationRuntime
 checks both configured and published Tool shapes against the frozen composition.
-Phase changes publish no capability generation. Ordinary `--tools`/`agent.tools.builtin`
+Phase changes publish no capability generation. Ordinary `agent.tools.builtin`
 selection neither grants nor strips Goal Tools.
 
 `create_goal` is permitted only when the Human clearly authorizes persistent

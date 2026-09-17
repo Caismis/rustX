@@ -29,6 +29,17 @@ const PROJECT_CONTEXT_FILENAMES: [&str; 5] = [
 ];
 const MAX_RESOURCE_DIAGNOSTIC_BYTES: usize = 4096;
 
+/// Frozen authored ownership of a complete resource identity. Discovery records
+/// the losing location without parsing or borrowing any of its fields.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ResourceLocation {
+    pub scope: crate::local_runtime::configuration::settings::SourceScope,
+    pub path: PathBuf,
+    pub shadowed: Option<PathBuf>,
+}
+
 /// One runtime-loaded project instruction file.
 ///
 /// The value carries both the canonical source identity and the exact
@@ -47,28 +58,59 @@ pub struct ProjectContextFile {
 /// Inert canonical Managed Python sources frozen with the full generation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ManagedPythonCatalog {
-    packages: std::collections::BTreeMap<crate::capabilities::ToolSourceId, PathBuf>,
+    pub(crate) locations:
+        std::collections::BTreeMap<crate::capabilities::ToolSourceId, ResourceLocation>,
+    pub(crate) discovery_diagnostics: Vec<crate::runtime::resources::RuntimeResourceLoadError>,
+    packages: std::collections::BTreeMap<
+        crate::capabilities::ToolSourceId,
+        Result<crate::tools::python::PythonToolPackage, crate::tools::python::PythonToolError>,
+    >,
 }
 impl ManagedPythonCatalog {
-    /// Construct an inert catalog from canonical, authority-checked package paths.
+    /// Captured package bytes or a bounded failure for each winning identity.
     #[must_use]
     pub fn new(
-        packages: std::collections::BTreeMap<crate::capabilities::ToolSourceId, PathBuf>,
+        packages: std::collections::BTreeMap<
+            crate::capabilities::ToolSourceId,
+            Result<crate::tools::python::PythonToolPackage, crate::tools::python::PythonToolError>,
+        >,
     ) -> Self {
-        Self { packages }
+        Self {
+            packages,
+            locations: std::collections::BTreeMap::new(),
+            discovery_diagnostics: Vec::new(),
+        }
     }
-    /// Discovered source identities and their canonical package directories.
     #[must_use]
     pub const fn packages(
         &self,
-    ) -> &std::collections::BTreeMap<crate::capabilities::ToolSourceId, PathBuf> {
+    ) -> &std::collections::BTreeMap<
+        crate::capabilities::ToolSourceId,
+        Result<crate::tools::python::PythonToolPackage, crate::tools::python::PythonToolError>,
+    > {
         &self.packages
     }
+}
+
+/// Configuration authority carried by the same immutable generation as resources.
+/// Authored source capture is process-local and never persisted as Session intent.
+#[derive(Clone)]
+pub struct RuntimeConfiguration {
+    pub resource_definitions: Vec<crate::runtime::capability_inspection::ResourceDefinition>,
+    pub resource_diagnostics: Vec<crate::runtime::capability_inspection::ResourceDiagnostic>,
+    pub source_revisions: std::collections::BTreeMap<PathBuf, String>,
+    pub effective: crate::local_runtime::authoring::RuntimeLayer<
+        crate::local_runtime::configuration::settings::ProviderView,
+    >,
+    pub config: Arc<crate::local_runtime::config::CurrentRuntimeConfig>,
+    pub models: crate::model::invocation::ModelBindingRegistry,
+    pub provenance: std::collections::BTreeMap<String, crate::local_runtime::configuration::Origin>,
 }
 
 /// The complete immutable resource generation observed by an attempt.
 #[derive(Clone)]
 pub struct RuntimeResourceSnapshot {
+    configuration: Option<Arc<RuntimeConfiguration>>,
     revision: RuntimeResourceRevision,
     inspection: Arc<crate::runtime::capability_inspection::CapabilityInspection>,
     project_context_files: Arc<[ProjectContextFile]>,
@@ -152,6 +194,18 @@ impl RuntimeResourceSnapshot {
         self
     }
 
+    /// Preserve configuration identity while resolving newly admitted demand.
+    pub(crate) fn with_admitted_capability(
+        mut self,
+        capability: Arc<CapabilitySnapshot>,
+        availability: CapabilityAvailability,
+    ) -> Self {
+        self.capability = capability;
+        self.capability_availability = availability;
+        self.resolve_profiles();
+        self
+    }
+
     fn resolve_profiles(&mut self) {
         use crate::runtime::agent_profile::{
             AgentProfileAuthority, AgentScope, resolve_agent_profile,
@@ -197,6 +251,14 @@ impl RuntimeResourceSnapshot {
                 self.capability.skills(),
             ),
         );
+        if let Some(configuration) = &self.configuration {
+            Arc::make_mut(&mut self.inspection)
+                .definitions
+                .clone_from(&configuration.resource_definitions);
+            Arc::make_mut(&mut self.inspection)
+                .resource_diagnostics
+                .clone_from(&configuration.resource_diagnostics);
+        }
     }
     /// Read the frozen generation facts without resolution or execution.
     #[must_use]
@@ -257,6 +319,7 @@ impl RuntimeResourceSnapshot {
             capability.skills(),
         );
         Self {
+            configuration: None,
             revision,
             inspection: Arc::new(inspection),
             project_context_files: project_context_files.into(),
@@ -327,13 +390,27 @@ impl RuntimeResourceSnapshot {
             prepared.context_assembly,
             capability,
         );
+        snapshot.configuration = prepared.configuration;
         snapshot.subagents = Arc::new(prepared.subagents);
         snapshot.workflows = Arc::new(prepared.workflows);
         snapshot.managed_python = prepared.managed_python;
         snapshot.capability_availability = prepared.capability_availability;
         snapshot.resolved_agents = prepared.resolved_agents;
         snapshot.inspection = prepared.inspection;
+        if let Some(config) = &snapshot.configuration {
+            Arc::make_mut(&mut snapshot.inspection)
+                .definitions
+                .clone_from(&config.resource_definitions);
+            Arc::make_mut(&mut snapshot.inspection)
+                .resource_diagnostics
+                .clone_from(&config.resource_diagnostics);
+        }
         snapshot
+    }
+
+    #[must_use]
+    pub fn configuration(&self) -> Option<&Arc<RuntimeConfiguration>> {
+        self.configuration.as_ref()
     }
 
     /// The process-local generation identity.
@@ -425,6 +502,7 @@ impl RuntimeResourceSnapshot {
 /// A complete off-side resource candidate. Nothing in this value is visible
 /// to an admitted attempt until the runtime publishes it.
 pub struct PreparedRuntimeResources {
+    configuration: Option<Arc<RuntimeConfiguration>>,
     project_context_files: Vec<ProjectContextFile>,
     agent_profile: Option<String>,
     context_assembly: ContextAssembly,
@@ -437,6 +515,7 @@ pub struct PreparedRuntimeResources {
 /// The non-capability half of a prepared resource candidate after the
 /// capability candidate has been moved into its commit boundary.
 pub(crate) struct PreparedRuntimeResourceData {
+    pub(crate) configuration: Option<Arc<RuntimeConfiguration>>,
     inspection: Arc<crate::runtime::capability_inspection::CapabilityInspection>,
     resolved_agents: std::collections::BTreeMap<
         SubagentName,
@@ -452,6 +531,12 @@ pub(crate) struct PreparedRuntimeResourceData {
 }
 
 impl PreparedRuntimeResources {
+    #[must_use]
+    pub fn with_configuration(mut self, configuration: RuntimeConfiguration) -> Self {
+        self.configuration = Some(Arc::new(configuration));
+        self
+    }
+
     /// Builds one complete prepared resource candidate.
     #[must_use]
     pub fn new(
@@ -461,6 +546,7 @@ impl PreparedRuntimeResources {
         capability: PreparedCapabilityCandidate,
     ) -> Self {
         Self {
+            configuration: None,
             project_context_files,
             agent_profile,
             context_assembly,
@@ -522,6 +608,7 @@ impl PreparedRuntimeResources {
 
     pub(crate) fn into_parts(self) -> (PreparedCapabilityCandidate, PreparedRuntimeResourceData) {
         let Self {
+            configuration,
             project_context_files,
             agent_profile,
             context_assembly,
@@ -574,6 +661,7 @@ impl PreparedRuntimeResources {
         (
             capability,
             PreparedRuntimeResourceData {
+                configuration,
                 inspection: Arc::new(inspection),
                 resolved_agents,
                 project_context_files,
@@ -748,7 +836,7 @@ impl core::fmt::Display for RuntimeResourceLoadError {
 
 impl std::error::Error for RuntimeResourceLoadError {}
 
-/// Loads project context only from the resolved, trusted workspace boundary.
+/// Loads project context only from the resolved workspace boundary.
 /// It contributes at most one file using first-match precedence:
 /// `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`.
 /// Unrelated ancestor instructions are outside this workspace's authority.
@@ -804,7 +892,7 @@ pub(crate) fn validate_project_resource_path(
     })?;
     if !resolved.starts_with(workspace) {
         return Err(RuntimeResourceLoadError::new(format!(
-            "project resource {} is outside trusted workspace {}",
+            "project resource {} is outside workspace boundary {}",
             path.display(),
             workspace.display()
         )));

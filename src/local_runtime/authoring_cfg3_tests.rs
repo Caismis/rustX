@@ -10,7 +10,7 @@ fn parse(text: &str) -> RuntimeLayer {
 }
 
 fn workspace() -> Origin {
-    Origin::Project {
+    Origin::Workspace {
         document: "/workspace/rustx.toml".into(),
         base: "/workspace".into(),
     }
@@ -166,6 +166,38 @@ fn explicit_empty_policy_objects_reset_to_domain_defaults() {
 }
 
 #[test]
+fn plugin_omission_empty_and_explicit_enable_are_distinct_without_splicing() {
+    let lower = "[agent.model]\nmodel = 'chosen'\n[agent.plugins.agent_status]\nenabled = true\n[agent.plugins.agent_status.background]\nenabled = false\n[agent.plugins.todo]\nenabled = true\n";
+    let (inherited, _) = effective(lower, "");
+    assert!(inherited.agent.extensions.resolve().todo().is_some());
+    for higher in [
+        "[agent.plugins.agent_status]\n[agent.plugins.todo]\n",
+        "[agent.plugins.agent_status]\nenabled = false\n[agent.plugins.todo]\nenabled = false\n",
+    ] {
+        let (replaced, origins) = effective(lower, higher);
+        assert!(replaced.agent.extensions.resolve().is_empty());
+        assert!(matches!(
+            origins["agent.plugins.todo"],
+            Origin::Workspace { .. }
+        ));
+    }
+    let (enabled, _) = effective(lower, "[agent.plugins.agent_status]\nenabled = true\n");
+    assert!(
+        enabled
+            .agent
+            .extensions
+            .resolve()
+            .agent_status()
+            .unwrap()
+            .background
+            .enabled
+    );
+    let named: super::super::config::AgentProfileDocument =
+        crate::toml_authoring::parse(b"[plugins.agent_status]\n[plugins.todo]\n").unwrap();
+    assert!(named.extensions.resolve().is_empty());
+}
+
+#[test]
 fn native_policy_is_atomic_per_tool() {
     let (config, origins) = effective(LOWER, "[native_tools.bash]\napproval = 'never'");
     assert_eq!(config.native_tools.bash.execution, None);
@@ -196,14 +228,23 @@ fn empty_identity_maps_do_not_erase_unmentioned_identities() {
 
 #[test]
 fn mcp_destination_replacement_drops_lower_secrets_and_headers() {
-    let lower = format!(
-        "{LOWER}\n[mcp_servers.docs]\nurl = 'https://lower.example/mcp'\nheaders = {{ Accept = 'lower' }}\nsensitive_headers = {{ Authorization = '$LOWER_TOKEN' }}"
-    );
-    let (config, _) = effective(
-        &lower,
+    let root = tempfile::tempdir().unwrap();
+    let user = root.path().join("user/.agents");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&user).unwrap();
+    std::fs::create_dir_all(workspace.join(".agents")).unwrap();
+    std::fs::write(user.join("mcp.toml"), "[mcp_servers.docs]\nurl = 'https://lower.example/mcp'\nheaders = { Accept = 'lower' }\nsensitive_headers = { Authorization = '$LOWER_TOKEN' }").unwrap();
+    std::fs::write(
+        workspace.join(".agents/mcp.toml"),
         "[mcp_servers.docs]\nurl = 'https://upper.example/mcp'",
-    );
-    let server = &config.mcp_servers[&crate::runtime::identity::McpServerId::new("docs")];
+    )
+    .unwrap();
+    let catalog = crate::local_runtime::mcp_resources::load(&user, &workspace);
+    let server = catalog.definitions[&crate::runtime::identity::McpServerId::new("docs")]
+        .as_ref()
+        .unwrap()
+        .clone()
+        .resolve();
     assert_eq!(server.url.as_deref(), Some("https://upper.example/mcp"));
     assert!(server.headers.is_empty());
     assert!(server.sensitive_headers.is_empty());

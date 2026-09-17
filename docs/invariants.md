@@ -81,25 +81,13 @@ These invariants are architectural constraints. Implementations may change; thes
 
 ## Configuration analysis and activation
 
-There is one TOML parser and one prospective launch semantic path. Runtime
-admission follows static analysis; diagnostics never simulate admission with
-trust grants, credential snapshots, executors or connected-source facts.
-Static configuration checks may read bounded authorized local files but cannot
-execute, prepare, connect, resolve secrets, create Sessions, or write runtime/trust
-state. Host path discovery is not credential materialization.
+Only User and Workspace `rustx.toml` are ordinary configuration authority.
+Offline analysis reads current bound sources and validates native structure and
+references without connecting MCP, preparing Python, resolving secrets, creating
+Sessions or executing providers. Prospective facts cannot mutate a loaded runtime.
+Root and named Agent profiles select capabilities; global policy owns execution.
+See [the exact CFG3 overlay matrix](configuration.md#exact-overlay-matrix).
 
-Initialization publishes only explicitly requested minimal user configuration and
-never overwrites existing files by default, including racing creations. Per-file
-publication does not imply a multi-file transaction.
-
-Configuration show is a redacted prospective next-launch projection from the
-ordinary launch semantics, not a current Session or attempt projection. Schemas
-describe structural authoring shape from native types; semantic admission remains
-in domain validators and the Workflow compiler.
-
-Probes disclose effects before execution, preserve runtime trust/source gates,
-and use existing process/connection cancellation and settlement owners. Cancelling
-a caller is not proof that an owned process or connection has settled.
 
 ## Native invocation ownership
 
@@ -1479,221 +1467,24 @@ RemoteTaskActive
   records the ordinary requested/settled facts of any Questionnaire a task
   published, because those are runtime execution facts.
 
-### The conversation task list and `todo`
+### Plugins and Conversation state
 
-> Enabling Todo composes one coherent Todo capability for one concrete
-> Agent/Conversation: conversation-owned Todo state, its model-facing `todo`
-> Tool, bounded Todo status presentation, and Runtime Client/TUI projection.
-> Ordinary Tool selection does not independently add or remove the
-> extension-provided `todo` Tool.
+Plugins are closed Rust-owned capabilities configured by `agent.plugins` or a
+complete named Agent's `plugins` table. All default off. `NativeAgentExtensions`
+is the internal typed representation; it is not a dynamic plugin API.
 
-Todo is an optional **Native Agent Extension** (Issue #259), not an ordinary
-execution capability like Read or Bash. `agent.extensions.todo.enabled` is its one
-switch in root authoring, and it composes all four faces above or none of them.
-The explicit lower-priority root product profile enables it; complete-profile
-omission composes none; `agent.tools.builtin`, `--tools`, `--exclude-tools`, a role's
-`tools.builtin`, and a Workflow's admitted capability set all reject the name
-`todo` outright, because they address the ordinary capability plane and Todo is
-not in it. `--no-direct-tools` therefore leaves an enabled Todo's Tool in place: a
-Tool-free model request needs zero direct Tools, empty Agent/Workflow
-selections, and no Tool-providing Extensions.
+Root composition belongs to the immutable configuration generation. A successful
+reload publishes Plugin configuration, Tool registrations, policies and context
+contributors together. Each Attempt uses its admitted profile. Named Agents
+compose independently, without a Root Tool or Plugin ceiling. Child scope
+restrictions remain typed admission rules.
 
-The coherence is **structural, not conventional**. One frozen
-`NativeAgentExtensions` is stored by the `ConversationToolRuntime` that
-materializes it, and every other face is derived from or proved against that
-one value: the conversation's `ConversationTodoList` is materialized from it,
-the extension Tool plane is derived from *that list* rather than configured
-beside it (`ExtensionToolPlane`'s only Tool-publishing constructor takes the
-materialized owner, and the one public constructor yields the empty plane), the
-Agent Status engine is materialized from it, and the Runtime Client effective
-projection returns it. So "the model is offered `todo` while the runtime owns
-no list" is not a state the types can represent. Pairing facets materialized
-for two *different* compositions is refused at the ownership-transfer boundary:
-`ConversationRuntime` construction fails closed with
-`ExtensionCompositionMismatch` unless the Todo state owner, the coordinator's
-configured Tool plane, its **currently active** `CapabilitySnapshot` Tool
-authority, and the status engine all follow from the conversation's one stored
-composition. The active generation is checked separately from the configured
-plane because a coordinator holds its configured plane from construction but
-publishes nothing until a prepared candidate is committed — so "configured to
-publish `todo`" is not "the currently executable generation carries `todo`",
-and the active comparison is by exact canonical `ToolDefinition` rather than by
-model-facing name.
+Todo and Goal current state belongs to the Conversation, not configuration.
+Turning a Plugin off removes its model-facing capability and live presentation;
+it does not rewrite canonical historical results or erase its domain state.
+The native `effective_plugins` projection reports the published composition;
+historical-only inspection does not invent current configuration.
 
-Composition is launch-frozen exactly like every other extension. A resource
-reload cannot install or remove Todo in a running composition — the extension
-Tool set is composed once, outside the reloadable capability inputs — and
-restart/resume is a new composition resolved through the ordinary resolver.
-The `todo` Tool definition is therefore stable for the lifetime of one
-composition: list contents, emptiness, actionability, and mutations never add
-or remove it, and never republish a capability generation.
-
-Within a composition that includes it, `todo` is one ordinary foreground,
-sequential, approval-never Tool over the conversation-owned
-`ConversationTodoList`. Task ids are allocated in creation
-order from `next_id` and are unique within the current list generation;
-`clear` resets the allocator, so an id names one task for as long as the list
-it belongs to lives, not for as long as the conversation does. A rejected call
-allocates nothing. Status transitions are `pending <-> in_progress`, either to
-`completed`, and any status to `deleted`; `completed` may only become
-`deleted`, and `deleted` is terminal. A transition to the current status is
-accepted and reported as a no-op. `delete` tombstones a task and never
-removes it, so historical `blocked_by` references still resolve; tombstones
-are hidden from `list` unless `include_deleted` is set, and are never counted
-in `done/total`.
-
-Dependency edges are validated before the list is written: an unknown id, a
-tombstoned id, a self-block, and an edge that would close a cycle in the
-`blocked_by` graph are all rejected, and a rejected call leaves the list
-exactly as it was. Reverse `blocks` edges are derived from the other tasks'
-`blocked_by` sets and never stored.
-
-A subject is trimmed and must not be blank, on `update` exactly as on
-`create`. More generally the authority validates every candidate list against
-the rule a rebuild applies *before* staging it, so no accepted call can
-publish a snapshot the next restart would refuse to read back.
-
-Task text is model-written and a client draws it, so the tool's input contract
-rejects control characters — the C0 and C1 ranges, `DEL`, and the Unicode bidi
-controls — in `subject`, `active_form`, `owner`, `description`, and in metadata
-keys and every string inside a metadata value, before any list state is
-touched. "The bidi controls" means Unicode's `Bidi_Control` property in full,
-runtime and client alike: `U+061C`, `U+200E`, `U+200F`, `U+202A`–`U+202E`,
-`U+2066`–`U+2069`. `U+061C` is named because it is the one a rule states
-without meaning to omit — it is `Cf` rather than a control character, so it
-passes anything written in terms of "control character", and it lives in the
-Arabic block rather than beside the other eleven. `description` is long-form prose that no bounded row draws and keeps
-line breaks; nothing else may contain one, so a single-line field is one
-physical client row.
-
-Input validation is not the whole boundary, because a client draws things the
-runtime never validated: a tool *call* is rendered from the model's own
-arguments while the assistant message is still streaming, before any executor
-has seen them, so a call that will be rejected has already been drawn. A
-client therefore sanitizes at its own rendering boundary as well — nothing a
-model or a tool wrote can move the cursor, repaint the screen, retitle the
-window, reverse reading order, or buy itself a second physical row.
-
-Where that reduction happens is part of the invariant. Untrusted text is
-reduced **before** it is styled, at the boundary where it enters the
-presentation layer: published argument text, the values that text parses into,
-and every string of a committed result. Once a row has been assembled out of
-styled fragments, an `ESC` the client's own theme emitted and an `ESC` that
-arrived in content are the same bytes, so a filter applied to the finished line
-that spares "the client's own styling" spares a model-written `ESC[8m` too —
-conceal, a forged colour, a reset theme. Argument *text* and parsed argument
-*values* are reduced separately, because `"\u001b"` is six harmless characters
-in published JSON and one `ESC` after parsing. What remains on the assembled
-line is a layout backstop: one built line is one physical row.
-
-Every *settled* call publishes the complete post-call snapshot as the
-structured content of its own canonical tool result; a rejected call is an
-ordinary failed ToolResult carrying the specific reason and publishes no
-snapshot. That published snapshot is the only durable record of the list:
-`ConversationToolRuntime` construction rebuilds the list from the **newest**
-such snapshot in canonical history, so a restart, a Session resume, and a
-compaction preserve exactly what the conversation still carries. There is no
-sidecar file, no separate durability path, and no migration.
-
-A composition **without** the Todo extension composes no list and reads no Todo
-history at all — not even read-only. Reconstruction exists to serve a current
-Todo authority, and such a runtime has none. The canonical `todo` ToolCalls and
-ToolResults the conversation already holds are untouched: nothing deletes,
-rewrites, or hides them, they stay renderable as transcript history, and a
-later launch that composes Todo again rebuilds the same latest accepted
-snapshot from them. That rebuild *reads* the newest committed result rather
-than replaying mutations, so re-enabling produces no duplicate ToolResults and
-no duplicate events.
-
-A child conversation composes its own list, over its own Ledger, which is empty
-at birth. So a child's list never aliases its parent's, two concurrently
-running Todo-enabled children never observe or mutate each other's, and no
-child snapshot merges upward. A child that does not compose the extension has
-no list and registers no `todo` tool at all.
-
-That equivalence requires the in-memory list never to run ahead of the Ledger,
-so a `todo` call mutates *staged* state owned by the batch the Agent Loop opens
-before the batch runs. Settling installs the newest list that batch's **own
-committed results** published, never whatever happens to be staged, and opening
-a batch drops any provisional state left behind by something that did not
-commit. Later calls of one batch read what earlier ones staged; every exit that
-is not the commit discards them. So a batch that never becomes canonical leaves
-the list exactly as canonical history describes it.
-
-Provisional state is owned rather than ambient, and that ownership is the
-authority, not the timing:
-
-- **one batch at a time.** Opening a batch while another holds the list is
-  refused rather than served: silently replacing the open batch would leave the
-  displaced batch still committing its own results and then settling a list it
-  no longer owned. A caller that cannot open a batch runs without one.
-- **no batch, no mutation.** Every mutation goes through the writer its batch
-  hands its own invocations, and a writer whose batch has settled, been
-  discarded, or been dropped neither reads nor writes. The `todo` executor
-  holds no list of its own and receives that writer per invocation, so a
-  dispatch outside the Agent Loop — a directly driven executor, a detached
-  execution — is refused as an ordinary failed ToolResult instead of writing
-  provisional state some other batch would then commit as its own. A stage such
-  a caller does own is invisible to every other batch: it can neither be read,
-  extended, inherited, nor promoted.
-- **settlement says what the batch meant, and nothing else.** The list becomes
-  exactly what the batch's own committed blocks published, or does not move
-  when they published none — canonical history is the authority, never the
-  stage. There is deliberately no third outcome for "the list was taken away":
-  a live batch *is* the open batch, so a batch that reaches settlement still
-  holds what it opened, and that is asserted where it would be violated rather
-  than carried as a state the caller has to branch on.
-- **the authority does not leave the crate.** The list, its batch, its writer,
-  and the seam that binds a writer to an invocation are all crate-private.
-  Settling a batch is a *claim about the Ledger* — that canonical history
-  already carries the list being installed — and only the Agent Loop can make
-  it truthfully, because only it holds the durable batch commit the claim
-  refers to. A consumer that could open a batch, stage a list, and settle it
-  against blocks of its own making would move the committed list without
-  moving the Ledger, and the next `todo` call would publish that divergence
-  into canonical history as though it had always been there. What a consumer
-  gets instead is the derived list: `ConversationToolRuntime::todo_snapshot`
-  and `RuntimeClientSnapshot.todos`, both of which read and neither of which
-  claims.
-
-The list survives a restart, a Session resume, and a compaction, and the third
-is a property of two subsystems rather than one: compaction appends a summary
-and replaces an active *Surface* span, while the Ledger is append-only and the
-rebuild reads `load_canonical`. So a compacted `todo` result stops being
-model-visible and stays exactly where the rebuild looks for it.
-
-It survives a Session clone, fork, and tree branch for the same reason, and
-that took making the reason true of Session lineage as well — see **A lineage
-copy is a copy of the conversation, not of its Surface** below.
-
-The rebuild fails closed. A newest successful `todo` result whose payload is
-missing, undecodable, or violates the list's own invariants refuses
-construction rather than reaching back to an older snapshot, which would
-revive tasks the conversation has already completed, tombstoned, or cleared.
-The invariants are exactly what a sequence of mutations can produce: the
-generation is dense and ordered — ids `1..next_id-1` in creation order, with
-`next_id` one past the last, because `delete` tombstones in place and `clear`
-starts a new generation at 1 — every subject is non-blank, every dependency
-resolves, is not self-referential, is normalized, and closes no cycle, and no
-text field or metadata entry carries a control character.
-
-The runtime derives the same list over the whole Ledger and carries it in
-`RuntimeClientSnapshot.todos`; a client renders that projection and folds each
-newly committed `todo` result into it. `todos: null` is a different fact from
-the empty list and must render differently: the attached runtime composes no
-Todo extension, so there is no current task list to show at all, and the fold
-is guarded on that fact rather than on the message — canonical history a
-Todo-disabled runtime inherited still renders as transcript history and may
-never manufacture a current panel from it. The composed/absent fact itself is
-authoritative only in `effective_extensions.todo`, never inferred from the
-transcript. A client must not scan its own
-transcript for the list, because it holds only a bounded newest page: a
-conversation that committed a page or more of messages since its last `todo`
-result would otherwise appear to have no list at all. The TUI keys the fold on
-the runtime's own `ToolId`, never on tool name or JSON shape, and stores no
-task state of its own: a fresh authoritative snapshot reproduces the panel
-exactly. The panel is bounded and drops completed rows before unfinished ones,
-always naming what it hid; `/todos` prints the complete list.
 
 ### Runtime Client and TUI projection
 
@@ -2576,137 +2367,21 @@ after ChildGuidanceOutcome::Accepted:
 [`ExecutionCancellation`]: ../src/runtime/cancellation.rs
 [`TOOL_SETTLEMENT_CONTROL_GUARD`]: ../src/tools/deadline.rs
 
-## Issue #144: named attempt-scoped subagent definitions
+## Named Agent admission
 
-- **Named subagent definitions are immutable members of one admitted
-  runtime resource generation.** `AgentCatalog` is
-  configuration/resource-generation state that the loader builds off-side,
-  validates against the very capability candidate it will publish, and
-  freezes into `RuntimeResourceSnapshot` at the same atomic commit that
-  publishes that generation's capabilities, project instructions, and
-  Skills. There is no hard-coded profile set and no `SubagentProfile` type.
-- **A subagent invocation resolves against the runtime generation owned by
-  its invoking attempt, not mutable runtime-current resources.** The
-  registered `SubagentExecutor` holds no runtime handle. Each invocation
-  receives an `AttemptSubagentContext` — the attempt's own
-  `Arc<RuntimeResourceSnapshot>` plus the model authority frozen at the same
-  admission linearization — through the crate-private `ToolExecutionContext`
-  seam that the native Questionnaire and task-list authorities already use.
-  A resource reload additionally cannot commit while an attempt is live: it
-  refuses with `Busy { Attempt }`.
-- **Parent active ToolRegistry is one projection of runtime authority; a
-  subagent is another.** Resolution reads
-  `CapabilitySnapshot::available_tools()` and the matching
-  capability-source availability of the same generation. So
-  `ParentActiveTools ⊆ available_tools()` and
-  `SubagentResolvedTools ⊆ available_tools()` both hold, while
-  `SubagentResolvedTools ⊆ ParentActiveTools` is deliberately **not**
-  required: a definition may select a capability that is available but
-  inactive for the parent.
-- **A named subagent may narrow authority but cannot manufacture it.** No
-  selector resolves to anything outside the invoking generation's authorized
-  available capabilities. Since Issue #258 the model-facing contract is
-  `{agent, task, context?, override?}`, and the override is bounded by an
-  explicit delegation ceiling rather than by the generation alone; see
-  *Issue #258* below.
-- **A named definition's optional `timeout_ms` is a validated static policy.**
-  The value is a positive integer number of milliseconds, bounded at
-  86,400,000 (24 hours); absence means no whole-lifecycle deadline, and zero,
-  malformed, or above-maximum values reject configuration admission without
-  clamping. The typed `SubagentExecutionDeadline` participates in the
-  versioned definition digest and is copied into `ResolvedSubagentSpec`, so
-  an admitted generation freezes the policy for every launch. It covers the
-  owned child lifecycle, including model, tools, and physical/workspace
-  settlement; it is separate from model request/stream-idle and tool timeout
-  policies. The model-facing `subagent` and `execution` schemas expose no
-  deadline or deadline-control parameter.
-- **Complete Agent Profiles share generation-scoped warning and suppression.**
-  `AgentProfileDocument` lowers to `AgentProfile`; `resolve_agent_profile`
-  produces `ResolvedAgentProfile` and canonically ordered typed diagnostics.
-  An unavailable builtin, undefined/inactive/unprepared/failed source, Exact
-  Tool absent from a ready source, or missing Skill, named Agent or admitted
-  Workflow suppresses only that selection. The remaining Agent stays usable.
-  Known scope-ineligible capabilities in a complete one-shot child profile
-  follow the same documented suppression policy.
-- **Malformed authoring remains a hard error.** Unknown fields, wrong types,
-  malformed identities, duplicate exact selections, unknown Extensions, invalid
-  extension configuration and invalid native bounds reject preparation.
-  Child worktree/deadline requests in root scope are invalid. Explicit model
-  configuration/reference errors remain model-owner failures. A failed
-  candidate leaves the previous complete generation authoritative.
-- **Dynamic overrides retain strict authorization.** Model-authored and
-  Workflow-authored replacements must satisfy their typed authority and
-  validity contracts; unauthorized or invalid requests fail, never silently
-  become a narrower successful override. Absent dimensions retain named
-  defaults; present dimensions replace completely, including explicit empty.
-  Complete-profile suppression does not weaken Workflow static admission.
-- **Project instructions and Skills are parent-resolved frozen resources;
-  the child does not rediscover them.** `agents_md.inherit = true` freezes the
-  generation's exact chain followed by the definition's explicit files in
-  configured order; `inherit = false` freezes only the explicit files. The
-  child's Skill allowlist crosses as the immutable
-  `SkillId` + `SkillVersionId` binding of each selected package plus its
-  model-visible catalog metadata, with progressive disclosure intact: no
-  `SKILL.md` body ever crosses the boundary, and a host path is metadata
-  rather than identity, so a later filesystem change cannot reinterpret an
-  already-frozen specification. The child runs no ancestor discovery and no
-  Skill discovery, which is what makes the boundary correct once a child's
-  filesystem ancestry can differ from the parent workspace.
-- **A default child model is the invoking attempt's frozen effective model,
-  and it crosses the boundary already resolved.** An explicitly configured
-  model resolves through the admitted model authority and fails closed; no
-  path reads live mutable session state or a composition-time capture. What
-  crosses is a `FrozenModelSpec` — the resolved invocation's provider
-  binding, protocol, context window, output budget, reasoning profile and
-  enabled state, effective request parameters, effective capabilities, and
-  compat metadata — never a `SessionModelConfig` plus a `models.toml` path.
-  The child materializes it physically (adapter construction plus credential
-  resolution through its own `CredentialEnvironment`) and owns **no** mutable
-  model authority: `SessionModelState::registry()` is `None` there and a live
-  model replacement is refused. A catalog edit landing between the parent's
-  freeze and the child's composition is therefore unobservable to that child.
-- **A child registers the exact parent-frozen `ToolDefinition`.** Identity,
-  description, input schema, replay policy, origin, and all three invocation
-  policy axes are the ones the invoking generation admitted. The child plane
-  reconstructs the native implementation for the frozen name under the frozen
-  policy through one bounded explicit `match` — no factory, plugin loader, or
-  strategy registry — and compares the reconstruction against the frozen
-  definition, failing closed on any mismatch rather than substituting
-  different semantics under the same tool name. `subagent`, `ask_user`, and
-  `execution` have no child-plane implementation at all.
-- **Committed child identity is `(agent, definition_digest)`.**
-  `NamedAgentDefinitionDigest` is SHA-256 over a rustX-owned versioned
-  canonical framing (`rustx-agent-definition-v5`) of the normalized
-  semantic definition — never raw TOML bytes — so comments, whitespace, key
-  order, and selector listing order cannot change it while every semantic
-  change does. It is the identity of the **named definition itself**, not of
-  the full effective child runtime: inherited project instructions, the exact
-  admitted Skill versions, the resolved capability definitions, and the
-  resolved model invocation are invoking-generation state, so two children of
-  the same definition under different generations share a digest while
-  legitimately differing in resolved resources. The durable fact, registry
-  snapshot, recovery diagnostic, and Runtime Client projection all carry both
-  fields, so a later reload that redefines the same agent name can never
-  reinterpret an already-running child by name alone.
-- **Ordinary external Tools share typed ToolSource selection.** MCP and
-  Managed Python use `tools.sources` with exactly `All` or `Exact` modes.
-  Source definition/eligibility never implies Agent exposure. Demand cannot
-  widen source authority. Discovery of unreferenced Python packages is inert.
-  The MCP and Python materialization owners remain distinct. Source-qualified
-  identity and frozen finite child plans prevent same-name substitution and
-  widening after publication. See [ToolSource selection](tool-source-selection.md).
-- **The `python:` MCP server namespace is structurally reserved.** Every
-  discovered `.agents/tools/<folder>/` synthesizes `python:<folder>`, and a
-  configured `mcpServers` entry whose identity starts with `python:` is
-  rejected at configuration validation (before any capability preparation)
-  with an actionable diagnostic. One `McpServerId` can never have two
-  owners: there is no runtime arbitration, no precedence rule, no alias,
-  and no compatibility mode. A coordinator encountering the impossible
-  collision treats it as an internal invariant violation, never as a
-  supported availability state.
-- **MCP selections additionally freeze a deterministic cross-process
-  identity.** `SourceToolIdentity` (`MCP_TOOL_IDENTITY_V1`) is what a separate
-  OS process can recompute and compare; see Issue #145 below.
+See [Agent profiles](agent-profiles.md) and [CFG3 configuration](configuration.md).
+User and Workspace definitions are complete named profiles. Resource identity
+exists before selection; a higher malformed duplicate shadows the lower source.
+Unused invalid definitions produce bounded ordered diagnostics. Admission of a
+selected invalid profile fails with its typed diagnostic.
+
+Root controls delegation through `agent.agents`. The child profile independently
+selects Native Tools, external sources, Skills and closed Plugins. Missing child
+model selection inherits the invoking Attempt's frozen effective model. Child
+resolution never rereads current files, and preparation materializes only finite
+admitted demand. Exact model/Tool/source/Skill bindings freeze before child
+ownership commits. Global invocation policies remain global, not profile prose.
+
 
 ## Issue #145: external subagent capabilities and nested process containment
 
@@ -2995,232 +2670,22 @@ after ChildGuidanceOutcome::Accepted:
   is spellable on the wire. HITL traffic is never a control acknowledgement
   and never uses the disposable observation lane.
 
-## Issue #258: invocation-scoped tools, Skills, and extension overrides
+## Invocation overrides and frozen child contracts
 
-### The final child execution contract
+`ResolvedSubagentSpec` is the complete immutable child contract. An invocation
+may replace the supported Tool, Skill or Plugin dimensions as a whole, including
+with an explicit empty selection. Missing dimensions use the named profile.
+There is no generic Root Tool or Plugin ceiling and no recursive object merge.
+Unknown references, unsupported child scope, invalid selections and impossible
+materialization fail before ownership commits. Overrides cannot change global
+execution/approval policies or create a persistent configuration layer.
 
-- **`ResolvedSubagentSpec` — not the role document and not the invocation
-  payload — is the complete immutable child execution contract.** Defaults plus
-  an authorized invocation override are resolved against one admitted runtime
-  generation, validated once, and frozen before process staging and durable
-  ownership commit. The child consumes that value and reinterprets nothing: it
-  rereads no role file, `rustx.toml`, model catalog, Skill catalog, extension
-  authoring document, or later resource generation.
-- **A named definition is the canonical *default* child profile.** Exactly
-  three dimensions are overridable — `tools`, `skills`, `extensions` — through
-  one provider-independent typed contract,
-  `SubagentInvocationOverride`, shared by the model-facing `subagent` Tool and
-  a Workflow `Agent` node. There is no second merge algorithm in either
-  adapter, and no second resolver, Tool Plane, or `SubagentRuntime`.
+The profile digest covers effective execution semantics. Canonical Tool identity,
+model binding, Skill version and closed Plugin behavior are frozen before process
+staging. Equivalent resolved profiles have the same digest; routing prose and
+unselected definitions do not create execution authority. A steering message is
+ordinary inbound task content, never a way to change that admitted profile.
 
-### Replacement, not merge
-
-- **Missing means inherit; present means replace.** A missing dimension uses
-  the definition's value; a present dimension replaces that dimension
-  completely and independently of the others. There is no additive or
-  subtractive mode, no wildcard, and no recursive merge of a present `tools` or
-  `extensions` object with the role's corresponding object.
-- **Emptiness is sayable.** `"tools": {}` is no ordinary selected tools,
-  `"skills": []` is no selected Skills, and `"extensions": {}` is no composed
-  native extension. Because all three dimensions have a legitimate empty value,
-  *presence* rather than emptiness is the inheritance signal, and an explicit
-  `null` is rejected rather than folded into absence.
-- **Complete profiles and override selections share Extension omission semantics.**
-  Omitted members in `NativeAgentExtensionsDocument` and
-  `NativeAgentExtensionSelection` compose nothing. Root Agent Status and Todo
-  defaults come from an explicit lower-priority product profile layer.
-  The outer invocation dimension is presence-aware: absence retains named
-  defaults; a present empty object replaces with none. The wire selection
-  retains its camelCase spelling; the complete TOML profile uses snake_case.
-  Both use the same closed composition owner, with no generic merge engine.
-- **No override reaches anything else.** Model, instructions/body, timeout,
-  workspace/worktree policy, `AGENTS.md` policy, approval mode, credentials,
-  source enablement, and arbitrary external configuration have no per-call
-  form, and the strict input boundary rejects them by name.
-
-### Two callers, one algorithm, different authority
-
-- **The caller's authority is an explicit typed native input, never model
-  input.** Dynamic Subagent delegation and static Workflow admission are separate launch boundaries.
-  A model emits `override`; it cannot emit the authority its `override` is
-  judged under, cannot change the Subagent admission domain, and cannot supply
-  an authority snapshot of its own.
-- **For dynamic (main-model) delegation the ceiling is
-  `authorized role baseline[d] ∪ invoking Agent frozen authority[d]`, per
-  dimension.** The union is an authorization ceiling, not a merge of the
-  child's selections. A dimension the caller did not override is never judged
-  against the parent's registry at all, so a role default stays usable even
-  when the invoking model does not expose that capability.
-- **The parent contribution is the invoking attempt's frozen admitted
-  execution profile.** `InvokingAgentAuthority::frozen` reads the attempt's own
-  `CapabilitySnapshot::tool_registry()`, its `model_skill_entries()` (so the
-  Issue #234 Read gate governs Skill delegation), and the extension composition
-  its runtime is executing against. It is deliberately not
-  `available_tools()`, not a live mutable registry, not the next generation,
-  and not current configuration. Capabilities held only by another role, known
-  only to the generation, or merely compiled into the executable are not
-  delegable.
-- **Authority is exact native identity.** Tools compare by `ToolId` and Skills
-  by `SkillId` + `SkillVersionId`; a matching display name or role prose is
-  never authorization, and a same-named capability from another source cannot
-  substitute for an authorized one.
-- **Tools, Skills, and extensions are separate authorization domains.**
-  Holding one never implies holding another. Selecting a Skill grants no Tool —
-  Issue #234's exact-selection and visibility rules are unchanged — and an
-  extension-provided model Tool is governed by effective extension composition
-  rather than removed by the ordinary `tools` allowlist.
-- **Extension authorization is configuration-exact, not name-based, and the
-  union is taken per behavior-affecting contributor.** A composition is not a
-  set of identities, so "the role authorizes the whole composition **or** the
-  invoking Agent does" is strictly narrower than a union and would refuse a
-  request whose contributors are each legitimately held. For Agent Status:
-  an absent extension is always authorized (removal is narrowing); composing
-  the extension at all requires that some source composes it, because composing
-  it composes the always-on Todo contributor; a requested `time.enabled` or
-  `background.enabled` requires that some source composes Agent Status with
-  that same contributor enabled; a contributor set to `false` requires no
-  authority. So a role holding UTC Time with Background off and an invoking
-  Agent holding Background with Time off together authorize a child with both
-  on, with nothing manufactured. Root extension composition is therefore
-  legitimate authority for an explicit authorized override, and never implicit
-  child inheritance.
-- **Timezone authority is decided on effective execution semantics.** Time
-  renders UTC for an absent `time.timezone`, so an omitted zone is a request
-  for UTC and needs an authority that itself renders UTC; a role rendering
-  `Asia/Shanghai` does not cover it, and absence is never a wildcard. A
-  disabled Time contributor creates no timezone authority requirement at all,
-  because nothing will execute.
-- **A Workflow Agent node's override is trusted static program data.** It is
-  validated at compilation and again during resource-generation preparation
-  against the Workflow's admitted generation and the applicable resource
-  policies — not against the main model's narrower active set — so it may
-  legitimately exceed the role defaults and the invoking model's capabilities.
-  It is not replaceable through model input, node input values, task text, or
-  any added expression/interpolation language, and main/Workflow profile
-  admission stays independent.
-- **Authorization is not source availability.** Unknown, unavailable,
-  inert/not-admitted, unauthorized, and unresolved stay distinct outcomes, and
-  a requested capability is never silently dropped.
-
-### Ordering, freeze, and the commit boundary
-
-- **Replacement precedes dependency resolution.** The resolver applies
-  `effective[d] = override[d] if present else definition[d]` before resolving
-  the invocation's required dependencies, so a default that was replaced away
-  is neither a materialization requirement nor a reason to fail when its
-  optional source is unavailable. The role's separate catalog/admission
-  validation is unchanged and still rejects a statically invalid definition.
-- **Every failure is decided before staging and ownership commit.** An
-  unauthorized or invalid override starts no child process, acquires no
-  override-specific execution resource, and commits no child ownership.
-  Cleanup after a spawn is not an authorization boundary. Extension
-  authorization and one-shot child-scope support are independent checks, and a
-  recognized-but-unsupported scope fails before spawn even for an entitled
-  caller.
-- **Resolution mutates nothing.** The shared definition, catalog, runtime
-  generation, and parent profile are unchanged, so two invocations of one role
-  with different overrides are independent. A child override never mutates the
-  parent's tool registry, extension composition, system instructions, request
-  prefix, or already-frozen model request.
-- **Cancellation semantics are unchanged.** A pre-commit cancellation
-  publishes and activates no owned child and leaves no partially materialized
-  resource or leaked staged process, through the existing staging/cleanup
-  protocol.
-- **One-shot lifecycle semantics are unchanged.** Final-report semantics,
-  terminal uniqueness, Workflow's typed terminal-output contract, deadlines,
-  process cleanup, ownership, workspace and candidate handoff, and existing
-  child tool restrictions all remain exactly as they were.
-
-### Effective execution-profile identity
-
-- **`NamedAgentDefinitionDigest` identifies the source definition;
-  `ResolvedSubagentSpec::profile_digest()` identifies the effective child
-  execution profile.** They are separate identities and neither is derived from
-  the other. Materially different effective tools, Skills, or extensions change
-  the profile digest; equivalent effective profiles — no override, and an
-  override restating the defaults — produce the same value, and equivalent
-  authorized Tool and Workflow inputs agree.
-- **The digest identifies the semantic final frozen execution profile, not its
-  authoring history, and no behavior-affecting frozen field may be omitted.**
-  Source-definition-only provenance is therefore outside the preimage: the
-  definition digest itself, and with it the role's routing description (which
-  never executes) and any default Tool/Skill/extension selection that the
-  invocation replaced completely (which stops existing before the child is
-  frozen). Every behavior-affecting field those summarize is framed directly,
-  as its final frozen value. So two definitions differing only in routing prose
-  or in replaced-away defaults produce one profile digest, while any change to
-  the final frozen contract changes it.
-- **A frozen model invocation is framed by one shared helper, so the primary
-  and an explicit summary invocation are identified equally completely.**
-  Model reference, protocol, context window, model and effective output
-  budgets, reasoning profile and semantics, effective request parameters,
-  effective and declared capabilities, and compat are all in the preimage for
-  both. The summary policy still distinguishes "follows the session primary"
-  from an explicit invocation. `FrozenModelSpec::configured` is excluded: it
-  records what was *asked for*, while the resolved invocations are the
-  authority.
-- **Provider binding and credential material are excluded, and the exclusion is
-  a contract.** Rotating a credential or repointing an endpoint at the same
-  model leaves the identity unchanged, on the primary invocation and on an
-  explicit summary alike.
-- **Values whose serialization carries authoring shape are framed by their
-  effective semantics instead.** An omitted `time.timezone` frames as the UTC
-  it renders, and `ModelCompat` is framed by its five translation decisions
-  rather than through a serializer that emits a field only when the catalog
-  spelled it out. In both cases two values that behave identically are one
-  effective profile. The *source-definition* digest keeps the authored
-  spelling, because it identifies the source document rather than the
-  behavior.
-- **A stable capability id is never accepted as a summary of the semantics it
-  was frozen with.** Every resolved Tool frames its COMPLETE frozen
-  `ToolDefinition` — id, name, origin, description, canonical input schema, and
-  the execution, concurrency, approval and replay policies — so two tools
-  sharing a `ToolId` and a model-facing name but frozen with different
-  approval, execution, concurrency or replay policies, a different description,
-  or a different input schema are different effective profiles. The input
-  schema is framed through the same rustX-owned canonical JSON writer the
-  cross-process MCP Tool identity uses, so object key insertion order cannot
-  move a digest. An MCP tool additionally frames its frozen `SourceToolIdentity`,
-  which gates the child's startup; the profile digest frames that frozen value
-  and never performs the cross-process verification itself.
-- **A frozen string the child takes verbatim identifies the child.** A Skill's
-  model-visible name AND description are framed, because the child remaps only
-  `location` and otherwise consumes the parent's frozen catalog metadata
-  unchanged; the description drives progressive disclosure and `version_id`
-  does not stand in for it. The Skill `source_root` stays out as a
-  materialization source, and the `files` list stays out because `version_id`
-  hashes every package-relative path and its bytes.
-- **A disabled contributor's configuration does not execute and does not
-  identify.** With `time.enabled = false` the Time contributor never runs, so
-  every timezone spelling — including omission — frames as one inactive
-  sentinel and the two compositions are one effective profile. With Time
-  enabled the effective zone is framed, and an omitted zone equals an explicit
-  `UTC`. Authorization reads the identical rule: a disabled Time contributor
-  needs no timezone authority; an enabled one needs authority for its effective
-  zone.
-- **It is derived from the frozen contract, not stored beside it.** Every input
-  is already part of the frozen specification, so the identity is frozen
-  exactly as strongly as the contract while no second stored copy can drift
-  from the specification it labels; the child recomputes the same value from
-  the same frozen bytes.
-- **The framing is versioned** (`rustx-subagent-profile-v3`). Semantically
-  unordered collections are canonically normalized and meaningful order is
-  preserved. Execution identities, timestamps, temporary staging paths, Skill
-  source roots, and raw payload formatting are all outside the preimage.
-- **Once `SubagentOwnershipCommitted` exists, both `definition_digest` and
-  `profile_digest` are durable execution facts and survive restart unchanged.**
-  The ownership commit writes both from the frozen specification. Recovery
-  restores exactly the committed values and never recomputes either from the
-  current role definition or the current resource generation, so a reload that
-  redefines the same agent name cannot relabel an already-committed child, and
-  terminal settlement never alters them. Workflow-owned and normal children
-  preserve them identically. Only the digests are persisted; the effective
-  Tool, Skill, and extension bodies they summarize are not.
-- **The digest is never an authorization token.** It is identity and
-  diagnostic/recovery correlation over an already-authorized contract. Runtime
-  Client projects it beside `definition_digest` as a bounded, redacted
-  correlation identity — never the effective selections, prompts, Skill bodies,
-  credentials, registries, or materialization secrets.
 
 ## Issues #146, #187, and #189: deterministic, scope-preserving worktree isolation
 
@@ -3513,7 +2978,7 @@ the launch-boundary policy inheritance.
   host/user-owned complete policy objects.
 - **Project resource authority follows provenance, not absolute spelling.**
   Project-origin Skills, Subagent instruction/agents_md files and path-valued
-  MCP command/cwd must resolve within the canonical trusted workspace. Traversal,
+  MCP command/cwd must resolve within the canonical Workspace. Traversal,
   absolute paths, symlink targets and external `--config` cannot widen that
   authority. Initial preparation rechecks frozen path authority; reload rechecks
   its candidate from pinned slots. Failed candidates never replace the current
@@ -3637,176 +3102,35 @@ the launch-boundary policy inheritance.
   resume is intentionally absent. A future Canvas can edit the same canonical
   Definition without adding layout metadata.
 
-## Issue #96: Session/configuration and capability activation
+## CFG3 configuration, resource and Session authority
 
-- **Durable Session state is intentionally small.** The Session catalog owns
-  Session identity, names and timestamps, graph nodes, active node,
-  ConversationId lineage, durable conversation history, and explicitly
-  Session-local choices. Its current persisted choice is the selected model.
-  It never serializes a complete runtime/project configuration.
-- **Configuration documents are strictly typed TOML.** `settings.toml`,
-  `models.toml`, and `rustx.toml` deserialize into snake_case authoring structs.
-  Explicit domain choices replace meaningful JSON-null layer behavior. Provider
-  overlays use only `request_params`, normalized from JSON-compatible TOML tables
-  into JSON objects before native validation. Dates, times, datetimes and non-finite floats fail
-  with parameter paths. TOML cannot author explicit null; runtime JSON retains it.
-  Runtime semantic composition never merges dynamic TOML or JSON trees. Generated schemas and wire state remain JSON.
-- **Current runtime configuration is recomposed on every launch.**
-  `--config <rustx.toml>` is parsed and validated before an existing Session
-  catalog is opened. MCP definitions, native Tool policy and activation,
-  Skill roots/resources, environment, context policy, the launch-scoped native
-  Agent Extension composition (including the Agent Status Time timezone), agent
-  settings, approval settings reserved for #100, and future capability
-  sources therefore come from the current launch. A valid old Session can
-  never make an invalid current configuration disappear.
-- Resource reload replaces only the process-local Runtime Resource Snapshot;
-  it does not reread `rustx.toml` or change the native Agent Extension
-  composition.
-- **A running `ConversationRuntime` executes against the native Agent
-  Extension composition frozen for that launch (Issue #256).** `agent.extensions` is
-  the one closed, launch-scoped surface for optional Agent augmentation;
-  Agent Status is the first extension migrated under it and the obsolete
-  top-level `agentStatus` contract is removed with no alias, fallback parse,
-  deprecation warning, or compatibility mode. Resource reload cannot install,
-  remove, or reconfigure an extension in an already-composed runtime;
-  restart/resume is a new launch that resolves the current document through
-  the ordinary resolver and rewrites no canonical Session history. The
-  composition is a closed record of typed Rust members: an unknown extension
-  name and an unknown knob inside a known extension both fail the strict-field
-  boundary, and there is no plugin loader, lifecycle trait, dynamic
-  registration, event-hook registry, or third-party extension mechanism.
-- **Root Agent extensions and named-Subagent extensions are independently
-  authored compositions (Issue #256).** A child never implicitly inherits the
-  root's extension set: `SubagentResolver` consumes the shared resolved profile's
-  scope-eligible composition or an authorized replacement and freezes it into
-  `ResolvedSubagentSpec::extensions` before process staging and durable ownership
-  commit. The caller's frozen composition supplies override authority only. Role extension settings participate in
-  `NamedAgentDefinitionDigest`. The child materializes that frozen decision and
-  never rereads `rustx.toml`, host or project configuration, role files, or a
-  later resource generation to reinterpret which extensions it owns.
-- **Runtime Client reports the extension composition owned by the attached
-  Agent runtime; it never rereads authoring configuration to reconstruct or
-  guess effective extensions (Issue #256).**
-  `RuntimeClientSnapshot::effective_extensions` is projected from
-  `ConversationRuntime::native_extensions()`, which reads the composition back
-  off the extension owners that composition materialized. The projected value
-  and the executed value are therefore the same value by construction — no
-  second stored field can drift — and the projection path reaches no
-  configuration document, `ProspectiveSessionConfig`, `RuntimeResourceSnapshot`, Agent
-  Status observation, context message, or Event Journal entry. A root host
-  projects the value frozen at `LocalConversationCore::compose`
-  (`launch_capture`); a child host projects the value its invoking generation
-  froze into `ResolvedSubagentSpec::extensions` (`frozen_admission` under
-  `frozen_child` evidence), so a child frozen under R1 keeps reporting R1 after
-  R2 publishes and root configuration cannot reach it. Resource reload has no
-  seam into the projection at all; only a new launch or a newly resolved child
-  specification produces a different one. Absence is typed twice and precisely:
-  a `null` snapshot field means no authoritative composition exists to project
-  (historical-only inspection, never filled from today's disk or built-in
-  defaults), while `agent_status: null` means the extension is not part of this
-  composition — which is a different fact from a composed extension whose
-  contributors are all disabled. Agent Status observations are not extension
-  configuration authority in either direction. The wire vocabulary is a closed
-  typed record with one member per native extension, mirrored in the
-  TypeScript protocol; it is never generic metadata, a plugin descriptor, or a
-  dynamic registry view, and it reports what was already composed rather than
-  deciding any extension's scope.
-- **An empty extension composition is an ordinary runtime, not a second
-  runtime mode (Issue #256).** `Option<AgentStatusEngine>` is the entire
-  representation of "no Agent Status": the Agent Loop consults the extension
-  set at exactly one seam (`AgentExecution::compose_status`) and nowhere in
-  tool admission, tool execution, cancellation, attempt settlement, terminal
-  events, canonical history, or the Event Journal. An extension may contribute
-  behavior only through an existing native owner; Context Assembly remains the
-  sole request-time owner of Agent Status admission, ordering, provenance,
-  projection, and token semantics.
-- **Runtime resources are process-local generations.** Composition discovers
-  project instructions, Skill catalog identity/metadata, extension System
-  Sections, and extension Tool registrations once and publishes them with one
-  compatible immutable `CapabilitySnapshot`. Ordinary requests, tool
-  continuations, compaction, attachment changes, and lineage projection never
-  rediscover them. Explicit reload is the only in-process replacement; cold
-  resume composes a fresh generation without restoring one from history.
-- **First-Session publication follows model validation and full
-  composition.** On a fresh `runtime-root`, composition loads the current
-  `models.toml` and validates the current runtime default before building
-  the root Session, and the root Session is built as an unpublished plan:
-  `catalog.json` is written by the one startup catalog transaction, after
-  composition, recovery, and host binding have succeeded. A failed first
-  launch changes no published catalog state — no catalog, no Session
-  containing an invalid model, and no resumable row for a process that never
-  started. The destination conversation database may already be seeded; a
-  conversation the catalog does not name is neither selectable nor
-  resumable, so it is an inert file rather than published state. Existing Session models are
-  validated independently and are never replaced by the current default.
-- **Model ownership is split deliberately.** The current runtime model is
-  the default for a brand-new Session. An explicitly selected Session model
-  is persisted and wins when that Session resumes. Clone/fork/tree creation
-  copies only Session-local state; it never copies runtime capability or
-  environment settings.
-- **Available and active Tools are different facts.** Native, MCP (managed
-  Python packages included),
-  and future source registrations form the runtime-owned available catalog
-  after hard eligibility. Startup activation then derives the immutable active
-  `ToolRegistry`. Inactive definitions remain available for truthful
-  inspection but their schemas never enter provider requests.
-- **Startup Tool selection is deterministic.** The base selection applies
-  `agent.tools.builtin` to built-ins, `--no-builtin-tools` removes ordinary builtin Tools from direct selection,
-  `--no-direct-tools` selects zero ordinary Tools, `--tools` selects exactly its
-  names, and exclusions subtract last. Read has no activation exception.
-  Empty, unknown/ineligible, ambiguous or duplicate explicit CLI entries fail.
-  Complete-profile empty dimensions are valid, and unavailable selections warn
-  and suppress through the shared resolver.
-  Contradictory flags fail; no insertion order resolves identity collisions.
-- **Skill visibility is separate from discovery.** Canonical user/project
-  resources and explicit CLI roots are collected in deterministic order.
-  Agent Profiles select exact admitted names; selections never discover paths. Duplicate logical identities fail explicitly. A validated Skill
-  with `disable-model-invocation: true` remains in the immutable Skill
-  snapshot but is omitted from the model-visible catalog. A discovered Skill
-  is model-visible only when the resolved Agent Profile selects it and that
-  domain's frozen registry also admits native
-  Read. Missing Read hides lazy guidance without changing discovery or child
-  admission and without eagerly injecting bodies. The catalog and Runtime
-  Client projection expose the same host `SKILL.md` path. The model reads
-  that path and resolves a Skill's own relative references against its parent
-  directory; no virtual Skill namespace exists, so Bash, Grep, and Glob see
-  exactly the paths Read does. The published locations are part of active
-  Skill snapshot equality, so relocating identical package content creates a
-  new capability revision rather than leaving the catalog pointed at an old
-  root.
-- **One accepted Skill package has one address.** Discovery accepts
-  non-canonical inputs — a relative `--skill` path, an ancestor symlink, an
-  embedded `..` — but an accepted `SkillPackage` always carries a canonical
-  absolute host root, and a location that is that root's `SKILL.md`
-  losslessly representable as UTF-8. Discovery is the single normalization
-  point; the catalog, the Runtime Client projection, and snapshot equality
-  are projections of that one fact and never re-derive it. This is a
-  correctness requirement, not tidiness: a relative published location would
-  be re-resolved against the canonical Workspace root by Read and against the
-  Workspace cwd by Bash, so both would open a path that does not exist. A
-  candidate root that cannot be canonicalized, or whose canonical path is not
-  valid UTF-8, fails the whole discovery transaction rather than reaching the
-  model in a lossy spelling. The complete Skill
-  bindings remain in `CapabilitiesManifest` provenance; visibility affects
-  only model-facing projections. Skills are trusted instruction packages in
-  the current rustX threat model; structural escaping remains, without a
-  semantic trust tier or hostile-package sanitization.
-- **Background ownership preserves capability resources.** Before the
-  background ownership commit, the Agent Loop captures the admitted attempt's
-  immutable effective environment. The detached runner owns exactly that
-  value and never looks up a later capability snapshot, so foreground and
-  background executions have the same environment semantics.
-- **Coordinator and lease ownership do not move.** `CapabilityCoordinator`
-  remains the sole candidate/commit authority. An admitted attempt retains
-  one immutable capability snapshot until terminal settlement. #96 does not
-  add approval/HITL (#100), Execution Modes (#98), model-turn leases or
-  deferred discovery (`#99`), or file watching. Issue #106 later adds only
-  explicit quiescent runtime-resource reload; it does not add automatic
-  invalidation.
-- **Clients are projections.** Runtime Client exposes typed active and
-  available Tool lists and the model-visible Skill catalog. The TUI forwards
-  startup paths and renders that projection; it never parses configuration,
-  discovers Skills, or chooses activation.
+The complete invariant and overlay matrix lives in [configuration](configuration.md).
+Only bound User and Workspace `rustx.toml` files authorize configuration; only
+their two fixed `.agents` roots define resources. Workspace replaces complete
+same-name identities even when malformed. There is no trust gate, ancestor merge,
+legacy reader, or fallback from an invalid higher object.
+
+Providers and Models are independent named domains. Atomic overlays never splice
+credentials, Tool policy, Plugins, model selections or runtime policy members.
+Root and named Agent capability selection is independent of global invocation
+policy. Plugins default off. Skills select prompt visibility, not filesystem ACLs.
+
+Discovery performs no MCP connection/Python preparation. Finite admitted demand
+enters existing lifecycle owners. Named omitted model inherits the invoking
+Attempt's frozen model. Root delegation is its explicit Agent allowlist, never a
+Root Tool/Plugin ceiling.
+
+Save commits authored bytes with revision fencing. Reload builds one complete
+candidate off-side and publishes at one coordinator state-lock linearization
+point, or preserves the exact old generation. Busy ownership refuses publication.
+Cold composition rereads current files and startup bindings. Session persistence
+contains only cwd and explicit model intent. Admitted work stays frozen.
+
+Session/Node/Conversation/ToolExecution identities are typed UUIDv7, allocated with
+collision/no-overwrite checks. Semantic order uses explicit metadata. The fixed
+process runtime root owns Session/Conversation directories, one SQLite store per
+Conversation, and retained foreground/background Tool output outside OS temp.
+
 
 ## Capability immutability
 
@@ -3994,7 +3318,7 @@ A package rewrite is observed only at the next quiescent re-discovery.
   cache of its own. A positive `ttlMs` therefore never suppresses the next
   refresh's request, and a failed refresh is always observed as the failure
   it is — which is precisely the fact the capability plane needs to retain
-  its last-known-good generation honestly.
+  the exact old configuration generation, including source bindings and policies.
 - **Streamable HTTP protocol semantics stay rmcp's.** rustX supplies its own
   `StreamableHttpClient` for exactly one reason — a cancelled tool call must
   terminate, and prove the release of, its own in-flight HTTP request — and
@@ -4594,10 +3918,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   exactly once at construction; the background-registry identity and its
   execution records can never be replaced or reset by a configuration
   change.
-- `ToolExecutionId` values are conversation-owned, deterministic, and
-  monotonic (`exec_1`, `exec_2`, ...) with checked exhaustion; they are
-  allocated under the same synchronization boundary that owns background
-  records.
+- `ToolExecutionId` values are Conversation-owned typed `exec_<uuid-v7>`
+  identities. Allocation validates absence and refuses collisions without
+  overwriting output. Explicit admission ordinals and durable journal sequences
+  determine order; UUID lexical order has no execution semantics.
 - Starting, Running, and Cancelling can settle directly or retain a candidate
   in PublishingTerminal until durable publication succeeds. The six terminal
   states (`Succeeded`, `Failed`, `Denied`, `Cancelled`, `TimedOut`,
@@ -5018,55 +4342,14 @@ remote control plane            local ownership plane
   of a connection is alive at a time and drain never inherits an unsettled
   corpse.
 
-### Last-known-good capability publication
+### Configuration failure preserves the published generation
 
-- **Capability refresh is publish-on-success.** A candidate becomes
-  authoritative only at the capability commit linearization point — one
-  snapshot swap under the capability state lock, holding the MCP
-  invalidation guard for the final epoch validation. Preparation never
-  mutates published knowledge, and snapshots are immutable values, so Tool
-  admission can never observe half a candidate or a temporarily empty
-  catalog.
-- **Carry-forward requires the same binding identity.** A server id alone is
-  not sufficient identity for the last-known-good fallback:
+Selected-source preparation failure rejects the whole candidate. The exact old
+snapshot, endpoint bindings, policies, profiles and executors remain authoritative.
+No unavailable replacement catalog or changed policy is partially published.
+Physical connection recovery inside a frozen source binding remains the existing
+MCP lifecycle owner's responsibility; it cannot republish configuration.
 
-  ```text
-  published S/B1/G1, candidate S/B1, refresh fails => G1 carried forward
-  published S/B1/G1, candidate S/B2, refresh fails => nothing carried
-  ```
-
-  The registrations reused by a carry-forward carry their executors, and
-  those executors dispatch through the connection the *published* binding
-  negotiated. Reusing them under a different binding would publish a snapshot
-  whose authoritative metadata says `S -> B2` while every executor of `S`
-  still talks to `B1` — a split-brain authority in which endpoint,
-  executable, arguments, environment, headers, credentials, cwd, and every
-  policy field disagree with the transport that actually runs the call. The
-  comparison is the domain equality of `McpServerBinding` against the
-  authoritative frozen binding set of the published snapshot, so it covers
-  every execution-relevant field the type represents — never a digest, a
-  `ToolDefinition`, or a `tools/list` result standing in for one.
-- **Same binding, transient refresh failure: the generation is carried
-  forward.** The candidate reuses exactly the registrations the authoritative
-  snapshot already carries for that server — executors included, so they stay
-  bound to the same stable connection owner — records the server as
-  carried-forward, and contributes no epoch for it. Commit **retains** that
-  server's published physical generation instead of retiring it. When nothing
-  else changed the commit is a no-op and no capability revision is
-  fabricated.
-- **Changed binding whose replacement cannot validate: nothing is carried.**
-  The new binding becomes the published configured desired state and its
-  source is reported `Unavailable`, the server publishes no tools at all, and
-  the previous binding's physical generation retires with the commit. No
-  partial generation of the new binding ever becomes authoritative, and no
-  snapshot exists in which the published binding is `B2` while an executor
-  of that server still resolves a connection negotiated from `B1`. Published
-  execution authority stays internally coherent even though capability
-  knowledge, availability, and configured desired state are separate facts.
-- **Capability knowledge and transport availability are different facts.**
-  A failed refresh reports the source as `Unavailable` in the availability
-  plane while its catalog stays authoritative. They are never collapsed into
-  one mutable optional value.
 
 ### Protocol corruption
 
@@ -7906,7 +7189,7 @@ contracts and provider protocols. These invariants are frozen by M2:
   selector over `model_catalog_get` and applies a choice through `model_set`;
   `/model show` renders `model_get`'s projection. The selector filters and
   formats the published catalog and nothing more. The client never
-  reads `models.toml`, instantiates a provider SDK, resolves an API key, or
+  reads `rustx.toml`, instantiates a provider SDK, resolves an API key, or
   interprets provider protocol semantics. Only *effective* capability is
   advertised. Reasoning profiles are shown exactly as published: a
   reasoning-capable model with no profiles means reasoning is supported with
@@ -8186,27 +7469,14 @@ mixtures fail closed; completion order grants no authority.
 Clearing human acceptance removes its exact-candidate constraint, not Tool/workspace permission. Normal machine checking and repair may continue on the current candidate; explicit data applicability remains independently enforced.
 
 An Agent compares native admitted and post-node candidate identities. A -> A emits Unchanged; A -> B emits Cleared even under local acceptance None. The effect survives nested joins, preventing a sibling Replaced(A) from surviving mutation. Agent execution/write capability is not itself a mutation fact.
-## CFG-02 external sources
+## CFG3 external sources
 
-- Writable enablement is only enabled/disabled. Host evaluation derives
-  effective activation; unconfigured/untrusted are never configuration input.
-- Every declared Python identity has availability, including missing folders.
-  Missing enabled sources are diagnosed without probes or package-state creation.
-- Discovered, enabled, available, admitted and model-visible are distinct.
-- Disabled/untrusted sources perform zero preparation, probes, installation,
-  environment creation, process starts, connection or recovery admission.
-- Project source replacement replaces the whole entry and cannot inherit host
-  credentials or enablement. Secret declarations are host-owned.
-- Credentials resolve once per admitted instance from captured host inputs;
-  normal projections never serialize resolved bytes or sensitive literals.
-- Retirement closes future reconnect admission, preserving already admitted
-  calls and existing generation lease/settlement ownership.
-- Every admitted initial/replacement MCP generation uses the single service
-  constructor with SDK response caching disabled; retirement never bypasses or
-  replaces the committed capability snapshot's semantic cache authority.
+Discovery, identity, selection, finite demand, credential resolution,
+materialization and exact model exposure are distinct stages. Unselected sources
+perform no connection or preparation. Invalid unused resources yield bounded
+ordered diagnostics. A selected invalid winner fails its typed admission; lower
+resources never restore it. See [configuration](configuration.md).
 
-The [source activation contract](source-activation.md) specifies configuration,
-ownership frontiers, diagnostics, and native-only startup.
 
 ### Session deletion durability
 
@@ -8222,38 +7492,12 @@ stale writers from replacing newer state. Runtime Client receives bounded DTOs,
 never the internal frozen workset. See [Session deletion lifecycle](session-deletion-lifecycle.md).
 
 
-### Source selection identity domain
+### Agent and source identity domains
 
-All and Exact address the same canonical Tool identity universe: MCP source ids
-and canonical source Tool names are exact non-empty strings. The `python:`
-source namespace is reserved for Managed Python package identities validated by
-that owner. Selection adds no character grammar or pattern interpretation.
-Duplicate Exact entries remain authoring errors.
+MCP and Managed Python selections use typed `ToolSourceId` and all/exact/empty
+semantics per source. Whole resources shadow by identity. Root Tool policy is not
+child authority; independent named profiles freeze at child admission.
 
-Extension ownership is provenance, not a globally reserved Tool-name namespace.
-A source-owned `todo` remains selectable by its source under All or Exact;
-`builtin = ["todo"]` cannot select the Todo extension. A selected source Tool and
-an enabled extension with the same model-facing name fail at final ToolRegistry
-composition, without filtering, shadowing or renaming either registration.
-
-
-### Agent Profile authority (CFG2-04)
-
-- Root and named Agents share one strict authoring model and semantic resolver.
-- Resource existence, source activation, Agent exposure and invocation approval
-  are separate authority decisions. Profile selection changes only exposure.
-- Named defaults use admitted generation authority; root delegation never grants
-  root direct access to child-only capabilities.
-- Valid unavailable selections produce typed ordered diagnostics and suppression.
-  Malformed authoring and unauthorized dynamic overrides remain hard failures.
-- Tools, Skills and Extensions override by whole-dimension replacement. An
-  explicitly empty dimension is distinct from absence.
-- Omitted Extensions select none in a complete profile. Root product composition
-  is an explicit lower-priority profile layer.
-- Published resource generations own resolved profiles. Later publication cannot
-  mutate admitted attempt leases or frozen child execution specifications.
-
-See [Agent Profiles](agent-profiles.md) for the exact scope and ownership rules.
 
 ## Native Trace semantic cut and history continuity (#306)
 
@@ -8270,60 +7514,12 @@ See [Agent Profiles](agent-profiles.md) for the exact scope and ownership rules.
 - Trace is read-only. Removing Web Trajectory changes no execution, canonical
   history, cancellation, settlement or recovery semantics.
 
-### Settings source authoring
+### CFG3 source writes and clients
 
-- User/Workspace author canonical partial `ModelLayer`; omission is distinct from
-  explicit catalog-default/profile/limit. Session alone selects whole state.
-- Reset removes the chosen source model layer or Session selection. It never copies
-  Effective and never changes unrelated TOML settings.
-- One native source capture owns strict parsing, authority, overlay and provenance.
-  Model resolution validates catalog/request/summary/context semantics only. Full
-  Session resolution reuses it, then validates all runtime domains before resource
-  preparation. Valid Settings model state does not imply runtime admissibility.
-- Workspace publication is authorized by trust at atomic rename. Grant/revoke and
-  source projection/publication share one per-workspace native trust epoch. Reads
-  cannot mix inactive Workspace status with Project-derived provenance.
-- Lock order: workspace trust, then sorted document locks. Session catalog locking
-  is limited to snapshot and revision/CAS operations, never source filesystem work.
-- Source reads recheck their captured Session revision once; changes fail typed.
-  Source commits with unavailable coherent readback report committed uncertainty.
-- User, Workspace, catalog and Session CAS domains are independent. Stale revisions
-  never publish; side-effecting commands are never automatically replayed.
-- Prospective/current/frozen model **request** state is native-projected and remains
-  distinguishable even when model identity is unchanged. Admitted attempts stay frozen.
-- Provider definitions and credentials remain User-only, catalog binding remains
-  bootstrap-owned, and no secret values are returned or persisted by Web.
-- Noncooperating filesystem editors may race the last fingerprint check and rename;
-  native locks do not claim stronger filesystem transactions.
-
-### Integration Settings (WEB-09)
-
-- `capture_layers` is the shared source authority/overlay seam. MCP projection
-  validates only the canonical MCP semantic domain; full Session admission still
-  validates models, runtime configuration and resources.
-- MCP edits address one User/trusted-Workspace identity and exact source revision.
-  Same-name replacement is whole-entry. No Session definition authority exists.
-- Workspace trust/provenance and source publication share the WEB-08 trust epoch;
-  Host cwd admission grants no project configuration or credential authority.
-- MCP definition provenance != MCP Tool policy provenance. Definitions are User or
-  trusted Workspace authority; `mcp_policy` is always User-owned, with no scope
-  selector. A User policy may target a winning trusted Workspace definition.
-  Workspace cannot widen this policy or inherit User credentials.
-- Individual authored MCP-entry validity != merged MCP definition/policy closure
-  validity. The canonical entry owner validates every new authored definition,
-  including a shadowed User entry. The merged validator independently checks real
-  authorized definitions plus User policy closure and source-count bounds before
-  publication. No simulated trust state or generic validation mode is used.
-- User policy identities remain projected after their only Workspace definition
-  loses trust. Native `policy_state` reports dangling and `mcp_valid` reports invalid;
-  no Workspace content is read or exposed. Resetting the policy uses User CAS and
-  can repair the domain without re-trusting or inventing a server definition.
-- MCP definition and policy drafts pin their creation revision for the first save.
-  Conflict preserves the exact draft; only explicit retry uses refreshed authority.
-  Uncertain saves/deletions repair through exact-target authoritative reread, never
-  replay. Observing the requested post-state does not identify its writer.
-- Native integration inventories distinguish resource provenance, authored root
-  selections, prospective state, loaded resources and frozen admission.
-- Extension member changes preserve the exact same-scope collection; cross-scope
-  composition remains whole-dimension replacement. Runtime Todo/Goal state never
-  enters configuration.
+Bound User and Workspace authored documents/resources have exact independent
+revisions. Cooperating writers serialize with an OS file lock, compare revisions,
+validate and stage complete canonical bytes, recheck bytes before atomic rename,
+and fsync the parent directory. External edits invalidate stale revisions. An
+uncertain result is reread, never blindly replayed. Normal projections redact
+secrets. Save and Reload remain separate. Clients never parse, overlay, derive
+provenance or treat a draft as loaded effective state.

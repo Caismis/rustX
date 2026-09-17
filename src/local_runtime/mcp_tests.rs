@@ -1,0 +1,477 @@
+//! The ecosystem-compatible MCP configuration contract (Issue #46).
+//!
+//! `mcp_servers` is a named map keyed by MCP server identity, spelled exactly
+//! in the canonical TOML authoring contract. This suite pins the complete
+//! accepted syntax surface, every rejection, the rustX policy overlay, and
+//! the determinism of the normalized runtime bindings.
+
+use std::collections::BTreeMap;
+
+use crate::local_runtime::config::CurrentRuntimeConfigError;
+use crate::runtime::identity::McpServerId;
+use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
+use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy};
+
+/// Fixtures author independent resource definitions and global policy documents.
+/// Native readers own both; no MCP fields are accepted by rustx.toml.
+fn parse_bindings(fragment: &str) -> Result<McpServerBindings, CurrentRuntimeConfigError> {
+    let mut fixture: toml::Table =
+        toml::from_str(fragment).map_err(|e| CurrentRuntimeConfigError::Syntax {
+            detail: e.to_string(),
+        })?;
+    let policies = fixture
+        .remove("mcp_tool_policies")
+        .map(toml::Value::try_into)
+        .transpose()
+        .map_err(|e: toml::de::Error| CurrentRuntimeConfigError::Syntax {
+            detail: e.to_string(),
+        })?
+        .unwrap_or_default();
+    let document: super::mcp_resources::McpDocument = toml::Value::Table(fixture)
+        .try_into()
+        .map_err(|e| CurrentRuntimeConfigError::Syntax {
+            detail: e.to_string(),
+        })?;
+    let definitions = document
+        .mcp_servers
+        .into_iter()
+        .map(|(id, entry)| (id, entry.resolve()))
+        .collect();
+    super::config::resolve_mcp_bindings(&definitions, &policies)
+}
+
+fn bindings(fragment: &str) -> McpServerBindings {
+    parse_bindings(fragment).expect("strict resource definitions and policies resolve offline")
+}
+
+fn rejection(fragment: &str) -> CurrentRuntimeConfigError {
+    fragment
+        .parse::<toml_edit::DocumentMut>()
+        .expect("valid TOML");
+    parse_bindings(fragment).expect_err("the authored unit must be rejected")
+}
+
+fn single(bindings: &McpServerBindings) -> (&McpServerId, &McpServerBinding) {
+    assert_eq!(bindings.len(), 1, "exactly one binding");
+    bindings.iter().next().expect("one binding")
+}
+
+// ---------------------------------------------------------------- HTTP ----
+
+/// The canonical remote form: an explicit `type` and a `url`.
+#[test]
+fn canonical_http_entry_normalizes_to_the_streamable_http_transport() {
+    let bindings = bindings(
+        r#"mcp_servers = { "exa" = { "type" = "http", "url" = "https://mcp.exa.ai/mcp" } }"#,
+    );
+    let (server_id, binding) = single(&bindings);
+    assert_eq!(server_id.as_str(), "exa");
+    assert_eq!(
+        binding.transport,
+        McpTransportConfig::StreamableHttp {
+            endpoint: "https://mcp.exa.ai/mcp".to_owned(),
+            headers: BTreeMap::new(),
+        }
+    );
+}
+
+/// The shorthand every remote MCP README uses: a bare `url`.
+#[test]
+fn url_only_entry_infers_the_same_http_transport() {
+    let canonical = bindings(
+        r#"mcp_servers = { "exa" = { "type" = "http", "url" = "https://mcp.exa.ai/mcp" } }"#,
+    );
+    let inferred = bindings(r#"mcp_servers = { "exa" = { "url" = "https://mcp.exa.ai/mcp" } }"#);
+    assert_eq!(
+        canonical, inferred,
+        "the canonical and inferred HTTP forms normalize identically"
+    );
+}
+
+/// Static HTTP headers reach the runtime transport byte-for-byte.
+#[test]
+fn http_headers_survive_normalization_exactly() {
+    let bindings = bindings(
+        r#"mcp_servers = { "exa" = { "type" = "http", "url" = "https://mcp.exa.ai/mcp", "headers" = { "x-api-key" = "secret-value", "X-Trace" = "on" } } }"#,
+    );
+    let (_, binding) = single(&bindings);
+    let McpTransportConfig::StreamableHttp { headers, .. } = &binding.transport else {
+        panic!("HTTP transport");
+    };
+    assert_eq!(
+        headers,
+        &BTreeMap::from([
+            ("X-Trace".to_owned(), "on".to_owned()),
+            ("x-api-key".to_owned(), "secret-value".to_owned()),
+        ])
+    );
+}
+
+/// A missing endpoint is a configuration failure, never an empty URL that
+/// only fails at connect time.
+#[test]
+fn empty_or_blank_http_url_is_rejected() {
+    for url in ["", "   "] {
+        let error = rejection(&format!(
+            r#"mcp_servers = {{ "exa" = {{ "type" = "http", "url" = "{url}" }} }}"#
+        ));
+        assert!(
+            error.to_string().contains("url must be a non-empty"),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+/// An explicit HTTP entry that also carries stdio fields is a contradiction.
+#[test]
+fn http_entry_with_command_fields_is_rejected() {
+    for fragment in [
+        r#"mcp_servers = { "exa" = { "type" = "http", "url" = "https://x", "command" = "npx" } }"#,
+        r#"mcp_servers = { "exa" = { "type" = "http", "url" = "https://x", "args" = ["-y"] } }"#,
+        r#"mcp_servers = { "exa" = { "type" = "http", "url" = "https://x", "env" = { "K" = "v" } } }"#,
+        r#"mcp_servers = { "exa" = { "type" = "http", "url" = "https://x", "cwd" = "sub" } }"#,
+    ] {
+        let error = rejection(fragment);
+        assert!(
+            error.to_string().contains("declares stdio fields"),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+/// An explicit HTTP entry with no `url` at all is rejected rather than
+/// silently reinterpreted.
+#[test]
+fn http_entry_without_url_is_rejected() {
+    let error = rejection(r#"mcp_servers = { "exa" = { "type" = "http" } }"#);
+    assert!(
+        error.to_string().contains("declares no url"),
+        "unexpected error: {error}"
+    );
+}
+
+// --------------------------------------------------------------- stdio ----
+
+/// The canonical local form: an explicit `type` and a `command`.
+#[test]
+fn canonical_stdio_entry_normalizes_to_the_stdio_transport() {
+    let bindings = bindings(
+        r#"mcp_servers = { "exa" = { "type" = "stdio", "command" = "npx", "args" = ["-y", "exa-mcp-server"], "env" = { "EXA_API_KEY" = "key" }, "cwd" = "servers/exa" } }"#,
+    );
+    let (server_id, binding) = single(&bindings);
+    assert_eq!(server_id.as_str(), "exa");
+    assert_eq!(
+        binding.transport,
+        McpTransportConfig::Stdio {
+            program: "npx".to_owned(),
+            args: vec!["-y".to_owned(), "exa-mcp-server".to_owned()],
+            cwd: Some(std::path::PathBuf::from("servers/exa")),
+            environment: BTreeMap::from([("EXA_API_KEY".to_owned(), "key".to_owned())]),
+        },
+        "command/args/env/cwd survive normalization exactly"
+    );
+}
+
+/// The shorthand every local MCP README uses: a bare `command`.
+#[test]
+fn command_only_entry_infers_the_same_stdio_transport() {
+    let canonical = bindings(
+        r#"mcp_servers = { "exa" = { "type" = "stdio", "command" = "npx", "args" = ["-y", "mcp-remote"] } }"#,
+    );
+    let inferred = bindings(
+        r#"mcp_servers = { "exa" = { "command" = "npx", "args" = ["-y", "mcp-remote"] } }"#,
+    );
+    assert_eq!(
+        canonical, inferred,
+        "the canonical and inferred stdio forms normalize identically"
+    );
+}
+
+/// A missing executable is a configuration failure.
+#[test]
+fn empty_or_blank_stdio_command_is_rejected() {
+    for command in ["", "   "] {
+        let error = rejection(&format!(
+            r#"mcp_servers = {{ "exa" = {{ "type" = "stdio", "command" = "{command}" }} }}"#
+        ));
+        assert!(
+            error.to_string().contains("command must be a non-empty"),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+/// An explicit stdio entry that also carries HTTP fields is a contradiction.
+#[test]
+fn stdio_entry_with_http_fields_is_rejected() {
+    for fragment in [
+        r#"mcp_servers = { "exa" = { "type" = "stdio", "command" = "npx", "url" = "https://x" } }"#,
+        r#"mcp_servers = { "exa" = { "type" = "stdio", "command" = "npx", "headers" = { "k" = "v" } } }"#,
+    ] {
+        let error = rejection(fragment);
+        assert!(
+            error.to_string().contains("declares http fields"),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+/// An explicit stdio entry with no `command` at all is rejected.
+#[test]
+fn stdio_entry_without_command_is_rejected() {
+    let error = rejection(r#"mcp_servers = { "exa" = { "type" = "stdio" } }"#);
+    assert!(
+        error.to_string().contains("declares no command"),
+        "unexpected error: {error}"
+    );
+}
+
+// ----------------------------------------------------------- rejection ----
+
+/// An entry carrying both transports is ambiguous, and ambiguity never
+/// resolves to a guess.
+#[test]
+fn command_and_url_together_are_rejected() {
+    let error =
+        rejection(r#"mcp_servers = { "exa" = { "url" = "https://x", "command" = "npx" } }"#);
+    assert!(
+        error.to_string().contains("declares both url and command"),
+        "unexpected error: {error}"
+    );
+}
+
+/// An entry carrying neither transport is incomplete.
+#[test]
+fn entry_without_url_or_command_is_rejected() {
+    let error = rejection(r#"mcp_servers = { "exa" = {  } }"#);
+    assert!(
+        error.to_string().contains("declares neither url"),
+        "unexpected error: {error}"
+    );
+}
+
+/// rustX has exactly two runtime transports. The accepted `type` set is
+/// exactly `http` and `stdio`: no aliases, no SSE, no WebSocket.
+#[test]
+fn unsupported_transport_types_are_rejected_with_the_accepted_set() {
+    for transport_type in [
+        "sse",
+        "ws",
+        "websocket",
+        "streamable-http",
+        "streamable_http",
+    ] {
+        let error = rejection(&format!(
+            r#"mcp_servers = {{ "exa" = {{ "type" = "{transport_type}", "url" = "https://x" }} }}"#
+        ));
+        let message = error.to_string();
+        assert!(
+            matches!(error, CurrentRuntimeConfigError::Syntax { .. }),
+            "unexpected error kind for {transport_type}: {message}"
+        );
+        assert!(
+            message.contains("unknown variant") && message.contains("expected `http` or `stdio`"),
+            "the failure must name the accepted set, got: {message}"
+        );
+    }
+}
+
+/// A typo must fail startup rather than silently change runtime semantics.
+#[test]
+fn unknown_entry_fields_are_rejected() {
+    let error = rejection(r#"mcp_servers = { exa = { url = "https://x", timeout_ms = 5000 } }"#);
+    assert!(
+        matches!(error, CurrentRuntimeConfigError::Syntax { .. }),
+        "unexpected error: {error}"
+    );
+    assert!(
+        error.to_string().contains("unknown field `timeout_ms`"),
+        "{error}"
+    );
+}
+
+/// The obsolete Issue #42 array schema is gone with no compatibility path.
+#[test]
+fn the_obsolete_array_schema_is_rejected() {
+    let error = rejection(
+        r#"mcp_servers = [{ "server_id" = "exa", "transport" = { "type" = "streamable_http", "endpoint" = "https://x" } }]"#,
+    );
+    assert!(
+        matches!(error, CurrentRuntimeConfigError::Syntax { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+/// The obsolete redundant identity field is gone: the map key is the one
+/// authoritative identity.
+#[test]
+fn the_obsolete_server_id_field_is_rejected() {
+    let error =
+        rejection(r#"mcp_servers = { "exa" = { "server_id" = "exa", "url" = "https://x" } }"#);
+    assert!(
+        matches!(error, CurrentRuntimeConfigError::Syntax { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+/// The obsolete nested transport object is gone.
+#[test]
+fn the_obsolete_nested_transport_field_is_rejected() {
+    let error = rejection(
+        r#"mcp_servers = { "exa" = { "transport" = { "type" = "streamable_http", "endpoint" = "https://x" } } }"#,
+    );
+    assert!(
+        matches!(error, CurrentRuntimeConfigError::Syntax { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+/// The obsolete policy-inside-connection coupling is gone: rustX policy lives
+/// in its own keyed surface.
+#[test]
+fn embedded_policy_inside_a_connection_entry_is_rejected() {
+    let error = rejection(
+        r#"mcp_servers = { "exa" = { "url" = "https://x", "policy" = { "execution" = "foreground_only" } } }"#,
+    );
+    assert!(
+        matches!(error, CurrentRuntimeConfigError::Syntax { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+// ----------------------------------------------------- identity/policy ----
+
+/// Duplicate TOML tables fail before semantic composition can produce bindings.
+#[test]
+fn duplicate_server_tables_are_rejected_before_binding_composition() {
+    let text = String::from(
+        r#"[mcp_servers.exa]
+url = "https://first"
+
+[mcp_servers.exa]
+url = "https://second""#,
+    );
+    let syntax = text
+        .parse::<toml_edit::DocumentMut>()
+        .expect_err("duplicate table");
+    assert!(syntax.message().contains("duplicate"), "{syntax}");
+    let error = parse_bindings(&text).expect_err("duplicate identities must produce no bindings");
+    assert!(matches!(error, CurrentRuntimeConfigError::Syntax { .. }));
+    assert!(error.to_string().contains("duplicate"), "{error}");
+    assert!(error.to_string().contains("exa"), "{error}");
+}
+
+/// An empty map key is not a usable server identity.
+#[test]
+fn empty_server_identity_is_rejected() {
+    let error = rejection(r#"mcp_servers = { "" = { "url" = "https://x" } }"#);
+    assert!(
+        error.to_string().contains("non-empty server identities"),
+        "unexpected error: {error}"
+    );
+}
+
+/// The `python:` MCP server namespace is structurally reserved for
+/// rustX-managed Python tool packages (Issue #174): a configured
+/// `mcp_servers` entry claiming it is rejected at configuration validation,
+/// before any capability preparation — one `McpServerId` can never have two
+/// owners. The diagnostic explains the reservation actionably.
+#[test]
+fn the_reserved_python_namespace_is_rejected_for_configured_servers() {
+    for fragment in [
+        r#"mcp_servers = { "python:foo" = { "command" = "python", "args" = ["-m", "demo"] } }"#,
+        r#"mcp_servers = { "python:demo" = { "url" = "https://demo" } }"#,
+        r#"mcp_servers = { "python:" = { "url" = "https://x" } }"#,
+    ] {
+        let error = rejection(fragment);
+        let message = error.to_string();
+        assert!(
+            message.contains("python:") && message.contains("reserved"),
+            "the rejection names the reserved namespace: {message}"
+        );
+        assert!(
+            message.contains("mcp_servers"),
+            "the rejection names the configuration surface: {message}"
+        );
+    }
+}
+
+/// Normal configured server IDs remain accepted: only the reserved prefix
+/// is rejected, never an ordinary identity.
+#[test]
+fn normal_configured_server_ids_remain_accepted() {
+    for fragment in [
+        r#"mcp_servers = { "github" = { "command" = "npx" } }"#,
+        r#"mcp_servers = { "python-tools" = { "command" = "npx" } }"#,
+        r#"mcp_servers = { "py-demo" = { "url" = "https://py-demo" } }"#,
+    ] {
+        let bindings = bindings(fragment);
+        assert_eq!(bindings.len(), 1, "a normal id binds: {fragment}");
+    }
+}
+
+/// A server with no policy entry gets the deterministic default policy.
+#[test]
+fn absent_policy_entry_uses_the_deterministic_default() {
+    let bindings = bindings(r#"mcp_servers = { "exa" = { "url" = "https://x" } }"#);
+    let (_, binding) = single(&bindings);
+    assert_eq!(
+        binding.policy.execution,
+        ToolExecutionPolicy::ForegroundOnly
+    );
+    assert_eq!(
+        binding.policy.concurrency,
+        ToolConcurrencyPolicy::Sequential
+    );
+}
+
+/// The keyed policy overlay applies exactly, and only to the named server.
+#[test]
+fn policy_overlay_applies_to_exactly_the_named_server() {
+    let bindings = bindings(
+        r#"mcp_servers = { "exa" = { "url" = "https://exa" }, "local" = { "command" = "npx" } }
+mcp_tool_policies = { "exa" = { "execution" = "background_only", "concurrency" = "parallel" } }"#,
+    );
+    let exa = &bindings[&McpServerId::new("exa")];
+    assert_eq!(exa.policy.execution, ToolExecutionPolicy::BackgroundOnly);
+    assert_eq!(exa.policy.concurrency, ToolConcurrencyPolicy::Parallel);
+    let local = &bindings[&McpServerId::new("local")];
+    assert_eq!(local.policy.execution, ToolExecutionPolicy::ForegroundOnly);
+    assert_eq!(local.policy.concurrency, ToolConcurrencyPolicy::Sequential);
+}
+
+/// A policy for a server that does not exist is a configuration error, never
+/// a silently ignored entry.
+#[test]
+fn policy_for_an_unknown_server_is_rejected() {
+    let error = rejection(
+        r#"mcp_servers = { "exa" = { "url" = "https://x" } }
+mcp_tool_policies = { "typo" = { "execution" = "background_only" } }"#,
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("mcp_tool_policies names typo, which mcp_servers does not declare"),
+        "unexpected error: {error}"
+    );
+}
+
+// --------------------------------------------------------- determinism ----
+
+/// TOML declaration order never reaches the normalized binding set: the
+/// keyed representation is the ordering authority.
+#[test]
+fn toml_insertion_order_does_not_affect_the_binding_order() {
+    let forward = bindings(
+        r#"mcp_servers = { "alpha" = { "url" = "https://alpha" }, "beta" = { "command" = "beta-server" }, "gamma" = { "url" = "https://gamma" } }"#,
+    );
+    let reversed = bindings(
+        r#"mcp_servers = { "gamma" = { "url" = "https://gamma" }, "beta" = { "command" = "beta-server" }, "alpha" = { "url" = "https://alpha" } }"#,
+    );
+    assert_eq!(forward, reversed);
+    assert_eq!(
+        forward.keys().map(McpServerId::as_str).collect::<Vec<_>>(),
+        ["alpha", "beta", "gamma"],
+        "iteration order is identity order, not document order"
+    );
+}

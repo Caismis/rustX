@@ -1,4 +1,5 @@
-//! Bounded trusted Workflow source resolution, shared by prospective analysis and reload.
+//! Bounded two-scope Workflow discovery, shared by prospective analysis and reload.
+use super::configuration::settings::SourceScope;
 use crate::runtime::resources::RuntimeResourceLoadError;
 use crate::runtime::workflow::{
     MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowCompileError, WorkflowDefinition, WorkflowProgram,
@@ -7,38 +8,77 @@ use std::path::Path;
 
 /// Discover and compile canonical Workflow files before resource publication.
 #[allow(clippy::too_many_lines)] // One deterministic compile transaction with structured diagnostics.
-pub(crate) fn load(workspace: &Path) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
+pub(crate) fn load(
+    workspace: &Path,
+    user_root: &Path,
+) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
     let mut programs = Vec::new();
-    let paths =
-        super::resource_directory::files(workspace, &workspace.join(".agents/workflows"), "yaml")?;
+    let mut diagnostics = Vec::new();
     let mut candidates = std::collections::BTreeMap::new();
-    for path in paths {
-        let name = path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| RuntimeResourceLoadError::new("Workflow filename must be UTF-8"))?;
-        let id = crate::runtime::workflow::WorkflowId::parse(name)
-            .map_err(|e| RuntimeResourceLoadError::new(e.to_string()).at(&path, "workflows"))?;
-        candidates.insert(id, path);
-    }
-    for (id, path) in candidates {
-        crate::runtime::resources::validate_project_resource_path(workspace, &path)
-            .map_err(|error| error.at(&path, format!("workflows.{id}")))?;
-        let bytes = crate::bounded_file::read_bounded(&path).map_err(|error| {
-            RuntimeResourceLoadError::new(format!(
-                "cannot read discovered workflow {id} at {}: {error}",
-                path.display()
-            ))
-            .at(&path, format!("workflows.{id}"))
-        })?;
-        if bytes.len() > MAX_WORKFLOW_BYTES {
-            return Err(RuntimeResourceLoadError::new(format!(
-                "workflow {id} at {} exceeds the {MAX_WORKFLOW_BYTES}-byte bound",
-                path.display()
-            ))
-            .at(&path, format!("workflows.{id}")));
+    let mut locations = std::collections::BTreeMap::new();
+    for (boundary, root, scope) in [
+        (user_root, user_root.join("workflows"), SourceScope::User),
+        (
+            workspace,
+            workspace.join(".agents/workflows"),
+            SourceScope::Workspace,
+        ),
+    ] {
+        let paths = match super::resource_directory::files(boundary, &root, "yaml") {
+            Ok(paths) => paths,
+            Err(error) => {
+                candidates.clear();
+                locations.clear();
+                diagnostics.push(error);
+                continue;
+            }
+        };
+        for path in paths {
+            let id = path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .and_then(|name| crate::runtime::workflow::WorkflowId::parse(name).ok());
+            let Some(id) = id else {
+                diagnostics.push(
+                    RuntimeResourceLoadError::new("invalid Workflow filename identity")
+                        .at(&path, "workflows"),
+                );
+                continue;
+            };
+            let shadowed = locations
+                .remove(&id)
+                .map(|lower: crate::runtime::resources::ResourceLocation| lower.path);
+            locations.insert(
+                id.clone(),
+                crate::runtime::resources::ResourceLocation {
+                    scope,
+                    path: path.clone(),
+                    shadowed,
+                },
+            );
+            candidates.insert(id, (path, boundary.to_path_buf()));
         }
-        let definition: WorkflowDefinition =
+    }
+    let mut invalid = std::collections::BTreeMap::new();
+    if candidates.len() > crate::runtime::workflow::MAX_WORKFLOW_DEFINITIONS {
+        diagnostics.push(
+            RuntimeResourceLoadError::new("Workflow catalog exceeds its definition bound")
+                .at(&workspace.join(".agents/workflows"), "workflows"),
+        );
+        candidates.clear();
+        locations.clear();
+    }
+    for (id, (path, boundary)) in candidates {
+        let result = (|| -> Result<WorkflowProgram, RuntimeResourceLoadError> {
+            let bytes = super::resource_directory::read_resource(&boundary, &path)?;
+            if bytes.len() > MAX_WORKFLOW_BYTES {
+                return Err(RuntimeResourceLoadError::new(format!(
+                    "workflow {id} at {} exceeds the {MAX_WORKFLOW_BYTES}-byte bound",
+                    path.display()
+                ))
+                .at(&path, format!("workflows.{id}")));
+            }
+            let definition: WorkflowDefinition =
             serde_path_to_error::deserialize(serde_yaml::Deserializer::from_slice(&bytes))
                 .map_err(|error| {
                     let mut failure = RuntimeResourceLoadError::new(format!(
@@ -57,7 +97,7 @@ pub(crate) fn load(workspace: &Path) -> Result<WorkflowCatalog, RuntimeResourceL
                     failure.inspection.correction = Some("correct this YAML using schemas/workflow.schema.json; fields and mapping keys must be unique");
                     failure
                 })?;
-        let program = WorkflowProgram::compile(id.clone(), definition)
+            let program = WorkflowProgram::compile(id.clone(), definition)
         .map_err(|error| {
             let mut failure = RuntimeResourceLoadError::new(format!(
                 "cannot compile discovered workflow {id} at {}: {error}",
@@ -92,11 +132,22 @@ pub(crate) fn load(workspace: &Path) -> Result<WorkflowCatalog, RuntimeResourceL
             }
             failure
         })?;
-        programs.push(program);
+            Ok(program)
+        })();
+        match result {
+            Ok(program) => programs.push(program),
+            Err(error) => {
+                invalid.insert(id, error);
+            }
+        }
     }
-    WorkflowCatalog::new(programs).map_err(|error| {
+    let mut catalog = WorkflowCatalog::new(programs).map_err(|error| {
         RuntimeResourceLoadError::new(format!("cannot admit Workflow catalog: {error}"))
-    })
+    })?;
+    catalog.set_invalid(invalid);
+    catalog.locations = locations;
+    catalog.discovery_diagnostics = diagnostics;
+    Ok(catalog)
 }
 
 // Unknown failing field names are untrusted content (and may themselves contain
@@ -164,7 +215,7 @@ mod tests {
                 std::fs::write(root.join(format!("{name}.yaml")), PROGRAM).unwrap();
             }
             std::fs::write(root.join("incidental.txt"), "invalid YAML: [").unwrap();
-            let catalog = load(&workspace).unwrap();
+            let catalog = load(&workspace, &workspace.join("user/.agents")).unwrap();
             assert_eq!(
                 catalog
                     .entries()
@@ -177,9 +228,15 @@ mod tests {
             for name in names {
                 std::fs::write(root.join(format!("{name}.yaml")), "invalid: [").unwrap();
             }
-            let error = load(&workspace).unwrap_err();
+            let invalid = load(&workspace, &workspace.join("user/.agents")).unwrap();
+            let error = invalid.invalid().values().next().unwrap();
             assert_eq!(error.source_file, Some(root.join("alpha.yaml")));
-            assert_eq!(error, load(&workspace).unwrap_err());
+            assert_eq!(
+                invalid.invalid(),
+                load(&workspace, &workspace.join("user/.agents"))
+                    .unwrap()
+                    .invalid()
+            );
             assert_eq!(catalog.entries().len(), 2);
         }
     }

@@ -69,14 +69,14 @@ describe("presentation projection", () => {
   it("derives the initial state from an authoritative snapshot", () => {
     const state = replaceFromSnapshot(
       snapshot({
-        conversation_id: "conv-1",
+        conversation_id: "conv_36524fd8-f674-7fc2-b125-06d01fee0e18",
         messages: [userMessage("m1", "hello"), assistantMessage("m2", "hi")],
         capabilities: capabilities(4),
       }),
       runtimeCursor(9),
     );
 
-    assert.equal(state.conversationId, "conv-1");
+    assert.equal(state.conversationId, "conv_36524fd8-f674-7fc2-b125-06d01fee0e18");
     assert.equal(state.cursor, "9");
     assert.equal(state.transcript.length, 2);
     assert.equal(state.capabilities.revision, "4");
@@ -410,22 +410,14 @@ describe("presentation projection", () => {
     assert.equal(repaired.cursor, "8");
   });
 
-  it("folds Questionnaires and authoritative ApprovalMode changes", () => {
+  it("folds Questionnaires without changing published approval policy", () => {
     const question = questionnaireInteraction();
     const state = fold(initial(), [
       { type: "interaction_pending", interaction: question },
-      {
-        type: "approval_mode_changed",
-        effective_approval_mode: "policy",
-        pending_approval_mode: "full_access",
-        revision: "1",
-      },
     ]);
 
     assert.deepEqual(state.pendingInteractions, [question]);
     assert.equal(state.effectiveApprovalMode, "policy");
-    assert.equal(state.pendingApprovalMode, "full_access");
-    assert.equal(state.approvalModeRevision, "1");
   });
 
   it("folds committed compaction diagnostics and rebuilds them from a snapshot", () => {
@@ -438,7 +430,7 @@ describe("presentation projection", () => {
           compaction_count: 2,
           latest_compaction: {
             generation: "2",
-            summary_message_id: "conv-1-summary-2",
+            summary_message_id: "conv_be682c07-c8cf-7a0f-9f06-17a4288267dd",
             surface_revision: "7",
             tokens_before: { input_tokens: 4_700, source: "estimated" },
             estimated_tokens_after: 1_800,
@@ -716,7 +708,7 @@ describe("presentation projection", () => {
         attempt_id: "a1",
         tool_call_id: "c1",
         tool_id: "tool-background",
-        execution_id: "exec-1",
+        execution_id: "exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb",
         progress: { message: "detached" },
       },
     ]);
@@ -729,7 +721,7 @@ describe("presentation projection", () => {
       { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       {
         type: "background_execution_updated",
-        execution: backgroundExecution("exec-1", "running"),
+        execution: backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running"),
       },
       {
         type: "attempt_settled",
@@ -745,7 +737,7 @@ describe("presentation projection", () => {
     state = fold(state, [
       {
         type: "background_execution_updated",
-        execution: backgroundExecution("exec-1", "succeeded", {
+        execution: backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "succeeded", {
           result: toolResult(),
         }),
       },

@@ -42,7 +42,7 @@
       "treatment": "rewritten selectors with native Dialog and typed rustX dispatch",
       "upstream_sha256": "c6a89ae2771f36ff6da26886fbc6719369f41f9eae004e52561644c788df153f",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v5",
+        "../../../../protocol/app-server/v6",
         "../../bindings/projection",
         "../../client/app-server",
         "../../presentation/primitives/Button",
@@ -349,7 +349,7 @@
       "treatment": "substantially refactored: presentation extracted; native rustX bindings Session upload receipts replace the obsolete artifact carrier; draft states remain presentation-only.",
       "upstream_sha256": "98fd669d20af309e31bf2cf0cc591b247905acf9ae02c98a3248c02429742477",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v5",
+        "../../../../protocol/app-server/v6",
         "../../client/app-server",
         "../../client/uploads",
         "../../presentation/attachments/AttachmentCard",
@@ -451,7 +451,7 @@
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
       "upstream_sha256": "9a3f529576191c8424544273c562e6f84741bd667b2a8efefac9c26dbaf82a02",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v5",
+        "../../../../protocol/app-server/v6",
         "../../bindings/questionnaire",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/icons",
@@ -880,7 +880,7 @@
       "upstream_sha256": "8761d0bbd471440ce331db1e4537e42cc630969244290f8b66cab090457ac70f",
       "destination": "web-console/src/app/Trajectory.tsx",
       "retained_dependencies": [
-        "../../../protocol/app-server/v5",
+        "../../../protocol/app-server/v6",
         "../client/trace",
         "../presentation/primitives/Button",
         "../presentation/primitives/Input",
@@ -997,7 +997,7 @@
       "treatment": "adapted: collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds a composed-empty strip, blocked_by and active_form",
       "upstream_sha256": "1d1e9d87c12b505fc8bc2bdf9973fc349fb80b9385419e0247420ecdb1fc2f4a",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v5",
+        "../../../../protocol/app-server/v6",
         "../../bindings/composer-context",
         "../../presentation/primitives/icons",
         "./TodoDock.module.css",
@@ -1029,7 +1029,7 @@
       "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds rustX GoalView armed flag, adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control",
       "upstream_sha256": "fcd9ec77f6e40cf4220a883f276d59be5641768a606ff128a5aa209222a637fa",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v5",
+        "../../../../protocol/app-server/v6",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -1063,7 +1063,7 @@
       "treatment": "adapted: collapsible queue, inline text editing, remove, busy controls and preserved drafts; native exact pending CAS and authoritative readback",
       "upstream_sha256": "682d5bb4aa11478acbac0f2e21ed1e129baddd18cbff732c64ae5bdb95fb738e",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v5",
+        "../../../../protocol/app-server/v6",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -1160,15 +1160,16 @@
       "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v5",
+        "../../../../protocol/app-server/v6",
         "../../client/app-server",
         "../../presentation/primitives/Button",
+        "./AgentEditor",
         "./CatalogEditor",
         "./Integrations",
-        "./RequestPolicy",
-        "./SessionIntegrations",
+        "./RootEditor",
+        "./RuntimeEditor",
         "./Settings.module.css",
-        "./source-outcome",
+        "./controls",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -1191,10 +1192,11 @@
       "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority",
       "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v5",
+        "../../../../protocol/app-server/v6",
         "../../presentation/primitives/Button",
         "./RequestPolicy",
         "./Settings.module.css",
+        "./controls",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -1230,9 +1232,9 @@
       "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command",
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v5",
+        "../../../../protocol/app-server/v6",
         "../../presentation/primitives/Button",
-        "./Settings.module.css",
+        "./controls",
         "react"
       ],
       "excluded_dependencies": [

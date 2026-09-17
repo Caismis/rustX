@@ -2690,7 +2690,11 @@ impl<'a> AgentExecution<'a> {
                 // outside the Agent Status engine — so the engine receives a
                 // finite immutable presentation rather than the list
                 // authority (Issue #259).
-                self.tool_runtime.todo_status_presentation(),
+                self.capability
+                    .snapshot()
+                    .resolved_profile()
+                    .filter(|profile| profile.extensions.todo().is_some())
+                    .and_then(|_| self.tool_runtime.todo_status_presentation()),
                 &emission_lookup,
             )
             .map(|prepared| AgentStatusGeneration {
@@ -4341,6 +4345,12 @@ impl<'a> AgentExecution<'a> {
         let batch = self
             .tool_runtime
             .todos()
+            .filter(|_| {
+                self.capability
+                    .snapshot()
+                    .resolved_profile()
+                    .is_some_and(|profile| profile.extensions.todo().is_some())
+            })
             .and_then(crate::tools::todo::ConversationTodoList::open_batch);
         self.execute_tools_staged(calls, preflight, batch).await
     }
@@ -6582,10 +6592,15 @@ mod tests {
             ],
         ]));
         let store = Arc::new(
-            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
-                .expect("in-memory store"),
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ))
+            .expect("in-memory store"),
         );
-        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            Some(store.clone()),
+        );
         let (reported, mut reported_rx) = watch::channel(false);
         let release = Arc::new(tokio::sync::Notify::new());
         let mut tools = ToolRegistry::new();
@@ -6867,7 +6882,7 @@ mod tests {
                 schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
                 event_id: EventId::new("observer-start"),
                 sequence: 1,
-                conversation_id: ConversationId::new("observer-conversation"),
+                conversation_id: ConversationId::new("conv_2287bce3-d81b-7f16-8c57-98493481c6cc"),
                 attempt_id: Some(attempt_id.clone()),
                 turn_id: Some(turn.clone()),
                 timestamp,
@@ -6880,7 +6895,7 @@ mod tests {
                 schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
                 event_id: EventId::new("observer-emission"),
                 sequence: 2,
-                conversation_id: ConversationId::new("observer-conversation"),
+                conversation_id: ConversationId::new("conv_2287bce3-d81b-7f16-8c57-98493481c6cc"),
                 attempt_id: Some(attempt_id),
                 turn_id: Some(turn),
                 timestamp,
@@ -7072,7 +7087,7 @@ mod tests {
         let adapter: Arc<dyn ModelAdapter> = adapter.clone();
         AgentExecutionRequest {
             agent_id: AgentId::new("agent-a"),
-            conversation_id: ConversationId::new("conv-1"),
+            conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             attempt_id: AttemptId::new("attempt-1"),
             conversation: ConversationState::new(),
             initial_turn_trigger: InitialTurnTrigger::Continuation,
@@ -7225,10 +7240,15 @@ mod tests {
     ) {
         let adapter = Arc::new(ScriptedAdapter::new(scripts));
         let store = Arc::new(
-            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
-                .expect("store"),
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ))
+            .expect("store"),
         );
-        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            Some(store.clone()),
+        );
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let latch = Arc::new(
@@ -7389,6 +7409,8 @@ mod tests {
         crate::capabilities::AttemptCapabilityLease,
     ) {
         let mut agent_activation = crate::capabilities::AgentActivation::default();
+        agent_activation.profile.extensions =
+            crate::scripted_suites::common::plugin_document(tool_runtime.extensions());
         agent_activation.profile.tools.builtin = tools
             .definitions()
             .into_iter()
@@ -7434,7 +7456,7 @@ mod tests {
 
         let adapter = Arc::new(ScriptedAdapter::new(Vec::new()));
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let tool_runtime = tool_runtime("conv-1");
+        let tool_runtime = tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let mut execution = AgentExecution::new(
@@ -7487,7 +7509,7 @@ mod tests {
     async fn capability_lease_owner_matches_runtime_before_execution() {
         let adapter = Arc::new(ScriptedAdapter::new(Vec::new()));
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let tool_runtime = tool_runtime("conv-1");
+        let tool_runtime = tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let (_dir, coordinator, lease) = capability_lease(ToolRegistry::new(), &tool_runtime).await;
         assert_eq!(coordinator.active_attempts(), 1);
 
@@ -7517,13 +7539,18 @@ mod tests {
             usage: None,
         }]]));
         let store = Arc::new(
-            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
-                .expect("in-memory store"),
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ))
+            .expect("in-memory store"),
         );
         store.arm_request_start_fault_script([
             crate::durable::sqlite::RequestStartFaultOperation::BeforeContextAppend,
         ]);
-        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            Some(store.clone()),
+        );
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -7583,7 +7610,7 @@ mod tests {
                 generation: None,
             },
         }]]));
-        let tool_runtime = tool_runtime("conv-1");
+        let tool_runtime = tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -7663,10 +7690,15 @@ mod tests {
 
         let adapter = Arc::new(ScriptedAdapter::new(scripts));
         let store = Arc::new(
-            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
-                .expect("in-memory store"),
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ))
+            .expect("in-memory store"),
         );
-        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            Some(store.clone()),
+        );
         let mut tools = ToolRegistry::new();
         tools
             .register(
@@ -7810,11 +7842,16 @@ mod tests {
             },
         ]]));
         let store = Arc::new(
-            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
-                .expect("in-memory store"),
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ))
+            .expect("in-memory store"),
         );
         store.arm_fail_next_terminal_event();
-        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            Some(store.clone()),
+        );
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -7905,10 +7942,15 @@ mod tests {
             },
         ]]));
         let store = Arc::new(
-            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
-                .expect("store"),
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ))
+            .expect("store"),
         );
-        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            Some(store.clone()),
+        );
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -8138,20 +8180,21 @@ mod tests {
     async fn capability_lease_rejects_different_conversation_before_execution() {
         let adapter = Arc::new(ScriptedAdapter::new(Vec::new()));
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let owner_runtime = tool_runtime("conv-1");
+        let owner_runtime = tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let (_dir, coordinator, lease) =
             capability_lease(ToolRegistry::new(), &owner_runtime).await;
         assert_eq!(coordinator.active_attempts(), 1);
         let other_dir = tempfile::tempdir().expect("other runtime directory");
         std::fs::create_dir_all(other_dir.path().join("workspace")).expect("other workspace");
         let other_runtime = crate::tools::runtime::ConversationToolRuntime::new(
-            ConversationId::new("conv-2"),
+            ConversationId::new("conv_1eef1854-fea7-788b-8e49-ca0ec811fb0c"),
             other_dir.path().join("workspace"),
             other_dir.path().join("artifacts"),
         )
         .expect("other tool runtime");
         let mut other_request = request(&adapter);
-        other_request.conversation_id = ConversationId::new("conv-2");
+        other_request.conversation_id =
+            ConversationId::new("conv_1eef1854-fea7-788b-8e49-ca0ec811fb0c");
 
         let result = AgentExecution::new(
             other_request,
@@ -8179,14 +8222,14 @@ mod tests {
     async fn capability_lease_rejects_different_workspace_before_execution() {
         let adapter = Arc::new(ScriptedAdapter::new(Vec::new()));
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let owner_runtime = tool_runtime("conv-1");
+        let owner_runtime = tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let (_dir, coordinator, lease) =
             capability_lease(ToolRegistry::new(), &owner_runtime).await;
         assert_eq!(coordinator.active_attempts(), 1);
         let other_dir = tempfile::tempdir().expect("other workspace directory");
         std::fs::create_dir_all(other_dir.path().join("workspace")).expect("other workspace");
         let other_runtime = crate::tools::runtime::ConversationToolRuntime::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             other_dir.path().join("workspace"),
             other_dir.path().join("artifacts"),
         )
@@ -8246,7 +8289,7 @@ mod tests {
             assert!(controller_cancellation.is_cancelled());
             pre_start.release();
         });
-        let tool_runtime = tool_runtime("conv-1");
+        let tool_runtime = tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let mut execution = AgentExecution::new(
@@ -8342,7 +8385,7 @@ mod tests {
             assert!(controller_cancellation.is_cancelled());
             pre_start.release();
         });
-        let tool_runtime = tool_runtime("conv-1");
+        let tool_runtime = tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let observer = RecordingObserver::default();
@@ -8419,7 +8462,7 @@ mod tests {
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let (pause, _, pre_commit) = StartBoundaryPause::install(false, true);
         let mut pre_commit = pre_commit.expect("pre-commit phase installed");
-        let tool_runtime = tool_runtime("conv-1");
+        let tool_runtime = tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let mut execution = AgentExecution::new(
@@ -8499,14 +8542,17 @@ mod tests {
     /// `ModelRequestStarted`, no provider invocation. The attempt settles
     /// with the honest durable-store failure.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)]
     async fn failed_start_commit_after_context_append_rolls_back_everything() {
         let adapter = Arc::new(ScriptedAdapter::new(vec![vec![ModelEvent::Completed {
             finish_reason: ModelFinishReason::Stop,
             usage: None,
         }]]));
         let store = Arc::new(
-            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
-                .expect("store"),
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ))
+            .expect("store"),
         );
         store.arm_request_start_fault_script([
             crate::durable::sqlite::RequestStartFaultOperation::AfterContextAppend,
@@ -8534,7 +8580,10 @@ mod tests {
             crate::scripted_suites::support::default_monotonic_clock(),
         )
         .expect("valid context runtime");
-        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            Some(store.clone()),
+        );
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -8633,7 +8682,7 @@ mod tests {
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
         let mut pre_start = pre_start.expect("pre-start phase installed");
-        let tool_runtime = tool_runtime("conv-1");
+        let tool_runtime = tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
         let mut execution = AgentExecution::new(
             request(&adapter),
@@ -8719,10 +8768,10 @@ mod tests {
             // Each iteration gets its own in-memory durable authority; the
             // default temp-dir store would be shared across iterations.
             let tool_runtime = tool_runtime_with_store(
-                "conv-1",
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
                 Some(Arc::new(
                     crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                        "conv-1",
+                        "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
                     ))
                     .expect("store"),
                 )),
@@ -8923,7 +8972,7 @@ mod tests {
     fn request_dyn(adapter: &Arc<dyn ModelAdapter>) -> AgentExecutionRequest {
         AgentExecutionRequest {
             agent_id: AgentId::new("agent-a"),
-            conversation_id: ConversationId::new("conv-1"),
+            conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             attempt_id: AttemptId::new("attempt-1"),
             conversation: ConversationState::new(),
             initial_turn_trigger: InitialTurnTrigger::Continuation,
@@ -8999,7 +9048,7 @@ mod tests {
             controller_cancellation.cancel();
             release.send_replace(true);
         });
-        let tool_runtime = tool_runtime("conv-1");
+        let tool_runtime = tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let result = AgentExecution::new(
@@ -9063,7 +9112,7 @@ mod tests {
             .expect("canonical inbound history");
         request.initial_turn_trigger = InitialTurnTrigger::FreshInbound(fresh);
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let tool_runtime = tool_runtime("conv-1");
+        let tool_runtime = tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let result = AgentExecution::new(
@@ -9130,7 +9179,7 @@ mod tests {
         let (pause, reached_rx, release_tx) = ContinuationBoundaryPause::install();
         let controller = boundary_controller(reached_rx, release_tx, cancellation.clone());
 
-        let tool_runtime = tool_runtime("conv-1");
+        let tool_runtime = tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
         let execution = AgentExecution::new(
             request(&adapter),
@@ -9227,10 +9276,15 @@ mod tests {
             )
             .expect("register tool");
         let store = Arc::new(
-            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
-                .expect("in-memory store"),
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ))
+            .expect("in-memory store"),
         );
-        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            Some(store.clone()),
+        );
         let mailbox = tool_runtime.mailbox();
         mailbox
             .enqueue(inbound_message("msg-a", "A"))
@@ -9406,10 +9460,15 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     async fn terminal_inbound_after_snapshot_can_never_join_the_first_batch() {
         let store = Arc::new(
-            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
-                .expect("in-memory store"),
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ))
+            .expect("in-memory store"),
         );
-        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            Some(store.clone()),
+        );
         let mailbox = tool_runtime.mailbox();
         mailbox
             .enqueue(inbound_message("msg-human", "hello"))
@@ -9472,8 +9531,14 @@ mod tests {
             //    registry terminal observation proves the durable enqueue
             //    completed (finish publishes before notifying state).
             release.send_replace(true);
+            let execution_id = background
+                .all_snapshots()
+                .into_iter()
+                .next()
+                .unwrap()
+                .execution_id;
             background
-                .wait_until_terminal(&crate::runtime::identity::ToolExecutionId::new("exec_1"))
+                .wait_until_terminal(&execution_id)
                 .await
                 .expect("the terminal state is durably published");
             // 4. Release the boundary twice: turn 2 runs and adopts
@@ -9485,6 +9550,7 @@ mod tests {
             pause_release
                 .send(())
                 .expect("release the second continuation boundary");
+            format!("background-{execution_id}-terminal")
         });
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
         let execution = AgentExecution::new(
@@ -9508,7 +9574,7 @@ mod tests {
         let _result = tokio::time::timeout(LIVENESS_GUARD, execution.run())
             .await
             .expect("the attempt terminates");
-        tokio::time::timeout(LIVENESS_GUARD, controller)
+        let terminal_id = tokio::time::timeout(LIVENESS_GUARD, controller)
             .await
             .expect("the controller terminates")
             .expect("controller task");
@@ -9528,7 +9594,7 @@ mod tests {
         );
         assert!(
             !second_request.messages.iter().any(|message| {
-                matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id.as_str() == "background-exec_1-terminal")
+                matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id.as_str() == terminal_id)
             }),
             "the terminal can never appear in the first drained batch"
         );
@@ -9536,14 +9602,14 @@ mod tests {
             requests[2]
                 .messages
                 .iter()
-                .any(|message| matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id.as_str() == "background-exec_1-terminal")),
+                .any(|message| matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id.as_str() == terminal_id)),
             "the terminal inbound waits for the next drained batch"
         );
         let terminal_occurrences = requests
             .iter()
             .flat_map(|request| &request.messages)
             .filter(|message| {
-                matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id.as_str() == "background-exec_1-terminal")
+                matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id.as_str() == terminal_id)
             })
             .count();
         assert_eq!(

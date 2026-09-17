@@ -39,24 +39,15 @@ production maturity.
 ## Quick start
 
 Use [`rustx init`](docs/configuration-diagnostics.md#minimal-initialization) with
-explicit provider/model declarations, or author your model once in the host configuration directory:
-`$XDG_CONFIG_HOME/rustx`, or `$HOME/.config/rustx` when XDG_CONFIG_HOME is
-unset (Linux and macOS). Put explicit provider/model declarations in
-`models.toml` and select one in `settings.toml`:
+explicit Provider/Model declarations, or author `~/rustx/rustx.toml` using the
+[minimal example](examples/local-runtime/minimal/rustx.toml). Workspace configuration
+lives in `<workspace>/rustx.toml`; Agent resource definitions live in the User and
+Workspace `.agents` roots. Resource existence grants no Root capability.
 
-```toml
-[model]
-model = "example/demo-model"
-```
-
-Use your declared provider/model identity. The
-[minimal catalog example](examples/local-runtime/minimal/models.toml) shows the required endpoint,
-credential source, protocol, limits and capabilities; its endpoint is a placeholder.
-The [launch contract](docs/launch-configuration.md) documents all locations,
-field ownership, precedence, path semantics, defaults and trust.
-`rustx config check` diagnoses configuration offline; `rustx config show --sources`
-explains the redacted prospective next launch. Only explicit `doctor --probe`
-may connect or spawn diagnostic targets. See the [command and exit contract](docs/configuration-diagnostics.md).
+The [CFG3 reference](docs/configuration.md) documents paths, the complete typed
+schema, exact semantic overlay units, resource shadowing and Save/Reload behavior.
+`rustx config check` validates offline; `rustx config show --sources` explains
+prospective resolution. Default durable storage is `~/rustx/runtime`.
 
 See [Local development](DEVELOPMENT.md) for the canonical App Server, TUI, and complete Web launchers. Build the runtime and install the reference TUI:
 
@@ -64,12 +55,12 @@ See [Local development](DEVELOPMENT.md) for the canonical App Server, TUI, and c
 cargo build --bin rustx
 pnpm --dir dev install --frozen-lockfile
 pnpm --dir tui install --frozen-lockfile
-./target/debug/rustx --workspace /path/to/project --trust grant
+./target/debug/rustx --workspace /path/to/project
 pnpm --dir dev tui -- --workspace /absolute/path/to/project
 ```
 
 Supply `--workspace` explicitly with the development launcher. A project
-`rustx.toml` is optional, and runtime state defaults to the user state directory.
+`rustx.toml` is optional, and runtime state defaults to `~/rustx/runtime`.
 Native-only startup needs neither Python nor MCP. The
 [advanced resource example](examples/local-runtime/README.md) also demonstrates
 optional managed Python tools and fixed Workflows.
@@ -197,4 +188,4 @@ Native-only startup needs no Python, `uv`, MCP executable/endpoint or external
 source secret. `--no-direct-tools` controls model exposure; source disabling controls preparation.
 
 For typed generation diagnostics and offline Agent/Workflow inspection, see
-[capability inspection](docs/capability-inspection.md) and the [CFG2 example](examples/cfg2/README.md).
+[capability inspection](docs/capability-inspection.md) and the [CFG3 example](examples/local-runtime/README.md).

@@ -24,11 +24,6 @@ use super::ToolSourceId;
 /// The availability of one optional capability source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapabilitySourceState {
-    /// Inert source discovered without effective activation authority.
-    Inactive {
-        /// Explicit disable, absent grant, or host trust rejection.
-        activation: super::activation::SourceActivation,
-    },
     /// Bootstrap/prospective source whose first preparation has not completed.
     /// The coordinator exposes this before its first commit; normal composition
     /// publishes a Session only after preparation, so it need not appear there.
@@ -48,15 +43,6 @@ pub enum CapabilitySourceState {
 }
 
 impl CapabilitySourceState {
-    /// Prospective state of a declared source, before bounded discovery/preparation.
-    #[must_use]
-    pub fn before_preparation(activation: super::activation::SourceActivation) -> Self {
-        if activation.admit().is_ok() {
-            Self::Unprepared
-        } else {
-            Self::Inactive { activation }
-        }
-    }
     /// The one construction boundary of an unavailable state: the
     /// diagnostic is normalized (bounded, deterministic, valid UTF-8)
     /// *here*, before the state can enter the authoritative availability

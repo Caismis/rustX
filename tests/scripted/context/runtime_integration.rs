@@ -355,7 +355,7 @@ async fn run_continuation_case(
     let tools = tool_registry_with_alpha();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let runtime = runtime_with(window, 0, 5, weighted(100, 10, 0), summarizer);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -486,7 +486,7 @@ fn state(messages: Vec<MessageBlock>) -> ConversationState {
 }
 
 fn conversation() -> ConversationId {
-    ConversationId::new("conv-1")
+    ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18")
 }
 
 fn engine(
@@ -565,7 +565,7 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
         CompactionBudgets::new(1, 1, 1_000_000),
     );
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -616,7 +616,11 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
             .iter()
             .map(MessageId::as_str)
             .collect::<Vec<_>>(),
-        vec!["conv-1-summary-1", "recent", "attempt-1-agent-1"]
+        vec![
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-summary-1",
+            "recent",
+            "attempt-1-agent-1"
+        ]
     );
     let requests = model.requests();
     assert_eq!(requests.len(), 1);
@@ -659,7 +663,7 @@ async fn proactive_compaction_before_the_next_turn() {
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(200, 0, 5, weighted(100, 10, 0), summarizer);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -846,7 +850,7 @@ async fn below_threshold_runs_without_compaction() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("s".to_owned())]);
     let runtime = runtime_with(10_000, 0, 5, weighted(100, 10, 0), summarizer);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -912,7 +916,7 @@ async fn overflow_compact_and_retry_succeeds() {
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -1058,7 +1062,7 @@ async fn cancellation_before_overflow_retry_start_stops_the_retry() {
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
     let mut pre_start = pre_start.expect("pre-start phase installed");
@@ -1173,7 +1177,7 @@ async fn cancellation_after_preparation_compaction_keeps_it_and_discards_staged_
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with_assembly(250, 0, 5, weighted(100, 10, 0), summarizer, assembly);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
     let mut pre_start = pre_start.expect("pre-start phase installed");
@@ -1308,7 +1312,7 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
     );
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let publication = common::RecordingPublicationObserver::default();
     let mut execution = AgentExecution::new(
@@ -1512,7 +1516,7 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
         assembly,
     );
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
     let evaluations = Arc::new(AtomicUsize::new(0));
     let result = common::durable_agent_result(
@@ -1651,7 +1655,7 @@ async fn overflow_retry_exhausted_after_one_retry() {
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -1728,7 +1732,7 @@ async fn overflow_retry_never_commits_provisional_failed_content() {
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -1807,7 +1811,7 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -1887,7 +1891,7 @@ async fn overflow_retry_budget_is_per_model_turn() {
         FakeSummaryStep::Return("summary-2".to_owned()),
     ]);
     let runtime = runtime_with(500, 0, 0, weighted(100, 10, 0), summarizer);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -1966,7 +1970,7 @@ async fn invalid_summary_fails_without_commit_or_retry() {
         let summarizer =
             FakeContextSummarizer::new(vec![FakeSummaryStep::Return(bad_summary.to_owned())]);
         let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
-        let tool_runtime = common::tool_runtime("conv-1");
+        let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let capability = common::capability_lease(tools, &tool_runtime).await;
         let result = common::durable_agent_result(
             AgentExecution::new(
@@ -2039,7 +2043,7 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
         "summary generation refused",
     ))]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -2119,7 +2123,7 @@ async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
         Some(rustx::context::AgentStatusEngine::default()),
         CompactionBudgets::new(1, 1, 9),
     );
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -2197,7 +2201,7 @@ async fn a_rejected_summary_request_replans_against_a_smaller_budget() {
         Some(rustx::context::AgentStatusEngine::default()),
         CompactionBudgets::new(1, 1, 1_000_000),
     );
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -2267,7 +2271,7 @@ async fn failing_status_module_is_quarantined_not_preparation_failure() {
         Arc::new(FixedClock(fixed_time())),
     )
     .with_test_seam(seam.clone());
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -2376,7 +2380,7 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
         user("msg-old-2", "older"),
         fresh_user("msg-inbound-1", "fresh instruction"),
     ];
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -2452,7 +2456,7 @@ async fn no_progress_compaction_fails_without_retry() {
     // 400 bytes estimate 101 tokens >= the 100-token replaced context.
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("x".repeat(400))]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
@@ -2532,7 +2536,7 @@ async fn cancel_before_proactive_compaction() {
     // (210 tokens) would require proactive compaction at turn 2 — which
     // never starts because cancellation settles the attempt first.
     let runtime = runtime_with(200, 0, 5, weighted(100, 10, 0), summarizer);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let execution = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
@@ -2594,7 +2598,7 @@ async fn cancel_while_summary_generation_is_pending() {
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::ParkUntilCancelled]);
     let parked = summarizer.parked();
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let execution = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
@@ -2783,7 +2787,7 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
         support::default_monotonic_clock(),
     )
     .expect("runtime");
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let mut attempt_request = request("attempt-1", vec![user("msg-user-1", "hi")], 1, &model);
     attempt_request.model = snapshot;
@@ -2849,7 +2853,7 @@ async fn m4_projection_contains_drained_batch_before_request() {
         weighted(100, 10, 0),
         FakeContextSummarizer::new(Vec::new()),
     );
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
     let capability = common::capability_lease(tools, &tool_runtime).await;
@@ -2936,7 +2940,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     // proactive compaction while retaining the complete fresh inbound batch.
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("S".to_owned())]);
     let runtime = runtime_with(350, 0, 0, weighted(100, 10, 0), summarizer);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
     let capability = common::capability_lease(tools, &tool_runtime).await;
@@ -3109,7 +3113,7 @@ async fn m4_drain_retains_continuation_without_compaction() {
         weighted(100, 10, 0),
         FakeContextSummarizer::new(Vec::new()),
     );
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let mut model_parked = model.parked();

@@ -1,6 +1,6 @@
 # Human Review of a bounded plan
 
-Copy `.agents/workflows/human_plan.yaml` into a trusted workspace and select a
+Copy `.agents/workflows/human_plan.yaml` into a Workspace and select a
 model for the ordinary invoking Agent turn. This template needs no Subagent role:
 
 ```toml

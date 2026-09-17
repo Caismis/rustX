@@ -1,6 +1,6 @@
 import { appServerEndpoint } from '../../../dev/src/app-server-readiness.ts';
 import { startWorkspaceHost } from './workspace-host.ts';
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,16 +25,14 @@ function exited(child: ChildProcess): Promise<number | null> {
     child.once('exit', code => { clearTimeout(timer); resolveExit(code); });
   });
 }
-export async function startDogfood(scenario = 'web_console_dogfood', trusted = true) {
+export async function startDogfood(scenario = 'web_console_dogfood') {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-web-console-'));
-  const taskConfig = join(directory, 'config');
-  const settings = join(taskConfig, 'rustx/settings.toml');
-  mkdirSync(join(taskConfig, 'rustx'), { recursive: true });
+  const settings = join(directory, 'rustx.toml');
   const workspaceA = join(directory, 'A'), workspaceB = join(directory, 'B');
   mkdirSync(workspaceA); mkdirSync(workspaceB);
   const binary = process.env.RUSTX_BINARY ?? resolve(root, 'target/debug/rustx');
   const fixtureHome = join(directory, 'home'); mkdirSync(fixtureHome);
-  const env = { ...process.env, HOME: fixtureHome, XDG_CONFIG_HOME: taskConfig, XDG_STATE_HOME: join(directory, 'state'), RUSTX_CONSOLE_FIXTURE_KEY: 'fake-provider-only' };
+  const env = { ...process.env, HOME: fixtureHome, RUSTX_CONSOLE_FIXTURE_KEY: 'fake-provider-only' };
   const provider = spawn('uv', ['run', '--project', resolve(root, 'test-support/fake-provider'), '--frozen', 'fake-provider', '--scenario', scenario, '--port', '0'], { stdio: ['pipe', 'pipe', 'pipe'] });
   let providerErrors = ''; provider.stderr.on('data', chunk => { providerErrors = (providerErrors + String(chunk)).slice(-16_384); });
   let app: ChildProcess | undefined;
@@ -42,25 +40,25 @@ export async function startDogfood(scenario = 'web_console_dogfood', trusted = t
     const providerUrl = await readiness(provider, 'stdout', line => {
       const message = JSON.parse(line); return message.ready ? `http://${message.host}:${message.port}` : undefined;
     });
-    writeFileSync(join(taskConfig, 'rustx/models.toml'), `[providers.fixture]\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
-      ['console-model', 'second-model'].map(id => `\n[[providers.fixture.models]]\nid = "${id}"\nprotocol = "openai_chat_completions"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }\ncompat = { chat_reasoning_replay = "omit" }\n`).join(''));
+    const catalog = `[providers.fixture]\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
+      ['console-model', 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\nprotocol = "openai_chat_completions"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }\ncompat = { chat_reasoning_replay = "omit" }\n`).join('');
+    if (scenario === 'web_chat_history') {
+      const agents = join(fixtureHome, 'rustx/.agents');
+      mkdirSync(agents, { recursive: true });
+      writeFileSync(join(agents, 'mcp.toml'), `[mcp_servers.image_fixture]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(resolve(root, 'web-console/test/e2e/image-mcp.py'))}]\n`);
+    }
     const imageSource = scenario === 'web_chat_history' ? `
-[mcp_servers.image_fixture]
-enabled = true
-type = "stdio"
-command = "python3"
-args = [${JSON.stringify(resolve(root, 'web-console/test/e2e/image-mcp.py'))}]
 [mcp_tool_policies.image_fixture]
 approval = "never"
 [agent.tools.sources]
 image_fixture = ["render_image"]
 ` : scenario === 'web_composer_context' ? `
-[agent.extensions.todo]
+[agent.plugins.todo]
 enabled = true
-[agent.extensions.goal]
+[agent.plugins.goal]
 enabled = true
 ` : '';
-    const writeSettings = (model = 'console-model') => writeFileSync(settings, `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
+    const writeSettings = (model = 'console-model') => writeFileSync(settings, catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "ask_user", "execution"]\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
     writeSettings();
     if (scenario === 'web_workflow_conformance') {
       mkdirSync(join(workspaceA, '.agents/agents'), { recursive: true });
@@ -71,13 +69,9 @@ enabled = true
       writeFileSync(join(workspaceA, '.agents/skills/acceptance/SKILL.md'), '---\nname: acceptance\ndescription: Inspect the native acceptance fixture.\n---\nUse native authority.\n');
       writeFileSync(join(workspaceA, 'rustx.toml'), '[agent]\nworkflows = ["review_pr"]\n');
     }
-    for (const workspace of trusted ? [workspaceA, workspaceB] : []) {
-      const trusted = spawnSync(binary, ['--workspace', workspace, '--trust', 'grant'], { env, encoding: 'utf8' });
-      if (trusted.status !== 0) throw new Error(`Trust setup failed: ${trusted.stderr}`);
-    }
     const token = randomBytes(32).toString('base64url');
     const tokenFile = join(directory, 'socket-token'); writeFileSync(tokenFile, token, { mode: 0o600 });
-    app = spawn(binary, ['app-server', '--user-settings', settings, '--runtime-root', join(directory, 'runtime'), '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    app = spawn(binary, ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let appErrors = ''; app.stderr!.on('data', chunk => { appErrors = (appErrors + String(chunk)).slice(-16_384); });
     const endpoint = await readiness(app, 'stderr', appServerEndpoint);
     const control = async (path: string, method = 'GET') => {
@@ -92,10 +86,6 @@ enabled = true
     const hostConfigFile = join(directory, 'host-config.json');
     writeFileSync(hostConfigFile, JSON.stringify(hostConfig), { mode: 0o600 });
     return { hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
-      revokeWorkspaceTrust: () => {
-        const result = spawnSync(binary, ['--workspace', workspaceA, '--trust', 'revoke'], { env, encoding: 'utf8' });
-        if (result.status !== 0) throw new Error(`Trust revoke failed: ${result.stderr}`);
-      },
       gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors }),

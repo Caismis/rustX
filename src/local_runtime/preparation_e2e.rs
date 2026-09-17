@@ -140,7 +140,7 @@ impl Lab {
                 .expect("chmod wrapper");
         }
 
-        let conversation_id = ConversationId::new("conv-issue145-e2e");
+        let conversation_id = ConversationId::new("conv_2525f8d8-18aa-7bee-8704-e60e22b8e79b");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
                 .expect("in-memory durable store"),
@@ -154,6 +154,10 @@ impl Lab {
             clock: Arc::new(crate::runtime::types::SystemClock),
             monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
             spawn: crate::runtime::subagent::SubagentSpawnPlan {
+                session_id: crate::runtime::identity::SessionId::new(
+                    "ses_01900000-0000-7000-8000-000000000001",
+                ),
+
                 program: wrapper,
                 product_root: crate::runtime::local_storage::ProductRoot::create(
                     &runtime_root.clone(),
@@ -171,11 +175,8 @@ impl Lab {
             workspace: crate::runtime::workspace::WorkspaceManager::new(&workspace, &runtime_root),
             max_active: 4,
         });
-        // The one ordinal this conversation will allocate: `prepare` burns
-        // it for the staged child.
-        let child_runtime_group = runtime_root.join("subagents").join(
-            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1).as_str(),
-        );
+        let child_runtime_group =
+            runtime_root.join("sessions/ses_01900000-0000-7000-8000-000000000001/conversations");
         Self {
             _dir: dir,
             registry,
@@ -197,6 +198,10 @@ impl Lab {
         .expect("the child plane implements read");
         SubagentStartSpec {
             resolved: ResolvedSubagentSpec {
+                environment: Vec::new(),
+                generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
+                skill_roots: Vec::new(),
+
                 selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
                 agent: crate::runtime::subagent::SubagentName::parse("explore").expect("name"),
                 definition_digest: serde_json::from_value(serde_json::json!(
@@ -282,12 +287,19 @@ impl Lab {
             self.child_runtime_group.exists(),
             "the semantic grouping directory remains owned by the stable runtime root"
         );
-        assert_eq!(
-            std::fs::read_dir(&self.child_runtime_group)
-                .expect("the semantic child grouping")
-                .count(),
-            0,
-            "rollback removed exactly the staged physical incarnation"
+        let allocations: Vec<_> = std::fs::read_dir(&self.child_runtime_group)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(allocations.len(), 1, "one UUID reservation was burned");
+        assert!(
+            ConversationId::parse(allocations[0].file_name().unwrap().to_str().unwrap()).is_ok()
+        );
+        assert!(
+            std::fs::read_dir(&allocations[0])
+                .unwrap()
+                .all(|entry| !entry.unwrap().file_type().unwrap().is_dir()),
+            "rollback removes the staged incarnation and its managed outputs; its no-overwrite reservation remains"
         );
         assert!(
             self.durable_events()

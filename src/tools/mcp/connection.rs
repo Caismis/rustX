@@ -360,9 +360,6 @@ impl McpConnection {
                 self.server_id
             )));
         }
-        reconnect.binding.activation.admit().map_err(|reason| {
-            McpError::Configuration(format!("source {}: {reason}", self.server_id))
-        })?;
         #[cfg(test)]
         if let Some((false, pause)) = &pause {
             pause.park().await;

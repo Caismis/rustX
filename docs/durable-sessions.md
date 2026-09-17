@@ -52,15 +52,11 @@ See the [host acceptance and dogfooding flows](app-server-acceptance.md).
 | Persisted field | Reason |
 | --- | --- |
 | `cwd` | Absolute execution and project-resolution context; never ambient process cwd or an OS sandbox. |
-| `config: Option<PathBuf>` | Explicit project-document selection. Its current content is reread, never copied. Omission retains cwd-based current discovery. |
 | `model: Option<SessionModelConfig>` | Intentional whole-model selection: model reference, reasoning profile, request parameters, output cap and summary policy. `None` uses current source defaults. |
-| `skill_paths: Vec<PathBuf>` | Explicit additional Skill source selections; the contents and availability remain current source authority. |
-| `no_automatic_skills`, `no_builtin_tools`, `no_direct_tools` | Explicit narrowing switches. False and omission have the same input semantics. They grant no capability. |
-| `tools: Option<Vec<String>>` | Exact direct Tool selection; omission and an explicitly empty selection remain distinct in storage. Resolution still applies its existing validity rules. |
-| `exclude_tools: Option<Vec<String>>` | Explicit exclusions, preserving omission versus explicit empty replacement. |
 
-User bindings (`settings`, `models`, runtime root, HOME/XDG roots, credentials)
-are process/user authority. Agent profiles, user policy, model/provider catalogs,
+The bound User `rustx.toml`, HOME, fixed User resource root and runtime root
+are process bindings. Provider credentials belong to their complete winning
+Provider definition. Agent profiles, user policy, model/provider catalogs,
 MCP and Python definitions, Skill content, defaults, instructions and resource
 catalogs remain current source content. Registries, connections, credentials,
 resource generations, provenance, prospective/admitted effective configuration,
@@ -71,7 +67,7 @@ catalog and reading persisted settings. That owner remains retained through
 resolution, admission and composition, excluding competing settings publishers.
 The complete settings value and revision come from this one catalog snapshot;
 no catalog mutex spans resolution or runtime composition. Cold load reconstructs
-`SessionConfigInput` and uses #285's
+`SessionConfigInput` and uses the CFG3
 `UserConfigManager::resolve_session` and admission. No second resolver exists.
 Current authorization and availability are checked again. Missing explicit
 models/resources and invalid selections fail through existing typed resolution
@@ -116,7 +112,7 @@ record. Recovery never rediscovers a new deletion workset.
 Deletion preview, execution, and recovery on `SessionController` remain
 crate-private. `DeletionScope`, `DeletionRecord`, previews, blockers, and internal
 results are not public native DTOs: their frozen scopes are cleanup authority.
-App Server v5 exposes bounded public control-plane projections. Compile-fail API
+App Server v6 exposes bounded public control-plane projections. Compile-fail API
 regressions enforce this boundary.
 
 ## Schema

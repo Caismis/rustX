@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v5 envelope and method vocabulary.
+//! Rust authority for the App Server v6 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 5;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -83,6 +83,7 @@ pub use crate::local_runtime::session::uploads::UserInputBlock;
 /// A single public method space, with no nested Runtime Client envelope.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
+#[allow(clippy::large_enum_variant)] // Wire commands are short-lived and bounded by the transport frame.
 pub enum Method {
     #[serde(rename = "artifact/read")]
     ArtifactRead {
@@ -93,18 +94,6 @@ pub enum Method {
     SessionUpload {
         target: AttachmentTarget,
         files: Vec<UploadBytes>,
-    },
-    #[serde(rename = "settings/defaults")]
-    DefaultsRead {
-        target: AttachmentTarget,
-        scope: crate::runtime_client::settings::DefaultScope,
-    },
-    #[serde(rename = "settings/saveDefault")]
-    DefaultSave {
-        target: AttachmentTarget,
-        scope: crate::runtime_client::settings::DefaultScope,
-        expected_revision: String,
-        setting: crate::runtime_client::settings::DefaultTarget,
     },
     #[serde(rename = "session/unload")]
     SessionUnload { target: AttachmentTarget },
@@ -128,11 +117,6 @@ pub enum Method {
     ModelSet {
         target: AttachmentTarget,
         config: Box<crate::model::session::SessionModelConfig>,
-    },
-    #[serde(rename = "settings/setApprovalMode")]
-    ApprovalModeSet {
-        target: AttachmentTarget,
-        mode: crate::runtime::types::ApprovalMode,
     },
     #[serde(rename = "resources/read")]
     Capability { target: AttachmentTarget },
@@ -281,9 +265,11 @@ pub enum Method {
         expected_revision: u64,
         selection: Option<crate::model::session::SessionModelConfig>,
     },
-    #[serde(rename = "settings/sourcesRead")]
+    #[serde(rename = "configuration/effective")]
+    ConfigurationGet { target: AttachmentTarget },
+    #[serde(rename = "configuration/sourcesRead")]
     SourcesRead { session_id: SessionId },
-    #[serde(rename = "settings/sourcesWrite")]
+    #[serde(rename = "configuration/sourceWrite")]
     SourcesWrite {
         session_id: SessionId,
         expected_revision: String,
@@ -297,13 +283,19 @@ pub enum Method {
         expected_revision: u64,
         settings: SessionPersistentState,
     },
-    #[serde(rename = "resources/reload")]
-    ResourcesReload { target: AttachmentTarget },
+    #[serde(rename = "configuration/reload")]
+    ConfigurationReload { target: AttachmentTarget },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ErrorData {
+    ConfigurationBusy {
+        reason: crate::runtime::RuntimeResourceReloadBusyReason,
+    },
+    ConfigurationFailed {
+        diagnostic: String,
+    },
     RequestCapacity,
     ResidencyCapacity,
     AttachmentCapacity,
@@ -320,7 +312,6 @@ pub enum ErrorData {
         expected: String,
         actual: String,
     },
-    UntrustedWorkspace,
     StaleSettings {
         expected: u64,
         actual: u64,
@@ -395,12 +386,6 @@ pub enum MethodResult {
     Diagnostics {
         snapshot: crate::app_server::host::ServerDiagnostics,
     },
-    Defaults {
-        document: crate::runtime_client::settings::DefaultDocument,
-    },
-    DefaultSaved {
-        result: crate::runtime_client::settings::SaveDefaultResult,
-    },
     Unloaded {},
     Model {
         model: Box<crate::model::session::SessionModelView>,
@@ -408,11 +393,7 @@ pub enum MethodResult {
     Models {
         catalog: crate::model::catalog::ModelCatalogView,
     },
-    ApprovalMode {
-        effective_approval_mode: crate::runtime::types::ApprovalMode,
-        pending_approval_mode: Option<crate::runtime::types::ApprovalMode>,
-        revision: u64,
-    },
+
     Capabilities {
         capabilities: crate::runtime_client::snapshot::CapabilityView,
     },
@@ -499,22 +480,24 @@ pub enum MethodResult {
     InteractionSettled {
         interaction: InteractionRef,
     },
+    EffectiveConfiguration {
+        projection: Box<crate::local_runtime::configuration::settings::EffectiveConfiguration>,
+    },
     SourceSettings {
         projection: Box<crate::local_runtime::configuration::settings::SourceSettings>,
         session_revision: u64,
         session_selection: Option<crate::model::session::SessionModelConfig>,
     },
     Settings {
-        /// Current native project source trust; unresolved is never trusted.
-        /// Loaded resources retain their admitted generation independently.
-        project_trusted: Option<bool>,
+        /// Exact durable Session-intent revision for subsequent CAS controls.
+        /// Loaded configuration has its own immutable generation.
         revision: u64,
         settings: SessionPersistentState,
     },
     SettingsReplaced {
         revision: u64,
     },
-    ResourcesReloaded {
+    ConfigurationReloaded {
         resource_revision: u64,
         capability_revision: crate::runtime::identity::CapabilityRevision,
     },

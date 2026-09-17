@@ -2,7 +2,7 @@
   "schema_version": 1,
   "event_id": "evt-4",
   "sequence": 4,
-  "conversation_id": "conv-1",
+  "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
   "attempt_id": "attempt-1",
   "turn_id": "turn-1",
   "timestamp": "2026-08-07T12:00:03Z",

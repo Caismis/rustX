@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { MethodParams, SessionDeleteResult } from "../src/protocol/app-server.ts";
-const target = { session_id: "session-1", target_revision: "a".repeat(64) };
+const target = { session_id: "ses_84097828-fc31-78c8-9292-10df48901a85", target_revision: "a".repeat(64) };
 const variants = {
   preview: { status: "preview", preview: { session_id: target.session_id, name: null, target_revision: target.target_revision, owned_node_count: 1, owned_conversation_count: 2, owned_child_count: 1 } },
   deleted: { status: "deleted", session_id: target.session_id },
@@ -9,7 +9,7 @@ const variants = {
   blocked: { status: "blocked", session_id: target.session_id, reason: { kind: "in_use" } },
   committed_cleanup_pending: { status: "committed_cleanup_pending", session_id: target.session_id },
   committed_durability_uncertain: { status: "committed_durability_uncertain", session_id: target.session_id },
-  not_found: { status: "not_found", session_id: "unknown" },
+  not_found: { status: "not_found", session_id: "ses_01900000-0000-7000-8000-000000000099" },
 } satisfies Record<SessionDeleteResult["status"], SessionDeleteResult>;
 function classify(result: SessionDeleteResult): string {
   switch (result.status) {

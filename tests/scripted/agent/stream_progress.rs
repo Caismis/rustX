@@ -39,7 +39,7 @@ use rustx::tools::types::{ToolCall, ToolCallStart};
 use support::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
 use support::fake::{FakeModel, FakeStep, fake_model, model_release};
 
-const CONVERSATION: &str = "conv-168";
+const CONVERSATION: &str = "conv_a372741e-6db4-71f8-b1d4-f18242cfd63a";
 
 fn user(id: &str, text: &str) -> MessageBlock {
     MessageBlock::User(UserMessageBlock {

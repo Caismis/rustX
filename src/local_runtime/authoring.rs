@@ -54,36 +54,135 @@ fn named<K: Ord + std::fmt::Display, V>(
 }
 macro_rules! partial {
     ($name:ident { $($field:ident: $ty:ty),* $(,)? }) => {
-        #[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+        #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
         #[serde(deny_unknown_fields)]
-        pub(super) struct $name { $(#[serde(default, skip_serializing_if = "Option::is_none")]
+        pub struct $name { $(#[serde(default, skip_serializing_if = "Option::is_none")]
             pub $field: Option<$ty>),* }
     };
 }
 // Schemars derives concrete field schemas below; optional fields mean omission,
 // never a TOML null value.
-partial!(RuntimeLayer {
-    models: PathBuf, runtime_root: PathBuf, schema_version: u32,
-    app_server: super::app_server_policy::AppServerPolicy,
-    agent_id: crate::runtime::identity::AgentId,
-    approval_mode: crate::runtime::ApprovalMode, agent: AgentProfileLayer,
-    context: ContextLayer, model_timeout_policy: TimeoutLayer, tool_deadline_policy: ToolDeadlineLayer,
-    mcp_servers: BTreeMap<crate::runtime::identity::McpServerId, McpAuthoring>,
-    mcp_tool_policies: BTreeMap<crate::runtime::identity::McpServerId, InvocationPolicyDocument>,
-    native_tools: NativeToolsLayer, environment: BTreeMap<String,String>,
-    subagents: SubagentsLayer, skills: SkillsLayer
-});
-partial!(SkillsLayer { sources: Vec<crate::skills::AutomaticSkillSource> });
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields, bound(deserialize = "P: Deserialize<'de>"))]
+pub struct RuntimeLayer<P = crate::model::authoring::Provider> {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub providers: Option<BTreeMap<String, P>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<BTreeMap<String, crate::model::authoring::Model>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_server: Option<super::app_server_policy::AppServerPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<crate::runtime::identity::AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_mode: Option<crate::runtime::ApprovalMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentProfileLayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextLayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_timeout_policy: Option<TimeoutLayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_deadline_policy: Option<ToolDeadlineLayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_tool_policies:
+        Option<BTreeMap<crate::runtime::identity::McpServerId, InvocationPolicyDocument>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_tools: Option<NativeToolsLayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagents: Option<SubagentsLayer>,
+}
+impl<P> Default for RuntimeLayer<P> {
+    fn default() -> Self {
+        Self {
+            providers: None,
+            models: None,
+            schema_version: None,
+            app_server: None,
+            agent_id: None,
+            approval_mode: None,
+            agent: None,
+            context: None,
+            model_timeout_policy: None,
+            tool_deadline_policy: None,
+            mcp_tool_policies: None,
+            native_tools: None,
+            environment: None,
+            subagents: None,
+        }
+    }
+}
+impl<P> RuntimeLayer<P> {
+    pub fn map_providers<Q>(self, mut project: impl FnMut(P) -> Q) -> RuntimeLayer<Q> {
+        RuntimeLayer {
+            providers: self.providers.map(|values| {
+                values
+                    .into_iter()
+                    .map(|(id, value)| (id, project(value)))
+                    .collect()
+            }),
+            models: self.models,
+            schema_version: self.schema_version,
+            app_server: self.app_server,
+            agent_id: self.agent_id,
+            approval_mode: self.approval_mode,
+            agent: self.agent,
+            context: self.context,
+            model_timeout_policy: self.model_timeout_policy,
+            tool_deadline_policy: self.tool_deadline_policy,
+            mcp_tool_policies: self.mcp_tool_policies,
+            native_tools: self.native_tools,
+            environment: self.environment,
+            subagents: self.subagents,
+        }
+    }
+}
 partial!(AgentProfileLayer {
-    description: String, instructions: String, model: ModelLayer, timeout_ms: u64,
-    tools: crate::capabilities::selection::ToolSelectionDocument,
-    skills: Vec<String>, disabled_skills: Vec<String>,
-    extensions: crate::extensions::NativeAgentExtensionsDocument,
+    description: String, instructions: String, model: ModelLayer,
+    tools: ToolsLayer,
+    skills: crate::runtime::agent_profile::AgentSkillSelection,
+    plugins: PluginsLayer,
     agents: Vec<crate::runtime::subagent::SubagentName>,
     workflows: Vec<crate::runtime::workflow::WorkflowId>,
-    agents_md: super::config::AgentProjectInstructionsDocument,
-    worktree: super::config::AgentWorktreeDocument
+    agents_md: super::config::AgentProjectInstructionsDocument
 });
+partial!(ToolsLayer {
+    builtin: Vec<String>,
+    sources: BTreeMap<crate::capabilities::ToolSourceId, crate::capabilities::selection::SourceToolSelection>
+});
+partial!(PluginsLayer {
+    agent_status: crate::extensions::AgentStatusExtensionDocument,
+    todo: crate::extensions::TodoExtensionDocument,
+    goal: crate::extensions::GoalExtensionDocument
+});
+impl PluginsLayer {
+    #[must_use]
+    pub fn resolve(self) -> crate::extensions::NativeAgentExtensionsDocument {
+        let mut result = crate::extensions::NativeAgentExtensionsDocument::default();
+        if let Some(value) = self.agent_status {
+            result.agent_status = value;
+        }
+        if let Some(value) = self.todo {
+            result.todo = value;
+        }
+        if let Some(value) = self.goal {
+            result.goal = value;
+        }
+        result
+    }
+}
+impl ToolsLayer {
+    #[must_use]
+    pub fn resolve(self) -> crate::capabilities::selection::ToolSelectionDocument {
+        crate::capabilities::selection::ToolSelectionDocument {
+            builtin: self.builtin.unwrap_or_default(),
+            sources: self.sources.unwrap_or_default(),
+        }
+    }
+}
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ModelLayer {
@@ -130,6 +229,7 @@ pub enum ReasoningSelection {
     Profile { name: ReasoningProfileId },
 }
 impl ReasoningSelection {
+    #[must_use]
     pub fn resolve(self) -> Option<ReasoningProfileId> {
         match self {
             Self::CatalogDefault {} => None,
@@ -151,9 +251,9 @@ impl ModelOutput {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-pub(super) enum SummaryOutput {
+pub enum SummaryOutput {
     ModelLimit {},
     Limit { tokens: u32 },
 }
@@ -165,9 +265,9 @@ impl SummaryOutput {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-pub(super) enum IdleLiveness {
+pub enum IdleLiveness {
     Disabled {},
     Window { milliseconds: u64 },
 }
@@ -214,15 +314,13 @@ impl SummaryAuthoring {
 
 /// Secret-field presence is retained even for empty tables, so project authority
 /// cannot be widened by replacing an authored empty table with a default map.
-#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(super) struct McpAuthoring {
+pub struct McpAuthoring {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sensitive_env: Option<BTreeMap<String, crate::credentials::EnvironmentReference>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sensitive_headers: Option<BTreeMap<String, crate::credentials::EnvironmentReference>>,
-    #[serde(default)]
-    pub enabled: Option<bool>,
     #[serde(rename = "type", default)]
     pub transport_type: Option<McpTransportType>,
     #[serde(default)]
@@ -243,7 +341,6 @@ impl McpAuthoring {
         McpServerDocument {
             sensitive_env: self.sensitive_env.unwrap_or_default(),
             sensitive_headers: self.sensitive_headers.unwrap_or_default(),
-            enabled: self.enabled,
             transport_type: self.transport_type,
             url: self.url,
             headers: self.headers,
@@ -268,9 +365,50 @@ macro_rules! replace_units {
 impl AgentProfileLayer {
     fn overlay(&mut self, layer: Self, origin: &Origin, origins: &mut Origins) {
         replace_units!(self, layer, "agent.", origin, origins;
-            description, instructions, model, timeout_ms, tools, skills,
-            disabled_skills, extensions, agents, workflows, agents_md, worktree
+            description, instructions, model, skills,
+            agents, workflows, agents_md
         );
+        if let Some(tools) = layer.tools {
+            let target = self.tools.get_or_insert_default();
+            replace(
+                &mut target.builtin,
+                tools.builtin,
+                "agent.tools.builtin",
+                origin,
+                origins,
+            );
+            named(
+                &mut target.sources,
+                tools.sources,
+                "agent.tools.sources",
+                origin,
+                origins,
+            );
+        }
+        if let Some(plugins) = layer.plugins {
+            let target = self.plugins.get_or_insert_default();
+            replace(
+                &mut target.agent_status,
+                plugins.agent_status,
+                "agent.plugins.agent_status",
+                origin,
+                origins,
+            );
+            replace(
+                &mut target.todo,
+                plugins.todo,
+                "agent.plugins.todo",
+                origin,
+                origins,
+            );
+            replace(
+                &mut target.goal,
+                plugins.goal,
+                "agent.plugins.goal",
+                origin,
+                origins,
+            );
+        }
     }
 }
 impl Copy for NativeToolsLayer {}
@@ -385,8 +523,6 @@ impl RuntimeLayer {
             "approval_mode",
             "agent.tools",
             "agent.skills",
-            "agent.disabled_skills",
-            "skills.sources",
             "agent.model.model",
             "agent.model.reasoning_profile",
             "agent.model.request_params",
@@ -399,12 +535,12 @@ impl RuntimeLayer {
             "model_timeout_policy.stream_idle_timeout_ms",
             "tool_deadline_policy.hard_deadline_ms",
             "tool_deadline_policy.idle_liveness_ms",
-            "agent.extensions.agent_status.enabled",
-            "agent.extensions.agent_status.time.enabled",
-            "agent.extensions.agent_status.time.timezone",
-            "agent.extensions.agent_status.background.enabled",
-            "agent.extensions.todo",
-            "agent.extensions.goal",
+            "agent.plugins.agent_status.enabled",
+            "agent.plugins.agent_status.time.enabled",
+            "agent.plugins.agent_status.time.timezone",
+            "agent.plugins.agent_status.background.enabled",
+            "agent.plugins.todo",
+            "agent.plugins.goal",
             "subagents.max_concurrent",
             "agent.agents",
             "agent.workflows",
@@ -440,9 +576,17 @@ impl RuntimeLayer {
 
     pub fn overlay(&mut self, layer: Self, origin: &Origin, origins: &mut Origins) {
         replace_units!(self, layer, "", origin, origins;
-            models, runtime_root, schema_version, agent_id, approval_mode,
-            context, model_timeout_policy, tool_deadline_policy, subagents, skills
+            schema_version, agent_id, approval_mode,
+            context, model_timeout_policy, tool_deadline_policy, subagents
         );
+        named(
+            &mut self.providers,
+            layer.providers,
+            "providers",
+            origin,
+            origins,
+        );
+        named(&mut self.models, layer.models, "models", origin, origins);
         if let Some(agent) = layer.agent {
             self.agent
                 .get_or_insert_default()
@@ -453,13 +597,6 @@ impl RuntimeLayer {
                 .get_or_insert_default()
                 .overlay(policies, origin, origins);
         }
-        named(
-            &mut self.mcp_servers,
-            layer.mcp_servers,
-            "mcp_servers",
-            origin,
-            origins,
-        );
         named(
             &mut self.mcp_tool_policies,
             layer.mcp_tool_policies,
@@ -475,6 +612,9 @@ impl RuntimeLayer {
             origins,
         );
     }
+    /// Resolve complete model selection and context policy.
+    /// # Errors
+    /// Rejects a missing model or an invalid complete selection.
     pub fn model_sections(self) -> Result<(SessionModelConfig, ContextPolicyDocument), String> {
         Ok((
             self.agent
@@ -484,6 +624,9 @@ impl RuntimeLayer {
             self.context.unwrap_or_default().resolve(),
         ))
     }
+    /// Resolve the winning semantic units with their domain defaults.
+    /// # Errors
+    /// Rejects missing required model intent and invalid runtime policy.
     pub fn resolve(self) -> Result<CurrentRuntimeConfig, String> {
         let mut config = CurrentRuntimeConfig::defaults(
             self.agent
@@ -508,28 +651,23 @@ impl RuntimeLayer {
                 profile,
                 description,
                 instructions,
-                tools,
-                extensions,
                 agents,
                 workflows,
-                agents_md,
-                worktree
+                agents_md
             );
-            // The Skill selection fields are presence-preserving all the way
-            // through layering: a layer that authors `skills = []` must reach
-            // the document as an authored empty list, because the Agent kind
-            // rejects the field on presence rather than on emptiness.
+            if let Some(tools) = layer.tools {
+                profile.tools = tools.resolve();
+            }
+            if let Some(plugins) = layer.plugins {
+                profile.extensions = plugins.resolve();
+            }
+            // Explicit empty visibility replaces lower visibility; omission
+            // was handled by the typed overlay before this final resolution.
             if let Some(skills) = layer.skills {
                 profile.skills = Some(skills);
             }
-            if let Some(disabled_skills) = layer.disabled_skills {
-                profile.disabled_skills = Some(disabled_skills);
-            }
             if let Some(model) = layer.model {
                 profile.model = Some(model.resolve()?);
-            }
-            if let Some(timeout) = layer.timeout_ms {
-                profile.timeout_ms = Some(timeout);
             }
             config.agent = profile;
         }
@@ -557,53 +695,12 @@ impl RuntimeLayer {
             apply!(layer, subagents, max_concurrent);
             config.subagents = subagents;
         }
-        if let Some(layer) = self.skills {
-            let mut skills = config.skills;
-            apply!(layer, skills, sources);
-            config.skills = skills;
-        }
         if let Some(layer) = self.native_tools {
             let mut policies = config.native_tools;
             apply!(layer, policies, read, write, edit, glob, grep, bash);
             config.native_tools = policies;
         }
-        config.mcp_servers = self
-            .mcp_servers
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(id, entry)| (id, entry.resolve()))
-            .collect();
         Ok(config)
-    }
-    pub fn resources_only(&mut self) {
-        self.models = None;
-        self.runtime_root = None;
-        self.app_server = None;
-        self.schema_version = None;
-        self.agent_id = None;
-        if let Some(agent) = &mut self.agent {
-            agent.model = None;
-            agent.extensions = None;
-        }
-        self.approval_mode = None;
-        // The Skill *source policy* is launch-scoped: a reload rescans the
-        // roots this launch resolved, it never installs or removes a source
-        // authority under a running composition.
-        self.skills = None;
-
-        self.context = None;
-        self.model_timeout_policy = None;
-        self.tool_deadline_policy = None;
-    }
-    pub fn copy_resources(config: &mut CurrentRuntimeConfig, resources: CurrentRuntimeConfig) {
-        config.mcp_servers = resources.mcp_servers;
-        config.mcp_tool_policies = resources.mcp_tool_policies;
-        config.native_tools = resources.native_tools;
-        config.environment = resources.environment;
-        let extensions = config.agent.extensions.clone();
-        config.agent = resources.agent;
-        config.agent.extensions = extensions;
-        config.subagents = resources.subagents;
     }
 }
 
@@ -618,7 +715,7 @@ mod tests {
         let mut origins = Origins::new();
         merged.overlay(
             layer(upper),
-            &Origin::Project {
+            &Origin::Workspace {
                 document: "rustx.toml".into(),
                 base: "/workspace".into(),
             },
@@ -652,9 +749,9 @@ mode = "limit"
 tokens = 512
 
 
-[agent.extensions]
-[agent.extensions.agent_status]
-[agent.extensions.agent_status.time]
+[agent.plugins]
+[agent.plugins.agent_status]
+[agent.plugins.agent_status.time]
 timezone = "Asia/Shanghai"
 "#;
     #[test]
@@ -698,9 +795,9 @@ mode = "catalog_default"
 mode = "catalog_default"
 
 
-[agent.extensions]
-[agent.extensions.agent_status]
-[agent.extensions.agent_status.time]
+[agent.plugins]
+[agent.plugins.agent_status]
+[agent.plugins.agent_status.time]
 timezone = "UTC"
 "#,
         );
@@ -721,9 +818,9 @@ timezone = "UTC"
             "agent.model",
             "context",
             "tool_deadline_policy",
-            "agent.extensions",
+            "agent.plugins.agent_status",
         ] {
-            assert!(matches!(origins[field], Origin::Project { .. }));
+            assert!(matches!(origins[field], Origin::Workspace { .. }));
         }
     }
     #[test]
@@ -785,36 +882,40 @@ tokens = 1024
         }
     }
     #[test]
-    fn project_cannot_author_host_policy_or_even_empty_secret_tables() {
+    fn both_scopes_author_runtime_policies_but_process_bindings_are_not_config() {
         for text in [
-            "models = 'models.toml'",
-            "runtime_root = '/tmp/state'",
             "approval_mode = 'policy'",
             "native_tools = {}",
             "mcp_tool_policies = {}",
-            "[mcp_servers.source]\nsensitive_env = {}",
-            "[mcp_servers.source]\nsensitive_headers = {}",
         ] {
-            assert!(
+            for workspace in [false, true] {
                 super::super::configuration::parse_layer(
                     std::path::Path::new("rustx.toml"),
                     text.as_bytes(),
-                    true
+                    workspace,
                 )
-                .is_err(),
-                "{text}"
-            );
-            assert!(
-                super::super::configuration::parse_layer(
-                    std::path::Path::new("settings.toml"),
-                    text.as_bytes(),
-                    false
-                )
-                .is_ok(),
-                "{text}"
-            );
+                .unwrap();
+            }
+        }
+        for text in [
+            "models = 'models.toml'",
+            "runtime_root = '/tmp/state'",
+            "[mcp_servers.source]\nsensitive_env = {}",
+        ] {
+            for workspace in [false, true] {
+                assert!(
+                    super::super::configuration::parse_layer(
+                        std::path::Path::new("rustx.toml"),
+                        text.as_bytes(),
+                        workspace
+                    )
+                    .is_err(),
+                    "{text}"
+                );
+            }
         }
     }
+
     #[test]
     fn structured_params_round_trip_and_reject_unsupported_summary_values() {
         let text = r#"[agent.model]

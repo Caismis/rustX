@@ -248,6 +248,7 @@ async fn child_fixture_at(
     let clock = Arc::new(ManualMonotonicClock::new());
     let runtime = ConversationRuntime::with_test_monotonic_clock(
         RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-child-138"),
             model: support::model::scripted_session_model(adapter),
             approval_mode: rustx::runtime::ApprovalMode::Policy,
@@ -310,6 +311,10 @@ async fn child_fixture_at(
 /// exactly like the production composition root.
 fn test_spawn_plan(runtime_root: &std::path::Path) -> SubagentSpawnPlan {
     SubagentSpawnPlan {
+        session_id: crate::runtime::identity::SessionId::new(
+            "ses_01900000-0000-7000-8000-000000000001",
+        ),
+
         program: std::path::PathBuf::from("/nonexistent/rustx"),
         product_root: crate::runtime::local_storage::ProductRoot::create(runtime_root)
             .expect("product root"),
@@ -331,6 +336,10 @@ fn test_spawn_plan(runtime_root: &std::path::Path) -> SubagentSpawnPlan {
 /// path.
 fn resolved_child_spec(agent: &str) -> ResolvedSubagentSpec {
     ResolvedSubagentSpec {
+        environment: Vec::new(),
+        generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
+        skill_roots: Vec::new(),
+
         selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
         agent: SubagentName::parse(agent).expect("canonical subagent name"),
         definition_digest: serde_json::from_value(serde_json::json!(
@@ -402,7 +411,20 @@ fn child_approval_tools() -> (
 
 /// The parent side: a real `SubagentRegistry` over an in-memory durable
 /// authority, with the Issue #60 staged-child test seam for the process.
+#[derive(Debug, Default)]
+struct WiredIdentities(std::sync::Mutex<std::collections::VecDeque<uuid::Uuid>>);
+impl rustx::runtime::identity::UuidV7Generator for WiredIdentities {
+    fn next_uuid(&self) -> uuid::Uuid {
+        self.0
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("the wired child supplies its independent Conversation identity")
+    }
+}
+
 struct ParentPlane {
+    identities: Arc<WiredIdentities>,
     registry: SubagentRegistry,
     store: Arc<dyn ConversationStore>,
     parent_agent_id: AgentId,
@@ -423,6 +445,7 @@ fn standalone_parent_plane(dir: &tempfile::TempDir, conversation: &str) -> Paren
             .expect("in-memory store"),
     );
     let mailbox = ConversationInboundMailbox::over_store(store.clone());
+    let identities = Arc::new(WiredIdentities::default());
     let registry = SubagentRegistry::new(SubagentRegistryConfig {
         conversation_id,
         agent_id: AgentId::new("agent-parent-138"),
@@ -435,8 +458,10 @@ fn standalone_parent_plane(dir: &tempfile::TempDir, conversation: &str) -> Paren
             &runtime_root,
         ),
         max_active: 4,
-    });
+    })
+    .with_identity_generator(identities.clone());
     ParentPlane {
+        identities,
         registry,
         store: store as Arc<dyn ConversationStore>,
         parent_agent_id: AgentId::new("agent-parent-138"),
@@ -519,6 +544,7 @@ async fn compose_parent_runtime_plane(
     .expect("parent capability coordinator");
     let candidate = capability.prepare_candidate().await.expect("candidate");
     capability.commit(candidate).expect("capability commit");
+    let identities = Arc::new(WiredIdentities::default());
     let registry = SubagentRegistry::new(SubagentRegistryConfig {
         conversation_id,
         agent_id: AgentId::new("agent-parent-138"),
@@ -528,10 +554,12 @@ async fn compose_parent_runtime_plane(
         spawn: test_spawn_plan(&runtime_root),
         workspace: rustx::runtime::workspace::WorkspaceManager::new(&workspace, &runtime_root),
         max_active: 4,
-    });
+    })
+    .with_identity_generator(identities.clone());
     let model = fake_model(parent_scripts);
     let adapter: Arc<dyn rustx::model::ModelAdapter> = model.clone();
     let runtime = ConversationRuntime::new(RuntimeConversationConfig {
+        explicit_model: true,
         agent_id: AgentId::new("agent-parent-138"),
         model: support::model::scripted_session_model(adapter),
         approval_mode: rustx::runtime::ApprovalMode::Policy,
@@ -580,6 +608,7 @@ async fn compose_parent_runtime_plane(
     (
         ParentRuntimePlane {
             plane: ParentPlane {
+                identities,
                 registry,
                 store: tool_runtime.durable_store(),
                 parent_agent_id: AgentId::new("agent-parent-138"),
@@ -676,6 +705,17 @@ async fn launch_wired_child_full(
         observation_driver_end,
         child_root,
     ));
+    plane.identities.0.lock().unwrap().push_back(
+        uuid::Uuid::parse_str(
+            child
+                .runtime
+                .conversation_id()
+                .as_str()
+                .strip_prefix("conv_")
+                .unwrap(),
+        )
+        .unwrap(),
+    );
     let prepared = plane
         .registry
         .prepare(
@@ -1039,9 +1079,10 @@ async fn park_child_in_retry_backoff(
 async fn the_child_spec_carries_the_frozen_timeout_policy() {
     let dir = tempfile::tempdir().expect("temp root");
     let plan = test_spawn_plan(&dir.path().join("runtime"));
-    let subagent_id = rustx::runtime::identity::SubagentId::new("conv-x-subagent-1");
+    let subagent_id =
+        rustx::runtime::identity::SubagentId::new("conv_95489284-1901-7da7-8093-8754fbb0517e");
     let physical_root = plan
-        .allocate_child_runtime_root(&subagent_id)
+        .allocate_child_runtime_root(&ConversationId::generate())
         .expect("physical child root");
     let workspace_path = dir.path().join("parent-workspace");
     std::fs::create_dir_all(&workspace_path).expect("parent workspace");
@@ -1057,7 +1098,7 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
     let workspace = rustx::runtime::workspace::WorkspaceUse::from(workspace);
     let spec = plan.child_spec(
         &subagent_id,
-        &ConversationId::new("conv-x-subagent-1"),
+        &ConversationId::new("conv_95489284-1901-7da7-8093-8754fbb0517e"),
         &AgentId::new("agent-child"),
         &AgentId::new("agent-parent"),
         &resolved_child_spec("conformance"),
@@ -1096,10 +1137,10 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_transient_retries_settle_one_parent_success() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-138-retry-success");
+    let plane = standalone_parent_plane(&dir, "conv_8922ca62-7b5e-701f-ba4e-201ed534db9e");
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-138-retry-success-child"),
+        &ConversationId::new("conv_c959e31c-c2f7-79e0-81c4-69631cbd39ee"),
         vec![
             vec![
                 FakeStep::Emit(started()),
@@ -1182,10 +1223,10 @@ async fn child_transient_retries_settle_one_parent_success() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn failed_attempt_publication_stays_child_local() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-138-partial-retry");
+    let plane = standalone_parent_plane(&dir, "conv_d621af25-1566-7bbb-91e3-ab2733eda977");
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-138-partial-retry-child"),
+        &ConversationId::new("conv_80c7f635-217b-7732-8a24-6f582cb74379"),
         vec![
             vec![
                 FakeStep::Emit(started()),
@@ -1276,7 +1317,7 @@ async fn failed_attempt_publication_stays_child_local() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retry_exhaustion_publishes_one_bounded_failure_without_child_content() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-138-exhaustion");
+    let plane = standalone_parent_plane(&dir, "conv_8ba92ecd-5003-7efa-a870-61822bc44c39");
     let failing_script = || {
         vec![
             FakeStep::Emit(started()),
@@ -1305,7 +1346,7 @@ async fn retry_exhaustion_publishes_one_bounded_failure_without_child_content() 
     };
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-138-exhaustion-child"),
+        &ConversationId::new("conv_a0d3e5e0-480f-7c20-8bf9-5b3a9787769b"),
         // The transient budget is three retries per logical step: four
         // failures exhaust it and the attempt settles Failed.
         vec![
@@ -1417,7 +1458,7 @@ async fn child_carryover_never_enters_parent_conversation_or_requests() {
     let dir = tempfile::tempdir().expect("temp root");
     let parent = parent_runtime_plane(
         &dir,
-        "conv-138-carryover-parent",
+        "conv_37a1028a-6a51-70ac-b030-34bfd2f0b06c",
         vec![answer_script("PARENT-FINAL-TURN")],
     )
     .await;
@@ -1434,7 +1475,7 @@ async fn child_carryover_never_enters_parent_conversation_or_requests() {
     };
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-138-carryover-child"),
+        &ConversationId::new("conv_f1a8467a-1235-7538-8915-c9ae04d931fb"),
         vec![
             failing_script(),
             failing_script(),
@@ -1536,10 +1577,10 @@ async fn child_carryover_never_enters_parent_conversation_or_requests() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parent_cancellation_during_retry_backoff_cancels_the_child() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-138-cancel-backoff");
+    let plane = standalone_parent_plane(&dir, "conv_1be6c606-ae2d-7802-bc3d-3b9342b12ca3");
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-138-cancel-backoff-child"),
+        &ConversationId::new("conv_c7a1038c-e276-7ee2-80f8-ce547012a4f9"),
         vec![
             // No provider hint: the backoff deadline is 2000ms ahead on the
             // manual clock, which the test never advances.
@@ -1624,10 +1665,15 @@ async fn parent_cancellation_during_retry_backoff_cancels_the_child() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parent_runtime_drain_during_child_retry_backoff_reaches_quiescence() {
     let dir = tempfile::tempdir().expect("temp root");
-    let parent = parent_runtime_plane(&dir, "conv-138-drain-parent", Vec::new()).await;
+    let parent = parent_runtime_plane(
+        &dir,
+        "conv_091b2630-19f7-79a9-a87e-b02de2aace1a",
+        Vec::new(),
+    )
+    .await;
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-138-drain-child"),
+        &ConversationId::new("conv_80b51d1b-769b-7a72-823e-20b526bf3f07"),
         vec![
             vec![
                 FakeStep::Emit(started()),
@@ -1717,10 +1763,10 @@ async fn parent_runtime_drain_during_child_retry_backoff_reaches_quiescence() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_process_loss_during_backoff_is_terminal_and_never_relaunched() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-138-crash");
+    let plane = standalone_parent_plane(&dir, "conv_4e3cd5bc-80e4-750c-8369-e65ca9ce7564");
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-138-crash-child"),
+        &ConversationId::new("conv_5719a626-fa3f-7543-8aa4-81d528c5de6c"),
         vec![
             vec![
                 FakeStep::Emit(started()),
@@ -1812,10 +1858,10 @@ async fn child_process_loss_during_backoff_is_terminal_and_never_relaunched() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancellation_after_terminalization_cannot_rewrite_the_result() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-138-late-cancel");
+    let plane = standalone_parent_plane(&dir, "conv_a08991e8-0c1d-70a5-9ecd-5459da30726e");
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-138-late-cancel-child"),
+        &ConversationId::new("conv_ff830f2c-8ce1-7fba-817f-264b6719596d"),
         vec![answer_script("LATE-CANCEL-ANSWER")],
         ToolRegistry::new(),
         Vec::new(),
@@ -1876,10 +1922,10 @@ async fn cancellation_and_drain_have_exactly_one_winning_cause() {
         (false, "the runtime is shutting down"),
     ] {
         let dir = tempfile::tempdir().expect("temp root");
-        let plane = standalone_parent_plane(&dir, "conv-138-cause-race");
+        let plane = standalone_parent_plane(&dir, "conv_987b5a05-95b6-754e-980e-50721bd7ca4e");
         let child = child_fixture(
             &dir,
-            &ConversationId::new("conv-138-cause-race-child"),
+            &ConversationId::new("conv_9e335f9d-1b62-7821-8682-0a25bbbd186b"),
             vec![
                 vec![
                     FakeStep::Emit(started()),
@@ -1976,10 +2022,10 @@ async fn cancellation_and_drain_have_exactly_one_winning_cause() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retry_is_activity_never_lifecycle() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-138-projection");
+    let plane = standalone_parent_plane(&dir, "conv_de69a5cb-e55e-7819-a41e-aa728d5f6b9b");
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-138-projection-child"),
+        &ConversationId::new("conv_6710f869-54b5-70c7-8a80-a7e217a3e50f"),
         vec![
             vec![
                 FakeStep::Emit(started()),
@@ -2130,8 +2176,12 @@ fn ask_user_arguments(question: &str) -> serde_json::Value {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_questionnaire_routes_through_root_without_parent_mediation() {
     let dir = tempfile::tempdir().expect("temp root");
-    let (parent, host) =
-        parent_runtime_host_plane(&dir, "conv-184-questionnaire", Vec::new()).await;
+    let (parent, host) = parent_runtime_host_plane(
+        &dir,
+        "conv_c27650cf-7376-753e-95af-c493e2de043f",
+        Vec::new(),
+    )
+    .await;
     let (attachment, initialized) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("root Runtime Client attaches");
@@ -2145,7 +2195,7 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
     let question = "Which deployment target should the child use?";
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-184-questionnaire-subagent-1"),
+        &ConversationId::new("conv_e6395e9e-2b15-7991-809f-bc3eaa72d0bf"),
         vec![
             tool_call_request(&support::fake::ScriptedCall {
                 id: "call-ask-user",
@@ -2197,7 +2247,7 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
             child_conversation_id,
             ..
         } if *subagent_id == wired.accepted.subagent_id
-            && *child_conversation_id == ConversationId::new("conv-184-questionnaire-subagent-1")
+            && *child_conversation_id == ConversationId::new("conv_e6395e9e-2b15-7991-809f-bc3eaa72d0bf")
     ));
     assert_eq!(routed.interaction, routed.request.interaction_ref());
 
@@ -2314,8 +2364,12 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
     let dir = tempfile::tempdir().expect("temp root");
-    let (parent, host) =
-        parent_runtime_host_plane(&dir, "conv-184-approval-allow", Vec::new()).await;
+    let (parent, host) = parent_runtime_host_plane(
+        &dir,
+        "conv_f827f1de-a705-78d1-8367-8747d8a1c98b",
+        Vec::new(),
+    )
+    .await;
     let (attachment, initialized) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("root Runtime Client attaches");
@@ -2328,7 +2382,7 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
         .expect("root event subscription");
     let (tools, mut calls, _started) = child_approval_tools();
     let invocation_arguments = serde_json::json!({"target": "staging"});
-    let child_conversation = ConversationId::new("conv-184-approval-allow-subagent-1");
+    let child_conversation = ConversationId::new("conv_8cb27edc-7469-7f11-80e8-cfd61970a05b");
     let child = child_fixture(
         &dir,
         &child_conversation,
@@ -2502,8 +2556,12 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_approval_deny_routes_to_child_and_never_starts_executor() {
     let dir = tempfile::tempdir().expect("temp root");
-    let (parent, host) =
-        parent_runtime_host_plane(&dir, "conv-184-approval-deny", Vec::new()).await;
+    let (parent, host) = parent_runtime_host_plane(
+        &dir,
+        "conv_7fef1d27-1af8-7c12-ad03-a38f8e57c071",
+        Vec::new(),
+    )
+    .await;
     let (attachment, initialized) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("root Runtime Client attaches");
@@ -2515,7 +2573,7 @@ async fn child_approval_deny_routes_to_child_and_never_starts_executor() {
         .subscribe_events(cursor)
         .expect("root event subscription");
     let (tools, calls, started) = child_approval_tools();
-    let child_conversation = ConversationId::new("conv-184-approval-deny-subagent-1");
+    let child_conversation = ConversationId::new("conv_0a5b2055-9982-791e-881a-f4c2e2986d6e");
     let child = child_fixture(
         &dir,
         &child_conversation,
@@ -2610,7 +2668,12 @@ async fn child_approval_deny_routes_to_child_and_never_starts_executor() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn routed_interaction_survives_root_detach_and_reconnect() {
     let dir = tempfile::tempdir().expect("temp root");
-    let (parent, host) = parent_runtime_host_plane(&dir, "conv-184-reconnect", Vec::new()).await;
+    let (parent, host) = parent_runtime_host_plane(
+        &dir,
+        "conv_ff54ad2c-f7b7-73ef-b0d3-70d74674b085",
+        Vec::new(),
+    )
+    .await;
     let (first, initialized) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("first root Runtime Client attaches");
@@ -2621,7 +2684,7 @@ async fn routed_interaction_survives_root_detach_and_reconnect() {
     let subscription = first
         .subscribe_events(cursor)
         .expect("first root event subscription");
-    let child_conversation = ConversationId::new("conv-184-reconnect-subagent-1");
+    let child_conversation = ConversationId::new("conv_d2131d77-33c4-7cbe-840c-36beb1bcf1b9");
     let child = child_fixture(
         &dir,
         &child_conversation,
@@ -2739,7 +2802,12 @@ async fn routed_interaction_survives_root_detach_and_reconnect() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
     let dir = tempfile::tempdir().expect("temp root");
-    let (parent, host) = parent_runtime_host_plane(&dir, "conv-184-mixed", Vec::new()).await;
+    let (parent, host) = parent_runtime_host_plane(
+        &dir,
+        "conv_7d27cece-5131-7eb2-b2b5-547ef0cbca24",
+        Vec::new(),
+    )
+    .await;
     let (attachment, initialized) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("root Runtime Client attaches");
@@ -2751,7 +2819,7 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
         .subscribe_events(cursor)
         .expect("root event subscription");
 
-    let child_one_conversation = ConversationId::new("conv-184-mixed-subagent-1");
+    let child_one_conversation = ConversationId::new("conv_b8eb123a-65ed-7bcc-8b0f-803645aaddd6");
     let child_one = child_fixture(
         &dir,
         &child_one_conversation,
@@ -2768,7 +2836,7 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
         Vec::new(),
     )
     .await;
-    let child_two_conversation = ConversationId::new("conv-184-mixed-subagent-2");
+    let child_two_conversation = ConversationId::new("conv_1e203843-ca70-7ee7-8612-924f55a9fa53");
     let (child_two_tools, _child_two_calls, _child_two_started) = child_approval_tools();
     let child_two = child_fixture_at(
         &dir,
@@ -2998,7 +3066,12 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_death_removes_only_its_routed_interactions() {
     let dir = tempfile::tempdir().expect("temp root");
-    let (parent, host) = parent_runtime_host_plane(&dir, "conv-184-child-death", Vec::new()).await;
+    let (parent, host) = parent_runtime_host_plane(
+        &dir,
+        "conv_54228aad-8ab2-7cbb-b603-2bd2ef743b95",
+        Vec::new(),
+    )
+    .await;
     let (attachment, initialized) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("root Runtime Client attaches");
@@ -3010,7 +3083,7 @@ async fn child_death_removes_only_its_routed_interactions() {
         .subscribe_events(cursor)
         .expect("root event subscription");
 
-    let first_conversation = ConversationId::new("conv-184-child-death-subagent-1");
+    let first_conversation = ConversationId::new("conv_cfff5913-af5d-77ab-8a73-c378115262b9");
     let first = child_fixture_at(
         &dir,
         &first_conversation,
@@ -3028,7 +3101,7 @@ async fn child_death_removes_only_its_routed_interactions() {
         dir.path().join("child-artifacts-dead"),
     )
     .await;
-    let second_conversation = ConversationId::new("conv-184-child-death-subagent-2");
+    let second_conversation = ConversationId::new("conv_c1c4dc64-e3cb-77dc-8ce1-7f41b01aa4a5");
     let second = child_fixture_at(
         &dir,
         &second_conversation,
@@ -3221,10 +3294,10 @@ async fn child_death_removes_only_its_routed_interactions() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_questionnaire_fails_closed_without_root_provider() {
     let dir = tempfile::tempdir().expect("temp root");
-    let parent = standalone_parent_plane(&dir, "conv-184-no-provider");
+    let parent = standalone_parent_plane(&dir, "conv_0a422f7d-96cd-75e6-85eb-3c293deeb822");
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-184-no-provider-child"),
+        &ConversationId::new("conv_d626ca61-f709-7993-83a5-f38129c908fc"),
         vec![
             tool_call_request(&support::fake::ScriptedCall {
                 id: "call-ask-user-unavailable",
@@ -3264,8 +3337,12 @@ async fn child_questionnaire_fails_closed_without_root_provider() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn root_detach_preserves_headless_child_publication_and_routed_cancellation() {
     let dir = tempfile::tempdir().expect("temp root");
-    let (parent, host) =
-        parent_runtime_host_plane(&dir, "conv-184-admission-race", Vec::new()).await;
+    let (parent, host) = parent_runtime_host_plane(
+        &dir,
+        "conv_a1557c10-e45c-744b-ad71-85d8ae26e91b",
+        Vec::new(),
+    )
+    .await;
     let (attachment, initialized) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("root Runtime Client attaches");
@@ -3298,7 +3375,7 @@ async fn root_detach_preserves_headless_child_publication_and_routed_cancellatio
     }));
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-184-admission-race-subagent-1"),
+        &ConversationId::new("conv_701adfe4-8ac7-7c17-84a5-61f4a67aae8d"),
         vec![approval_script, answer_script("ADMISSION-RACE-CONTINUED")],
         tools,
         Vec::new(),
@@ -3380,11 +3457,11 @@ fn event_kinds(events: &[RuntimeEvent]) -> Vec<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn model_activity_projects_while_lifecycle_stays_running() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-178-model-activity");
+    let plane = standalone_parent_plane(&dir, "conv_41e0c081-549d-7ed8-952b-db2deb356df5");
     let (release, released) = support::fake::model_release();
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-178-model-activity-child"),
+        &ConversationId::new("conv_a9d4c9a4-68a0-78ff-85f9-b9665c4541a2"),
         vec![vec![
             FakeStep::Emit(started()),
             FakeStep::ParkUntilReleased(released),
@@ -3476,7 +3553,7 @@ async fn model_activity_projects_while_lifecycle_stays_running() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tool_activity_projects_identity_scoped_progress_and_counts_executions() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-178-tool-activity");
+    let plane = standalone_parent_plane(&dir, "conv_f5578161-daa5-7b53-98c1-d26358e4e432");
     let mut tools = ToolRegistry::new();
     // The first tool parks without reporting progress; the second parks
     // after three numbered progress reports.
@@ -3508,7 +3585,7 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
     let (answer_release, answer_released) = support::fake::model_release();
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-178-tool-activity-child"),
+        &ConversationId::new("conv_cb2a6a47-aa74-7d9a-8817-22bc4c728926"),
         vec![
             tool_call_request(&support::fake::ScriptedCall {
                 id: "call-probe",
@@ -3680,7 +3757,7 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-178-parallel-activity");
+    let plane = standalone_parent_plane(&dir, "conv_88187cdd-43f7-7645-ab39-921033fd729c");
     let mut tools = ToolRegistry::new();
     // call-a parks without reporting progress; call-b parks, reports one
     // progress phase on release, and parks again before settling.
@@ -3745,7 +3822,7 @@ async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
     }));
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-178-parallel-activity-child"),
+        &ConversationId::new("conv_67dc1348-af1d-7dad-87ae-d7286640cebf"),
         vec![
             parallel_turn,
             vec![
@@ -3856,11 +3933,11 @@ async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_transient_retry_projects_retrying_model_then_the_retried_request() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-178-retry-activity");
+    let plane = standalone_parent_plane(&dir, "conv_a1951b70-2756-73a9-a86b-ff5a157b1fba");
     let (release, released) = support::fake::model_release();
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-178-retry-activity-child"),
+        &ConversationId::new("conv_928f47e9-6da3-7762-8780-bff9412aa87f"),
         vec![
             // No provider hint: the backoff deadline is 2000ms ahead on the
             // manual clock, which the test advances exactly once.
@@ -4071,7 +4148,7 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
         let (answer_release, answer_released) = support::fake::model_release();
         let child = child_fixture(
             &dir,
-            &ConversationId::new(format!("{conversation}-child")),
+            &ConversationId::new("conv_00000000-0000-7000-8000-000000000002"),
             vec![
                 // One transient failure with a zero provider hint: the retry
                 // schedule commits durably and the backoff collapses.
@@ -4305,10 +4382,26 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
         record
     }
 
-    let standalone = run("conv-178-topology", Topology::Standalone).await;
-    let drained = run("conv-178-topology", Topology::Draining).await;
-    let stalled = run("conv-178-topology", Topology::Stalled).await;
-    let observation_broken = run("conv-178-topology", Topology::ObservationBroken).await;
+    let standalone = run(
+        "conv_11117c63-28d3-7f8d-88ff-b49c8225bfc1",
+        Topology::Standalone,
+    )
+    .await;
+    let drained = run(
+        "conv_11117c63-28d3-7f8d-88ff-b49c8225bfc1",
+        Topology::Draining,
+    )
+    .await;
+    let stalled = run(
+        "conv_11117c63-28d3-7f8d-88ff-b49c8225bfc1",
+        Topology::Stalled,
+    )
+    .await;
+    let observation_broken = run(
+        "conv_11117c63-28d3-7f8d-88ff-b49c8225bfc1",
+        Topology::ObservationBroken,
+    )
+    .await;
 
     // The shared workload really ran in every topology: three provider
     // requests (R0 transient, R1 the retried tool-call request, R2 the
@@ -4350,7 +4443,7 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
     let dir = tempfile::tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
-        "conv-178-projection-backpressure",
+        "conv_a302f249-af50-7289-942e-c166d04125a4",
         vec![answer_script("PARENT-BACKPRESSURE-TURN")],
     )
     .await;
@@ -4401,7 +4494,7 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
     }));
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-178-projection-backpressure-child"),
+        &ConversationId::new("conv_39892d1e-9c40-71ba-8297-579c5f21bff7"),
         vec![first_request, answer_script("BACKPRESSURE-ANSWER")],
         tools,
         Vec::new(),
@@ -4543,8 +4636,16 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-178-live-progress");
-    let child_conversation_id = ConversationId::new("conv-178-live-progress-child");
+    let plane = standalone_parent_plane(&dir, "conv_fd5f1ca7-c1e6-7664-9d06-c5d40791b868");
+    let catalog = rustx::local_runtime::session::SessionCatalog::create(
+        &plane.runtime_root,
+        &rustx::local_runtime::session::SessionPersistentState::from_input(
+            &rustx::local_runtime::SessionConfigInput::new(dir.path().join("child-workspace")),
+        ),
+    )
+    .unwrap();
+    let session = catalog.persisted_session_ids()[0].clone();
+    let child_conversation_id = catalog.lineage(&session, None).unwrap().0.conversation_id;
     let mut tools = ToolRegistry::new();
     // The phased tool parks first (a deterministic no-progress cut); each
     // gate release reports the next phase's progress and parks again, and
@@ -4562,13 +4663,11 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     let mut phased_started = phased.started();
     phased.register(&mut tools);
     let (answer_release, answer_released) = support::fake::model_release();
-    let child_artifacts = crate::runtime::subagent::child_conversation_store_path(
-        &plane.runtime_root,
-        &child_conversation_id,
-    )
-    .parent()
-    .expect("stable child conversation directory")
-    .to_path_buf();
+    let child_artifacts = catalog
+        .database_path(&session, &child_conversation_id)
+        .parent()
+        .unwrap()
+        .to_path_buf();
     let child = child_fixture_at(
         &dir,
         &child_conversation_id,
@@ -4675,18 +4774,11 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         )
         .expect("child live inspection endpoint");
     let inspection_paths = LaunchFixture {
-        models: dir.path().join("unused-models.toml"),
         config: dir.path().join("unused-config.toml"),
-        skill_paths: Vec::new(),
-        no_automatic_skills: true,
-        no_builtin_tools: false,
-        no_direct_tools: false,
         startup_session: rustx::local_runtime::StartupSession::InspectConversation {
             conversation_id: child_conversation_id.clone(),
         },
         session_name: None,
-        tools: None,
-        exclude_tools: Vec::new(),
         workspace: dir.path().join("child-workspace"),
         runtime_root: plane.runtime_root.clone(),
     };
@@ -4987,7 +5079,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_fresh_request_after_a_retry_projects_retry_zero() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-178-retry-ordinal");
+    let plane = standalone_parent_plane(&dir, "conv_9e749cd5-a623-7c43-aa5e-5806aaa85b40");
     let mut tools = ToolRegistry::new();
     FakeTool::new(
         common::tool_policies(
@@ -5002,7 +5094,7 @@ async fn a_fresh_request_after_a_retry_projects_retry_zero() {
     let (answer_release, answer_released) = support::fake::model_release();
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-178-retry-ordinal-child"),
+        &ConversationId::new("conv_2f56b3b0-6029-794e-8b2f-f7ba78375068"),
         vec![
             // A zero-hint transient failure: the retry schedule commits and
             // the backoff collapses.
@@ -5088,7 +5180,7 @@ async fn a_fresh_request_after_a_retry_projects_retry_zero() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn activity_frames_commit_no_parent_journal_facts() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-178-journal-isolation");
+    let plane = standalone_parent_plane(&dir, "conv_d933f2dd-c757-73db-978b-5a0eb50843e8");
     let mut tools = ToolRegistry::new();
     // The tool parks so the mid-run Tool activity is applied before the
     // terminal can settle: without a parked-stable observation point, the
@@ -5110,7 +5202,7 @@ async fn activity_frames_commit_no_parent_journal_facts() {
     let (answer_release, answer_released) = support::fake::model_release();
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-178-journal-isolation-child"),
+        &ConversationId::new("conv_cc4fcedc-f877-7abd-8028-2d88e9d079b7"),
         vec![
             tool_call_request(&support::fake::ScriptedCall {
                 id: "call-scan",
@@ -5199,7 +5291,7 @@ async fn child_activity_never_enters_the_parent_model_context() {
     let dir = tempfile::tempdir().expect("temp root");
     let parent = parent_runtime_plane(
         &dir,
-        "conv-178-context-parent",
+        "conv_789c0434-30c8-7ad9-bd0b-8ca0693eac95",
         vec![answer_script("PARENT-178-TURN")],
     )
     .await;
@@ -5216,7 +5308,7 @@ async fn child_activity_never_enters_the_parent_model_context() {
     .register(&mut tools);
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-178-context-child"),
+        &ConversationId::new("conv_31d90518-8792-7046-8a88-c89d2bc0d324"),
         vec![
             tool_call_request(&support::fake::ScriptedCall {
                 id: "call-178-secret",
@@ -5324,14 +5416,14 @@ async fn the_successful_answer_never_enters_the_observation_plane() {
     }
 
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-178-result-isolation");
+    let plane = standalone_parent_plane(&dir, "conv_36a1b005-528a-75f5-ae6b-5beb5ceb7829");
     let recorded = Arc::new(RecordingObserver::default());
     plane
         .registry
         .install_observer_and_snapshots(Arc::clone(&recorded) as Arc<dyn SubagentObserver>);
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-178-result-isolation-child"),
+        &ConversationId::new("conv_ece31631-4cc9-772b-8aab-e3433f26747a"),
         vec![answer_script(ANSWER)],
         ToolRegistry::new(),
         Vec::new(),
@@ -5396,14 +5488,14 @@ async fn snapshot_repair_serves_the_latest_subagent_observation() {
     let dir = tempfile::tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
-        "conv-178-repair",
+        "conv_112418f3-578e-706b-b917-7950d19a8036",
         vec![answer_script("PARENT-178-DONE")],
     )
     .await;
     let (release, released) = support::fake::model_release();
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-178-repair-child"),
+        &ConversationId::new("conv_368c0d6b-0358-74ae-8fa5-14e38e60c42a"),
         vec![vec![
             FakeStep::Emit(started()),
             FakeStep::ParkUntilReleased(released),
@@ -5526,10 +5618,10 @@ async fn snapshot_repair_serves_the_latest_subagent_observation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_snapshot_projects_only_the_frozen_execution_profile() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-178-profile");
+    let plane = standalone_parent_plane(&dir, "conv_4781943a-d0c2-79ab-a6e5-d4790aed5fdb");
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-178-profile-child"),
+        &ConversationId::new("conv_6a793afb-327f-7220-8a50-c38b7b8a04c9"),
         vec![answer_script("PROFILE-ANSWER")],
         ToolRegistry::new(),
         Vec::new(),
@@ -5665,11 +5757,11 @@ fn request_carries_user_text(request: &rustx::model::ModelRequest, wanted: &str)
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_steer_is_consumed_by_the_same_child_conversation_and_agent_loop() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-193-same-child");
+    let plane = standalone_parent_plane(&dir, "conv_70bbecdd-3617-7fdf-b79d-bb3881570201");
     let (release, released) = support::fake::model_release();
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-193-same-child-1"),
+        &ConversationId::new("conv_ff01502f-ec03-77a1-8ef2-596a71855fe5"),
         vec![
             parking_answer_script("working", released),
             answer_script("final answer after steering"),
@@ -5777,11 +5869,11 @@ async fn a_steer_is_consumed_by_the_same_child_conversation_and_agent_loop() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn accepted_steers_are_observed_in_their_durable_acceptance_order() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-193-order");
+    let plane = standalone_parent_plane(&dir, "conv_804e7c5c-0eb9-761c-87f8-2f107fa4d3cd");
     let (release, released) = support::fake::model_release();
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-193-order-1"),
+        &ConversationId::new("conv_a513094f-a62a-75be-8e69-25d0c1c86794"),
         vec![
             parking_answer_script("working", released),
             answer_script("done"),
@@ -5843,11 +5935,16 @@ async fn accepted_steers_are_observed_in_their_durable_acceptance_order() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn steering_preserves_the_child_frozen_launch_authority_across_a_resource_reload() {
     let dir = tempfile::tempdir().expect("temp root");
-    let parent = parent_runtime_plane(&dir, "conv-193-frozen", Vec::new()).await;
+    let parent = parent_runtime_plane(
+        &dir,
+        "conv_7cbdc3d8-1447-76d3-95da-044b6a29356e",
+        Vec::new(),
+    )
+    .await;
     let (release, released) = support::fake::model_release();
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-193-frozen-1"),
+        &ConversationId::new("conv_8134db98-8ecf-70b3-81e4-d6b626eadce4"),
         vec![
             parking_answer_script("working", released),
             answer_script("done under the original authority"),
@@ -5871,13 +5968,15 @@ async fn steering_preserves_the_child_frozen_launch_authority_across_a_resource_
         .await
         .expect("accepted");
 
-    // A complete parent runtime resource/capability generation is published
-    // while the child runs.
-    parent
-        .runtime
-        .reload_resources()
-        .await
-        .expect("the parent publishes a new resource generation");
+    // Owned child work makes full configuration publication deterministically busy.
+    let before = parent.runtime.runtime_resources();
+    assert!(matches!(
+        parent.runtime.reload_configuration().await,
+        Err(rustx::runtime::RuntimeResourceReloadError::Busy {
+            reason: rustx::runtime::RuntimeResourceReloadBusyReason::OwnedWork
+        })
+    ));
+    assert!(Arc::ptr_eq(&before, &parent.runtime.runtime_resources()));
 
     parent
         .plane
@@ -5932,10 +6031,10 @@ async fn steering_preserves_the_child_frozen_launch_authority_across_a_resource_
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_settled_child_refuses_steering_and_keeps_exactly_one_terminal() {
     let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv-193-settled");
+    let plane = standalone_parent_plane(&dir, "conv_e7c4ac45-ecea-7387-829c-1a3ac159864e");
     let child = child_fixture(
         &dir,
-        &ConversationId::new("conv-193-settled-1"),
+        &ConversationId::new("conv_d3cd9640-6808-7427-8a23-771cbfa9bd5c"),
         vec![answer_script("the one final answer")],
         ToolRegistry::new(),
         Vec::new(),

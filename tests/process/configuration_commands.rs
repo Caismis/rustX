@@ -44,24 +44,19 @@ fn state_tree(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Opt
 fn cfg237_binary_workflow_commands_share_json_exit_and_read_only_contract() {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");
-    let user = root.path().join("home/.config/rustx");
+    let user = root.path().join("home/rustx");
     let workflows = workspace.join(".agents/workflows");
     std::fs::create_dir_all(&workflows).unwrap();
     std::fs::create_dir_all(&user).unwrap();
     std::fs::write(
-        user.join("models.toml"),
-        include_bytes!("../../examples/local-runtime/minimal/models.toml"),
-    )
-    .unwrap();
-    std::fs::write(
-        user.join("settings.toml"),
-        include_bytes!("../../examples/local-runtime/minimal/settings.toml"),
+        user.join("rustx.toml"),
+        include_bytes!("../../examples/local-runtime/minimal/rustx.toml"),
     )
     .unwrap();
     std::fs::write(
         workspace.join("rustx.toml"),
         r"[agent]
-workflows = []
+workflows = ['human_plan']
 ",
     )
     .unwrap();
@@ -70,9 +65,8 @@ workflows = []
         "../../examples/local-runtime/workflow-templates/.agents/workflows/human_plan.yaml"
     );
     std::fs::write(&file, valid).unwrap();
-    assert!(run(root.path(), &["--trust", "grant"]).status.success());
-    let state = root.path().join("home/.local/state");
-    let before = state_tree(&state); // The explicit trust setup already wrote its membership directory.
+    let state = root.path().join("home");
+    let before = state_tree(&state);
     for operation in ["check", "explain"] {
         let value = report(
             &run(
@@ -171,18 +165,17 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
             .len(),
         2
     );
-    let models = root.path().join("home/.config/rustx/models.toml");
+    let models = root.path().join("home/rustx/rustx.toml");
     let before = std::fs::read(&models).unwrap();
     assert!(String::from_utf8_lossy(&before).contains("$RUSTX_TEST_KEY"));
     report(&run(root.path(), &arguments), 2);
     assert_eq!(std::fs::read(models).unwrap(), before);
     assert!(!root.path().join("home/.local/state").exists());
     assert!(!root.path().join("workspace/rustx.toml").exists());
-    let untrusted = report(&run(root.path(), &["config", "check", "--json"]), 3);
-    assert_eq!(untrusted["validity"], "valid");
-    assert_eq!(untrusted["launch"]["trusted"], false);
+    let prospective = report(&run(root.path(), &["config", "check", "--json"]), 3);
+    assert_eq!(prospective["validity"], "valid");
+    assert!(prospective["launch"].get("trusted").is_none());
     assert!(!root.path().join("home/.local/state").exists());
-    assert!(run(root.path(), &["--trust", "grant"]).status.success());
     let checked = report(&run(root.path(), &["config", "check", "--json"]), 3);
     let shown = report(
         &run(root.path(), &["config", "show", "--sources", "--json"]),
@@ -213,24 +206,17 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
 fn cfg235_binary_doctor_discloses_plan_and_preserves_mixed_results() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("workspace")).unwrap();
-    let user = root.path().join("home/.config/rustx");
+    let user = root.path().join("home/rustx");
     std::fs::create_dir_all(&user).unwrap();
     std::fs::write(
-        user.join("models.toml"),
-        include_str!("../../examples/local-runtime/minimal/models.toml"),
+        user.join("rustx.toml"),
+        include_bytes!("../../examples/local-runtime/minimal/rustx.toml"),
     )
     .unwrap();
+    std::fs::create_dir_all(root.path().join("workspace/.agents")).unwrap();
     std::fs::write(
-        user.join("settings.toml"),
-        include_str!("../../examples/local-runtime/minimal/settings.toml"),
-    )
-    .unwrap();
-    std::fs::write(
-        root.path().join("workspace/rustx.toml"),
-        r#"[mcp_servers.disabled]
-enabled = false
-command = "must-never-spawn"
-"#,
+        root.path().join("workspace/.agents/mcp.toml"),
+        "[mcp_servers.unselected]\ncommand = \"must-never-spawn\"\n",
     )
     .unwrap();
     let output = run(root.path(), &["doctor", "--probe", "--json"]);
@@ -256,12 +242,11 @@ command = "must-never-spawn"
     assert_eq!(records[1]["results"][0]["state"], "unresolved");
     assert_eq!(
         records[1]["results"].as_array().unwrap().len(),
-        1,
-        "untrusted project sources are not read"
+        2,
+        "discovered sources remain inert without admitted demand"
     );
     assert!(!root.path().join("home/.local/state").exists());
 
-    assert!(run(root.path(), &["--trust", "grant"]).status.success());
     std::fs::write(root.path().join("workspace/rustx.toml"), "").unwrap();
     std::fs::create_dir_all(root.path().join("workspace/.agents/tools/unprepared")).unwrap();
     let output = run(root.path(), &["doctor", "--probe", "--prepare", "--json"]);
@@ -273,27 +258,21 @@ command = "must-never-spawn"
         .collect();
     assert_eq!(records[1]["results"][1]["state"], "skipped");
     assert_eq!(records[0]["targets"][1]["prepare_environment"], false);
-    assert!(!root.path().join("workspace/.rustx").exists());
+    assert!(!root.path().join("home/rustx/runtime").exists());
 }
 
 #[test]
 fn cfg275_agent_inspection_and_removed_flags_are_offline() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("workspace")).unwrap();
-    let user = root.path().join("home/.config/rustx");
+    let user = root.path().join("home/rustx");
     std::fs::create_dir_all(&user).unwrap();
     std::fs::write(
-        user.join("models.toml"),
-        include_bytes!("../../examples/local-runtime/minimal/models.toml"),
+        user.join("rustx.toml"),
+        include_bytes!("../../examples/local-runtime/minimal/rustx.toml"),
     )
     .unwrap();
-    std::fs::write(
-        user.join("settings.toml"),
-        include_bytes!("../../examples/local-runtime/minimal/settings.toml"),
-    )
-    .unwrap();
-    assert!(run(root.path(), &["--trust", "grant"]).status.success());
-    let before = state_tree(&root.path().join("home/.local/state"));
+    let before = state_tree(&root.path().join("home"));
     let result = run(
         root.path(),
         &["config", "show", "--agent", "main", "--json"],
@@ -325,5 +304,5 @@ fn cfg275_agent_inspection_and_removed_flags_are_offline() {
             Some(2)
         );
     }
-    assert_eq!(before, state_tree(&root.path().join("home/.local/state")));
+    assert_eq!(before, state_tree(&root.path().join("home")));
 }

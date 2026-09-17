@@ -3,7 +3,7 @@ import type {
   PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v5';
+} from '../../../protocol/app-server/v6';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from './uploads';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, type TranscriptCache } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
@@ -29,8 +29,6 @@ export interface SessionView {
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   settings?: SessionPersistentState;
-  /** Current native source trust, not loaded resource activation or Host authorization. */
-  projectTrusted?: boolean | null;
   /** Exact acknowledged MessageIds awaiting projection reconciliation, not queue authority. */
   submissions?: readonly Submission[];
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
@@ -67,7 +65,7 @@ export interface ClientView {
   capabilities?: ServerCapabilities;
   error?: string;
   sessions: readonly SessionSummary[];
-  sessionResidencies?: Record<string, import('../../../protocol/app-server/v5').ResidencyState>;
+  sessionResidencies?: Record<string, import('../../../protocol/app-server/v6').ResidencyState>;
   nextOffset?: number | null;
   views: Readonly<Record<string, SessionView>>;
   uncertain: readonly UncertainOperation[];
@@ -114,7 +112,7 @@ function goalRefusal(error: unknown) {
 const READS = new Set<Request1['method']>([
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/tree', 'session/deletePreview',
   'session/snapshot', 'session/transcript', 'session/trace', 'settings/read', 'settings/model', 'settings/models',
-  'settings/sourcesRead', 'resources/read', 'background/status', 'subagent/status', 'settings/defaults', 'session/boundaries',
+  'configuration/sourcesRead', 'configuration/effective', 'resources/read', 'background/status', 'subagent/status', 'session/boundaries',
 ]);
 export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conversation_id, ref.interaction_id]);
 export const sameTarget = (a?: AttachmentTarget, b?: AttachmentTarget) => !!a && !!b &&
@@ -178,7 +176,7 @@ export class AppServerClient {
     const generation = this.state.generation;
     this.publish({ endpoint: url.href, connection: reconnect ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v5', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v6', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -196,12 +194,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 5, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 6, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 5 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v5 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (hello.protocol_version !== 6 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v6 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
@@ -384,7 +382,7 @@ export class AppServerClient {
     return this.changeAttachment(id, 'attach', async generation => {
       if (!navigationCurrent() || this.state.views[id]?.attachmentIntent !== 'wanted') return;
       if (this.state.views[id]?.target) return this.refresh(id);
-      this.setSession(id, { attachment: 'attaching', error: undefined, projectTrusted: undefined });
+      this.setSession(id, { attachment: 'attaching', error: undefined });
       const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
       this.attachmentEpochs.set(id, epoch);
       await this.performAttach(id, generation, epoch, navigationCurrent);
@@ -427,7 +425,7 @@ export class AppServerClient {
       this.reconcileInteractions(id); this.settleSubmissions(id);
       const settings = await this.request({ method: 'settings/read', params: { session_id: id } }, 'settings');
       if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
-      this.setSession(id, { settings: settings.settings, projectTrusted: settings.project_trusted });
+      this.setSession(id, { settings: settings.settings });
       if (this.dirty.has(id)) { this.resubscribe.add(id); await this.refresh(id); }
     } catch (error) {
       if (current() && (!target || sameTarget(this.state.views[id]?.target, target))) this.setSession(id, { attachment: 'error', error: String(error) });

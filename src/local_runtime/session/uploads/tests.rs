@@ -13,6 +13,17 @@ use std::sync::Arc;
 fn tempdir() -> std::io::Result<tempfile::TempDir> {
     tempfile::tempdir_in(std::env::temp_dir().canonicalize()?)
 }
+async fn pending_destination(controller: &SessionController) -> SessionId {
+    let catalog = controller.catalog.lock().await;
+    assert_eq!(catalog.document.upload_preparations.len(), 1);
+    catalog
+        .document
+        .upload_preparations
+        .keys()
+        .next()
+        .unwrap()
+        .clone()
+}
 fn file(name: &str, bytes: &[u8]) -> UploadFile {
     UploadFile {
         name: name.into(),
@@ -69,11 +80,21 @@ fn names_and_symlink_ancestors_fail_closed() {
         .unwrap();
     assert!(
         registry
-            .materialize(&SessionId::new("session-1"), &batch, &inputs)
+            .materialize(
+                &SessionId::new("ses_84097828-fc31-78c8-8292-10df48901a85"),
+                &batch,
+                &inputs
+            )
             .is_err()
     );
     assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 1);
-    assert!(cleanup(workspace.path(), &SessionId::new("session-1")).is_err());
+    assert!(
+        cleanup(
+            workspace.path(),
+            &SessionId::new("ses_84097828-fc31-78c8-8292-10df48901a85")
+        )
+        .is_err()
+    );
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commit_gate_receipts_restart_concurrency_and_failed_turn_are_independent() {
@@ -246,9 +267,10 @@ async fn fork_and_clone_copy_current_cut_before_publication_and_survive_source_d
                 .len(),
             1
         );
+        let pending = pending_destination(&controller).await;
         let destination_path = file_path(
             workspace.path(),
-            &SessionId::new("session-2"),
+            &pending,
             &uploaded[0].file.batch_id,
             &uploaded[0].file.name,
         );
@@ -259,7 +281,7 @@ async fn fork_and_clone_copy_current_cut_before_publication_and_survive_source_d
         assert_eq!(
             file_path(
                 workspace.path(),
-                &SessionId::new("session-2"),
+                &pending,
                 &orphan[0].file.batch_id,
                 &orphan[0].file.name
             )
@@ -382,7 +404,7 @@ async fn deletion_freezes_all_historical_workspaces_and_retries_same_record() {
 fn exclusive_batch_creation_never_overwrites_and_cleanup_never_follows_child_links() {
     let workspace = tempdir().unwrap();
     let outside = tempdir().unwrap();
-    let session = SessionId::new("session-1");
+    let session = SessionId::new("ses_84097828-fc31-78c8-8292-10df48901a85");
     let mut registry = UploadRegistry::default();
     let files = vec![file("safe", b"original")];
     let batch = registry
@@ -468,7 +490,7 @@ async fn same_session_branch_shares_uploads_and_private_copy_claim_recovers_afte
             .count(),
         1
     );
-    let staged = SessionId::new("session-2");
+    let staged = SessionId::new("ses_5d906140-8048-712d-8539-25aed45333a1");
     controller
         .catalog
         .lock()
@@ -479,7 +501,13 @@ async fn same_session_branch_shares_uploads_and_private_copy_claim_recovers_afte
     drop(staged_root);
     drop(controller);
     let controller = SessionController::open(root.path()).unwrap();
-    assert!(!workspace.path().join(".agents/uploads/session-2").exists());
+    assert!(
+        !workspace
+            .path()
+            .join(".agents/uploads")
+            .join(staged.as_str())
+            .exists()
+    );
     assert!(
         controller
             .catalog
@@ -618,7 +646,7 @@ async fn copied_file_symlink_before_publication_rejects_and_cleans_private_desti
     tokio::task::spawn_blocking(move || gate.wait_entered())
         .await
         .unwrap();
-    let destination = SessionId::new("session-2");
+    let destination = pending_destination(&controller).await;
     let copied = file_path(
         workspace.path(),
         &destination,
@@ -640,8 +668,20 @@ async fn copied_file_symlink_before_publication_rejects_and_cleans_private_desti
             .len(),
         1
     );
-    assert!(!workspace.path().join(".agents/uploads/session-2").exists());
-    assert!(!root.path().join("sessions/session-2").exists());
+    assert!(
+        !workspace
+            .path()
+            .join(".agents/uploads")
+            .join(destination.as_str())
+            .exists()
+    );
+    assert!(
+        !root
+            .path()
+            .join("sessions")
+            .join(destination.as_str())
+            .exists()
+    );
     assert!(
         controller
             .catalog
@@ -738,7 +778,7 @@ async fn failed_copy_cleanup_retains_the_frozen_claim_until_recovery_finishes() 
         error,
         SessionError::PreparationCleanupPending { .. }
     ));
-    let destination = SessionId::new("session-2");
+    let destination = pending_destination(&controller).await;
     let residue = file_path(
         workspace.path(),
         &destination,
@@ -746,7 +786,12 @@ async fn failed_copy_cleanup_retains_the_frozen_claim_until_recovery_finishes() 
         "first",
     );
     assert_eq!(std::fs::read(&residue).unwrap(), b"source");
-    assert!(root.path().join("sessions/session-2").is_dir());
+    assert!(
+        root.path()
+            .join("sessions")
+            .join(destination.as_str())
+            .is_dir()
+    );
     assert!(controller.read_session(&destination).await.is_err());
     let frozen = controller
         .catalog
@@ -770,7 +815,7 @@ async fn failed_copy_cleanup_retains_the_frozen_claim_until_recovery_finishes() 
     );
     // The claim reserves identity even if native residue was independently removed.
     // A new Session must not consume this still-owned upload cleanup authority.
-    std::fs::remove_dir_all(root.path().join("sessions/session-2")).unwrap();
+    std::fs::remove_dir_all(root.path().join("sessions").join(destination.as_str())).unwrap();
     let unrelated = controller
         .create_session(settings(workspace.path()))
         .await
@@ -795,7 +840,13 @@ async fn failed_copy_cleanup_retains_the_frozen_claim_until_recovery_finishes() 
     );
     assert!(!residue.exists());
     assert!(controller.read_session(&unrelated.id).await.is_ok());
-    assert!(!root.path().join("sessions/session-2").exists());
+    assert!(
+        !root
+            .path()
+            .join("sessions")
+            .join(destination.as_str())
+            .exists()
+    );
     assert_eq!(std::fs::read(&files[0].path).unwrap(), b"source");
     assert!(controller.read_session(&source.id).await.is_ok());
 }
@@ -976,7 +1027,7 @@ async fn restored_editor_uploads_are_ordered_owned_and_prepared_before_publicati
         let destination = if tree {
             source.id.clone()
         } else {
-            SessionId::new("session-2")
+            pending_destination(&controller).await
         };
         for f in &files {
             assert!(

@@ -145,7 +145,7 @@ fn fail(kind: rustx::model::ModelErrorKind, message: &str) -> ModelEvent {
 }
 
 fn conversation() -> ConversationId {
-    ConversationId::new("conv-1")
+    ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18")
 }
 
 // ---------------------------------------------------------------------------

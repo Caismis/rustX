@@ -169,8 +169,8 @@ async fn a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction()
     std::fs::write(package_root.join("requirements.txt"), "# none\n").expect("requirements");
 
     let workspace = Workspace::new(&workspace_root).expect("workspace");
-    let discovered =
-        crate::tools::python::discover_python_packages(&workspace).expect("package discovery");
+    let discovered = crate::boundary_suites::common::discover_python_packages(&workspace)
+        .expect("package discovery");
     let package = discovered
         .into_iter()
         .find(|entry| entry.server_id == crate::tools::python::python_server_id("mrtr-tool"))
@@ -219,14 +219,14 @@ async fn a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction()
 
     let artifacts = tempfile::tempdir().expect("artifacts");
     let bundle = crate::tools::runtime::ConversationToolRuntime::new(
-        ConversationId::new("mrtr-managed"),
+        ConversationId::new("conv_7d6fc77b-8407-7f94-8826-ba70ab764a7f"),
         &workspace_root,
         artifacts.path(),
     )
     .expect("tool runtime");
     let lifecycle = ConversationLifecycle::new();
     assert!(lifecycle.activate());
-    let conversation_id = ConversationId::new("mrtr-managed");
+    let conversation_id = ConversationId::new("conv_7d6fc77b-8407-7f94-8826-ba70ab764a7f");
     let audit = RecordingInteractionAudit::new(conversation_id.clone());
     let coordinator = Arc::new(InteractionCoordinator::new(
         conversation_id,

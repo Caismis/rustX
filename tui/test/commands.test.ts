@@ -112,8 +112,6 @@ describe("command registry", () => {
       COMMANDS.map((command) => command.name),
       [
         "/settings",
-        "/defaults",
-        "/save-default",
         "/help",
         "/goal",
         "/model",
@@ -135,7 +133,6 @@ describe("command registry", () => {
         "/show-reasoning",
         "/expand",
         "/cancel",
-        "/approval",
         "/quit",
       ],
     );
@@ -574,7 +571,7 @@ describe("CommandDispatcher", () => {
     const h = await harness();
     const reading = h.dispatcher.submit("/session");
     const read = await nextRequest(h, "session/read");
-    assert.equal(paramsOf(read, "session/read").session_id, "session-1");
+    assert.equal(paramsOf(read, "session/read").session_id, "ses_84097828-fc31-78c8-9292-10df48901a85");
     h.transport.respond(read.id, {
       type: "session",
       session: sessionView({ name: "review" }),
@@ -585,9 +582,9 @@ describe("CommandDispatcher", () => {
     if (outcome.kind === "inspect") {
       assert.equal(outcome.title, "Session");
       assert.match(outcome.body, /name review/);
-      assert.match(outcome.body, /session session-1/);
-      assert.match(outcome.body, /active node node-1/);
-      assert.match(outcome.body, /conversation conv-test/);
+      assert.ok(outcome.body.includes(`session ${sessionView().id}`));
+      assert.ok(outcome.body.includes(`active node ${sessionView().active_node}`));
+      assert.ok(outcome.body.includes(`conversation ${sessionView().active_conversation_id}`));
     }
   });
 
@@ -600,16 +597,16 @@ describe("CommandDispatcher", () => {
       residencies: {},
       sessions: [
         {
-          id: "session-1",
+          id: "ses_84097828-fc31-78c8-9292-10df48901a85",
           name: "current",
           updated_at: "2026-08-21T00:00:00Z",
-          cwd: "/server/work", active_node: "node-1",
+          cwd: "/server/work", active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
         },
         {
-          id: "session-2",
+          id: "ses_5d906140-8048-712d-8539-25aed45333a1",
           name: "saved review",
           updated_at: "2026-08-20T00:00:00Z",
-          cwd: "/server/work", active_node: "node-2",
+          cwd: "/server/work", active_node: "node_1779f59f-4df2-71f6-b81a-eb08fb52a5d8",
         },
       ],
     });
@@ -627,8 +624,8 @@ describe("CommandDispatcher", () => {
     assert.equal(outcome.kind, "choose_session");
     if (outcome.kind === "choose_session") {
       assert.deepEqual(outcome.sessions.map((session) => session.id), [
-        "session-1",
-        "session-2",
+        "ses_84097828-fc31-78c8-9292-10df48901a85",
+        "ses_5d906140-8048-712d-8539-25aed45333a1",
       ]);
     }
     // The durable list is a read: choosing is the user's, and focusing is a
@@ -643,14 +640,14 @@ describe("CommandDispatcher", () => {
     // Choosing a row in the picker names the Session to show. It does not
     // detach, cancel, unload, or replace anything, so it writes nothing here:
     // the app performs the attach when it changes focus.
-    assert.deepEqual(h.dispatcher.selectSession("session-2"), {
+    assert.deepEqual(h.dispatcher.selectSession("ses_5d906140-8048-712d-8539-25aed45333a1"), {
       kind: "focus_session",
-      sessionId: "session-2",
+      sessionId: "ses_5d906140-8048-712d-8539-25aed45333a1",
     });
-    assert.deepEqual(h.dispatcher.selectTreeNode("session-2", "node-9"), {
+    assert.deepEqual(h.dispatcher.selectTreeNode("ses_5d906140-8048-712d-8539-25aed45333a1", "node_cda805b6-0c45-73dd-81b4-8a4571613b8e"), {
       kind: "focus_session",
-      sessionId: "session-2",
-      nodeId: "node-9",
+      sessionId: "ses_5d906140-8048-712d-8539-25aed45333a1",
+      nodeId: "node_cda805b6-0c45-73dd-81b4-8a4571613b8e",
     });
     assert.equal(h.transport.log.requests.length, before);
   });
@@ -701,13 +698,13 @@ describe("CommandDispatcher", () => {
     assert.deepEqual(paramsOf(create, "session/create").settings, SESSION_SETTINGS);
     h.transport.respond(create.id, {
       type: "session_transition",
-      session: sessionView({ id: "session-2", name: "New session" }),
+      session: sessionView({ id: "ses_5d906140-8048-712d-8539-25aed45333a1", name: "New session" }),
     });
 
     const outcome = await creating;
     assert.equal(outcome.kind, "focus_session");
     if (outcome.kind === "focus_session") {
-      assert.equal(outcome.sessionId, "session-2");
+      assert.equal(outcome.sessionId, "ses_5d906140-8048-712d-8539-25aed45333a1");
       assert.match(outcome.notice ?? "", /created session/);
     }
     // Creating a Session replaces no process and stops nothing.
@@ -733,7 +730,7 @@ describe("CommandDispatcher", () => {
     assert.equal(params.boundary, null);
     h.transport.respond(fork.id, {
       type: "session_transition",
-      session: sessionView({ id: "session-3" }),
+      session: sessionView({ id: "ses_eb278475-f606-7143-97df-8cb657e1c7ee" }),
     });
 
     const outcome = await cloning;
@@ -745,7 +742,7 @@ describe("CommandDispatcher", () => {
     const naming = h.dispatcher.submit("/name design review");
     const rename = await nextRequest(h, "session/name");
     assert.deepEqual(paramsOf(rename, "session/name"), {
-      session_id: "session-1",
+      session_id: "ses_84097828-fc31-78c8-9292-10df48901a85",
       name: "design review",
     });
     h.transport.respond(rename.id, {
@@ -772,7 +769,7 @@ describe("CommandDispatcher", () => {
     const unnamed = await asking;
     assert.equal(unnamed.kind, "transient");
     if (unnamed.kind === "transient") {
-      assert.match(unnamed.text, /session-1 is unnamed/);
+      assert.ok(unnamed.text.includes(`${sessionView().id} is unnamed`));
     }
 
     const again = h.dispatcher.submit("/name");
@@ -947,73 +944,14 @@ describe("CommandDispatcher", () => {
     assert.equal(h.transport.log.requests.length, before);
   });
 
-  it("CFG238 save declares user scope, fields and caller revision without live mutation", async () => {
-    const h = await harness();
-    const before = structuredClone(h.session.state);
-    const command = h.dispatcher.submit("/save-default user model sha256:reviewed");
-    const save = await nextRequest(h, "settings/saveDefault");
-    const params = paramsOf(save, "settings/saveDefault");
-    assert.equal(params.scope, "user");
-    assert.equal(params.expected_revision, "sha256:reviewed");
-    assert.equal(params.setting, "model_selection");
-    assert.ok(!("value" in params), "the client never supplies the saved value");
-    h.transport.respond(save.id, {
-      type: "default_saved",
-      result: {
-        scope: "user",
-        document: "/config/settings.toml",
-        revision: "sha256:new",
-        changed: {
-          field: "model_selection",
-          selection: { model: "alpha/model-b", reasoning_profile: null },
-        },
-        live_unchanged: true,
-        applies_at: "next_launch",
-      },
-    });
-    const result = await command;
-    assert.equal(result.kind, "transient");
-    if (result.kind === "transient") assert.match(result.text, /Live Session unchanged/);
-    assert.deepEqual(h.session.state, before);
-  });
-
-  it("CFG238 save after a model response never consumes the lagging A projection", async () => {
-    const h = await harness(snapshot({ model: sessionModel("alpha/model-a") }));
-    const setting = h.session.modelSet(sessionModel("alpha/model-b").configured);
-    const set = await nextRequest(h, "settings/setModel");
-    h.transport.respond(set.id, {
-      type: "model",
-      model: sessionModel("alpha/model-b"),
-    });
-    await setting;
-    // Deliberately deliver no session_model_changed observation: a response is
-    // not an observation, and the projection follows the observation stream.
-    assert.equal(h.session.state.sessionModel?.configured.model, "alpha/model-a");
-
-    const saving = h.dispatcher.submit("/save-default user model sha256:reviewed");
-    const save = await nextRequest(h, "settings/saveDefault");
-    assert.deepEqual(paramsOf(save, "settings/saveDefault"), {
-      target: h.target,
-      scope: "user",
-      expected_revision: "sha256:reviewed",
-      setting: "model_selection",
-    });
-    h.transport.respond(save.id, {
-      type: "default_saved",
-      result: {
-        scope: "user",
-        document: "/config/settings.toml",
-        revision: "sha256:B",
-        changed: {
-          field: "model_selection",
-          selection: { model: "alpha/model-b", reasoning_profile: null },
-        },
-        live_unchanged: true,
-        applies_at: "next_launch",
-      },
-    });
-    await saving;
-    assert.equal(h.session.state.sessionModel?.configured.model, "alpha/model-a");
+  it("removed Session approval and save-default commands never reach the wire", async () => {
+    const h = await harness(); const before = h.transport.log.requests.length;
+    for (const command of ["/approval", "/defaults", "/save-default user model revision"]) {
+      const result = await h.dispatcher.submit(command);
+      assert.equal(result.kind, "transient");
+      if (result.kind === "transient") assert.equal(result.level, "error");
+    }
+    assert.equal(h.transport.log.requests.length, before);
   });
 
   it("rejects an unusable /show-reasoning argument instead of guessing", async () => {
@@ -1189,7 +1127,7 @@ describe("CommandDispatcher", () => {
         compaction_count: 1,
         latest_compaction: {
           generation: "1",
-          summary_message_id: "conv-test-compaction-summary-1",
+          summary_message_id: "conv_8498648a-66ba-716f-8243-8cf147533e52",
           surface_revision: "4",
           tokens_before: { input_tokens: 8_400, source: "estimated" },
           estimated_tokens_after: 1_900,
@@ -1221,16 +1159,16 @@ describe("CommandDispatcher", () => {
   it("runs /reload through one canonical App Server operation", async () => {
     const h = await harness();
     const reloading = h.dispatcher.submit("/reload");
-    const reload = await nextRequest(h, "resources/reload");
+    const reload = await nextRequest(h, "configuration/reload");
     h.transport.respond(reload.id, {
-      type: "resources_reloaded",
+      type: "configuration_reloaded",
       resource_revision: "2",
       capability_revision: "4",
     });
     assert.deepEqual(await reloading, {
       kind: "transient",
       level: "info",
-      text: "runtime resources reloaded to generation 2 (capabilities 4)",
+      text: "configuration reloaded to generation 2 (capabilities 4)",
     });
   });
 
@@ -1249,7 +1187,7 @@ describe("CommandDispatcher", () => {
   it("presents a typed refusal from /reload", async () => {
     const h = await harness();
     const reloading = h.dispatcher.submit("/reload");
-    const reload = await nextRequest(h, "resources/reload");
+    const reload = await nextRequest(h, "configuration/reload");
     h.transport.respondError(reload.id, {
       code: -32000,
       message: "runtime resources are busy: attempt",
@@ -1274,9 +1212,9 @@ describe("CommandDispatcher", () => {
       diagnostics: () => ({
         connection: "external App Server at ws://127.0.0.1:8080",
         ownership: "an external owner runs the App Server; exiting only disconnects",
-        sessionId: "session-1",
+        sessionId: "ses_84097828-fc31-78c8-9292-10df48901a85",
         attachmentId: "att-1",
-        conversationId: "conv-test",
+        conversationId: "conv_01900000-0000-7000-8000-000000000002",
         runtimeIncarnation: "9007199254740993",
         cursor: runtimeCursor(0),
         attachedSessions: 2,
@@ -1326,7 +1264,7 @@ describe("CommandDispatcher", () => {
     const h = await harness();
     const before = h.transport.log.requests.length;
     const outcome = await h.dispatcher.submit(
-      "/approve conv-test::attempt-1-interaction-1 allow",
+      "/approve conv_01900000-0000-7000-8000-000000000002::attempt-1-interaction-1 allow",
     );
     assert.equal(outcome.kind, "transient");
     if (outcome.kind === "transient") {
@@ -1337,34 +1275,18 @@ describe("CommandDispatcher", () => {
     assert.equal(h.transport.log.count("interaction/respond"), 0);
   });
 
-  it("opens approval selection without a native mutation and rejects raw arguments", async () => {
-    const h = await harness();
-    const before = h.transport.log.requests.length;
-    assert.deepEqual(await h.dispatcher.submit("/approval"), {
-      kind: "choose_approval",
-    });
-    for (const argument of ["policy", "full_access"]) {
-      assert.deepEqual(await h.dispatcher.submit(`/approval ${argument}`), {
-        kind: "transient",
-        level: "error",
-        text: "usage: /approval",
-      });
-    }
-    assert.equal(h.transport.log.requests.length, before);
-  });
-
   it("cancels one background execution by its runtime identity", async () => {
     const h = await harness();
-    const cancelling = h.dispatcher.submit("/cancel exec-7");
+    const cancelling = h.dispatcher.submit("/cancel exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5");
     const cancel = await nextRequest(h, "background/cancel");
     assert.equal(
       paramsOf(cancel, "background/cancel").execution_id,
-      "exec-7",
+      "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5",
     );
     h.transport.respond(cancel.id, {
       type: "background",
       execution: {
-        execution_id: "exec-7",
+        execution_id: "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5",
         tool_id: "tool-background",
         tool_name: "bash",
         state: "cancelling",
@@ -1438,31 +1360,16 @@ describe("CLI arguments", () => {
   const localArgv = [
     "--binary",
     "/usr/bin/rustx",
-    "--user-settings",
-    "/private/user/settings.toml",
-    "--models",
-    "/m.toml",
     "--runtime-root",
     "/private/state",
     "--workspace",
     "/work/project",
     "--config",
-    "/work/project/rustx.toml",
+    "/private/user/rustx.toml",
     "--model",
     "local/dev",
     "--name",
     "auth refactor",
-    "--skill",
-    "/skills/first",
-    "--skill",
-    "relative/second",
-    "--no-automatic-skills",
-    "--no-builtin-tools",
-    "--no-direct-tools",
-    "--tools",
-    "read,search",
-    "--exclude-tools",
-    " search , ",
   ];
 
   it("parses the complete local self-hosted argument set", () => {
@@ -1473,21 +1380,13 @@ describe("CLI arguments", () => {
     assert.equal(parsed.mode.binary, "/usr/bin/rustx");
     // Process-level source bindings configure the App Server process.
     assert.deepEqual(parsed.mode.launch, {
-      userSettings: "/private/user/settings.toml",
-      models: "/m.toml",
+      config: "/private/user/rustx.toml",
       runtimeRoot: "/private/state",
     });
     // Session settings are `session/create` inputs, and stay separate.
     assert.deepEqual(parsed.sessionSettings, {
       cwd: "/work/project",
-      config: "/work/project/rustx.toml",
       model: { model: "local/dev" },
-      skill_paths: ["/skills/first", "relative/second"],
-      no_automatic_skills: true,
-      no_builtin_tools: true,
-      no_direct_tools: true,
-      tools: ["read", "search"],
-      exclude_tools: ["search"],
     });
     assert.equal(parsed.sessionName, "auth refactor");
     assert.deepEqual(parsed.routing, {
@@ -1504,13 +1403,10 @@ describe("CLI arguments", () => {
     // Every omitted binding keeps the App Server's canonical default; the
     // client never fabricates a path, and never reads one.
     assert.deepEqual(parsed.mode.launch, {
-      userSettings: undefined,
-      models: undefined,
+      config: undefined,
       runtimeRoot: undefined,
     });
-    assert.equal(parsed.sessionSettings.config, null);
     assert.equal(parsed.sessionSettings.model, null);
-    assert.deepEqual(parsed.sessionSettings.skill_paths, []);
     assert.equal(parsed.sessionName, undefined);
   });
 
@@ -1564,7 +1460,7 @@ describe("CLI arguments", () => {
     // These configure a *process*. A remote App Server was launched by someone
     // else and already has its own; accepting them would be a flag that
     // pretends to configure a server it cannot reach.
-    for (const flag of ["--user-settings", "--models", "--runtime-root"]) {
+    for (const flag of ["--config", "--runtime-root"]) {
       assert.throws(
         () =>
           parseArguments([
@@ -1613,13 +1509,13 @@ describe("CLI arguments", () => {
       "--binary",
       "/usr/bin/rustx",
       "--session",
-      "session-3",
+      "ses_eb278475-f606-7143-97df-8cb657e1c7ee",
       "--node",
-      "node-7",
+      "node_c346d387-9a21-70f0-ae5c-7422521183b3",
     ]);
     assert.deepEqual(explicit.routing, {
-      session: "session-3",
-      node: "node-7",
+      session: "ses_eb278475-f606-7143-97df-8cb657e1c7ee",
+      node: "node_c346d387-9a21-70f0-ae5c-7422521183b3",
       openSessionSelector: false,
     });
     const picker = parseArguments(["--binary", "/usr/bin/rustx", "--resume"]);
@@ -1638,7 +1534,7 @@ describe("CLI arguments", () => {
       /cannot be combined/,
     );
     assert.throws(
-      () => parseArguments(["--binary", "/usr/bin/rustx", "--node", "node-7"]),
+      () => parseArguments(["--binary", "/usr/bin/rustx", "--node", "node_c346d387-9a21-70f0-ae5c-7422521183b3"]),
       /--node requires --session/,
     );
   });

@@ -946,7 +946,9 @@ mod tests {
         let mut projector = SubagentObservationProjector::default();
         let request = crate::runtime::interaction::InteractionRequest {
             id: crate::runtime::identity::InteractionId::new("interaction-1"),
-            conversation_id: crate::runtime::identity::ConversationId::new("conv-1"),
+            conversation_id: crate::runtime::identity::ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ),
             attempt_id: AttemptId::new("attempt-1"),
             turn: 1,
             kind: InteractionKind::Approval {
@@ -986,7 +988,9 @@ mod tests {
             &mut projector,
             &ConversationObservation::InteractionSettled {
                 interaction: crate::runtime::interaction::InteractionRef::new(
-                    crate::runtime::identity::ConversationId::new("conv-1"),
+                    crate::runtime::identity::ConversationId::new(
+                        "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+                    ),
                     crate::runtime::identity::InteractionId::new("interaction-1"),
                 ),
                 outcome: crate::runtime::interaction::InteractionOutcome::Responded {
@@ -1008,7 +1012,9 @@ mod tests {
             schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
             event_id: crate::runtime::identity::EventId::new("event-1"),
             sequence: 1,
-            conversation_id: crate::runtime::identity::ConversationId::new("conv-1"),
+            conversation_id: crate::runtime::identity::ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ),
             attempt_id: Some(AttemptId::new("attempt-1")),
             turn_id: None,
             timestamp: now(),
@@ -1021,7 +1027,9 @@ mod tests {
         let mut projector = SubagentObservationProjector::default();
         let request = crate::runtime::interaction::InteractionRequest {
             id: crate::runtime::identity::InteractionId::new("interaction-2"),
-            conversation_id: crate::runtime::identity::ConversationId::new("conv-1"),
+            conversation_id: crate::runtime::identity::ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ),
             attempt_id: AttemptId::new("attempt-1"),
             turn: 1,
             kind: InteractionKind::Questionnaire {
@@ -1325,7 +1333,9 @@ mod tests {
                 interaction: crate::runtime::interaction::RoutedInteraction::primary(
                     crate::runtime::interaction::InteractionRequest {
                         id: crate::runtime::identity::InteractionId::new("interaction-1"),
-                        conversation_id: crate::runtime::identity::ConversationId::new("conv-1"),
+                        conversation_id: crate::runtime::identity::ConversationId::new(
+                            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+                        ),
                         attempt_id: AttemptId::new("attempt-1"),
                         turn: 1,
                         kind: InteractionKind::Approval {
@@ -1356,7 +1366,9 @@ mod tests {
             &mut projector,
             &ConversationObservation::InteractionSettled {
                 interaction: crate::runtime::interaction::InteractionRef::new(
-                    crate::runtime::identity::ConversationId::new("conv-1"),
+                    crate::runtime::identity::ConversationId::new(
+                        "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+                    ),
                     crate::runtime::identity::InteractionId::new("interaction-1"),
                 ),
                 outcome: crate::runtime::interaction::InteractionOutcome::Responded {

@@ -195,6 +195,7 @@ mod tests {
         _dir: tempfile::TempDir,
         workspace: Workspace,
         tool_output: ManagedToolOutput,
+        spill: std::path::PathBuf,
     }
 
     fn roots() -> Roots {
@@ -203,16 +204,17 @@ mod tests {
         fs::write(dir.path().join("workspace/file.txt"), "x").expect("file");
         let workspace = Workspace::new(dir.path().join("workspace")).expect("workspace");
         let tool_output = ManagedToolOutput::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             dir.path().join("tool-output"),
         )
         .expect("managed output");
         let spill = tool_output.open_spill().expect("spill");
-        drop(spill);
+        let spill = spill.path().to_path_buf();
         Roots {
             _dir: dir,
             workspace,
             tool_output,
+            spill,
         }
     }
 
@@ -246,7 +248,7 @@ mod tests {
     #[test]
     fn managed_output_is_readable() {
         let roots = roots();
-        let spill = roots.tool_output.root().join("results/result_1.txt");
+        let spill = roots.spill;
         let locator = absolute(&spill);
         resolve(&roots.workspace, &roots.tool_output, &locator).expect("read of managed output");
     }

@@ -1,11 +1,11 @@
 //! The bounded startup argument contract of the `rustx` binary.
 //!
 //! Parsing preserves user intent. The Rust launch resolver owns discovery,
-//! field authority, trust, layering, defaults, paths and semantic validation.
+//! field authority, semantic overlay, defaults, paths and semantic validation.
 //!
 //! ```text
-//! rustx [--models <path>] [--config <path>] [--workspace <dir>] [--runtime-root <dir>]
-//!       [--model <provider/model>] [--trust grant|revoke]
+//! rustx [--config <path>] [--workspace <dir>] [--runtime-root <dir>]
+//!       [--model <model-name>]
 //!       [--inspect-conversation <conversation-id>]
 //!       [--session <session-id> [--node <node-id>]] [--name <text>]
 //! ```
@@ -31,19 +31,14 @@
 use std::path::PathBuf;
 
 use super::composition::StartupSession;
-use super::launch::{LaunchRequest, TrustAction};
+use super::launch::LaunchRequest;
 use super::session::{SessionId, SessionNodeId};
 
 const LAUNCH_VALUE_FLAGS: &[&str] = &[
     "--model",
-    "--trust",
-    "--models",
     "--config",
     "--workspace",
     "--runtime-root",
-    "--skill",
-    "--tools",
-    "--exclude-tools",
     "--session",
     "--node",
     "--name",
@@ -52,9 +47,9 @@ const LAUNCH_VALUE_FLAGS: &[&str] = &[
 
 pub const CONFIG_USAGE: &str = "Workflow authoring (offline, no execution or authority changes):\n\
   rustx workflow check <id> [--workspace <dir>] [--config <path>]\n\
-    [--models <path>] [--model <provider/model>] [--json]\n\
+    [--model <model-name>] [--json]\n\
   rustx workflow explain <id> [--workspace <dir>] [--config <path>]\n\
-    [--models <path>] [--model <provider/model>] [--json]\n\
+    [--model <model-name>] [--json]\n\
   Only discovered Workflow ids are inspected. Static validity is not runtime readiness.\n\
   Exit 2: invalid; exit 3: static valid/incomplete, runtime readiness unresolved.\n\
 Configuration commands:\n\
@@ -67,14 +62,14 @@ Configuration commands:\n\
   rustx config check [launch selection/path flags] [--json]\n\
   rustx config show (--sources | --agent <main|name>) [launch selection/path flags] [--json]\n\
   rustx doctor --probe [--prepare] [launch selection/path flags] [--json]\n\
-Diagnostic commands reject Session and trust-change flags.\n\
+Diagnostic commands reject Session mutation flags.\n\
 Exit: 0 initialization/help complete; 1 probe or output failure; 2 invalid;\n\
 3 incomplete or unresolved readiness. Check/show never resolve credentials,\n\
 spawn, connect, prepare environments, or create Sessions/state.\n\
 Show describes the prospective next launch. Doctor prints an effect plan before\n\
 effects; --prepare explicitly permits managed Python preparation.\n\
-Init creates user models.toml and settings.toml only, never overwrites files,\n\
-and never grants project trust. Project rustx.toml remains optional.";
+Init creates ~/rustx/rustx.toml and ~/rustx/.agents, never overwrites files,\n\
+Workspace rustx.toml remains optional.";
 
 /// The finite Rust-owned command grammar. Runtime flags have one parser.
 #[derive(Debug)]
@@ -201,12 +196,9 @@ pub fn parse_command(
         }
     }
     let request = parse_arguments(arguments)?;
-    if request.trust.is_some()
-        || request.startup_session != StartupSession::Empty
-        || request.session_name.is_some()
-    {
+    if request.startup_session != StartupSession::Empty || request.session_name.is_some() {
         return Err(ArgumentError::InvalidValue {
-            flag: "diagnostic commands do not accept trust or Session operations".into(),
+            flag: "diagnostic commands do not accept Session operations".into(),
         });
     }
     match operation.as_str() {
@@ -251,7 +243,7 @@ fn parse_workflow(mut arguments: Vec<String>) -> Result<Command, ArgumentError> 
     while index < arguments.len() {
         if !matches!(
             arguments[index].as_str(),
-            "--workspace" | "--config" | "--models" | "--model"
+            "--workspace" | "--config" | "--model"
         ) {
             return Err(ArgumentError::UnknownFlag {
                 flag: arguments[index].clone(),
@@ -290,28 +282,30 @@ fn remove_switch(arguments: &mut Vec<String>, flag: &str) -> Result<bool, Argume
 }
 
 /// The usage text printed to **stderr** for an argument failure.
-pub const USAGE: &str = "usage: rustx [--models <models.toml>] [--config <rustx.toml>] \
-                         [--workspace <dir>] [--runtime-root <dir>] \
-                         [--model <provider/model>] [--trust grant|revoke] \
-                         [--inspect-conversation <conversation-id>] \
-                         [--session <session-id> [--node <node-id>]] \
-                         [--name <text>] [--skill <path>] [--no-automatic-skills] \
-                         [--no-direct-tools | --tools <a,b> | --no-builtin-tools] \
-                         [--exclude-tools <a,b>]\n\
-Direct Tool selection: defaults include Read. --tools is exact; exclusions subtract last.\n\
---no-direct-tools removes direct ordinary Tools. Agent/Workflow dispatch and Extensions remain.\n\
-It conflicts with --tools, --exclude-tools,\n\
-and --no-builtin-tools. --tools conflicts with --no-builtin-tools.\n\
-Explicit lists must be non-empty, unique, known and unambiguous.\n\
-Tool exposure does not disable source preparation; use source enabled:false.\n\
-Skills: automatic sources are global (~/.agents/skills) and workspace\n\
-(<workspace>/.agents/skills), selected by [skills].sources. Precedence is\n\
-explicit --skill > workspace > global; array order is never precedence.\n\
---no-automatic-skills disables automatic discovery. A malformed package is excluded with\n\
-a diagnostic, never failing the rest of the catalog. The root Agent sees every\n\
-eligible catalog Skill minus agent.disabled_skills; named Agents select\n\
-identities explicitly. Lazy Skills are advertised only when this domain admits\n\
-native Read; a catalog entry is metadata, never a loaded SKILL.md body.";
+pub const USAGE: &str = r"usage: rustx [--config <absolute-rustx.toml>] [--workspace <dir>]
+             [--runtime-root <absolute-dir>] [--model <model-name>]
+             [--inspect-conversation <conv_uuid-v7>]
+             [--session <ses_uuid-v7> [--node <node_uuid-v7>]] [--name <text>]
+
+User configuration defaults to ~/rustx/rustx.toml. --config replaces only that
+User source binding; it never relocates ~/rustx/.agents or ~/rustx/runtime.
+Workspace configuration is <workspace>/rustx.toml, with no ancestor accumulation.
+--runtime-root is a process binding; reload cannot change it.
+--model selects deliberate Session intent and never edits an authored default.
+
+rustx.toml owns Root capability selection and global Tool invocation policy.
+Root Native Tools are an explicit whitelist. Skills, MCP and Managed Python
+use all/exact/empty selections. Plugins default off. Named Agents own complete
+independent profiles; Root authorizes delegation through agent.agents.
+Resource definitions in the two .agents roots grant no Root capabilities.
+Unused MCP and Python definitions do not connect or prepare environments.
+
+Skills are prompt visibility, never filesystem access control. Prompts provide
+the User and Workspace Skill roots for progressive disclosure. Same-name
+Workspace resources shadow User resources completely, including invalid ones.
+Save commits source bytes only. /reload publishes one coherent configuration
+generation; already-admitted work retains its frozen generation.
+";
 
 /// Parses the bounded startup arguments.
 ///
@@ -325,22 +319,14 @@ pub fn parse_arguments(
     arguments: impl IntoIterator<Item = String>,
 ) -> Result<LaunchRequest, ArgumentError> {
     let mut model = None;
-    let mut trust = None;
-    let mut models: Option<PathBuf> = None;
     let mut config: Option<PathBuf> = None;
     let mut workspace: Option<PathBuf> = None;
     let mut runtime_root: Option<PathBuf> = None;
-    let mut skill_paths = Vec::new();
-    let mut no_automatic_skills = false;
-    let mut no_builtin_tools = false;
-    let mut no_direct_tools = false;
     let mut continue_active_session = false;
     let mut inspect_conversation: Option<String> = None;
     let mut session: Option<String> = None;
     let mut node: Option<String> = None;
     let mut session_name: Option<String> = None;
-    let mut tools = None;
-    let mut exclude_tools = None;
 
     let mut arguments = arguments.into_iter();
     while let Some(flag) = arguments.next() {
@@ -351,33 +337,18 @@ pub fn parse_arguments(
                 };
                 match flag.as_str() {
                     "--model" => set_text(&mut model, &value, &flag)?,
-                    "--trust" => set_text(&mut trust, &value, &flag)?,
-                    "--models" => set_path(&mut models, value.as_str(), flag.as_str())?,
                     "--config" => set_path(&mut config, value.as_str(), flag.as_str())?,
                     "--workspace" => set_path(&mut workspace, value.as_str(), flag.as_str())?,
                     "--runtime-root" => set_path(&mut runtime_root, value.as_str(), flag.as_str())?,
-                    "--skill" => {
-                        if value.is_empty() {
-                            return Err(ArgumentError::InvalidValue { flag });
-                        }
-                        skill_paths.push(PathBuf::from(value));
-                    }
                     "--session" => set_text(&mut session, value.as_str(), flag.as_str())?,
                     "--node" => set_text(&mut node, value.as_str(), flag.as_str())?,
                     "--name" => set_text(&mut session_name, value.as_str(), flag.as_str())?,
                     "--inspect-conversation" => {
                         set_text(&mut inspect_conversation, value.as_str(), flag.as_str())?;
                     }
-                    "--tools" => set_names(&mut tools, value.as_str(), flag.as_str())?,
-                    "--exclude-tools" => {
-                        set_names(&mut exclude_tools, value.as_str(), flag.as_str())?;
-                    }
                     _ => unreachable!(),
                 }
             }
-            "--no-automatic-skills" => set_bool(&mut no_automatic_skills, flag.as_str())?,
-            "--no-builtin-tools" => set_bool(&mut no_builtin_tools, flag.as_str())?,
-            "--no-direct-tools" => set_bool(&mut no_direct_tools, flag.as_str())?,
             "--continue" => set_bool(&mut continue_active_session, flag.as_str())?,
             other => {
                 return Err(ArgumentError::UnknownFlag {
@@ -387,16 +358,6 @@ pub fn parse_arguments(
         }
     }
 
-    let selection = crate::capabilities::AgentActivation {
-        no_direct_tools,
-        no_builtin_tools,
-        tools: tools.clone(),
-        exclude_tools: exclude_tools.clone().unwrap_or_default(),
-        ..Default::default()
-    };
-    if let Some((first, second)) = selection.conflict() {
-        return Err(ArgumentError::Conflicting { first, second });
-    }
     let startup_session = startup_request(
         inspect_conversation,
         continue_active_session,
@@ -404,31 +365,13 @@ pub fn parse_arguments(
         node,
         session_name.is_some(),
     )?;
-    let trust = match trust.as_deref() {
-        None => None,
-        Some("grant") => Some(TrustAction::Grant),
-        Some("revoke") => Some(TrustAction::Revoke),
-        Some(_) => {
-            return Err(ArgumentError::InvalidValue {
-                flag: "--trust".into(),
-            });
-        }
-    };
     Ok(LaunchRequest {
-        models,
         config,
         workspace,
         runtime_root,
         model,
-        trust,
-        skill_paths,
-        no_automatic_skills,
-        no_builtin_tools,
-        no_direct_tools,
         startup_session,
         session_name,
-        tools,
-        exclude_tools,
     })
 }
 
@@ -465,7 +408,10 @@ fn startup_request(
             });
         }
         Ok(StartupSession::InspectConversation {
-            conversation_id: crate::runtime::identity::ConversationId::new(conversation_id),
+            conversation_id: crate::runtime::identity::ConversationId::parse(conversation_id)
+                .map_err(|_| ArgumentError::InvalidValue {
+                    flag: "--inspect-conversation".into(),
+                })?,
         })
     } else {
         startup_session(continue_active_session, session, node)
@@ -490,8 +436,14 @@ fn startup_session(
             });
         }
         return Ok(StartupSession::Select {
-            session: SessionId::new(session),
-            node: node.map(SessionNodeId::new),
+            session: SessionId::parse(session).map_err(|_| ArgumentError::InvalidValue {
+                flag: "--session".into(),
+            })?,
+            node: node.map(SessionNodeId::parse).transpose().map_err(|_| {
+                ArgumentError::InvalidValue {
+                    flag: "--node".into(),
+                }
+            })?,
         });
     }
     if node.is_some() {
@@ -538,23 +490,6 @@ fn set_path(slot: &mut Option<PathBuf>, value: &str, flag: &str) -> Result<(), A
         return Err(ArgumentError::InvalidValue { flag: flag.into() });
     }
     *slot = Some(PathBuf::from(value));
-    Ok(())
-}
-
-fn set_names(slot: &mut Option<Vec<String>>, value: &str, flag: &str) -> Result<(), ArgumentError> {
-    if slot.is_some() {
-        return Err(ArgumentError::Repeated {
-            flag: flag.to_owned(),
-        });
-    }
-    let names = value
-        .split(',')
-        .map(str::trim)
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    crate::capabilities::validate_tool_names(&names, flag)
-        .map_err(|_| ArgumentError::InvalidValue { flag: flag.into() })?;
-    *slot = Some(names);
     Ok(())
 }
 
@@ -646,16 +581,13 @@ mod tests {
                 Command::Workflow { json: true, .. }
             ));
             for flag in [
-                "--trust",
                 "--session",
                 "--continue",
                 "--name",
                 "--runtime-root",
                 "--prepare",
                 "--probe",
-                "--tools",
                 "--no-direct-tools",
-                "--skill",
             ] {
                 assert!(
                     parse(&["workflow", operation, "typed_agent", flag, "x"]).is_err(),
@@ -766,8 +698,6 @@ mod tests {
     #[test]
     fn complete_arguments_parse() {
         let paths = parse_arguments(args(&[
-            "--models",
-            "/m.json",
             "--config",
             "/r.json",
             "--workspace",
@@ -776,10 +706,6 @@ mod tests {
             "/private",
         ]))
         .expect("valid");
-        assert_eq!(
-            paths.models.as_deref().and_then(std::path::Path::to_str),
-            Some("/m.json")
-        );
         assert_eq!(
             paths.config.as_deref().and_then(std::path::Path::to_str),
             Some("/r.json")
@@ -791,21 +717,22 @@ mod tests {
     #[test]
     fn malformed_arguments_fail() {
         assert!(matches!(
-            parse_arguments(args(&["--future"])).expect_err("unknown"),
+            parse_arguments(args(&["--future"]))
+                .expect_err("ses_b23a6a84-39c0-7de5-8158-93e7c90c1e32"),
             ArgumentError::UnknownFlag { .. }
         ));
         assert!(matches!(
-            parse_arguments(args(&["--models"])).expect_err("no value"),
+            parse_arguments(args(&["--config"])).expect_err("no value"),
             ArgumentError::MissingValue { .. }
         ));
         assert!(matches!(
-            parse_arguments(args(&["--models", "a", "--models", "b"])).expect_err("repeated"),
+            parse_arguments(args(&["--config", "a", "--config", "b"])).expect_err("repeated"),
             ArgumentError::Repeated { .. }
         ));
         assert!(
             parse_arguments(args(&[]))
                 .expect("minimal intent")
-                .models
+                .config
                 .is_none()
         );
         // Choosing a Session interactively belongs to the client that can
@@ -824,8 +751,6 @@ mod tests {
     #[test]
     fn implicit_resume_is_rejected_without_a_session_identity() {
         let default = parse_arguments(args(&[
-            "--models",
-            "m",
             "--config",
             "r",
             "--workspace",
@@ -837,8 +762,6 @@ mod tests {
         assert_eq!(default.startup_session, StartupSession::Empty);
 
         let continued = parse_arguments(args(&[
-            "--models",
-            "m",
             "--config",
             "r",
             "--workspace",
@@ -861,50 +784,61 @@ mod tests {
     /// explicit attachment request. The obsolete implicit-resume flag is rejected.
     #[test]
     fn naming_a_startup_session_is_exclusive_and_carries_its_optional_node() {
-        let base = args(&[
-            "--models",
-            "m",
-            "--config",
-            "r",
-            "--workspace",
-            "w",
-            "--runtime-root",
-            "p",
-        ]);
+        let base = args(&["--config", "r", "--workspace", "w", "--runtime-root", "p"]);
         let with = |extra: &[&str]| {
             let mut values = base.clone();
             values.extend(args(extra));
             values
         };
 
-        let selected = parse_arguments(with(&["--session", "session-3"])).expect("session");
+        let selected = parse_arguments(with(&[
+            "--session",
+            "ses_eb278475-f606-7143-87df-8cb657e1c7ee",
+        ]))
+        .expect("session");
         assert_eq!(
             selected.startup_session,
             StartupSession::Select {
-                session: SessionId::new("session-3"),
+                session: SessionId::new("ses_eb278475-f606-7143-87df-8cb657e1c7ee"),
                 node: None,
             }
         );
 
-        let node = parse_arguments(with(&["--session", "session-3", "--node", "node-7"]))
-            .expect("session and node");
+        let node = parse_arguments(with(&[
+            "--session",
+            "ses_eb278475-f606-7143-87df-8cb657e1c7ee",
+            "--node",
+            "node_c346d387-9a21-70f0-8e5c-7422521183b3",
+        ]))
+        .expect("session and node");
         assert_eq!(
             node.startup_session,
             StartupSession::Select {
-                session: SessionId::new("session-3"),
-                node: Some(SessionNodeId::new("node-7")),
+                session: SessionId::new("ses_eb278475-f606-7143-87df-8cb657e1c7ee"),
+                node: Some(SessionNodeId::new(
+                    "node_c346d387-9a21-70f0-8e5c-7422521183b3"
+                )),
             }
         );
 
         assert!(matches!(
-            parse_arguments(with(&["--session", "session-3", "--continue"])).expect_err("both"),
+            parse_arguments(with(&[
+                "--session",
+                "ses_eb278475-f606-7143-87df-8cb657e1c7ee",
+                "--continue"
+            ]))
+            .expect_err("both"),
             ArgumentError::Conflicting {
                 first: "--continue",
                 second: "--session"
             }
         ));
         assert!(matches!(
-            parse_arguments(with(&["--node", "node-7"])).expect_err("unqualified node"),
+            parse_arguments(with(&[
+                "--node",
+                "node_c346d387-9a21-70f0-8e5c-7422521183b3"
+            ]))
+            .expect_err("unqualified node"),
             ArgumentError::Dependent {
                 flag: "--node",
                 requires: "--session"
@@ -922,16 +856,7 @@ mod tests {
     /// *which* Session to open.
     #[test]
     fn naming_the_bound_session_combines_with_every_startup_session_request() {
-        let base = args(&[
-            "--models",
-            "m",
-            "--config",
-            "r",
-            "--workspace",
-            "w",
-            "--runtime-root",
-            "p",
-        ]);
+        let base = args(&["--config", "r", "--workspace", "w", "--runtime-root", "p"]);
         let with = |extra: &[&str]| {
             let mut values = base.clone();
             values.extend(args(extra));
@@ -946,14 +871,18 @@ mod tests {
             .expect_err("explicit identity required");
         assert!(matches!(continued, ArgumentError::Dependent { .. }));
 
-        let selected =
-            parse_arguments(with(&["--session", "session-3", "--name", "auth refactor"]))
-                .expect("name");
+        let selected = parse_arguments(with(&[
+            "--session",
+            "ses_eb278475-f606-7143-87df-8cb657e1c7ee",
+            "--name",
+            "auth refactor",
+        ]))
+        .expect("name");
         assert_eq!(selected.session_name.as_deref(), Some("auth refactor"));
         assert_eq!(
             selected.startup_session,
             StartupSession::Select {
-                session: SessionId::new("session-3"),
+                session: SessionId::new("ses_eb278475-f606-7143-87df-8cb657e1c7ee"),
                 node: None,
             }
         );
@@ -976,30 +905,23 @@ mod tests {
     /// path exactly, and never falls through to Session composition.
     #[test]
     fn inspecting_a_conversation_is_an_exclusive_startup_request() {
-        let base = args(&[
-            "--models",
-            "m",
-            "--config",
-            "r",
-            "--workspace",
-            "w",
-            "--runtime-root",
-            "p",
-        ]);
+        let base = args(&["--config", "r", "--workspace", "w", "--runtime-root", "p"]);
         let with = |extra: &[&str]| {
             let mut values = base.clone();
             values.extend(args(extra));
             values
         };
 
-        let inspected =
-            parse_arguments(with(&["--inspect-conversation", "conv-parent-subagent-1"]))
-                .expect("inspection");
+        let inspected = parse_arguments(with(&[
+            "--inspect-conversation",
+            "conv_c89c766b-0004-76cb-8baf-0d5b1a677c1e",
+        ]))
+        .expect("inspection");
         assert_eq!(
             inspected.startup_session,
             StartupSession::InspectConversation {
                 conversation_id: crate::runtime::identity::ConversationId::new(
-                    "conv-parent-subagent-1",
+                    "conv_c89c766b-0004-76cb-8baf-0d5b1a677c1e"
                 ),
             }
         );
@@ -1035,85 +957,26 @@ mod tests {
     }
 
     #[test]
-    fn tool_and_skill_startup_options_are_typed_and_repeatable_only_where_allowed() {
-        let paths = parse_arguments(args(&[
+    fn cfg332_removed_configuration_and_session_narrowing_flags_are_rejected() {
+        for flag in [
             "--models",
-            "m",
-            "--config",
-            "r",
-            "--workspace",
-            "w",
-            "--runtime-root",
-            "p",
+            "--user-settings",
             "--no-automatic-skills",
             "--skill",
-            "one",
-            "--skill",
-            "two",
+            "--skills",
+            "--no-builtin-tools",
+            "--no-direct-tools",
             "--tools",
-            "read, search",
             "--exclude-tools",
-            "bash,grep",
-        ]))
-        .expect("options");
-        assert!(paths.no_automatic_skills);
-        assert_eq!(
-            paths.skill_paths,
-            vec![
-                std::path::PathBuf::from("one"),
-                std::path::PathBuf::from("two")
-            ]
-        );
-        assert_eq!(
-            paths.tools,
-            Some(vec!["read".to_owned(), "search".to_owned()])
-        );
-        assert_eq!(
-            paths.exclude_tools,
-            Some(vec!["bash".to_owned(), "grep".to_owned()])
-        );
-        assert!(!paths.no_builtin_tools);
-    }
-
-    #[test]
-    fn exact_tool_flag_conflicts_and_explicit_lists_fail_closed() {
-        for flags in [
-            vec!["--no-direct-tools", "--tools", "read"],
-            vec!["--no-direct-tools", "--exclude-tools", "read"],
-            vec!["--no-direct-tools", "--no-builtin-tools"],
-            vec!["--tools", "read", "--no-builtin-tools"],
+            "--trust",
         ] {
-            assert!(matches!(
-                parse_arguments(args(&flags)),
-                Err(ArgumentError::Conflicting { .. })
-            ));
-        }
-        for flag in ["--tools", "--exclude-tools"] {
-            for value in [
-                "",
-                " ",
-                ",",
-                "read,",
-                ",read",
-                "read,,grep",
-                "read,read",
-                "read, read",
-            ] {
-                assert!(
-                    matches!(
-                        parse_arguments(args(&[flag, value])),
-                        Err(ArgumentError::InvalidValue { .. })
-                    ),
-                    "{flag} {value:?}"
-                );
-            }
-        }
-        for flags in [
-            vec!["--no-direct-tools"],
-            vec!["--tools", "read,grep", "--exclude-tools", "read"],
-            vec!["--no-builtin-tools", "--exclude-tools", "external"],
-        ] {
-            assert!(parse_arguments(args(&flags)).is_ok());
+            assert!(
+                matches!(
+                    parse_arguments(args(&[flag])),
+                    Err(ArgumentError::UnknownFlag { .. })
+                ),
+                "{flag}"
+            );
         }
     }
 }

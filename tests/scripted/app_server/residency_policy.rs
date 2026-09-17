@@ -416,7 +416,7 @@ async fn inactive_goal_can_idle_unload_and_policy_is_user_only() {
     let clock = policy(&mut f, 2);
     std::fs::write(
         f.workspaces[0].join("rustx.toml"),
-        "[agent.extensions.goal]\nenabled = true\n",
+        "[agent.plugins.goal]\nenabled = true\n",
     )
     .unwrap();
     let a = f.load(0).await.unwrap().unwrap();
@@ -438,7 +438,7 @@ async fn inactive_goal_can_idle_unload_and_policy_is_user_only() {
             .unwrap()
             .unwrap_err()
             .to_string()
-            .contains("forbidden")
+            .contains("process")
     );
     f.close().await;
 }
@@ -512,7 +512,7 @@ async fn goal_fixture() -> (
     let clock = policy(&mut f, 2);
     std::fs::write(
         f.workspaces[0].join("rustx.toml"),
-        "[agent.extensions.goal]\nenabled = true\n",
+        "[agent.plugins.goal]\nenabled = true\n",
     )
     .unwrap();
     let a = f.load(0).await.unwrap().unwrap();

@@ -36,7 +36,7 @@ impl Fixture {
         let root =
             tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
         let home = root.path().join("home");
-        let config = home.join(".config/rustx");
+        let config = home.join("rustx");
         std::fs::create_dir_all(&config).unwrap();
         let initialized = Command::new(env!("CARGO_BIN_EXE_rustx"))
             .env("HOME", &home)
@@ -73,23 +73,23 @@ impl Fixture {
             "{}",
             String::from_utf8_lossy(&initialized.stdout)
         );
-        let host =
-            rustx::local_runtime::HostEnvironment::from_paths(root.path().into(), home, None, None)
-                .unwrap();
+        let authored = config.join("rustx.toml");
+        let mut source: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
+        source["agent"].as_table_mut().unwrap().insert("tools".into(), toml::Value::try_from(serde_json::json!({"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"]})).unwrap());
+        source["agent"].as_table_mut().unwrap().insert(
+            "plugins".into(),
+            toml::Value::try_from(
+                serde_json::json!({"todo": {"enabled": true}, "agent_status": {"enabled": true}}),
+            )
+            .unwrap(),
+        );
+        std::fs::write(authored, toml::to_string_pretty(&source).unwrap()).unwrap();
         let controller = SessionController::open(&root.path().join("runtime")).unwrap();
         let mut sessions = Vec::new();
         for name in ["a", "b"] {
             let workspace = root.path().join(name);
             std::fs::create_dir(&workspace).unwrap();
-            rustx::local_runtime::launch::change_trust(
-                &rustx::local_runtime::LaunchRequest {
-                    workspace: Some(workspace.clone()),
-                    ..Default::default()
-                },
-                &host,
-                rustx::local_runtime::TrustAction::Grant,
-            )
-            .unwrap();
             sessions.push(
                 controller
                     .create_session(SessionPersistentState::from_input(
@@ -170,7 +170,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":5,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":6,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -198,7 +198,7 @@ async fn app_server_websocket_real_process_shared_conformance_and_listener_survi
         replacement.send(INITIALIZE.into()).await.unwrap();
         assert_eq!(
             json_response(&mut replacement).await["result"]["protocol_version"],
-            5
+            6
         );
         kill(
             Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
@@ -227,9 +227,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v2, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v5"),
+            Some("rustx.app-server.v6"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v5, rustx-token.wrong"),
+            Some("rustx.app-server.v6, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -381,8 +381,7 @@ async fn app_server_bootstrap_fails_before_readiness_and_owner_may_kill_stdio_ch
         for failure in ["settings", "catalog", "root"] {
             let f = Fixture::new().await;
             let path: PathBuf = match failure {
-                "settings" => f.root.path().join("home/.config/rustx/settings.toml"),
-                "catalog" => f.root.path().join("home/.config/rustx/models.toml"),
+                "settings" | "catalog" => f.root.path().join("home/rustx/rustx.toml"),
                 _ => {
                     std::fs::remove_dir_all(f.root.path().join("runtime")).unwrap();
                     f.root.path().join("runtime")
@@ -426,39 +425,26 @@ async fn app_server_stdio_broken_output_pipe_settles_with_input_still_open() {
 }
 
 #[tokio::test]
-async fn app_server_explicit_user_settings_are_authoritative_for_both_transports() {
+async fn app_server_explicit_user_config_are_authoritative_for_both_transports() {
     bounded(async {
         use app_server_conformance::AppServerConformanceDriver;
         use rustx::app_server::protocol::*;
         for ws in [false, true] {
             for explicit in [false, true] {
                 let f = Fixture::new().await;
-                let ambient = f.root.path().join("home/.config/rustx");
+                let ambient = f.root.path().join("home/rustx");
                 let selected = f.root.path().join("selected");
                 std::fs::create_dir(&selected).unwrap();
-                std::fs::copy(ambient.join("models.toml"), selected.join("models.toml")).unwrap();
-                let settings = std::fs::read_to_string(ambient.join("settings.toml")).unwrap();
-                // Different model catalogs prove source ownership and that authored
-                // relative bindings use the selected document parent, not launch cwd.
+                let authored = std::fs::read_to_string(ambient.join("rustx.toml")).unwrap();
+                std::fs::write(selected.join("rustx.toml"), &authored).unwrap();
                 std::fs::write(
-                    selected.join("settings.toml"),
-                    format!("models = \"models.toml\"\n{settings}"),
-                )
-                .unwrap();
-                std::fs::write(
-                    ambient.join("settings.toml"),
-                    format!("models = \"ambient-models.toml\"\n{settings}"),
-                )
-                .unwrap();
-                let catalog = std::fs::read_to_string(ambient.join("models.toml")).unwrap();
-                std::fs::write(
-                    ambient.join("ambient-models.toml"),
-                    catalog.replace("context_window = 128000", "context_window = 64000"),
+                    ambient.join("rustx.toml"),
+                    authored.replace("context_window = 128000", "context_window = 64000"),
                 )
                 .unwrap();
                 let mut command = f.command(if ws { "ws://127.0.0.1:0" } else { "stdio" });
                 if explicit {
-                    command.args(["--user-settings", "selected/settings.toml"]);
+                    command.arg("--config").arg(selected.join("rustx.toml"));
                 }
                 if ws {
                     command.arg("--token-file").arg(f.root.path().join("token"));
@@ -527,7 +513,7 @@ async fn app_server_explicit_user_settings_are_authoritative_for_both_transports
 }
 
 #[tokio::test]
-async fn app_server_explicit_user_settings_fail_before_readiness() {
+async fn app_server_explicit_user_config_fail_before_readiness() {
     bounded(async {
         let f = Fixture::new().await;
         for contents in [None, Some("secret-sentinel invalid TOML")] {
@@ -537,7 +523,7 @@ async fn app_server_explicit_user_settings_fail_before_readiness() {
             }
             for listen in ["stdio", "ws://127.0.0.1:0"] {
                 let mut command = f.command(listen);
-                command.arg("--user-settings").arg(&path);
+                command.arg("--config").arg(&path);
                 if listen != "stdio" {
                     command.arg("--token-file").arg(f.root.path().join("token"));
                 }
@@ -647,13 +633,13 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
         for forced in [false, true] {
             let f = Fixture::new().await;
             if forced {
-                let settings = f.root.path().join("home/.config/rustx/settings.toml");
+                let settings = f.root.path().join("home/rustx/rustx.toml");
                 let mut text = std::fs::read_to_string(&settings).unwrap();
                 text.push_str("\n[app_server]\nshutdown_deadline_ms = 2000\n");
                 std::fs::write(settings, text).unwrap();
             }
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let models = f.root.path().join("home/.config/rustx/models.toml");
+            let models = f.root.path().join("home/rustx/rustx.toml");
             let text = std::fs::read_to_string(&models)
                 .unwrap()
                 .replace("127.0.0.1:9", &listener.local_addr().unwrap().to_string());
@@ -824,13 +810,13 @@ async fn start_turn(
 }
 
 fn use_emulator(f: &Fixture, provider: &provider_emulator::ProviderEmulator) {
-    let catalog = f.root.path().join("home/.config/rustx/models.toml");
+    let catalog = f.root.path().join("home/rustx/rustx.toml");
     let text = std::fs::read_to_string(&catalog)
         .unwrap()
         .replace("http://127.0.0.1:9/v1", &provider.openai_base_url())
         .replace("id = \"test\"", "id = \"integration-model\"");
     std::fs::write(catalog, text).unwrap();
-    let settings = f.root.path().join("home/.config/rustx/settings.toml");
+    let settings = f.root.path().join("home/rustx/rustx.toml");
     let text = std::fs::read_to_string(&settings)
         .unwrap()
         .replace("local/test", "local/integration-model");
@@ -853,7 +839,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         initialize_client(&client).await;
         std::fs::write(
             f.root.path().join("b/rustx.toml"),
-            "[agent.extensions.todo]\nenabled = false\n",
+            "[agent.plugins.todo]\nenabled = false\n",
         )
         .unwrap();
         let mut targets = Vec::new();
@@ -878,7 +864,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         start_turn(&client, &b, "tui multi-session: session B quick task").await;
         let b_done = settled(&client, &b).await;
         assert_eq!(provider.requests().await.len(), 2);
-        assert!(b_done["effective_extensions"]["todo"].is_null());
+        assert!(b_done["effective_plugins"]["todo"].is_null());
         // Drain through B's authoritative settlement publication. Every event
         // before that cut must route to its original Session/Conversation.
         loop {
@@ -935,7 +921,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         assert_ne!(resumed.attachment_id, a.attachment_id);
         let a_done = settled(&reconnected, &resumed).await;
         assert_eq!(a_done["attempt"]["phase"]["outcome"]["type"], "completed");
-        assert!(!a_done["effective_extensions"]["todo"].is_null());
+        assert!(!a_done["effective_plugins"]["todo"].is_null());
         let history = a_done["messages"].to_string();
         assert_eq!(
             history.matches("A is working and has now finished").count(),
@@ -983,7 +969,7 @@ async fn app_server_current_sources_persisted_selection_and_targeted_cold_replac
         };
         let f = Fixture::new().await;
         use_emulator(&f, &provider);
-        let source = f.root.path().join("home/.config/rustx/settings.toml");
+        let source = f.root.path().join("home/rustx/rustx.toml");
         let initial = std::fs::read_to_string(&source).unwrap();
         let (mut child, url) = f.ws().await;
         let client = driver::websocket(&url).await;
@@ -1023,12 +1009,15 @@ async fn app_server_current_sources_persisted_selection_and_targeted_cold_replac
         // One canonical current source edit; no alternate resolver or input path.
         std::fs::write(
             &source,
-            format!("{initial}\n[agent.extensions.todo]\nenabled = false\n"),
+            initial.replace(
+                "[agent.plugins.todo]\nenabled = true",
+                "[agent.plugins.todo]\nenabled = false",
+            ),
         )
         .unwrap();
         assert_eq!(
-            snapshot(&client, &a).await["effective_extensions"],
-            a_initial["effective_extensions"]
+            snapshot(&client, &a).await["effective_plugins"],
+            a_initial["effective_plugins"]
         );
         assert_eq!(
             snapshot(&client, &a).await["attempt"]["model"],
@@ -1036,8 +1025,8 @@ async fn app_server_current_sources_persisted_selection_and_targeted_cold_replac
         );
         let b = attach(&client, f.sessions[1].clone(), 3).await;
         let b_initial = snapshot(&client, &b).await;
-        assert!(b_initial["effective_extensions"]["todo"].is_null());
-        assert!(!a_initial["effective_extensions"]["todo"].is_null());
+        assert!(b_initial["effective_plugins"]["todo"].is_null());
+        assert!(!a_initial["effective_plugins"]["todo"].is_null());
         start_turn(&client, &b, "tui multi-session: session B quick task").await;
         provider.await_gate("session-b-holding").await;
         provider.release_gate("session-a-holding").await;
@@ -1054,15 +1043,15 @@ async fn app_server_current_sources_persisted_selection_and_targeted_cold_replac
         assert_ne!(cold.runtime_incarnation, a.runtime_incarnation);
         assert_eq!(cold.conversation_id, a.conversation_id);
         let after = snapshot(&client, &cold).await;
-        assert!(after["effective_extensions"]["todo"].is_null());
+        assert!(after["effective_plugins"]["todo"].is_null());
         assert_eq!(
             after["model"]["configured"],
             a_initial["model"]["configured"]
         );
         assert_eq!(after["messages"], before["messages"]);
         assert_eq!(
-            snapshot(&client, &b).await["effective_extensions"],
-            b_initial["effective_extensions"]
+            snapshot(&client, &b).await["effective_plugins"],
+            b_initial["effective_plugins"]
         );
         assert_eq!(
             snapshot(&client, &b).await["attempt"]["phase"]["type"],
@@ -1109,21 +1098,25 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         let mut clients = Vec::new();
         let mut targets = Vec::new();
         for (identity, user, provider) in &users {
-            let skill = user.root.path().join(format!("home/.agents/skills/host-{identity}"));
+            let skill = user.root.path().join(format!("home/rustx/.agents/skills/host-{identity}"));
             std::fs::create_dir_all(&skill).unwrap();
             std::fs::write(skill.join("SKILL.md"), format!("---\nname: host-{identity}\ndescription: host-{identity}-only resource\n---\nUse this user's supplied workspace.\n")).unwrap();
-            let config = user.root.path().join("home/.config/rustx");
-            let catalog = std::fs::read_to_string(config.join("models.toml")).unwrap()
+            let config = user.root.path().join("home/rustx");
+            let catalog = std::fs::read_to_string(config.join("rustx.toml")).unwrap()
                 .replace("http://127.0.0.1:9/v1", &provider.openai_base_url())
-                .replace("id = \"test\"", &format!("id = \"user-{identity}\""));
-            std::fs::write(config.join("models.toml"), catalog).unwrap();
-            std::fs::write(config.join("settings.toml"), format!("[agent.model]\nmodel = \"local/user-{identity}\"\n[native_tools.bash]\napproval = \"never\"\n")).unwrap();
-            let authored = config.join("settings.toml");
+                .replace("id = \"test\"", &format!("id = \"user-{identity}\""))
+                .replace("local/test", &format!("local/user-{identity}"));
+            std::fs::write(config.join("rustx.toml"), catalog).unwrap();
+            let authored = config.join("rustx.toml");
+            let mut source: toml::Value = toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
+            source["agent"].as_table_mut().unwrap().insert("skills".into(), "all".into());
+            source.as_table_mut().unwrap().insert("native_tools".into(), toml::Value::try_from(serde_json::json!({"bash": {"approval": "never"}})).unwrap());
+            std::fs::write(&authored, toml::to_string_pretty(&source).unwrap()).unwrap();
             let mut text = std::fs::read_to_string(&authored).unwrap();
             write!(text, "\n[environment]\nRUSTX_HOST_MARKER = \"{identity}\"\n").unwrap();
             std::fs::write(authored, text).unwrap();
             let mut child = user.command("ws://127.0.0.1:0")
-                .arg("--user-settings").arg(config.join("settings.toml"))
+                .arg("--config").arg(config.join("rustx.toml"))
                 .arg("--token-file").arg(user.root.path().join("token"))
                 .env("TEST_KEY", format!("fake-{identity}"))
                 .env("RUSTX_HOST_MARKER", identity).spawn().unwrap();
@@ -1156,8 +1149,8 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             let list = result(client, Method::SessionList { query: Some(format!("user-{}-private", users[other].0)), offset: 0, limit: 32 }).await;
             let MethodResult::Sessions { sessions, .. } = list else { panic!("list") };
             assert!(sessions.is_empty());
-            let read = result(client, Method::SessionRead { session_id: targets[other].session_id.clone() }).await;
-            assert!(!serde_json::to_string(&read).unwrap().contains(users[other].1.root.path().to_str().unwrap()));
+            let Response::Failure(failure) = rpc(client, 100, Method::SessionRead { session_id: targets[other].session_id.clone() }).await else { panic!("foreign Session must be absent") };
+            assert_eq!(failure.error.data, Some(ErrorData::UnknownSession { session_id: targets[other].session_id.clone() }));
         }
         // Prove absent identities fail at the other root too, in both directions.
         for (index, count) in [(0, 1), (1, 2)] {
@@ -1173,13 +1166,15 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         }
         for (index, client) in clients.iter().enumerate() {
             use app_server_conformance::AppServerConformanceDriver;
-            result(client, Method::ApprovalModeSet { target: targets[index].clone(), mode: rustx::runtime::types::ApprovalMode::FullAccess }).await;
+            let mut model: rustx::model::session::SessionModelConfig = serde_json::from_value(snapshot(client, &targets[index]).await["model"]["configured"].clone()).unwrap();
+            model.request_params.insert("temperature".into(), serde_json::json!(0.42));
+            result(client, Method::ModelSet { target: targets[index].clone(), config: Box::new(model) }).await;
             loop {
                 let notification = client.next_notification().await;
                 let NotificationMethod::Event { target, event, .. } = notification.notification else { panic!("unexpected invalidation") };
                 assert_eq!(target, targets[index]);
                 assert!(!serde_json::to_string(&event).unwrap().contains(&format!("{}:unset", users[1 - index].0)));
-                if matches!(*event, rustx::runtime_client::event::RuntimeClientEvent::ApprovalModeChanged { .. }) { break; }
+                if matches!(*event, rustx::runtime_client::event::RuntimeClientEvent::SessionModelChanged { .. }) { break; }
             }
         }
         let a_pid = processes[0].id();
@@ -1207,8 +1202,11 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         assert_eq!(pb.requests().await.len(), 2);
         assert_eq!(snapshot(&clients[0], &targets[0]).await["attempt"], a_before["attempt"]);
         // Changing A's source is confined to A; B's admitted composition stays.
-        std::fs::write(users[0].1.root.path().join("home/.config/rustx/settings.toml"), "[agent.model]\nmodel = \"local/user-a\"\n[agent.extensions.todo]\nenabled = false\n").unwrap();
-        assert_eq!(snapshot(&recovered, &cold).await["effective_extensions"], after["effective_extensions"]);
+        let authored = users[0].1.root.path().join("home/rustx/rustx.toml");
+        let mut source: toml::Value = toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
+        source["agent"]["plugins"]["todo"]["enabled"] = false.into();
+        std::fs::write(authored, toml::to_string_pretty(&source).unwrap()).unwrap();
+        assert_eq!(snapshot(&recovered, &cold).await["effective_plugins"], after["effective_plugins"]);
         result(&recovered, Method::SessionUnload { target: cold.clone() }).await;
         let b_fresh = attach(&recovered, cold.session_id.clone(), 13).await;
         assert_eq!(snapshot(&recovered, &b_fresh).await["model"], after["model"]);

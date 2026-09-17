@@ -327,7 +327,7 @@ async fn one_settled_tool_batch_creates_one_post_tool_opportunity() {
     let fixture = common::native_fixture();
     let store = fixture.store.clone();
     let (result, recorder) = run_attempt(
-        "conv-m5",
+        "conv_161360a8-58d1-7c90-8acb-24a22e5d6832",
         "attempt-post-only",
         model.clone(),
         fixture.ordinary_registry.clone(),
@@ -474,7 +474,7 @@ async fn sibling_completion_order_cannot_split_post_tool_opportunity() {
     });
 
     let (result, recorder) = run_attempt(
-        "conv-m5",
+        "conv_161360a8-58d1-7c90-8acb-24a22e5d6832",
         "attempt-parallel",
         model.clone(),
         tools,
@@ -528,7 +528,7 @@ async fn fresh_inbound_and_post_tool_batch_are_one_combined_set() {
     );
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
-    let fixture = common::tool_runtime("issue-130-combined");
+    let fixture = common::tool_runtime("conv_6ebfe200-eb58-75eb-b0f2-e74f6da3c9e0");
     fixture
         .mailbox()
         .enqueue(support::fake::inbound_message(
@@ -539,7 +539,7 @@ async fn fresh_inbound_and_post_tool_batch_are_one_combined_set() {
         .expect("enqueue inbound before the batch boundary");
 
     let (result, recorder) = run_attempt(
-        "issue-130-combined",
+        "conv_6ebfe200-eb58-75eb-b0f2-e74f6da3c9e0",
         "attempt-combined",
         model.clone(),
         tools,
@@ -587,7 +587,7 @@ async fn committed_todo_state_emits_one_bounded_post_tool_reminder() {
     let model = fake_model(tool_turn_then_stop(std::slice::from_ref(&call)));
     let fixture = common::native_fixture();
     let (result, recorder) = run_attempt(
-        "conv-m5",
+        "conv_161360a8-58d1-7c90-8acb-24a22e5d6832",
         "attempt-todo-status",
         model.clone(),
         fixture.ordinary_registry.clone(),
@@ -665,7 +665,7 @@ async fn todo_cooldown_uses_later_primary_starts_and_repeats_at_four() {
     noop.register(&mut tools);
 
     let (result, recorder) = run_attempt(
-        "conv-m5",
+        "conv_161360a8-58d1-7c90-8acb-24a22e5d6832",
         "attempt-todo-progress",
         model.clone(),
         tools,

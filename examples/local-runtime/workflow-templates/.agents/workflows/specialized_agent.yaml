@@ -25,7 +25,7 @@ block:
     # One `override`: this child is the same role specialized for this node.
     # Each field REPLACES that whole dimension; omitted fields keep the role's
     # default. `read` and `grep` are not added to the role's selection, they
-    # are the whole selection, and `extensions: {}` composes no extension at
+    # are the whole selection, and `plugins: {}` composes no extension at
     # all rather than the role's authored default.
     inspect:
       type: agent
@@ -34,7 +34,7 @@ block:
       override:
         tools:
           builtin: [read, grep]
-        extensions: {}
+        plugins: {}
       input:
         described: {type: reference, path: [describe]}
       output: *assessment_contract

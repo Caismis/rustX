@@ -14,7 +14,7 @@ import { describe, it } from "node:test";
 import { reduce } from "../src/presentation/projection.ts";
 import { renderResourceBanner, displayPath } from "../src/ui/components/resources.ts";
 import { plainText } from "../src/ui/theme.ts";
-import { exact, nextCursor, runtimeCursor } from "./support/fixtures.ts";
+import { exact, nextCursor, runtimeCursor, sessionModel } from "./support/fixtures.ts";
 import { stateOf } from "./support/render.ts";
 
 const banner = (state: Parameters<typeof renderResourceBanner>[0], workspace?: string) =>
@@ -23,7 +23,7 @@ const banner = (state: Parameters<typeof renderResourceBanner>[0], workspace?: s
 describe("loaded resources", () => {
   it("names the context files, Skills, and active Tools the runtime published", () => {
     const state = stateOf({
-      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] },
+      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] },
         revision: "3",
         context_files: [
           { path: "/home/dev/AGENTS.md", bytes: 12 },
@@ -45,7 +45,7 @@ describe("loaded resources", () => {
 
   it("keeps context files in the runtime's own precedence order", () => {
     const state = stateOf({
-      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] },
+      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] },
         revision: "1",
         context_files: [
           { path: "/work/zeta/AGENTS.md", bytes: 1 },
@@ -72,19 +72,20 @@ describe("loaded resources", () => {
 
   it("reports a frozen agent profile as context", () => {
     const state = stateOf({
-      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: "2", context_files: [], agent_profile: true },
+      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] }, revision: "2", context_files: [], agent_profile: true },
     });
     assert.match(banner(state), /\[Context\]\n {2}agent profile/);
   });
 
   it("folds a reload's whole generation from one event", () => {
     const before = stateOf({
-      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: "1", context_files: [], agent_profile: false },
+      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] }, revision: "1", context_files: [], agent_profile: false },
     });
     const after = reduce(before, {
       cursor: nextCursor(before.cursor),
       event: {
         type: "resource_generation_updated",
+        model: sessionModel("published-model"), approval_mode: "policy", plugins: { goal: null, todo: null, agent_status: null },
         capabilities: {
           ...before.capabilities,
           revision: exact(BigInt(before.capabilities.revision) + 1n),
@@ -98,7 +99,7 @@ describe("loaded resources", () => {
             },
           ],
         },
-        resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] },
+        resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] },
           revision: "2",
           context_files: [{ path: "/work/project/AGENTS.md", bytes: 9 }],
           agent_profile: false,
@@ -120,16 +121,17 @@ describe("loaded resources", () => {
 
   it("folds a resource-only reload without waiting for a capability revision", () => {
     const before = stateOf({
-      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: "1", context_files: [], agent_profile: false },
+      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] }, revision: "1", context_files: [], agent_profile: false },
     });
     const after = reduce(before, {
       cursor: nextCursor(before.cursor),
       event: {
         type: "resource_generation_updated",
+        model: sessionModel("published-model"), approval_mode: "policy", plugins: { goal: null, todo: null, agent_status: null },
         // A reload that only rewrote project instructions repeats the
         // capability view it composed against, unchanged revision and all.
         capabilities: before.capabilities,
-        resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] },
+        resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] },
           revision: "2",
           context_files: [{ path: "/work/project/AGENTS.md", bytes: 9 }],
           agent_profile: false,
@@ -155,10 +157,10 @@ describe("resource path display", () => {
 
 
 it("CFG275 reload replaces diagnostics with the resource generation and preserves retained state", () => {
-  const before = stateOf({ resources: { revision: "1", inspection: { main: null, agents: {}, workflows: {}, sources: { optional: { status: "unprepared" } }, skills: [], skill_diagnostics: [] } } });
+  const before = stateOf({ resources: { revision: "1", inspection: { main: null, agents: {}, workflows: {}, sources: { optional: { status: "unprepared" } }, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] } } });
   const frozen = JSON.stringify(before.resources);
-  const next = { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] };
-  const after = reduce(before, { cursor: nextCursor(before.cursor), event: { type: "resource_generation_updated", capabilities: before.capabilities, resources: { revision: "2", inspection: next } } });
+  const next = { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] };
+  const after = reduce(before, { cursor: nextCursor(before.cursor), event: { type: "resource_generation_updated", model: sessionModel("published-model"), approval_mode: "policy", plugins: { goal: null, todo: null, agent_status: null }, capabilities: before.capabilities, resources: { revision: "2", inspection: next } } });
   assert.equal(after.resources.revision, "2");
   assert.deepEqual(after.resources.inspection, next);
   assert.equal(JSON.stringify(before.resources), frozen);

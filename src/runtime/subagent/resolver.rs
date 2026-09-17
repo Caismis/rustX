@@ -10,78 +10,17 @@
 //! ResolvedSubagentSpec   (frozen: every semantic identity the child needs)
 //! ```
 //!
-//! # Authority
+//! # Independent child authority
 //!
-//! Resolution reads the invoking generation's **available** capability
-//! catalog — [`CapabilitySnapshot::available_tools`] — and the matching
-//! capability-source availability of that same generation. That catalog is
-//! the outer ceiling on everything below:
+//! The invoking generation supplies the named Agent definition and inert source
+//! catalog. Root authorizes delegation through its named-Agent allowlist. The
+//! child owns its complete Tool, Skill and Plugin profile; the Root Tool set is
+//! not a ceiling. Admission prepares only this child's finite selected demand.
+//! Omitted model selection inherits the invoking Attempt's frozen model.
 //!
-//! ```text
-//! SubagentResolvedTools ⊆ CapabilitySnapshot::available_tools()
-//! ```
-//!
-//! A named subagent is an independent projection of the authority admitted
-//! into the invoking attempt's runtime generation: it may **narrow** that
-//! authority but can never manufacture authority the generation does not
-//! already hold.
-//!
-//! ## The parent registry: frozen authority, never a live read (Issue #258)
-//!
-//! Resolution never consults a **live, currently mutable** parent
-//! `ToolRegistry`. Doing so would let a reload widen an attempt that was
-//! already admitted, and would make one resolution's outcome depend on when
-//! it ran rather than on what the invoking attempt actually holds.
-//!
-//! It does, however, depend on the invoking attempt's model-facing registry —
-//! as a **value frozen at attempt admission**, not as a reference to a
-//! changing one:
-//!
-//! ```text
-//! attempt admission     CapabilitySnapshot::tool_registry()
-//!                              |  captured once, by exact ToolId
-//!                              v
-//!                       InvokingAgentAuthority   (a typed frozen value)
-//!                              |  passed in as an argument
-//!                              v
-//!                       SubagentResolver::resolve
-//! ```
-//!
-//! Three concepts stay distinct, and conflating any two of them is a
-//! privilege bug:
-//!
-//! ```text
-//! available_tools()   the whole GENERATION's catalog. The outer ceiling of
-//!                     every path below, and deliberately WIDER than what the
-//!                     invoking model was admitted with.
-//!
-//! tool_registry()     the exact model-facing registry of the INVOKING
-//!                     ATTEMPT, frozen into `InvokingAgentAuthority`. It is
-//!                     the ceiling on what an INVOCATION-SCOPED OVERRIDE may
-//!                     add, so a main-model caller cannot delegate a
-//!                     capability it was never admitted with.
-//!
-//! role defaults       a named definition's own selections are authorized
-//!                     INDEPENDENTLY, against the generation catalog. A role
-//!                     may legitimately hold a capability the invoking model
-//!                     does not, so its defaults never narrow to
-//!                     `InvokingAgentAuthority`.
-//! ```
-//!
-//! So `SubagentResolvedTools ⊄ ParentActiveTools` remains true — a role's own
-//! defaults are not bounded by the invoking model's registry — while an
-//! override's *additions* are bounded by exactly that frozen registry. A
-//! trusted Workflow program carries its own typed authority and is bounded by
-//! the generation catalog through static Workflow admission.
-//!
-//! # Complete profiles and dynamic replacements
-//!
-//! Complete named defaults consume the generation's shared resolved Agent
-//! Profile. Valid but unavailable selections have already been diagnosed and
-//! suppressed. Dynamic replacements are different: every requested capability
-//! must pass the typed invocation authorization boundary before the common
-//! profile resolver decides composition. An unauthorized override is refused,
-//! never silently suppressed into a different request.
+//! Invocation replacements are bounded execution data. Requested Tools must
+//! exist in the prepared admitted catalog, and Plugins must support child scope.
+//! Neither current files nor a later published generation participates.
 //!
 //! # The parent decides; the child materializes
 //!
@@ -100,13 +39,12 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::capabilities::{AvailableToolCatalog, CapabilityAvailability, CapabilitySnapshot};
-use crate::extensions::NativeAgentExtensions;
+use crate::capabilities::{AvailableToolCatalog, CapabilityAvailability};
 use crate::model::frozen::FrozenModelSpec;
 use crate::model::invocation::ModelBindingRegistry;
 use crate::model::session::SessionModelConfig;
 use crate::protocol::manifest::SkillBinding;
-use crate::runtime::identity::{SkillId, SkillVersionId, SourceToolIdentity, ToolId};
+use crate::runtime::identity::{SourceToolIdentity, ToolId};
 use crate::runtime::resources::{ProjectContextFile, RuntimeResourceSnapshot};
 use crate::skills::{SkillCatalogEntry, SkillSnapshot};
 use crate::tools::mcp::{McpServerBinding, McpServerBindings};
@@ -279,6 +217,8 @@ impl ResolvedSubagentMaterialization {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResolvedSubagentSpec {
+    /// Invoking immutable CFG3 generation, carried unchanged into the child.
+    pub generation: crate::runtime::identity::RuntimeResourceRevision,
     /// Owner-produced selection intent and diagnostics of this frozen child.
     pub selection: crate::runtime::agent_profile::FrozenAgentSelection,
     /// The canonical agent name this child was started as.
@@ -303,7 +243,7 @@ pub struct ResolvedSubagentSpec {
     ///
     /// A resolved invocation crosses the boundary, never a desired
     /// `SessionModelConfig` plus a catalog path: the child materializes this
-    /// decision physically and never reopens `models.toml` as semantic
+    /// decision physically and never reopens `rustx.toml` as semantic
     /// authority, so a catalog edit between parent freeze and child
     /// composition cannot change what the child runs.
     pub model: FrozenModelSpec,
@@ -314,6 +254,10 @@ pub struct ResolvedSubagentSpec {
     /// **not** included: progressive disclosure is preserved and the child
     /// loads them through ordinary Skill semantics.
     pub skills: Vec<ResolvedSubagentSkill>,
+    /// Both canonical roots captured from the invoking generation.
+    pub skill_roots: Vec<crate::skills::AutomaticSkillRoot>,
+    /// Global authored Tool environment, frozen before child preparation.
+    pub environment: Vec<(String, String)>,
     /// The frozen project instruction chain, in deterministic order.
     pub project_instructions: Vec<ProjectContextFile>,
     /// The frozen physical materialization plane of the selected external
@@ -523,7 +467,6 @@ impl ResolvedSubagentSpec {
                 .iter()
                 .map(|skill| skill.catalog_entry.name.clone())
                 .collect(),
-            disabled_skills: self.selection.disabled_skills.clone(),
             extensions: self.extensions.clone(),
             agents: BTreeSet::new(),
             workflows: BTreeSet::new(),
@@ -573,6 +516,7 @@ impl ResolvedSubagentSpec {
         // field of the frozen contract cannot reach a child without a
         // deliberate decision about whether it identifies the child.
         let Self {
+            generation: _, // Generation provenance is distinct from semantic profile identity.
             // Selection intent and suppression explain the frozen result;
             // only the realized executable composition identifies execution.
             selection: _,
@@ -587,6 +531,8 @@ impl ResolvedSubagentSpec {
             model,
             tools,
             skills,
+            skill_roots,
+            environment,
             project_instructions,
             materialization,
             extensions,
@@ -599,6 +545,8 @@ impl ResolvedSubagentSpec {
             model,
             tools,
             skills,
+            skill_roots,
+            environment,
             project_instructions,
             materialization,
             extensions,
@@ -612,6 +560,12 @@ impl ResolvedSubagentSpec {
 /// therefore long before durable ownership commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubagentResolutionError {
+    /// Complete selected profiles cannot degrade to executable subsets.
+    InvalidProfile {
+        diagnostic: crate::runtime::agent_profile::AgentProfileDiagnostic,
+    },
+    /// An admitted external source could not be prepared.
+    Preparation { detail: String },
     /// The invoking generation's catalog admits no agent of that name.
     UnknownAgent {
         /// The requested name.
@@ -662,38 +616,6 @@ pub enum SubagentResolutionError {
         /// The structural violation.
         error: SubagentOverrideError,
     },
-    /// The invocation override requests a capability the caller may not
-    /// delegate: it is neither part of the named role's own authority nor
-    /// part of the invoking model's frozen admitted execution profile
-    /// (Issue #258).
-    ///
-    /// This is emphatically **not** "unknown": the runtime generation
-    /// authorizes the capability, and some other caller could legitimately
-    /// select it. This caller cannot.
-    UnauthorizedTool {
-        /// The offending selector.
-        selector: String,
-    },
-    /// The invocation override requests a Skill the caller may not delegate.
-    UnauthorizedSkill {
-        /// The offending Skill name.
-        skill: String,
-    },
-    /// The invocation override requests an extension composition the caller
-    /// may not delegate.
-    ///
-    /// Naming an extension is not permission to configure it arbitrarily, so
-    /// this also covers a configuration no authority source holds — a
-    /// contributor switched on that neither the role nor the invoking Agent
-    /// switched on, or a timezone neither one *effectively renders*. The
-    /// detail names the first uncovered contributor, not the whole
-    /// composition, because the ceiling is a per-contributor union.
-    UnauthorizedExtension {
-        /// The offending extension.
-        extension: String,
-        /// The bounded reason the delegation ceiling does not cover it.
-        detail: String,
-    },
     /// The effective extension composition names an extension a one-shot
     /// child cannot own. Authorization and child-scope support are
     /// independent checks, and this one fails even for a fully entitled
@@ -709,6 +631,12 @@ pub enum SubagentResolutionError {
 impl core::fmt::Display for SubagentResolutionError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::InvalidProfile { diagnostic } => write!(
+                formatter,
+                "invalid Agent profile: {:?}",
+                diagnostic.redacted()
+            ),
+            Self::Preparation { detail } => write!(formatter, "child preparation failed: {detail}"),
             Self::UnknownAgent { agent, available } => {
                 if available.is_empty() {
                     write!(
@@ -755,24 +683,9 @@ impl core::fmt::Display for SubagentResolutionError {
             Self::InvalidOverride { error } => {
                 write!(formatter, "invalid subagent invocation override: {error}")
             }
-            Self::UnauthorizedTool { selector } => write!(
-                formatter,
-                "the invocation override requests {selector}, which is neither part of this \
-                 agent's own authority nor part of the invoking agent's frozen capabilities"
-            ),
-            Self::UnauthorizedSkill { skill } => write!(
-                formatter,
-                "the invocation override requests Skill {skill:?}, which is neither part of \
-                 this agent's own authority nor visible to the invoking agent"
-            ),
-            Self::UnauthorizedExtension { extension, detail } => write!(
-                formatter,
-                "the invocation override requests extension {extension:?} beyond the caller's \
-                 delegation authority: {detail}"
-            ),
             Self::ExtensionScopeUnsupported { extension, reason } => write!(
                 formatter,
-                "extension {extension:?} is not supported by one-shot subagent execution: \
+                "Plugin {extension:?} is not supported by one-shot subagent execution: \
                  {reason}"
             ),
         }
@@ -780,101 +693,6 @@ impl core::fmt::Display for SubagentResolutionError {
 }
 
 impl std::error::Error for SubagentResolutionError {}
-
-/// The invoking Agent's **frozen admitted execution profile** — the only
-/// parent-side contribution to the dynamic delegation ceiling (Issue #258).
-///
-/// Every field is captured from values the invoking attempt was admitted
-/// with, at the same admission linearization that froze its resource
-/// generation:
-///
-/// ```text
-/// tools       CapabilitySnapshot::tool_registry()       the exact model-facing
-///                                                       registry of this attempt,
-///                                                       NOT available_tools()
-/// skills      CapabilitySnapshot::model_skill_entries() the Skills this model can
-///                                                       actually see, which is empty
-///                                                       when the #234 Read gate is shut
-/// extensions  the composition the invoking runtime is executing against
-/// ```
-///
-/// The distinctions are load-bearing. `available_tools()` is the whole
-/// generation's catalog and would let a model delegate a capability it was
-/// never admitted with. A live registry would let a reload widen an
-/// already-admitted attempt. Capabilities held only by another role, or
-/// merely compiled into the executable, appear in neither.
-///
-/// Authority is compared by **exact native identity** — `ToolId`, and
-/// `SkillId` + `SkillVersionId` — never by model-facing name, so a Builtin
-/// `search` can never stand in for an MCP server's `search`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InvokingAgentAuthority {
-    tools: BTreeSet<ToolId>,
-    skills: BTreeSet<(SkillId, SkillVersionId)>,
-    extensions: NativeAgentExtensions,
-}
-
-impl InvokingAgentAuthority {
-    /// Captures one attempt's frozen model-facing profile.
-    ///
-    /// `capability` must be the snapshot the invoking attempt holds a lease
-    /// on, and `extensions` the composition its runtime is executing against.
-    #[must_use]
-    pub fn frozen(capability: &CapabilitySnapshot, extensions: NativeAgentExtensions) -> Self {
-        let visible: BTreeSet<&str> = capability
-            .model_skill_entries()
-            .iter()
-            .map(|entry| entry.name.as_str())
-            .collect();
-        Self {
-            tools: capability
-                .tool_registry()
-                .definitions()
-                .into_iter()
-                .map(|definition| definition.id)
-                .collect(),
-            skills: capability
-                .skills()
-                .packages()
-                .iter()
-                .filter(|package| visible.contains(package.name()))
-                .map(|package| (package.id().clone(), package.version_id().clone()))
-                .collect(),
-            extensions,
-        }
-    }
-
-    /// The authority of a caller that holds no model-facing profile of its
-    /// own, and can therefore delegate nothing beyond the role baseline.
-    #[must_use]
-    pub fn none() -> Self {
-        Self {
-            tools: BTreeSet::new(),
-            skills: BTreeSet::new(),
-            extensions: NativeAgentExtensions::none(),
-        }
-    }
-
-    /// Builds one authority directly from exact identities.
-    ///
-    /// Production reaches this type only through [`Self::frozen`], so that a
-    /// parent contribution can never be assembled from anything but a real
-    /// frozen snapshot. The direct form exists for the resolver's own unit
-    /// tests, where the identities under test are the point and composing a
-    /// whole runtime would obscure it.
-    #[cfg(test)]
-    pub(crate) fn from_identities(
-        tools: impl IntoIterator<Item = ToolId>,
-        skills: impl IntoIterator<Item = (SkillId, SkillVersionId)>,
-        extensions: NativeAgentExtensions,
-    ) -> Self {
-        Self {
-            tools: tools.into_iter().collect(),
-            skills: skills.into_iter().collect(),
-            extensions,
-        }
-    }
-}
 
 /// One complete resolution request (Issue #258).
 ///
@@ -893,9 +711,6 @@ pub struct SubagentResolution<'a> {
     /// The invocation-scoped capability override, when the caller supplied
     /// one. `None` and an empty override are deliberately equivalent.
     pub invocation: Option<&'a SubagentInvocationOverride>,
-    /// The invoking Agent's frozen admitted execution profile. It is read
-    /// when authorizing model-generated overrides.
-    pub invoking: &'a InvokingAgentAuthority,
 }
 
 /// Shared frozen child composition, independent of dynamic or static authority.
@@ -917,6 +732,11 @@ impl FrozenAgentComposition {
         skills: &crate::skills::SkillSnapshot,
         servers: &crate::tools::mcp::McpServerBindings,
     ) -> Result<Self, SubagentResolutionError> {
+        if let Some(diagnostic) = profile.diagnostics.first() {
+            return Err(SubagentResolutionError::InvalidProfile {
+                diagnostic: diagnostic.redacted(),
+            });
+        }
         let tools = profile
             .tools
             .iter()
@@ -951,6 +771,7 @@ impl FrozenAgentComposition {
     ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
         let definition = &self.definition;
         Ok(ResolvedSubagentSpec {
+            generation: resources.revision(),
             selection: self.selection.clone(),
             agent: definition.name().clone(),
             definition_digest: definition.digest().clone(),
@@ -960,6 +781,12 @@ impl FrozenAgentComposition {
             model: resolve_model(definition, attempt_model, models)?,
             tools: self.tools.clone(),
             skills: self.skills.clone(),
+            skill_roots: resources.capability().skills().roots().to_vec(),
+            environment: resources
+                .capability()
+                .effective_environment()
+                .authorized_entries()
+                .to_vec(),
             project_instructions: resolve_project_instructions(definition, resources),
             materialization: self.materialization.clone(),
             extensions: self.extensions.clone(),
@@ -1032,7 +859,7 @@ impl SubagentResolver {
         // are resolved, so a replaced-away default is not a requirement.
         let selected_tools = invocation.effective_tools(definition);
         let selected_skills = invocation.effective_skills(definition);
-        let extensions = invocation.effective_extensions(definition);
+        let extensions = invocation.effective_plugins(definition);
 
         // A requested invocation replacement remains a strict contract. Profile
         // suppression is never used to make an invalid/unauthorized override succeed.
@@ -1082,17 +909,6 @@ impl SubagentResolver {
             capability.skills(),
             capability.mcp_servers(),
         )?;
-        authorize_delegation(
-            invocation,
-            definition,
-            &frozen.tools,
-            &frozen.skills,
-            &frozen.extensions,
-            capability.available_tools(),
-            capability.skills(),
-            resources.capability_availability(),
-            request.invoking,
-        )?;
         frozen.bind(resources, request.attempt_model, request.models)
     }
 
@@ -1124,20 +940,6 @@ impl SubagentResolver {
                     .map_err(|error| error.to_string())
             })
             .map_err(named)?;
-        }
-        Ok(())
-    }
-
-    /// Validate local Skill/model references independently of physical binding.
-    pub(crate) fn validate_local_references(
-        catalog: &AgentCatalog,
-        skills: &SkillSnapshot,
-        mut model_check: impl FnMut(&SessionModelConfig) -> Result<(), String>,
-    ) -> Result<(), (SubagentName, SubagentResolutionError)> {
-        for definition in catalog.definitions() {
-            let named = |error: SubagentResolutionError| (definition.name().clone(), error);
-            Self::validate_definition_local_references(definition, skills, &mut model_check)
-                .map_err(named)?;
         }
         Ok(())
     }
@@ -1205,148 +1007,6 @@ fn resolve_tools(
     }
     result.sort_by_key(ResolvedSubagentTool::canonical);
     Ok(result)
-}
-
-/// The exact native identities the **named role** itself authorizes.
-///
-/// A role's own selection is legitimate authority even when the invoking
-/// model does not expose that capability: a named role is an independent
-/// projection of the generation, and requiring every role default to appear
-/// in the parent's registry would regress existing named-role behavior.
-///
-/// A role selector whose source is unavailable in this generation
-/// contributes nothing here, and needs to contribute nothing: a caller
-/// requesting that same selector fails earlier, at dependency resolution,
-/// with the source-availability fact rather than an authority verdict.
-fn role_tool_authority(
-    definition: &NamedAgentDefinition,
-    available: &AvailableToolCatalog,
-    availability: &CapabilityAvailability,
-) -> BTreeSet<ToolId> {
-    definition
-        .tools()
-        .iter()
-        .filter_map(|selector| {
-            crate::capabilities::selection::project(
-                selector,
-                available.tools().iter().map(|tool| &tool.definition),
-                availability,
-            )
-            .ok()
-        })
-        .flatten()
-        .map(|definition| definition.id.clone())
-        .collect()
-}
-
-/// The exact Skill identities the **named role** itself authorizes.
-fn role_skill_authority(
-    definition: &NamedAgentDefinition,
-    skills: &SkillSnapshot,
-) -> BTreeSet<(SkillId, SkillVersionId)> {
-    definition
-        .skills()
-        .iter()
-        .filter_map(|selected| {
-            skills
-                .packages()
-                .iter()
-                .find(|package| package.name() == selected)
-        })
-        .map(|package| (package.id().clone(), package.version_id().clone()))
-        .collect()
-}
-
-/// The dynamic delegation ceiling of a model-generated override.
-///
-/// ```text
-/// allowed[d] = authorized_role_baseline[d] ∪ invoking_agent_frozen_authority[d]
-/// ```
-///
-/// Four properties of this function are the whole point:
-///
-/// - it runs **per dimension**. Tools, Skills, and extensions are separate
-///   authorization domains, and holding one never implies holding another;
-/// - it is a real **union**, taken at each dimension's own semantic
-///   granularity. Tools and Skills are sets of exact identities, so their
-///   union is a set union. An extension composition is not a set, so its
-///   union is taken per behavior-affecting contributor by
-///   [`crate::extensions::authorize_delegated_extensions`] — a request whose
-///   contributors are independently covered by the role and by the invoking
-///   Agent is authorized, and nothing is manufactured from neither;
-/// - it compares **exact native identities**, never model-facing names or
-///   role prose, so a same-named capability from another source cannot
-///   substitute for an authorized one;
-/// - it runs only over the dimensions the caller actually *overrode*. A
-///   dimension that came from the definition is already the role's own
-///   authority by construction, so re-checking it against the parent's
-///   registry would be exactly the named-role regression this contract
-///   forbids.
-#[allow(clippy::too_many_arguments)] // one authorization boundary, three domains
-fn authorize_delegation(
-    invocation: &SubagentInvocationOverride,
-    definition: &NamedAgentDefinition,
-    tools: &[ResolvedSubagentTool],
-    skills: &[ResolvedSubagentSkill],
-    extensions: &crate::extensions::NativeAgentExtensions,
-    available: &AvailableToolCatalog,
-    admitted_skills: &SkillSnapshot,
-    availability: &CapabilityAvailability,
-    invoking: &InvokingAgentAuthority,
-) -> Result<(), SubagentResolutionError> {
-    if invocation.tools.is_some() {
-        let allowed: BTreeSet<ToolId> = role_tool_authority(definition, available, availability)
-            .union(&invoking.tools)
-            .cloned()
-            .collect();
-        for tool in tools {
-            let id = match tool {
-                ResolvedSubagentTool::Builtin { tool_id, .. }
-                | ResolvedSubagentTool::Source { tool_id, .. } => tool_id,
-            };
-            if !allowed.contains(id) {
-                return Err(SubagentResolutionError::UnauthorizedTool {
-                    selector: tool.canonical(),
-                });
-            }
-        }
-    }
-    if invocation.skills.is_some() {
-        let allowed: BTreeSet<(SkillId, SkillVersionId)> =
-            role_skill_authority(definition, admitted_skills)
-                .union(&invoking.skills)
-                .cloned()
-                .collect();
-        for skill in skills {
-            let identity = (
-                skill.binding.skill_id.clone(),
-                skill.binding.version_id.clone(),
-            );
-            if !allowed.contains(&identity) {
-                return Err(SubagentResolutionError::UnauthorizedSkill {
-                    skill: skill.catalog_entry.name.clone(),
-                });
-            }
-        }
-    }
-    if invocation.extensions.is_some() {
-        // The two sources are combined by the extension vocabulary's own
-        // owner, per behavior-affecting contributor. A whole-composition
-        // "role authorizes it OR the parent authorizes it" is strictly
-        // narrower than the union this contract specifies: it refuses a
-        // request whose contributors are each legitimately held, only
-        // because no single source holds all of them at once.
-        crate::extensions::authorize_delegated_extensions(
-            definition.extensions(),
-            &invoking.extensions,
-            extensions,
-        )
-        .map_err(|refusal| SubagentResolutionError::UnauthorizedExtension {
-            extension: refusal.extension.to_owned(),
-            detail: refusal.detail,
-        })?;
-    }
-    Ok(())
 }
 
 /// **Admission-time** validation: inspect *every* selector of a definition
@@ -1499,7 +1159,7 @@ fn resolve_materialization(
 /// window, output budget, reasoning-profile semantics, effective request
 /// parameters, effective capabilities, and compat metadata exactly once,
 /// here, against the registry the invoking attempt was admitted with. The
-/// child can then have no opinion about a `models.toml` that changed in the
+/// child can then have no opinion about a `rustx.toml` that changed in the
 /// meantime, because it never consults one.
 fn resolve_model(
     definition: &NamedAgentDefinition,
@@ -1551,6 +1211,8 @@ struct ProfileFraming<'a> {
     model: &'a FrozenModelSpec,
     tools: &'a [ResolvedSubagentTool],
     skills: &'a [ResolvedSubagentSkill],
+    skill_roots: &'a [crate::skills::AutomaticSkillRoot],
+    environment: &'a [(String, String)],
     project_instructions: &'a [ProjectContextFile],
     materialization: &'a ResolvedSubagentMaterialization,
     extensions: &'a crate::extensions::NativeAgentExtensions,
@@ -1569,6 +1231,14 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
     hasher.update(b"\n");
     field(&mut hasher, "agent", framing.agent.as_str());
     field(&mut hasher, "instructions", framing.instructions);
+    for root in framing.skill_roots {
+        field(&mut hasher, "skill_root.source", root.source.as_str());
+        field(&mut hasher, "skill_root.path", &root.root.to_string_lossy());
+    }
+    for (name, value) in framing.environment {
+        field(&mut hasher, "environment.name", name);
+        field(&mut hasher, "environment.value", value);
+    }
     match framing.execution_deadline {
         None => field(&mut hasher, "execution_deadline", "\u{0}absent"),
         Some(deadline) => field(
@@ -1853,6 +1523,7 @@ fn frame_frozen_model_invocation(
     // added without deciding whether it belongs in the identity.
     let crate::model::frozen::FrozenModelInvocation {
         binding: _,
+        wire_model: _,
         model,
         protocol,
         context_window,
@@ -2240,8 +1911,6 @@ mod tests {
         let unrelated = McpServerId::new("filesystem");
         let binding = || crate::tools::mcp::McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
-            activation: crate::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::Stdio {
                 program: "server".to_owned(),
                 args: Vec::new(),
@@ -2420,7 +2089,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Issue #258: the dynamic delegation ceiling.
+    // Invocation replacement over an independently owned named profile.
     //
     // The resolver owns authorization, so the ceiling is proven here, at its
     // owner, with the exact native identities under test rather than behind a
@@ -2455,471 +2124,28 @@ mod tests {
         .expect("definition")
     }
 
-    fn requested_tools(names: &[&str]) -> super::SubagentInvocationOverride {
-        super::SubagentInvocationOverride {
-            tools: Some(crate::capabilities::selection::ToolSelectionDocument {
-                builtin: names.iter().map(|name| (*name).to_owned()).collect(),
-                sources: std::collections::BTreeMap::new(),
-            }),
-            ..super::SubagentInvocationOverride::default()
-        }
-    }
-
-    fn authorize(
-        invocation: &super::SubagentInvocationOverride,
-        definition: &NamedAgentDefinition,
-        available: &AvailableToolCatalog,
-        invoking: &super::InvokingAgentAuthority,
-    ) -> Result<(), SubagentResolutionError> {
-        let selected = invocation.effective_tools(definition);
-        let tools = super::resolve_tools(&selected, available, &ready()).expect("resolution");
-        let extensions = invocation.effective_extensions(definition);
-        super::authorize_delegation(
-            invocation,
-            definition,
-            &tools,
-            &[],
-            &extensions,
-            available,
-            &crate::skills::SkillSnapshot::new(Vec::new()),
-            &ready(),
-            invoking,
-        )
-    }
-
-    fn tool_id_of(available: &AvailableToolCatalog, name: &str) -> ToolId {
-        available
-            .definitions()
-            .into_iter()
-            .find(|definition| {
-                definition.name == name
-                    && definition.origin == crate::tools::types::ToolOrigin::Builtin
-            })
-            .expect("the fixture catalog admits the capability")
-            .id
-    }
-
-    /// The three delegable outcomes of the ceiling, on one fixture: a role
-    /// default the parent does not hold, a parent capability the role does
-    /// not hold, and a combination of both.
     #[test]
-    fn sub258_role_authority_and_parent_authority_both_delegate() {
+    fn cfg332_named_profile_resolves_independently_of_root_tool_and_plugin_visibility() {
         let available = available();
-        let role = role_with(
+        let definition = role_with(
             vec![AgentToolSelection::Builtin {
-                name: "read".to_owned(),
+                name: "read".into(),
             }],
-            crate::extensions::NativeAgentExtensions::none(),
+            crate::extensions::NativeAgentExtensions::none().and_todo(),
         );
-        // The parent holds `grep` and deliberately does NOT hold `read`: a
-        // role default must stay delegable even when the invoking model does
-        // not expose that capability at all.
-        let parent = super::InvokingAgentAuthority::from_identities(
-            [tool_id_of(&available, "grep")],
-            [],
-            crate::extensions::NativeAgentExtensions::none(),
-        );
-        assert!(
-            authorize(&requested_tools(&["read"]), &role, &available, &parent).is_ok(),
-            "role-only authority remains usable"
-        );
-        assert!(
-            authorize(&requested_tools(&["grep"]), &role, &available, &parent).is_ok(),
-            "parent-only frozen authority may be explicitly delegated"
-        );
-        assert!(
-            authorize(
-                &requested_tools(&["read", "grep"]),
-                &role,
-                &available,
-                &parent
-            )
-            .is_ok(),
-            "a valid combination of role and parent authority succeeds"
-        );
-    }
-
-    /// Authority the generation knows but neither the role nor the invoking
-    /// model holds is not delegable. This is the difference between the
-    /// available catalog and the frozen admitted profile.
-    #[test]
-    fn sub258_generation_only_and_other_role_only_authority_is_rejected() {
-        let available = catalog(vec![
-            tool("read", ToolOrigin::Builtin),
-            tool("grep", ToolOrigin::Builtin),
-            tool("write", ToolOrigin::Builtin),
-        ]);
-        let role = role_with(
-            vec![AgentToolSelection::Builtin {
-                name: "read".to_owned(),
-            }],
-            crate::extensions::NativeAgentExtensions::none(),
-        );
-        // Another role holding `write` changes nothing: the ceiling reads
-        // this role's own selection and the invoking profile, never the
-        // union of every admitted definition.
-        let _other_role = role_with(
-            vec![AgentToolSelection::Builtin {
-                name: "write".to_owned(),
-            }],
-            crate::extensions::NativeAgentExtensions::none(),
-        );
-        let parent = super::InvokingAgentAuthority::from_identities(
-            [tool_id_of(&available, "read")],
-            [],
-            crate::extensions::NativeAgentExtensions::none(),
-        );
+        let invocation = super::SubagentInvocationOverride::default();
+        let selected = invocation.effective_tools(&definition);
+        let resolved = super::resolve_tools(&selected, &available, &ready()).unwrap();
         assert_eq!(
-            authorize(&requested_tools(&["write"]), &role, &available, &parent),
-            Err(SubagentResolutionError::UnauthorizedTool {
-                selector: "builtin:write".to_owned()
-            }),
-            "a capability only the generation authorizes is refused, not silently dropped"
+            resolved
+                .iter()
+                .map(super::ResolvedSubagentTool::name)
+                .collect::<Vec<_>>(),
+            ["read"]
         );
-    }
-
-    /// Authority is an exact native identity. A same-named capability from
-    /// another source is a different capability and cannot substitute.
-    #[test]
-    fn sub258_same_named_capabilities_from_different_sources_cannot_substitute() {
-        let available = catalog(vec![
-            tool("search", ToolOrigin::Builtin),
-            tool(
-                "search",
-                ToolOrigin::Mcp {
-                    server_id: McpServerId::new("github"),
-                },
-            ),
-        ]);
-        let role = role_with(Vec::new(), crate::extensions::NativeAgentExtensions::none());
-        // The parent holds the Builtin `search` and nothing else.
-        let parent = super::InvokingAgentAuthority::from_identities(
-            [tool_id_of(&available, "search")],
-            [],
-            crate::extensions::NativeAgentExtensions::none(),
-        );
-        assert!(
-            authorize(&requested_tools(&["search"]), &role, &available, &parent).is_ok(),
-            "the exact Builtin identity the parent holds is delegable"
-        );
-        let mcp_request = super::SubagentInvocationOverride {
-            tools: Some(crate::capabilities::selection::ToolSelectionDocument {
-                builtin: Vec::new(),
-                sources: [(
-                    crate::capabilities::ToolSourceId::Mcp(McpServerId::new("github")),
-                    crate::capabilities::selection::SourceToolSelection::Exact(vec![
-                        "search".to_owned(),
-                    ]),
-                )]
-                .into_iter()
-                .collect(),
-            }),
-            ..super::SubagentInvocationOverride::default()
-        };
-        assert_eq!(
-            authorize(&mcp_request, &role, &available, &parent),
-            Err(SubagentResolutionError::UnauthorizedTool {
-                selector: "source:github/search".to_owned()
-            }),
-            "a matching display name is not authorization"
-        );
-    }
-
-    /// Tools, Skills, and extensions are separate authorization domains, and
-    /// a dimension the caller did not override is never re-judged against the
-    /// parent's registry.
-    #[test]
-    fn sub258_an_unoverridden_dimension_is_never_judged_against_parent_authority() {
-        let available = available();
-        let role = role_with(
-            vec![AgentToolSelection::Builtin {
-                name: "read".to_owned(),
-            }],
-            crate::extensions::NativeAgentExtensions::with_agent_status(
-                crate::context::AgentStatusConfig::default(),
-            )
-            .and_todo(),
-        );
-        // A caller that holds nothing at all: the role's own defaults must
-        // still resolve, because they are the role's authority by
-        // construction.
-        let empty_parent = super::InvokingAgentAuthority::none();
-        let no_override = super::SubagentInvocationOverride::default();
-        assert!(
-            authorize(&no_override, &role, &available, &empty_parent).is_ok(),
-            "no override means no delegation question at all"
-        );
-        // Overriding only Skills leaves the role's tools and extensions
-        // untouched and unjudged.
-        let skills_only = super::SubagentInvocationOverride {
-            skills: Some(Vec::new()),
-            ..super::SubagentInvocationOverride::default()
-        };
-        assert!(authorize(&skills_only, &role, &available, &empty_parent).is_ok());
-    }
-
-    /// Naming an extension is not permission to configure it. The typed
-    /// calculation is proven field by field against both authority sources.
-    #[test]
-    #[allow(clippy::too_many_lines)] // one exhaustive authorization matrix
-    fn sub258_extension_authorization_is_configuration_exact() {
-        let available = available();
-        let utc = "Etc/UTC".parse::<chrono_tz::Tz>().expect("timezone");
-        let shanghai = "Asia/Shanghai".parse::<chrono_tz::Tz>().expect("timezone");
-        let compose = |time: bool, timezone: Option<chrono_tz::Tz>, background: bool| {
-            crate::extensions::NativeAgentExtensions::with_agent_status(
-                crate::context::AgentStatusConfig {
-                    time: crate::context::TimeStatusConfig {
-                        enabled: time,
-                        timezone,
-                    },
-                    background: crate::context::BackgroundStatusConfig {
-                        enabled: background,
-                    },
-                },
-            )
-        };
-        let request = |value: serde_json::Value| super::SubagentInvocationOverride {
-            extensions: Some(
-                serde_json::from_value::<crate::extensions::NativeAgentExtensionSelection>(value)
-                    .expect("selection parses"),
-            ),
-            ..super::SubagentInvocationOverride::default()
-        };
-
-        // The role composes Agent Status with Time on, UTC, Background off.
-        let role = role_with(Vec::new(), compose(true, Some(utc), false));
-        let bare_parent = super::InvokingAgentAuthority::none();
-
-        // Removing the extension entirely is narrowing and always allowed.
-        assert!(
-            authorize(
-                &request(serde_json::json!({})),
-                &role,
-                &available,
-                &bare_parent
-            )
-            .is_ok(),
-            "an empty extension override composes nothing and needs no authority"
-        );
-        // Restating the role's own composition is allowed.
-        assert!(
-            authorize(
-                &request(serde_json::json!({
-                    "agentStatus": {"time": {"enabled": true, "timezone": "Etc/UTC"},
-                                    "background": {"enabled": false}}
-                })),
-                &role,
-                &available,
-                &bare_parent
-            )
-            .is_ok()
-        );
-        // Switching a contributor off is narrowing and allowed.
-        assert!(
-            authorize(
-                &request(serde_json::json!({
-                    "agentStatus": {"time": {"enabled": false}, "background": {"enabled": false}}
-                })),
-                &role,
-                &available,
-                &bare_parent
-            )
-            .is_ok()
-        );
-        // Switching a contributor the authority does not hold ON is refused.
-        assert!(matches!(
-            authorize(
-                &request(serde_json::json!({
-                    "agentStatus": {"time": {"enabled": true, "timezone": "Etc/UTC"},
-                                    "background": {"enabled": true}}
-                })),
-                &role,
-                &available,
-                &bare_parent
-            ),
-            Err(SubagentResolutionError::UnauthorizedExtension { .. })
-        ));
-        // A timezone neither authority renders is refused: permission to name
-        // the extension is not permission to configure it.
-        assert!(matches!(
-            authorize(
-                &request(serde_json::json!({
-                    "agentStatus": {"time": {"timezone": "Asia/Shanghai"},
-                                    "background": {"enabled": false}}
-                })),
-                &role,
-                &available,
-                &bare_parent
-            ),
-            Err(SubagentResolutionError::UnauthorizedExtension { .. })
-        ));
-        // The invoking Agent's own composition is the other half of the
-        // ceiling, and it authorizes exactly what it holds.
-        let shanghai_parent = super::InvokingAgentAuthority::from_identities(
-            [],
-            [],
-            compose(true, Some(shanghai), true),
-        );
-        assert!(
-            authorize(
-                &request(serde_json::json!({
-                    "agentStatus": {"time": {"timezone": "Asia/Shanghai"},
-                                    "background": {"enabled": true}}
-                })),
-                &role,
-                &available,
-                &shanghai_parent
-            )
-            .is_ok(),
-            "root composition is legitimate authority for an explicit authorized override"
-        );
-        // A role that composes no Agent Status at all, with a caller that
-        // composes none either, cannot manufacture the extension.
-        let bare_role = role_with(Vec::new(), crate::extensions::NativeAgentExtensions::none());
-        assert!(matches!(
-            authorize(
-                &request(serde_json::json!({"agentStatus": {}})),
-                &bare_role,
-                &available,
-                &bare_parent
-            ),
-            Err(SubagentResolutionError::UnauthorizedExtension { .. })
-        ));
-    }
-
-    /// The extension half of the ceiling is a real **union**, taken at the
-    /// vocabulary's own granularity — not "one source authorizes the whole
-    /// composition".
-    ///
-    /// The role renders UTC Time with Background off; the invoking Agent has
-    /// Time off and Background on. Neither authorizes the combined request by
-    /// itself, and together they authorize it exactly, with nothing
-    /// manufactured.
-    #[test]
-    fn sub258_extension_authority_is_the_union_of_role_and_invoking_contributors() {
-        let available = available();
-        let compose = |time: bool, background: bool| {
-            crate::extensions::NativeAgentExtensions::with_agent_status(
-                crate::context::AgentStatusConfig {
-                    time: crate::context::TimeStatusConfig {
-                        enabled: time,
-                        timezone: None,
-                    },
-                    background: crate::context::BackgroundStatusConfig {
-                        enabled: background,
-                    },
-                },
-            )
-        };
-        let request = |value: serde_json::Value| super::SubagentInvocationOverride {
-            extensions: Some(
-                serde_json::from_value::<crate::extensions::NativeAgentExtensionSelection>(value)
-                    .expect("selection parses"),
-            ),
-            ..super::SubagentInvocationOverride::default()
-        };
-        let both_on = request(serde_json::json!({
-            "agentStatus": {"time": {"enabled": true}, "background": {"enabled": true}}
-        }));
-
-        let time_role = role_with(Vec::new(), compose(true, false));
-        let background_parent =
-            super::InvokingAgentAuthority::from_identities([], [], compose(false, true));
-
-        assert!(
-            matches!(
-                authorize(
-                    &both_on,
-                    &time_role,
-                    &available,
-                    &super::InvokingAgentAuthority::none()
-                ),
-                Err(SubagentResolutionError::UnauthorizedExtension { .. })
-            ),
-            "the role alone holds no Background"
-        );
-        assert!(
-            matches!(
-                authorize(
-                    &both_on,
-                    &role_with(Vec::new(), crate::extensions::NativeAgentExtensions::none()),
-                    &available,
-                    &background_parent
-                ),
-                Err(SubagentResolutionError::UnauthorizedExtension { .. })
-            ),
-            "the invoking Agent alone holds no Time"
-        );
-        assert_eq!(
-            authorize(&both_on, &time_role, &available, &background_parent),
-            Ok(()),
-            "independently authorized contributors from both sources combine"
-        );
-    }
-
-    /// Tools, Skills, and extensions stay three separate authorization
-    /// domains: holding one never authorizes another, and an extension
-    /// composition is never satisfiable out of tool or Skill authority.
-    #[test]
-    fn sub258_the_three_authorization_domains_stay_independent() {
-        let available = available();
-        let status = crate::extensions::NativeAgentExtensions::with_agent_status(
-            crate::context::AgentStatusConfig::default(),
-        );
-        // A caller holding every tool the generation knows, and nothing else.
-        let tool_rich_parent = super::InvokingAgentAuthority::from_identities(
-            available
-                .definitions()
-                .into_iter()
-                .map(|definition| definition.id),
-            [],
-            crate::extensions::NativeAgentExtensions::none(),
-        );
-        let bare_role = role_with(Vec::new(), crate::extensions::NativeAgentExtensions::none());
-
-        // Tool authority does not become extension authority.
-        let extension_request = super::SubagentInvocationOverride {
-            extensions: Some(crate::extensions::NativeAgentExtensionSelection::of(
-                &status,
-            )),
-            ..super::SubagentInvocationOverride::default()
-        };
-        assert!(matches!(
-            authorize(
-                &extension_request,
-                &bare_role,
-                &available,
-                &tool_rich_parent
-            ),
-            Err(SubagentResolutionError::UnauthorizedExtension { .. })
-        ));
-
-        // ...and extension authority does not become tool authority.
-        let extension_rich_parent =
-            super::InvokingAgentAuthority::from_identities([], [], status.clone());
-        assert!(matches!(
-            authorize(
-                &requested_tools(&["grep"]),
-                &bare_role,
-                &available,
-                &extension_rich_parent
-            ),
-            Err(SubagentResolutionError::UnauthorizedTool { .. })
-        ));
-
-        // The same caller that cannot delegate the extension can still
-        // delegate the tools it actually holds, so the refusal above is a
-        // domain fact and not an inert path that refuses everything.
-        assert_eq!(
-            authorize(
-                &requested_tools(&["grep"]),
-                &bare_role,
-                &available,
-                &tool_rich_parent
-            ),
-            Ok(())
-        );
+        assert!(invocation.effective_plugins(&definition).todo().is_some());
+        // Resolution takes the catalog and the complete child profile. Root
+        // visibility is intentionally not an input or a capability ceiling.
     }
 
     /// Agent Status and Todo support one-shot child scope; Goal is root-only.
@@ -3030,6 +2256,7 @@ mod tests {
 
     fn frozen_invocation() -> crate::model::frozen::FrozenModelInvocation {
         crate::model::frozen::FrozenModelInvocation {
+            wire_model: "model-a".into(),
             binding: crate::model::frozen::FrozenProviderBinding {
                 resolved_credential: None,
                 provider: crate::model::catalog::ProviderId::new("local"),
@@ -3055,6 +2282,9 @@ mod tests {
     fn frozen_spec() -> ResolvedSubagentSpec {
         let definition = role_with(Vec::new(), crate::extensions::NativeAgentExtensions::none());
         ResolvedSubagentSpec {
+            generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
+            environment: Vec::new(),
+            skill_roots: Vec::new(),
             selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
             agent: definition.name().clone(),
             definition_digest: definition.digest().clone(),
@@ -3662,8 +2892,6 @@ mod tests {
         let server = McpServerId::new("github");
         let binding = |command: &str| crate::tools::mcp::McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
-            activation: crate::capabilities::activation::SourceActivation::default(),
-            resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::Stdio {
                 program: command.to_owned(),
                 args: Vec::new(),

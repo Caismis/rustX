@@ -583,7 +583,9 @@ fn run_status(
         // registry; a mismatched kind/id pair is exactly an unknown id
         // there, never a fallback to another domain.
         ExecutionKind::Tool => {
-            let snapshot = background.snapshot(&ToolExecutionId::new(&target.id));
+            let snapshot = ToolExecutionId::parse(&target.id)
+                .ok()
+                .and_then(|id| background.snapshot(&id));
             tool_snapshot_result(snapshot, &target.id)
         }
         // Subagent children are owned by the conversation's subagent
@@ -607,7 +609,9 @@ fn run_cancel(
 ) -> ToolExecutionResult {
     match target.kind {
         ExecutionKind::Tool => {
-            let snapshot = background.cancel(&ToolExecutionId::new(&target.id));
+            let snapshot = ToolExecutionId::parse(&target.id)
+                .ok()
+                .and_then(|id| background.cancel(&id));
             tool_snapshot_result(snapshot, &target.id)
         }
         ExecutionKind::Subagent => {
@@ -1059,10 +1063,10 @@ mod tests {
         assert!(matches!(
             ExecutionInput::parse(&serde_json::json!({
                 "action": "status",
-                "target": {"kind": "tool", "id": "exec_1"},
+                "target": {"kind": "tool", "id": "exec_215a03ee-2332-70b6-8e2d-634da8066f98"},
             }))
             .expect("status parses"),
-            ExecutionInput::Status { target } if target.kind == ExecutionKind::Tool && target.id == "exec_1"
+            ExecutionInput::Status { target } if target.kind == ExecutionKind::Tool && target.id == "exec_215a03ee-2332-70b6-8e2d-634da8066f98"
         ));
         assert!(matches!(
             ExecutionInput::parse(&serde_json::json!({
@@ -1123,7 +1127,7 @@ mod tests {
         assert!(matches!(
             ExecutionInput::parse(&serde_json::json!({
                 "action": "steer",
-                "target": {"kind": "tool", "id": "exec_1"},
+                "target": {"kind": "tool", "id": "exec_215a03ee-2332-70b6-8e2d-634da8066f98"},
                 "message": "x",
             }))
             .expect("a tool-kinded steer parses"),
@@ -1183,22 +1187,22 @@ mod tests {
             serde_json::json!({"action": "status"}),
             serde_json::json!({"action": "cancel"}),
             serde_json::json!({"action": "status", "target": {"kind": "tool"}}),
-            serde_json::json!({"action": "status", "target": {"id": "exec_1"}}),
+            serde_json::json!({"action": "status", "target": {"id": "exec_215a03ee-2332-70b6-8e2d-634da8066f98"}}),
             // `list` names none: a target is not an ignored field.
-            serde_json::json!({"action": "list", "target": {"kind": "tool", "id": "exec_1"}}),
+            serde_json::json!({"action": "list", "target": {"kind": "tool", "id": "exec_215a03ee-2332-70b6-8e2d-634da8066f98"}}),
             // A filter belongs to `list` alone.
             serde_json::json!({
                 "action": "status",
-                "target": {"kind": "tool", "id": "exec_1"},
+                "target": {"kind": "tool", "id": "exec_215a03ee-2332-70b6-8e2d-634da8066f98"},
                 "filter": {"kind": "tool"},
             }),
             // The action itself is required.
-            serde_json::json!({"target": {"kind": "tool", "id": "exec_1"}}),
+            serde_json::json!({"target": {"kind": "tool", "id": "exec_215a03ee-2332-70b6-8e2d-634da8066f98"}}),
             serde_json::json!({"filter": {"kind": "tool"}}),
             // Unknown fields are rejected at every level.
             serde_json::json!({
                 "action": "status",
-                "target": {"kind": "tool", "id": "exec_1"},
+                "target": {"kind": "tool", "id": "exec_215a03ee-2332-70b6-8e2d-634da8066f98"},
                 "extra": true,
             }),
             serde_json::json!({"action": "list", "filter": {"kind": "tool", "extra": true}}),
@@ -1292,7 +1296,7 @@ mod tests {
         ] {
             let rejected = ExecutionInput::parse(&serde_json::json!({
                 "action": action,
-                "target": {"kind": "tool", "id": "exec_1"},
+                "target": {"kind": "tool", "id": "exec_215a03ee-2332-70b6-8e2d-634da8066f98"},
             }))
             .expect_err("outside the closed action set");
             assert!(
@@ -1432,7 +1436,7 @@ mod tests {
     #[test]
     fn the_response_envelope_is_tagged_and_preserves_domain_fields() {
         let snapshot = BackgroundExecutionSnapshot {
-            execution_id: ToolExecutionId::new("exec_1"),
+            execution_id: ToolExecutionId::new("exec_215a03ee-2332-70b6-8e2d-634da8066f98"),
             tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             state: crate::tools::background::BackgroundLifecycle::Running,
@@ -1444,7 +1448,10 @@ mod tests {
         })
         .expect("serializes");
         assert_eq!(value["kind"], "tool");
-        assert_eq!(value["execution_id"], "exec_1");
+        assert_eq!(
+            value["execution_id"],
+            "exec_215a03ee-2332-70b6-8e2d-634da8066f98"
+        );
         assert_eq!(value["tool_name"], "bash");
         assert_eq!(value["state"], "running");
     }
@@ -1617,7 +1624,7 @@ mod tests {
     #[test]
     fn a_tool_summary_carries_the_handle_and_state_but_no_output() {
         let snapshot = BackgroundExecutionSnapshot {
-            execution_id: ToolExecutionId::new("exec_7"),
+            execution_id: ToolExecutionId::new("exec_64692f59-5f7d-7854-820b-7d2afa58aafd"),
             tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             state: crate::tools::background::BackgroundLifecycle::Succeeded,
@@ -1644,7 +1651,7 @@ mod tests {
         let value = serde_json::to_value(ExecutionSummary::of_tool(snapshot)).expect("serializes");
         assert_eq!(
             value["execution"],
-            serde_json::json!({"kind": "tool", "id": "exec_7"}),
+            serde_json::json!({"kind": "tool", "id": "exec_64692f59-5f7d-7854-820b-7d2afa58aafd"}),
             "the entry carries an explicit typed handle, never a bare id"
         );
         assert_eq!(value["state"], "succeeded");
@@ -1735,10 +1742,24 @@ mod tests {
     /// produced.
     #[test]
     fn the_merged_order_alternates_between_the_two_domains() {
-        let listing = super::merge_bounded(tool_listing(&["t1", "t2", "t3"]), child_listing(3));
+        let listing = super::merge_bounded(
+            tool_listing(&[
+                "exec_00000000-0000-7000-8000-000000000063",
+                "exec_00000000-0000-7000-8000-000000000062",
+                "exec_00000000-0000-7000-8000-000000000061",
+            ]),
+            child_listing(3),
+        );
         assert_eq!(
             ids(&listing),
-            vec!["t1", "c1", "t2", "c2", "t3", "c3"],
+            vec![
+                "exec_00000000-0000-7000-8000-000000000063",
+                "c1",
+                "exec_00000000-0000-7000-8000-000000000062",
+                "c2",
+                "exec_00000000-0000-7000-8000-000000000061",
+                "c3"
+            ],
             "tool, subagent, tool, subagent, ..."
         );
         assert_eq!(listing.returned, 6);
@@ -1751,18 +1772,57 @@ mod tests {
     /// own order rather than being reordered or dropped.
     #[test]
     fn an_exhausted_domain_leaves_the_other_in_its_own_order() {
-        let listing =
-            super::merge_bounded(tool_listing(&["t1", "t2", "t3", "t4"]), child_listing(1));
-        assert_eq!(ids(&listing), vec!["t1", "c1", "t2", "t3", "t4"]);
+        let listing = super::merge_bounded(
+            tool_listing(&[
+                "exec_00000000-0000-7000-8000-000000000063",
+                "exec_00000000-0000-7000-8000-000000000062",
+                "exec_00000000-0000-7000-8000-000000000061",
+                "exec_00000000-0000-7000-8000-000000000060",
+            ]),
+            child_listing(1),
+        );
+        assert_eq!(
+            ids(&listing),
+            vec![
+                "exec_00000000-0000-7000-8000-000000000063",
+                "c1",
+                "exec_00000000-0000-7000-8000-000000000062",
+                "exec_00000000-0000-7000-8000-000000000061",
+                "exec_00000000-0000-7000-8000-000000000060"
+            ]
+        );
 
-        let listing = super::merge_bounded(tool_listing(&["t1"]), child_listing(3));
-        assert_eq!(ids(&listing), vec!["t1", "c1", "c2", "c3"]);
+        let listing = super::merge_bounded(
+            tool_listing(&["exec_00000000-0000-7000-8000-000000000063"]),
+            child_listing(3),
+        );
+        assert_eq!(
+            ids(&listing),
+            vec![
+                "exec_00000000-0000-7000-8000-000000000063",
+                "c1",
+                "c2",
+                "c3"
+            ]
+        );
 
         let listing = super::merge_bounded(tool_listing(&[]), child_listing(2));
         assert_eq!(ids(&listing), vec!["c1", "c2"]);
 
-        let listing = super::merge_bounded(tool_listing(&["t1", "t2"]), child_listing(0));
-        assert_eq!(ids(&listing), vec!["t1", "t2"]);
+        let listing = super::merge_bounded(
+            tool_listing(&[
+                "exec_00000000-0000-7000-8000-000000000063",
+                "exec_00000000-0000-7000-8000-000000000062",
+            ]),
+            child_listing(0),
+        );
+        assert_eq!(
+            ids(&listing),
+            vec![
+                "exec_00000000-0000-7000-8000-000000000063",
+                "exec_00000000-0000-7000-8000-000000000062"
+            ]
+        );
     }
 
     /// The bound is one global number: it holds however the matching
@@ -1771,7 +1831,7 @@ mod tests {
     #[test]
     fn the_response_bound_is_global_and_never_starves_a_domain() {
         let many = (1..=MAX_LISTED_EXECUTIONS + 20)
-            .map(|ordinal| format!("t{ordinal}"))
+            .map(|ordinal| format!("exec_00000000-0000-7000-8000-{:012x}", 100 - ordinal))
             .collect::<Vec<_>>();
         let names = many.iter().map(String::as_str).collect::<Vec<_>>();
 
@@ -1804,7 +1864,7 @@ mod tests {
     #[test]
     fn truncation_is_deterministic_and_explicitly_reported() {
         let many = (1..=MAX_LISTED_EXECUTIONS + 5)
-            .map(|ordinal| format!("t{ordinal}"))
+            .map(|ordinal| format!("exec_00000000-0000-7000-8000-{:012x}", 100 - ordinal))
             .collect::<Vec<_>>();
         let names = many.iter().map(String::as_str).collect::<Vec<_>>();
         let first = super::merge_bounded(tool_listing(&names), child_listing(7));
@@ -1827,7 +1887,14 @@ mod tests {
         assert_eq!(first, second, "the responses are identical");
         assert_eq!(
             ids(&first)[..6],
-            ["t1", "c1", "t2", "c2", "t3", "c3"],
+            [
+                "exec_00000000-0000-7000-8000-000000000063",
+                "c1",
+                "exec_00000000-0000-7000-8000-000000000062",
+                "c2",
+                "exec_00000000-0000-7000-8000-000000000061",
+                "c3"
+            ],
             "the kept records are the deterministic prefix, not a sample"
         );
         assert_eq!(first.returned, MAX_LISTED_EXECUTIONS);
@@ -1930,7 +1997,7 @@ mod tests {
         SubagentSnapshot {
             subagent_id: SubagentId::new("conversation-1-subagent-2"),
             child_agent_id: AgentId::new("agent-child"),
-            child_conversation_id: ConversationId::new("conversation-1-subagent-2"),
+            child_conversation_id: ConversationId::new("conv_7ffb8fb9-96df-7369-86cb-c7b7cf85136b"),
             tool_call_id: ToolCallId::new("call-1"),
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),

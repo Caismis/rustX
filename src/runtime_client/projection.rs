@@ -247,19 +247,15 @@ impl RuntimeClientProjection {
             exhausted: false,
             snapshot: RuntimeClientSnapshot {
                 settings_evidence: super::settings::SettingsEvidence::LiveSession,
-                launch_settings: None,
                 // Absent until the host installs the attached runtime's own
                 // frozen composition. A projection with no runtime behind it
                 // — durable historical inspection — keeps it absent rather
                 // than reconstructing one.
-                effective_extensions: None,
-                settings_lifetimes: super::settings::SettingsLifetimes::default(),
+                effective_plugins: None,
                 workflows: crate::runtime::workflow::read_model::WorkflowSnapshot::default(),
                 conversation_id,
                 shutting_down: false,
                 effective_approval_mode: ApprovalMode::Policy,
-                pending_approval_mode: None,
-                approval_mode_revision: 0,
                 durability_failure: None,
                 messages: initial_messages,
                 transcript: super::snapshot::RuntimeClientTranscriptPage::default(),
@@ -325,19 +321,6 @@ impl RuntimeClientProjection {
     /// and gets the first real cursor.
     pub(crate) fn set_settings_evidence(&mut self, evidence: super::settings::SettingsEvidence) {
         self.snapshot.settings_evidence = evidence;
-        if evidence == super::settings::SettingsEvidence::FrozenChild {
-            self.snapshot.settings_lifetimes.model =
-                super::settings::SettingsBoundary::FrozenAdmission;
-            // A child's extension composition is not a launch capture: it is
-            // the execution profile its invoking generation resolved and
-            // froze into `ResolvedSubagentSpec`.
-            self.snapshot.settings_lifetimes.extensions =
-                super::settings::SettingsBoundary::FrozenAdmission;
-        }
-    }
-
-    pub(crate) fn set_launch_settings(&mut self, launch: Option<super::settings::LaunchSettings>) {
-        self.snapshot.launch_settings = launch;
     }
 
     /// Installs the frozen effective native Agent Extension composition of
@@ -347,11 +330,8 @@ impl RuntimeClientProjection {
     /// [`ConversationRuntime::native_extensions`](crate::runtime::ConversationRuntime::native_extensions).
     /// There is no later mutation seam: the projected composition changes
     /// only when the runtime behind the projection is a different one.
-    pub(crate) fn set_effective_extensions(
-        &mut self,
-        extensions: super::settings::EffectiveNativeAgentExtensions,
-    ) {
-        self.snapshot.effective_extensions = Some(extensions);
+    pub(crate) fn set_effective_plugins(&mut self, extensions: super::settings::EffectivePlugins) {
+        self.snapshot.effective_plugins = Some(extensions);
     }
 
     pub(crate) fn bootstrap(
@@ -362,11 +342,7 @@ impl RuntimeClientProjection {
         self.snapshot.transcript = super::snapshot::transcript_page_view(seed.transcript.clone())
             .expect("runtime bootstrap transcript is valid");
         self.snapshot.shutting_down = seed.shutting_down;
-        self.snapshot.effective_approval_mode = seed.approval_mode.effective;
-        self.snapshot.pending_approval_mode = (seed.approval_mode.effective
-            != seed.approval_mode.desired)
-            .then_some(seed.approval_mode.desired);
-        self.snapshot.approval_mode_revision = seed.approval_mode.revision;
+        self.snapshot.effective_approval_mode = seed.approval_mode;
         self.snapshot.inbound.pending =
             seed.inbound_pending.iter().map(inbound_item_view).collect();
         self.snapshot
@@ -865,6 +841,8 @@ impl RuntimeClientProjection {
                 vec![RuntimeClientEvent::CapabilityUpdated { capabilities }]
             }
             ConversationObservation::Resources {
+                model,
+                approval_mode,
                 snapshot,
                 availability,
             } => {
@@ -884,9 +862,18 @@ impl RuntimeClientProjection {
                 // Adjacent is not atomic; one event is.
                 let capabilities = capability_view(snapshot.capability(), &availability);
                 let resources = resources_view(&snapshot);
+                let plugins = snapshot
+                    .root_profile()
+                    .map(|profile| super::settings::EffectivePlugins::project(&profile.extensions));
+                self.snapshot.effective_plugins.clone_from(&plugins);
                 self.snapshot.capabilities = capabilities.clone();
                 self.snapshot.resources = resources.clone();
+                self.snapshot.model = Some((*model).clone());
+                self.snapshot.effective_approval_mode = approval_mode;
                 vec![RuntimeClientEvent::ResourceGenerationUpdated {
+                    plugins,
+                    model,
+                    approval_mode,
                     capabilities,
                     resources,
                 }]
@@ -915,20 +902,6 @@ impl RuntimeClientProjection {
             ConversationObservation::SessionModelChanged { model } => {
                 self.snapshot.model = Some((*model).clone());
                 vec![RuntimeClientEvent::SessionModelChanged { model }]
-            }
-            ConversationObservation::ApprovalModeChanged {
-                effective,
-                pending,
-                revision,
-            } => {
-                self.snapshot.effective_approval_mode = effective;
-                self.snapshot.pending_approval_mode = pending;
-                self.snapshot.approval_mode_revision = revision;
-                vec![RuntimeClientEvent::ApprovalModeChanged {
-                    effective_approval_mode: effective,
-                    pending_approval_mode: pending,
-                    revision,
-                }]
             }
             ConversationObservation::Shutdown => {
                 self.snapshot.shutting_down = true;
@@ -2072,11 +2045,6 @@ pub(crate) fn capability_view(
                 }
             },
             state: match state {
-                crate::capabilities::CapabilitySourceState::Inactive { activation } => {
-                    super::snapshot::CapabilitySourceStateView::Inactive {
-                        activation: *activation,
-                    }
-                }
                 crate::capabilities::CapabilitySourceState::Unprepared => {
                     super::snapshot::CapabilitySourceStateView::Unprepared
                 }
@@ -2206,7 +2174,7 @@ fn upsert_subagent(
 }
 
 /// Inserts or replaces one live native interaction projection, preserving
-/// deterministic coordinator identity order.
+/// coordinator publication order. Identity never determines presentation order.
 fn upsert_interaction(
     interactions: &mut Vec<crate::runtime::interaction::RoutedInteraction>,
     request: crate::runtime::interaction::RoutedInteraction,
@@ -2218,7 +2186,6 @@ fn upsert_interaction(
         *existing = request;
     } else {
         interactions.push(request);
-        interactions.sort_by(|left, right| left.interaction.cmp(&right.interaction));
     }
 }
 
@@ -2416,7 +2383,7 @@ mod tests {
 
     fn projection() -> RuntimeClientProjection {
         RuntimeClientProjection::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             Vec::new(),
             crate::runtime_client::snapshot::CapabilityView {
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
@@ -3585,7 +3552,7 @@ mod tests {
             facts: Arc<Mutex<Vec<CompactionOrderFact>>>,
         ) -> Self {
             let mut projection = RuntimeClientProjection::new(
-                ConversationId::new("projection-order"),
+                ConversationId::new("conv_d8b669b8-1b38-797b-8db2-c56430c1741d"),
                 initial_messages,
                 crate::runtime_client::snapshot::CapabilityView {
                     revision: crate::runtime::identity::CapabilityRevision::new(1),
@@ -3794,14 +3761,16 @@ mod tests {
             Some(AgentStatusEngine::default()),
             CompactionBudgets::new(1, 1, 1_000_000),
         );
-        let tool_runtime = crate::scripted_suites::common::tool_runtime("projection-order");
+        let tool_runtime = crate::scripted_suites::common::tool_runtime(
+            "conv_d8b669b8-1b38-797b-8db2-c56430c1741d",
+        );
         let store = tool_runtime.durable_store();
         let capability =
             crate::scripted_suites::common::capability_lease(ToolRegistry::new(), &tool_runtime)
                 .await;
         let request = AgentExecutionRequest {
             agent_id: AgentId::new("agent-a"),
-            conversation_id: ConversationId::new("projection-order"),
+            conversation_id: ConversationId::new("conv_d8b669b8-1b38-797b-8db2-c56430c1741d"),
             attempt_id: AttemptId::new("attempt-order"),
             conversation: ConversationState::from_messages(initial_messages.clone())
                 .expect("bootstrap conversation"),
@@ -3941,7 +3910,9 @@ mod tests {
             &mut projection,
             RuntimeEvent::CompactionCompleted {
                 generation: 1,
-                summary_message_id: MessageId::new("conv-1-summary-1"),
+                summary_message_id: MessageId::new(
+                    "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-summary-1",
+                ),
                 surface_revision: crate::conversation::SurfaceRevision::new(3),
                 tokens_before: TokenMeasurement {
                     input_tokens: 4800,
@@ -3954,7 +3925,9 @@ mod tests {
             &mut projection,
             RuntimeEvent::CompactionCompleted {
                 generation: 2,
-                summary_message_id: MessageId::new("conv-1-summary-2"),
+                summary_message_id: MessageId::new(
+                    "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-summary-2",
+                ),
                 surface_revision: crate::conversation::SurfaceRevision::new(6),
                 tokens_before: TokenMeasurement {
                     input_tokens: 4700,
@@ -4227,7 +4200,9 @@ mod tests {
             RuntimeEvent::CompactionStarted,
             RuntimeEvent::CompactionCompleted {
                 generation: 1,
-                summary_message_id: MessageId::new("conv-1-summary-1"),
+                summary_message_id: MessageId::new(
+                    "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-summary-1",
+                ),
                 surface_revision: crate::conversation::SurfaceRevision::new(3),
                 tokens_before: TokenMeasurement {
                     input_tokens: 1,
@@ -4279,7 +4254,9 @@ mod tests {
         projection.apply(ConversationObservation::ManualCompactionEvent {
             event: RuntimeEvent::CompactionCompleted {
                 generation: 1,
-                summary_message_id: MessageId::new("conv-1-summary-1"),
+                summary_message_id: MessageId::new(
+                    "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-summary-1",
+                ),
                 surface_revision: crate::conversation::SurfaceRevision::new(2),
                 tokens_before: TokenMeasurement {
                     input_tokens: 8_400,
@@ -5062,7 +5039,7 @@ mod tests {
     #[test]
     fn unserviceable_cursors_fail_with_resync_required() {
         let mut projection = RuntimeClientProjection::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             Vec::new(),
             crate::runtime_client::snapshot::CapabilityView {
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
@@ -5121,7 +5098,7 @@ mod tests {
     fn a_stalled_subscriber_is_bounded_and_never_silently_skips() {
         let limit = 4;
         let mut projection = RuntimeClientProjection::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             Vec::new(),
             crate::runtime_client::snapshot::CapabilityView {
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
@@ -5235,7 +5212,9 @@ mod tests {
     /// drain clears them and records the watermark.
     #[test]
     fn inbound_diagnostics_fold_from_mailbox_observations() {
-        let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+        let mailbox = ConversationInboundMailbox::new(ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ));
         let item = |id: &str| UserMessageBlock {
             id: MessageId::new(id),
             content: vec![UserContentBlock::Text(TextBlock {
@@ -5290,7 +5269,7 @@ mod tests {
         let mut projection = projection();
         let request = InteractionRequest {
             id: InteractionId::new("attempt-1-interaction-1"),
-            conversation_id: ConversationId::new("conv-1"),
+            conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             attempt_id: attempt(),
             turn: 2,
             kind: InteractionKind::Approval {
@@ -5419,17 +5398,24 @@ mod tests {
                 reason: "independent prompt".to_owned(),
             },
         };
-        let primary = RoutedInteraction::primary(approval("conv-primary", "primary-a"));
-        let child_a_request = approval("conv-child-a", "child-a");
+        let primary = RoutedInteraction::primary(approval(
+            "conv_4cd896f4-a321-7e22-9d65-c0862e12ef89",
+            "primary-a",
+        ));
+        let child_a_request = approval("conv_8e708397-e71d-7840-8b5a-5074c7b2d0ed", "child-a");
         let child_a = RoutedInteraction::subagent(
-            crate::runtime::identity::SubagentId::new("conv-primary-subagent-1"),
+            crate::runtime::identity::SubagentId::new(
+                "conv_4cd896f4-a321-7e22-9d65-c0862e12ef89-subagent-1",
+            ),
             child_a_request.conversation_id.clone(),
             crate::runtime::subagent::catalog::SubagentName::parse("explore").expect("agent name"),
             child_a_request,
         );
-        let other_child_request = approval("conv-child-b", "child-b");
+        let other_child_request = approval("conv_143069cc-2a88-7514-b43a-0dfdaa9f1170", "child-b");
         let child_b = RoutedInteraction::subagent(
-            crate::runtime::identity::SubagentId::new("conv-primary-subagent-2"),
+            crate::runtime::identity::SubagentId::new(
+                "conv_4cd896f4-a321-7e22-9d65-c0862e12ef89-subagent-2",
+            ),
             other_child_request.conversation_id.clone(),
             crate::runtime::subagent::catalog::SubagentName::parse("explore").expect("agent name"),
             other_child_request,
@@ -5450,9 +5436,9 @@ mod tests {
                 .map(|interaction| interaction.interaction.clone())
                 .collect::<Vec<_>>(),
             vec![
+                primary.interaction.clone(),
                 child_a.interaction.clone(),
                 child_b.interaction.clone(),
-                primary.interaction.clone(),
             ]
         );
 
@@ -5466,7 +5452,7 @@ mod tests {
                 .iter()
                 .map(|interaction| interaction.interaction.clone())
                 .collect::<Vec<_>>(),
-            vec![child_b.interaction.clone(), primary.interaction.clone()]
+            vec![primary.interaction.clone(), child_b.interaction.clone()]
         );
 
         projection.apply(ConversationObservation::InteractionSettled {
@@ -5510,7 +5496,9 @@ mod tests {
         let mut projection = projection();
         projection.apply(ConversationObservation::Background(
             BackgroundExecutionSnapshot {
-                execution_id: crate::runtime::identity::ToolExecutionId::new("exec_1"),
+                execution_id: crate::runtime::identity::ToolExecutionId::new(
+                    "exec_215a03ee-2332-70b6-8e2d-634da8066f98",
+                ),
                 tool_id: ToolId::new("tool-bg"),
                 tool_name: "bg".to_owned(),
                 state: BackgroundLifecycle::Running,
@@ -5520,7 +5508,9 @@ mod tests {
         ));
         projection.apply(ConversationObservation::Background(
             BackgroundExecutionSnapshot {
-                execution_id: crate::runtime::identity::ToolExecutionId::new("exec_1"),
+                execution_id: crate::runtime::identity::ToolExecutionId::new(
+                    "exec_215a03ee-2332-70b6-8e2d-634da8066f98",
+                ),
                 tool_id: ToolId::new("tool-bg"),
                 tool_name: "bg".to_owned(),
                 state: BackgroundLifecycle::Succeeded,
@@ -5530,7 +5520,9 @@ mod tests {
         ));
         projection.apply(ConversationObservation::Background(
             BackgroundExecutionSnapshot {
-                execution_id: crate::runtime::identity::ToolExecutionId::new("exec_2"),
+                execution_id: crate::runtime::identity::ToolExecutionId::new(
+                    "exec_20eb7fc0-b69d-7476-8553-c156fdc879c3",
+                ),
                 tool_id: ToolId::new("tool-bg"),
                 tool_name: "bg".to_owned(),
                 state: BackgroundLifecycle::Starting,
@@ -5540,10 +5532,16 @@ mod tests {
         ));
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.background.len(), 2);
-        assert_eq!(snapshot.background[0].execution_id.as_str(), "exec_1");
+        assert_eq!(
+            snapshot.background[0].execution_id.as_str(),
+            "exec_215a03ee-2332-70b6-8e2d-634da8066f98"
+        );
         assert_eq!(snapshot.background[0].state, BackgroundLifecycle::Succeeded);
         assert!(snapshot.background[0].result.is_some());
-        assert_eq!(snapshot.background[1].execution_id.as_str(), "exec_2");
+        assert_eq!(
+            snapshot.background[1].execution_id.as_str(),
+            "exec_20eb7fc0-b69d-7476-8553-c156fdc879c3"
+        );
     }
 
     /// Issue #202: the projection carries the honest background terminal
@@ -5563,7 +5561,9 @@ mod tests {
         };
         projection.apply(ConversationObservation::Background(
             BackgroundExecutionSnapshot {
-                execution_id: crate::runtime::identity::ToolExecutionId::new("exec_unknown"),
+                execution_id: crate::runtime::identity::ToolExecutionId::new(
+                    "exec_60002c8f-aeff-7c09-8709-610f0ed8d415",
+                ),
                 tool_id: ToolId::new("tool-bg"),
                 tool_name: "bg".to_owned(),
                 state: BackgroundLifecycle::OutcomeUnknown,
@@ -5573,7 +5573,9 @@ mod tests {
         ));
         projection.apply(ConversationObservation::Background(
             BackgroundExecutionSnapshot {
-                execution_id: crate::runtime::identity::ToolExecutionId::new("exec_timed_out"),
+                execution_id: crate::runtime::identity::ToolExecutionId::new(
+                    "exec_d013aabc-70aa-72fc-8b80-81767d9a64a1",
+                ),
                 tool_id: ToolId::new("tool-bg"),
                 tool_name: "bg".to_owned(),
                 state: BackgroundLifecycle::TimedOut,
@@ -5642,9 +5644,13 @@ mod tests {
 
         fn snapshot(observation: SubagentObservation) -> SubagentSnapshot {
             SubagentSnapshot {
-                subagent_id: crate::runtime::identity::SubagentId::new("conv-1-subagent-1"),
+                subagent_id: crate::runtime::identity::SubagentId::new(
+                    "conv_57d68983-5497-771e-8aaa-5f1356061697",
+                ),
                 child_agent_id: AgentId::new("agent-child"),
-                child_conversation_id: ConversationId::new("conv-1-subagent-1"),
+                child_conversation_id: ConversationId::new(
+                    "conv_57d68983-5497-771e-8aaa-5f1356061697",
+                ),
                 tool_call_id: ToolCallId::new("call-1"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:d1".to_owned(),

@@ -51,8 +51,8 @@ const CAPABILITIES = {
 
 function target(overrides: Partial<AttachmentTarget> = {}): AttachmentTarget {
   return {
-    session_id: "session-a",
-    conversation_id: "conv-a",
+    session_id: "ses_fa57a52d-bf08-7902-9852-9730a3e99db6",
+    conversation_id: "conv_bf9033a7-86e2-71aa-8314-b791ebfdbfec",
     runtime_incarnation: "1",
     attachment_id: "attach-1",
     ...overrides,
@@ -103,8 +103,8 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(APP_SERVER_PROTOCOL_VERSION, 5);
-    assert.equal(params.protocol_version, 5);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 6);
+    assert.equal(params.protocol_version, 6);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
     assert.equal(transport.log.count("initialize"), 1);
@@ -277,8 +277,8 @@ describe("Session routing and stale fencing", () => {
     const { client, transport } = await initialized();
     const a = await attached(client, transport, target());
     const b = await attached(client, transport, {
-      session_id: "session-b",
-      conversation_id: "conv-b",
+      session_id: "ses_e8de016f-bd70-782f-ad23-25e81df82550",
+      conversation_id: "conv_449370cc-308b-7409-94bd-ff539142e4fb",
       runtime_incarnation: "2",
       attachment_id: "attach-2",
     });

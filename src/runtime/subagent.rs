@@ -107,10 +107,13 @@ use sha2::{Digest, Sha256};
 #[must_use]
 pub(crate) fn child_conversation_store_path(
     parent_runtime_root: &Path,
+    session_id: &crate::runtime::identity::SessionId,
     conversation_id: &ConversationId,
 ) -> PathBuf {
     parent_runtime_root
-        .join("subagents")
+        .join("sessions")
+        .join(session_id.as_str())
+        .join("conversations")
         .join(conversation_id.as_str())
         .join("conversation.sqlite")
 }
@@ -141,9 +144,10 @@ pub(crate) fn child_conversation_inspection_socket_path(
 #[must_use]
 pub(crate) fn child_conversation_inspection_liveness_path(
     parent_runtime_root: &Path,
+    session_id: &crate::runtime::identity::SessionId,
     conversation_id: &ConversationId,
 ) -> PathBuf {
-    child_conversation_store_path(parent_runtime_root, conversation_id)
+    child_conversation_store_path(parent_runtime_root, session_id, conversation_id)
         .parent()
         .expect("a child conversation database has a semantic parent")
         .join(".inspection-live")
@@ -190,7 +194,7 @@ pub use registry::{
     SubagentWorkspaceDisposalError, SubagentWorkspaceResourceState,
 };
 pub use resolver::{
-    InvokingAgentAuthority, ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool,
+    ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool,
     SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION, SubagentExecutionProfileDigest, SubagentResolution,
     SubagentResolutionError, SubagentResolver,
 };
@@ -253,19 +257,12 @@ pub struct AttemptSubagentContext {
 }
 
 struct AttemptSubagentContextInner {
+    capability: crate::capabilities::CapabilityCoordinator,
     attempt_id: crate::runtime::identity::AttemptId,
     resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
     model: crate::model::session::SessionModelConfig,
     models: crate::model::invocation::ModelBindingRegistry,
     approval_mode: ApprovalMode,
-    /// The invoking Agent's frozen admitted execution profile (Issue #258).
-    ///
-    /// It is captured once, here, from the very snapshot and extension
-    /// composition this attempt was admitted with. It is the *only*
-    /// parent-side input to the dynamic delegation ceiling, and it is never
-    /// an inheritance source: nothing in it reaches a child except through an
-    /// explicit, authorized invocation override.
-    invoking: InvokingAgentAuthority,
 }
 
 impl core::fmt::Debug for AttemptSubagentContext {
@@ -279,6 +276,49 @@ impl core::fmt::Debug for AttemptSubagentContext {
 }
 
 impl AttemptSubagentContext {
+    #[cfg(test)]
+    pub(crate) fn test_context(
+        attempt_id: crate::runtime::identity::AttemptId,
+        resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
+        model: crate::model::session::SessionModelConfig,
+        models: crate::model::invocation::ModelBindingRegistry,
+        approval_mode: ApprovalMode,
+    ) -> Self {
+        let snapshot = resources.capability();
+        let registry = crate::tools::executor::ToolRegistry::from_registrations(
+            snapshot.available_tools().registrations().to_vec(),
+        )
+        .unwrap();
+        let capability = crate::capabilities::CapabilityCoordinator::new(
+            crate::capabilities::CapabilityCoordinatorConfig {
+                conversation_id: snapshot.conversation_id().clone(),
+                workspace: crate::tools::workspace::Workspace::new(snapshot.workspace_root())
+                    .unwrap(),
+                environment_store_root: snapshot
+                    .workspace_root()
+                    .parent()
+                    .unwrap()
+                    .join(".test-environments"),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
+                base_tool_registry: Arc::new(registry),
+                extension_tools: crate::extensions::ExtensionToolPlane::none(),
+                agent_activation: crate::capabilities::AgentActivation::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
+                mcp_servers: snapshot.mcp_servers().clone(),
+                base_environment: snapshot.effective_environment().clone(),
+            },
+        )
+        .unwrap();
+        Self::new(
+            capability,
+            attempt_id,
+            resources,
+            model,
+            models,
+            approval_mode,
+        )
+    }
+
     /// Binds one attempt's immutable generation and frozen model authority.
     ///
     /// `model` must be the invoking attempt's **frozen effective** model
@@ -287,22 +327,21 @@ impl AttemptSubagentContext {
     /// state and never a composition-time capture.
     #[must_use]
     pub fn new(
+        capability: crate::capabilities::CapabilityCoordinator,
         attempt_id: crate::runtime::identity::AttemptId,
         resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
         model: crate::model::session::SessionModelConfig,
         models: crate::model::invocation::ModelBindingRegistry,
         approval_mode: ApprovalMode,
-        extensions: crate::extensions::NativeAgentExtensions,
     ) -> Self {
-        let invoking = InvokingAgentAuthority::frozen(resources.capability(), extensions);
         Self {
             inner: Arc::new(AttemptSubagentContextInner {
+                capability,
                 attempt_id,
                 resources,
                 model,
                 models,
                 approval_mode,
-                invoking,
             }),
             native: None,
         }
@@ -334,9 +373,8 @@ impl AttemptSubagentContext {
     /// invocation override, against exactly this attempt's generation.
     ///
     /// The authority mode is fixed here, by the launch site, and is not
-    /// reachable from the model's arguments: a `subagent` call is always
-    /// judged against the dynamic delegation ceiling, and always in the Main
-    /// admission domain.
+    /// reachable from the model's arguments. Root authorizes the named identity;
+    /// its Tool and Plugin selections never impose a ceiling on the child profile.
     ///
     /// # Errors
     ///
@@ -353,9 +391,60 @@ impl AttemptSubagentContext {
             models: &self.inner.models,
 
             invocation,
-
-            invoking: &self.inner.invoking,
         })
+    }
+
+    /// Prepare only the finite sources selected by this admitted child.
+    pub(crate) async fn resolve_admitted(
+        &self,
+        agent: &SubagentName,
+        invocation: Option<&SubagentInvocationOverride>,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
+    ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
+        let resources = &self.inner.resources;
+        let definition = resources
+            .subagents()
+            .get(agent)
+            .filter(|_| resources.delegatable_agents().contains(agent))
+            .ok_or_else(|| SubagentResolutionError::UnknownAgent {
+                agent: agent.to_string(),
+                available: resources
+                    .delegatable_agents()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+            })?;
+        let invocation_default = SubagentInvocationOverride::default();
+        let intent = invocation.unwrap_or(&invocation_default);
+        intent
+            .validate_spelling()
+            .map_err(|error| SubagentResolutionError::InvalidOverride { error })?;
+        let sources = intent
+            .effective_tools(definition)
+            .iter()
+            .filter_map(|selector| selector.source().cloned())
+            .collect();
+        let candidate = self
+            .inner
+            .capability
+            .prepare_admitted_sources(resources, sources, cancellation)
+            .await
+            .map_err(|error| SubagentResolutionError::Preparation {
+                detail: error.to_string(),
+            })?;
+        let admitted = resources.as_ref().clone().with_admitted_capability(
+            candidate.admitted_snapshot(resources.capability()),
+            candidate.availability().clone(),
+        );
+        let resolved = SubagentResolver::resolve(&SubagentResolution {
+            resources: &admitted,
+            agent,
+            attempt_model: &self.inner.model,
+            models: &self.inner.models,
+            invocation,
+        });
+        candidate.retire_uncommitted().await;
+        resolved
     }
 
     /// Bind attempt model inputs to previously admitted static child capabilities.
@@ -379,12 +468,12 @@ impl AttemptSubagentContext {
         );
         Self {
             inner: Arc::new(AttemptSubagentContextInner {
+                capability: self.inner.capability.clone(),
                 attempt_id: self.inner.attempt_id.clone(),
                 resources: Arc::new((**resources).clone().with_workflow_catalog(catalog)),
                 model: self.inner.model.clone(),
                 models: self.inner.models.clone(),
                 approval_mode: self.inner.approval_mode,
-                invoking: self.inner.invoking.clone(),
             }),
             native: self.native.clone(),
         }
@@ -950,9 +1039,9 @@ mod tests {
     /// workspace fact into the same Runtime-authored message (Issue #192).
     #[test]
     fn the_recovery_interruption_notice_is_runtime_authored_and_carries_the_retained_fact() {
-        let subagent_id = SubagentId::new("conv-1-subagent-1");
+        let subagent_id = SubagentId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-1");
         let child_agent_id = AgentId::new("agent-child");
-        let conversation_id = ConversationId::new("conv-1");
+        let conversation_id = ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let timestamp = chrono::Utc::now();
         let handoff = crate::runtime::workspace::WorkspaceHandoff {
             logical_workspace: std::path::PathBuf::from("/physical/worktree"),
@@ -1027,11 +1116,11 @@ mod tests {
     /// folds into the same one notice when settlement retained work.
     #[test]
     fn the_terminal_notice_correlates_the_exact_execution_handle() {
-        let subagent_id = SubagentId::new("conv-1-subagent-2");
+        let subagent_id = SubagentId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-2");
         let plain = super::terminal_notice_text(&subagent_id, "explore", false);
         assert_eq!(
             plain,
-            "Subagent execution {\"kind\":\"subagent\",\"id\":\"conv-1-subagent-2\"} \
+            "Subagent execution {\"kind\":\"subagent\",\"id\":\"conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-2\"} \
              (agent \"explore\") completed; the message that follows is its final report."
         );
         let retained = super::terminal_notice_text(&subagent_id, "explore", true);

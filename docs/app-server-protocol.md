@@ -1,4 +1,4 @@
-# App Server protocol v5
+# App Server protocol v6
 
 The App Server protocol is rustX's public client boundary for the TUI,
 Developer Web Console, future Web UI, and SDKs. Rust DTOs in
@@ -48,44 +48,28 @@ drain contract described below.
 
 ## Standalone startup
 
-One process represents one user environment. Bootstrap binds the canonical user
-TOML, validates the selected model catalog, opens one durable `SessionController`,
-and creates one `SessionRuntimeManager` before accepting transport traffic. There
-is no global active Session and no fixed Conversation composed at launch.
+One process captures one User home and fixed configuration/resource/runtime
+bindings. It creates one durable Session controller and residency manager; it
+has no global active Session.
 
 ```sh
-# Canonical user source: $XDG_CONFIG_HOME/rustx/settings.toml,
-# defaulting to ~/.config/rustx/settings.toml. Use rustx init to author it.
-rustx app-server --user-settings /private/user/settings.toml \
-  --runtime-root /private/user/rustx-state --listen stdio
-
-# Omit --runtime-root to use the user TOML binding, otherwise the default is
-# $XDG_STATE_HOME/rustx/app-server (default ~/.local/state/rustx/app-server).
-rustx app-server --user-settings /private/user/settings.toml \
+rustx app-server --config /private/user/rustx.toml \
+  --runtime-root /private/user/runtime --listen stdio
+rustx app-server --config /private/user/rustx.toml \
   --listen ws://127.0.0.1:8080 --token-file /private/user/socket-token
 ```
 
-`--user-settings <settings.toml>` explicitly fixes `UserConfigSources.settings`
-for this process and every Session it opens or creates. The selected file must
-exist and pass the shared TOML bootstrap before readiness. Omission retains the
-canonical XDG default. Hosts can select each process's user document directly;
-no HOME/XDG mutation or per-connection source switching is required.
+Defaults are `~/rustx/rustx.toml`, `~/rustx/.agents`, and `~/rustx/runtime`.
+`--config` replaces only the User document. Both explicit path bindings must be
+absolute. They cannot change through Reload. Each Session's explicit cwd selects
+exactly its Workspace document and `.agents`; no ancestor accumulation or rustX
+Workspace trust gate exists. Transport credentials remain a separate owner.
 
-`--models <models.toml>` and `--runtime-root <path>` override source bindings using
-the existing configuration resolver. Relative CLI paths resolve at launch; paths
-authored in user settings resolve relative to that document. `--config` is
-intentionally absent here: in ordinary `rustx` it selects a Session/project override,
-not the canonical user source. Use `--user-settings` for that process-level binding.
-Session cwd and optional project configuration come from `session/create` settings;
-launch cwd is never substituted for Session cwd. Project trust gates native project
-configuration/resources, independently of permission to use an explicit cwd. Neither cwd nor transport authentication is a sandbox.
+Exactly one transport is selected. Numeric IPv4/IPv6 WebSocket addresses may use
+port zero. Bound readiness is reported on stderr; stdio emits no banner. A stdio
+connection may use pipes or Unix socketpairs. The internal child process entry
+point is separate from the public App Server protocol.
 
-Exactly one transport is selected. `ws://IP:PORT` accepts numeric IPv4/IPv6 socket
-addresses, including port 0 for host-assigned ports. The server advertises the bound
-address on stderr only after bootstrap succeeds. Stdio readiness is the response to
-`initialize`; no banner is emitted. Stdio accepts pipes or Unix socketpairs on stdin/stdout, as supplied
-by a child-process launcher. The command does not daemonize or reconnect orphaned pipes.
-The internal `--subagent-child` path remains separate from the public client transport.
 
 ## Transport framing and admission
 
@@ -119,13 +103,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v5",
+  "rustx.app-server.v6",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v5` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v6` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -230,7 +214,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v5; pipeline individual requests instead. This limitation is
+supported in v6; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -248,9 +232,9 @@ explicitly rejected as an invalid request before any action occurs.
 | `turn/start`, `turn/steer`, `turn/cancel` | Native inbound and attempt-cancellation owners; acceptance is not terminal execution |
 | `interaction/respond`, `interaction/cancel` | Originating runtime/coordinator, including routed child interactions |
 | `settings/read`, `settings/replace` | Explicit durable Session selections with revision CAS; cold composition consumes them |
-| `settings/model`, `settings/models`, `settings/setModel`, `settings/setApprovalMode` | Native live settings; admitted work keeps its frozen values |
-| `settings/defaults`, `settings/saveDefault` | Bound user-default document owner; revision-checked source writes are distinct from live settings |
-| `resources/read`, `resources/reload` | Native capability/resource inspection and generation publication |
+| `settings/selectModel` | Explicit durable Session model selection (or clear to authored default), with revision CAS |
+| `configuration/sourcesRead`, `configuration/sourceWrite` | Native structured User/Workspace documents and exact revisions; bounded semantic-unit CAS writes |
+| `configuration/effective`, `configuration/reload` | Published generation/provenance and the one explicit full-generation reload |
 | `context/compact`, `goal/control` | Existing maintenance and Goal owners |
 | `background/status`, `background/cancel` | Existing background execution registry |
 | `subagent/status`, `subagent/cancel`, `subagent/disposeWorkspace` | Existing child/resource owner; no caller-supplied filesystem cleanup paths |
@@ -322,7 +306,7 @@ cannot remove a newly installed route.
 
 ## Attachment and observation lifetime
 
-Protocol v5 admits at most one writable external controller per resident
+Protocol v6 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -401,8 +385,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v5.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v5.ts`: TypeScript generated from that schema using pinned
+- `v6.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v6.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -475,7 +459,7 @@ lifecycle authority. Unload releases a live incarnation; it neither deletes a
 Session nor changes its durable selections. A later attach cold-loads through
 normal current configuration resolution and native recovery.
 
-The canonical **user** `settings.toml` accepts this process-only table. Project
+The bound User `rustx.toml` accepts this process-only table. Workspace
 TOML cannot override it, and it is never persisted in a Session:
 
 ```toml
@@ -664,7 +648,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v5; no compatibility path is provided.
+This remains mandatory protocol v6; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -680,7 +664,7 @@ additional retry endpoint is involved. These are the merged #319 v4 semantics.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v5 adds `inbound/edit { target, expected, text }` and
+Protocol v6 adds `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and controller attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -730,7 +714,7 @@ native snapshot. Pending mutation invalidates loaded Web transcript windows so
 removed entries cannot survive a historical-page merge. Recovery reconstructs
 only committed rows and revisions; no browser queue is persisted.
 
-The pending revision column advances the SQLite store schema to 37. As with the
+The pending revision column advances the SQLite store schema to 38. As with the
 other pre-1.0 schema changes, older stores are refused explicitly; no migration
 or compatibility representation is introduced.
 
@@ -759,11 +743,27 @@ from `SessionPersistentState`, and `residencies`, a native manager observation f
 exactly the returned page. The existing bounded pagination/query semantics remain;
 neither field loads a runtime. This avoids a second Session-to-Workspace database.
 
-`settings/read` includes nullable `project_trusted`, read by the native configuration
-owner without composing a runtime, reading project configuration or mutating trust.
-It reports current source trust, not loaded resource activation. Unknown remains
-unknown. Untrusted cwd composition excludes project configuration and automatic
-project resources; admitted resource generations retain their frozen authority.
-Workspace registration never grants trust. Workspace rename/order/unregister never
-rewrites Session state. Workspace switch is not unload/cancel; unregister is not
-Session delete. Native Fork/rename/history semantics are unchanged.
+Workspace registration, rename and order remain Product Host metadata. They do
+not rewrite Session state. Switching Workspace does not unload or cancel a
+Session, and unregistering a Workspace is not Session deletion.
+
+## CFG3 configuration authoring and publication
+
+[Configuration](configuration.md) defines the native source model and
+[Web Settings](web-settings.md) documents its projection. User and Workspace
+read/write operations return exact revisions and redacted structured documents.
+Rust validates and serializes whole semantic units. MCP and named Agent writes
+are separately revision-fenced. Saving never implicitly reloads.
+
+Effective state is one published immutable generation, including native origins,
+selected versus defined resources, shadowing, Session explicit model, and the
+admitted Attempt's frozen generation/model/resources. Explicit source revision
+comparison reports pending reload. `configuration/reload` either publishes one
+complete candidate or returns `configuration_busy` with the native owner
+(`attempt`, `interaction`, `owned_work`, `compaction`, or `reload`), or
+`configuration_failed` with a bounded redacted diagnostic. Both refusals leave the
+old generation authoritative. Session and node fields use strict typed UUIDv7
+identities in public and native Session projections.
+Reconnect reads authoritative snapshots and never replays mutations.
+
+Protocol 6 refuses obsolete development versions; no dual decoding exists.

@@ -24,8 +24,10 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
     };
     use crate::runtime::identity::{ConversationId, InteractionId};
     let target = AttachmentTarget {
-        session_id: crate::local_runtime::session::SessionId::new("session-fixture"),
-        conversation_id: ConversationId::new("conversation-fixture"),
+        session_id: crate::local_runtime::session::SessionId::new(
+            "ses_00000000-0000-7000-8000-000000000001",
+        ),
+        conversation_id: ConversationId::new("conv_00000000-0000-7000-8000-000000000001"),
         runtime_incarnation: serde_json::from_str("9007199254740993").expect("incarnation fixture"),
         attachment_id: crate::runtime_client::types::AttachmentId::new("attachment-fixture"),
     };
@@ -138,12 +140,18 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             id: RequestId::String("read".into()),
             result: MethodResult::Session {
                 session: crate::local_runtime::session::SessionSnapshot {
-                    id: crate::local_runtime::session::SessionId::new("session-fixture"),
+                    id: crate::local_runtime::session::SessionId::new(
+                        "ses_00000000-0000-7000-8000-000000000001",
+                    ),
                     name: None,
                     created_at: chrono::DateTime::from_timestamp(0, 0).expect("epoch"),
                     updated_at: chrono::DateTime::from_timestamp(1, 0).expect("epoch"),
-                    active_node: crate::local_runtime::session::SessionNodeId::new("node-fixture"),
-                    active_conversation_id: ConversationId::new("conversation-fixture"),
+                    active_node: crate::local_runtime::session::SessionNodeId::new(
+                        "node_00000000-0000-7000-8000-000000000001",
+                    ),
+                    active_conversation_id: ConversationId::new(
+                        "conv_00000000-0000-7000-8000-000000000001",
+                    ),
                     node_count: 1,
                 },
             },
@@ -224,18 +232,13 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             outcome: crate::durable::inbox::PendingMutationOutcome::Conflict,
         },
         MethodResult::SettingsReplaced { revision: EXACT },
-        MethodResult::ResourcesReloaded {
+        MethodResult::ConfigurationReloaded {
             resource_revision: EXACT,
             capability_revision: crate::runtime::identity::CapabilityRevision::new(EXACT),
         },
         MethodResult::InboundAccepted {
             message_id: crate::runtime::identity::MessageId::new("message-fixture"),
             inbound_sequence: crate::runtime::inbound::InboundSequence::new(EXACT),
-        },
-        MethodResult::ApprovalMode {
-            effective_approval_mode: crate::runtime::ApprovalMode::Policy,
-            pending_approval_mode: None,
-            revision: EXACT,
         },
     ] {
         fixtures.push(ProtocolMessage::Response(Response::Success(Box::new(
@@ -474,7 +477,7 @@ mod tests {
     fn committed_rust_artifacts_are_current() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server");
         assert_eq!(
-            std::fs::read_to_string(root.join("v5.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v6.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

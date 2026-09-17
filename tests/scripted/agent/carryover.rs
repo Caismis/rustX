@@ -36,7 +36,7 @@ use rustx::tools::executor::ToolRegistry;
 use support::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
 use support::fake::{FakeModel, FakeStep, fake_model};
 
-const CONVERSATION: &str = "conv-137";
+const CONVERSATION: &str = "conv_ad3b7302-b151-7c6f-ac81-2ddbfbe8c043";
 
 fn user(id: &str, text: &str) -> MessageBlock {
     MessageBlock::User(UserMessageBlock {

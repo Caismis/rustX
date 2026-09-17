@@ -1,5 +1,5 @@
 /** Browser grammar only. Identity is independent of translated labels/aliases. */
-export type CommandId = 'model' | 'permission' | 'compact' | 'new' | 'fork' | 'branch' | 'goal' | 'tools';
+export type CommandId = 'model' | 'compact' | 'new' | 'fork' | 'branch' | 'goal' | 'tools';
 export interface CommandDefinition {
   id: CommandId;
   label: string;
@@ -8,7 +8,6 @@ export interface CommandDefinition {
 }
 export const commands: readonly CommandDefinition[] = [
   { id: 'model', label: 'Choose model', aliases: ['模型'], availability: 'attached' },
-  { id: 'permission', label: 'Approval mode', aliases: ['approval', '权限'], availability: 'attached' },
   { id: 'compact', label: 'Compact context', aliases: ['压缩'], availability: 'no-attempt' },
   { id: 'new', label: 'New Session', aliases: ['新建'], availability: 'attached' },
   { id: 'fork', label: 'Fork independent Session', aliases: ['分叉'], availability: 'attached' },

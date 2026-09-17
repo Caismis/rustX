@@ -3,198 +3,45 @@ import { readFileSync } from "node:fs";
 import { it } from "node:test";
 import { renderSettings } from "../src/commands/dispatcher.ts";
 import { emptyPresentationState, replaceFromSnapshot } from "../src/presentation/projection.ts";
-import type { EffectiveNativeAgentExtensions, SettingsLifetimes } from "../src/protocol/app-server.ts";
 import { agentStatus, attemptModel, attemptView, runtimeCursor, sessionModel, snapshot, temporalSection } from "./support/fixtures.ts";
 
-it("CFG238 reconstructs distinct launch, Session, pending and frozen facts from a fresh snapshot", () => {
+it("CFG3 reconnect reconstructs published and admitted generations without replay", () => {
   const native = snapshot({
-    launch_settings: { model: { model: "local/a", reasoning_profile: null }, model_origin: { kind: "user", document: "/config/settings.toml" }, reasoning_origin: { kind: "builtin" }, approval_mode: "policy", approval_origin: { kind: "builtin" }, runtime_root_origin: { kind: "cli" }, tool_selection_origin: { kind: "builtin" } },
-    model: sessionModel("local/b"),
-    effective_approval_mode: "policy", pending_approval_mode: "full_access",
-    resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: "8", context_files: [], agent_profile: false },
-    attempt: attemptView({ model: attemptModel("local/c"), execution_settings: { resource_revision: "7", approval_mode: "policy" } }),
+    model: sessionModel("ses_5f9678b9-a001-7a5a-ba04-f2df4d59b899"),
+    resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] }, revision: "8", context_files: [], agent_profile: false },
+    attempt: attemptView({ model: attemptModel("admitted-model"), execution_settings: { resource_revision: "7", approval_mode: "policy" } }),
+    effective_plugins: { goal: null, todo: {}, agent_status: null },
   });
   const live = replaceFromSnapshot(native, runtimeCursor(50));
   const reconnect = replaceFromSnapshot(structuredClone(native), runtimeCursor(50));
   assert.deepEqual(reconnect, live);
   const rendered = renderSettings(reconnect);
-  for (const text of ["local/a", "local/b", "local/c", "source user", "pending approval: full_access", "published revision: 8", "resource revision: 7", "next eligible admission", "frozen"])
+  for (const text of ["ses_5f9678b9-a001-7a5a-ba04-f2df4d59b899", "admitted-model", "Published generation: 8", "Save commits authored sources", "/reload publishes a complete configuration generation"])
     assert.ok(rendered.includes(text), text);
-  assert.ok(!rendered.includes("requestParams"));
-  assert.deepEqual(native, snapshot({ ...native }));
+  assert.deepEqual(reconnect.effectivePlugins, native.effective_plugins);
+  assert.equal(reconnect.attempt?.executionSettings?.resource_revision, "7");
 });
 
-it("CFG238 historical settings remain explicitly unavailable", () => {
-  const state = replaceFromSnapshot(snapshot({ model: null, settings_evidence: "historical_partial", launch_settings: null, attempt: attemptView({ model: null, execution_settings: null }) }), runtimeCursor(0));
-  const rendered = renderSettings(state);
-  assert.match(rendered, /partial/);
-  assert.match(rendered, /unavailable/);
-  assert.ok(!rendered.includes("inspection/durable"));
-});
-
-it("CFG238 renders every lifetime from the supplied native field, with no unattached defaults", () => {
-  const empty = emptyPresentationState(sessionModel("local/a"));
-  assert.equal(empty.settingsLifetimes, null);
-  const native = snapshot({ settings_lifetimes: {
-    launch: "safe_boundary", model: "client_local", approval: "next_launch",
-    resources: "frozen_admission", attempt: "resource_publication",
-    presentation: "next_admission", saved_defaults: "launch_capture",
-    extensions: "next_launch",
-  } });
-  const state = replaceFromSnapshot(native, runtimeCursor(1));
-  assert.deepEqual(state.settingsLifetimes, native.settings_lifetimes);
-  const rendered = renderSettings(state);
-  for (const expected of ["Launch capture (safe boundary", "selection (immediate, client-local)", "Runtime policy (future launch)", "resource generation (frozen at admission)", "Admitted execution (resource publication)", "Presentation (next eligible admission)", "Defaults (launch capture", "Native Agent Extensions (future launch)"])
-    assert.ok(rendered.includes(expected), expected);
-});
-
-/**
- * Issue #256 regression 10 (TypeScript half): the same shared protocol
- * fixture the Rust `ext256_effective_extension_protocol_fixture_round_trips_exactly`
- * test reads. Both halves must agree on all three semantic states and on the
- * new `extensions` lifetime, or the wire contract has drifted.
- */
-it("EXT256 shares the native effective-extension protocol fixture exactly", () => {
-  const fixture: {
-    lifetimes: SettingsLifetimes;
-    child_lifetimes: SettingsLifetimes;
-    effective_extensions: Record<"composed" | "contributors_disabled" | "not_composed", EffectiveNativeAgentExtensions>;
-  } = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/settings-v26.json", import.meta.url), "utf8"));
-
-  assert.equal(fixture.lifetimes.extensions, "launch_capture");
-  assert.equal(fixture.child_lifetimes.extensions, "frozen_admission");
-  assert.equal(fixture.child_lifetimes.model, "frozen_admission");
-  assert.deepEqual(fixture.lifetimes, snapshot().settings_lifetimes);
-
-  // The three states are distinct values on the wire, not spellings of one
-  // another: "not composed" is never "composed with everything off".
-  const { composed, contributors_disabled: disabled, not_composed: absent } = fixture.effective_extensions;
-  assert.deepEqual(composed.agent_status, { time: { enabled: true, timezone: "Asia/Shanghai" }, background: { enabled: true } });
-  assert.deepEqual(disabled.agent_status, { time: { enabled: false, timezone: null }, background: { enabled: false } });
-  assert.equal(absent.agent_status, null);
-  assert.notDeepEqual(composed, disabled);
-  assert.notDeepEqual(disabled, absent);
-});
-
-/**
- * Issue #256 regression 11: `/settings` distinguishes an absent Agent Status
- * extension, a composed one, and a configured timezone from no explicit one —
- * and says nothing about extension internals.
- */
-it("EXT256 /settings distinguishes absent, composed, and timezone-configured Agent Status", () => {
-  const composed = renderSettings(replaceFromSnapshot(snapshot({
-    effective_extensions: { goal: null, agent_status: { time: { enabled: true, timezone: "Asia/Shanghai" }, background: { enabled: true } }, todo: {} },
-  }), runtimeCursor(1)));
-  assert.match(composed, /### Native Agent Extensions \(launch capture\)/);
-  assert.match(composed, /- Agent Status: enabled/);
-  assert.match(composed, /  - Time: enabled/);
-  assert.match(composed, /  - timezone: Asia\/Shanghai/);
-  assert.match(composed, /  - Background: enabled/);
-  assert.ok(!composed.includes("none configured"));
-  assert.match(composed, /reload republishes resources and never recomposes extensions/);
-
-  // Composed, but with both contributors off. This is not "disabled".
-  const idle = renderSettings(replaceFromSnapshot(snapshot({
-    effective_extensions: { goal: null, agent_status: { time: { enabled: false, timezone: null }, background: { enabled: false } }, todo: {} },
-  }), runtimeCursor(1)));
-  assert.match(idle, /- Agent Status: enabled/);
-  assert.match(idle, /  - Time: disabled/);
-  assert.match(idle, /  - timezone: none configured/);
-  assert.match(idle, /  - Background: disabled/);
-
-  // Not part of the composition at all: no contributor lines exist to read.
-  const absent = renderSettings(replaceFromSnapshot(snapshot({
-    effective_extensions: { goal: null, agent_status: null, todo: null },
-  }), runtimeCursor(1)));
-  assert.match(absent, /- Agent Status: disabled \(not composed for this Agent\)/);
-  assert.ok(!absent.includes("- Time:"));
-  assert.ok(!absent.includes("timezone"));
-  assert.ok(!absent.includes("- Background:"));
-
-  // A frozen child reports the frozen-child lifetime and its own vocabulary.
-  const child = renderSettings(replaceFromSnapshot(snapshot({
-    settings_evidence: "frozen_child",
-    settings_lifetimes: { ...snapshot().settings_lifetimes, model: "frozen_admission", extensions: "frozen_admission" },
-    effective_extensions: { goal: null, agent_status: { time: { enabled: true, timezone: "America/New_York" }, background: { enabled: false } }, todo: {} },
-  }), runtimeCursor(1)));
-  assert.match(child, /### Native Agent Extensions \(frozen at admission\)/);
-  assert.match(child, /  - timezone: America\/New_York/);
-  assert.match(child, /child execution profile its invoking generation resolved and froze/);
-
-  // The rendering is native facts only: no prompt, registry, or document dump.
-  for (const rendered of [composed, idle, absent, child])
-    for (const forbidden of ["system-reminder", "requestParams", "rustx.toml", "NativeAgentExtensionsDocument"])
-      assert.ok(!rendered.includes(forbidden), forbidden);
-});
-
-/**
- * Issue #256 regression 3 (client half): enablement comes from the
- * projection, never from the composed-status window. An extension that is
- * enabled but has produced no observation still renders as enabled, and an
- * absent extension is not implied to be present by a status that exists.
- */
-it("EXT256 /settings never infers extension enablement from Agent Status observations", () => {
-  const enabledWithoutObservation = replaceFromSnapshot(snapshot({
-    effective_extensions: { goal: null, agent_status: { time: { enabled: true, timezone: "UTC" }, background: { enabled: true } }, todo: {} },
-    statuses: [],
-  }), runtimeCursor(1));
-  assert.deepEqual(enabledWithoutObservation.statuses, []);
-  assert.match(renderSettings(enabledWithoutObservation), /- Agent Status: enabled/);
-
-  const absentWithObservation = replaceFromSnapshot(snapshot({
-    effective_extensions: { goal: null, agent_status: null, todo: null },
+it("CFG3 Plugins are native profile facts, independent of observations and current Todo state", () => {
+  const absent = replaceFromSnapshot(snapshot({
+    effective_plugins: { goal: null, agent_status: null, todo: null },
     statuses: [agentStatus({ status_message_id: "m1", sections: [temporalSection()] })],
   }), runtimeCursor(1));
-  assert.equal(absentWithObservation.statuses.length, 1);
-  assert.match(renderSettings(absentWithObservation), /- Agent Status: disabled \(not composed for this Agent\)/);
+  assert.equal(absent.statuses.length, 1);
+  assert.equal(absent.effectivePlugins?.agent_status, null);
+  const composed = replaceFromSnapshot(snapshot({
+    effective_plugins: { goal: null, todo: {}, agent_status: { time: { enabled: true, timezone: "Asia/Shanghai" }, background: { enabled: false } } },
+    statuses: [],
+  }), runtimeCursor(2));
+  assert.match(renderSettings(composed), /Asia\/Shanghai/);
+  assert.deepEqual(composed.statuses, []);
+  assert.equal(emptyPresentationState(sessionModel("test")).effectivePlugins, null);
 });
 
-/**
- * Issue #256 regression 12 (client half): a reconnect rebuilds the identical
- * effective-extension view from the authoritative snapshot alone. There is no
- * client-side merge with the state it replaces, so a fresh projection of the
- * same snapshot is byte-identical.
- */
-it("EXT256 reconnect reconstructs the same effective-extension view", () => {
-  const native = snapshot({
-    effective_extensions: { goal: null, agent_status: { time: { enabled: true, timezone: "Asia/Shanghai" }, background: { enabled: false } }, todo: {} },
-  });
-  const live = replaceFromSnapshot(native, runtimeCursor(9));
-  const reconnect = replaceFromSnapshot(structuredClone(native), runtimeCursor(9));
-  assert.deepEqual(reconnect.effectiveExtensions, live.effectiveExtensions);
-  assert.equal(renderSettings(reconnect), renderSettings(live));
-
-  // An unattached client has no composition of its own to show.
-  assert.equal(emptyPresentationState(sessionModel("local/a")).effectiveExtensions, null);
-});
-
-/**
- * Issue #256 regression 9 (client half): historical-only inspection reports
- * the composition as unavailable instead of inventing one.
- */
-it("EXT256 historical inspection reports no effective extension composition", () => {
-  const rendered = renderSettings(replaceFromSnapshot(snapshot({
-    model: null, settings_evidence: "historical_partial", launch_settings: null,
-    effective_extensions: null,
-  }), runtimeCursor(0)));
-  assert.match(rendered, /### Native Agent Extensions \(evidence unavailable\)/);
-  assert.match(rendered, /no effective extension composition exists for historical-only inspection/);
-  assert.ok(!rendered.includes("launch capture"), "no boundary is claimed for an absent value");
-  assert.ok(!rendered.includes("Agent Status: enabled"));
-  assert.ok(!rendered.includes("Agent Status: disabled"));
-});
-
-
-it("CFG275 renders the native generation fixture without resolving capability state", () => {
-  const facts: import("../src/protocol/app-server.ts").CapabilityInspection = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/capabilities-v34.json", import.meta.url), "utf8"));
-  const state = replaceFromSnapshot(snapshot({ resources: { revision: "7", inspection: facts } }), runtimeCursor(1));
-  const original = JSON.stringify(facts);
-  for (let index = 0; index < 3; index++) {
-    const output = renderSettings(state);
-    for (const expected of ["source_unavailable", "unprepared", "duplicate_identity", "workspace", "global", "block.nodes.inspect.selector"])
-      assert.ok(output.includes(expected), expected);
-    assert.equal(JSON.stringify(state.resources.inspection), original);
-  }
+it("CFG3 historical settings report partial evidence without inventing a live profile", () => {
+  const state = replaceFromSnapshot(snapshot({ model: null, settings_evidence: "historical_partial", effective_plugins: null, attempt: attemptView({ model: null, execution_settings: null }) }), runtimeCursor(0));
+  assert.match(renderSettings(state), /partial/);
+  assert.equal(state.effectivePlugins, null);
 });
 
 it("CFG275 redacted native causes match the TypeScript wire unions", () => {

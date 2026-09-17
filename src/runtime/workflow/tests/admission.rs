@@ -39,8 +39,6 @@ fn cfg274_admit_child(
         crate::runtime::identity::McpServerId::new("github"),
         crate::tools::mcp::McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
-            activation: crate::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::Stdio {
                 program: "never-started".into(),
                 args: Vec::new(),
@@ -146,7 +144,7 @@ fn cfg274_missing_role_and_required_child_exact_tool_disable_instead_of_suppress
 #[test]
 fn cfg274_replacements_remove_entire_defaults_and_known_goal_disables_child() {
     let agents = cfg274_agents(
-        "description='Review'\ninstructions='Review'\nskills=['missing']\n[tools.sources]\ngithub=['missing']\n[extensions.goal]\nenabled=true",
+        "description='Review'\ninstructions='Review'\nskills=['missing']\n[tools.sources]\ngithub=['missing']\n[plugins.goal]\nenabled=true",
     );
     let available = crate::capabilities::AvailableToolCatalog::default();
     let skills = SkillSnapshot::new(Vec::new());
@@ -166,7 +164,7 @@ fn cfg274_replacements_remove_entire_defaults_and_known_goal_disables_child() {
         )
     )));
     let enabled = cfg274_admit_child(
-        cfg274_agent_source(Some(json!({"tools":{},"skills":[],"extensions":{}}))),
+        cfg274_agent_source(Some(json!({"tools":{},"skills":[],"plugins":{}}))),
         &agents,
         &available,
         &availability,
@@ -397,16 +395,10 @@ fn cfg274_child_skills_use_merged_catalog_explicitly_and_remain_lazy() {
         crate::skills::SkillDiscovery::with_config(
             &workspace,
             crate::skills::SkillDiscoveryConfig {
-                automatic: crate::skills::automatic_skill_roots(
-                    Some(&home),
-                    workspace.root(),
-                    &crate::skills::default_automatic_sources(),
-                ),
-                explicit_paths: Vec::new(),
+                automatic: crate::skills::automatic_skill_roots(Some(&home), workspace.root()),
             },
         )
-        .discover()
-        .unwrap(),
+        .discover(),
     );
     let available = crate::capabilities::AvailableToolCatalog::default();
     let availability = crate::capabilities::CapabilityAvailability::new();
@@ -563,13 +555,12 @@ fn cfg274_model_exposure_requires_agent_selection_and_enabled_admission() {
         !select(&activation).contains(&&ordinary),
         "Workflow selection cannot grant its internal Tool directly"
     );
-    activation.no_direct_tools = true;
+    activation.profile.tools.builtin.clear();
     assert_eq!(
         select(&activation),
         [&workflow],
         "direct Tool restrictions cannot remove independently admitted Workflow dispatch"
     );
-    activation.no_direct_tools = false;
     activation.profile.workflows.clear();
     assert!(
         select(&activation).is_empty(),

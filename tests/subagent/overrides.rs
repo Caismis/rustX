@@ -18,7 +18,7 @@
 //!   vocabulary (missing vs empty vs null, closed dimensions).
 //!
 //! Every generation-ordering assertion here is decided by an explicit
-//! linearization the test drives — a completed `reload_resources`, or a typed
+//! linearization the test drives — a completed `reload_configuration`, or a typed
 //! refusal — never by a sleep.
 
 use crate::launch_fixture::LaunchFixture;
@@ -31,8 +31,8 @@ use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::SessionModelConfig;
 use rustx::runtime::RuntimeResourceSnapshot;
 use rustx::runtime::subagent::{
-    InvokingAgentAuthority, ResolvedSubagentSpec, SubagentInvocationOverride, SubagentName,
-    SubagentResolution, SubagentResolutionError, SubagentResolver,
+    ResolvedSubagentSpec, SubagentInvocationOverride, SubagentName, SubagentResolution,
+    SubagentResolutionError, SubagentResolver,
 };
 
 const KEY_ENV: &str = "RUSTX_ISSUE258_KEY";
@@ -41,25 +41,18 @@ const KEY_ENV: &str = "RUSTX_ISSUE258_KEY";
 async fn goal84_root_only_scope_is_enforced_for_definition_model_and_workflow_overrides() {
     let lab = Lab::new();
     lab.write_config(&serde_json::json!({
-        "goal_role": {"description": "Root-only extension in a named child", "tools": {"builtin": []}, "extensions": {"goal": {"enabled": true}}},
+        "goal_role": {"description": "Root-only extension in a named child", "tools": {"builtin": []}, "plugins": {"goal": {"enabled": true}}},
         "plain": {"description": "Ordinary child", "tools": {"builtin": []}}
     }), &[]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let parent = parent_with_extensions(&resources, NativeAgentExtensions::none().and_goal());
-    let invocation = parse_override(serde_json::json!({"extensions": {"goal": {"enabled": true}}}));
-    let selected = delegate(&resources, "goal_role", None, &parent)
-        .expect("valid scope-ineligible default stays usable");
-    assert!(selected.extensions.goal().is_none());
+    let invocation = parse_override(serde_json::json!({"plugins": {"goal": {"enabled": true}}}));
     assert!(
-        !resources
-            .resolved_agent(&agent("goal_role"))
-            .unwrap()
-            .diagnostics
-            .is_empty()
+        delegate(&resources, "goal_role", None).is_err(),
+        "a selected child-invalid profile fails admission"
     );
     {
-        let result = delegate(&resources, "plain", Some(&invocation), &parent);
+        let result = delegate(&resources, "plain", Some(&invocation));
         assert!(
             matches!(result, Err(SubagentResolutionError::ExtensionScopeUnsupported { extension, .. }) if extension == "goal")
         );
@@ -69,8 +62,7 @@ async fn goal84_root_only_scope_is_enforced_for_definition_model_and_workflow_ov
         delegate(
             &resources,
             "goal_role",
-            Some(&parse_override(serde_json::json!({"extensions": {}}))),
-            &parent
+            Some(&parse_override(serde_json::json!({"plugins": {}}))),
         )
         .is_ok()
     );
@@ -81,19 +73,20 @@ const MODELS: &str = r#"[providers.local]
 base_url = "http://127.0.0.1:9/v1"
 api_key = "$RUSTX_ISSUE258_KEY"
 
-[[providers.local.models]]
+[models."local/model-a"]
+provider = "local"
 id = "model-a"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
-[providers.local.models.capabilities]
+[models."local/model-a".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/model-a".compat]
 chat_reasoning_replay = "omit"
 "#;
 
@@ -123,26 +116,11 @@ fn attempt_model() -> SessionModelConfig {
     SessionModelConfig::of(ModelRef::parse("local/model-a").expect("model reference"))
 }
 
-/// The invoking Agent's frozen admitted execution profile, captured from the
-/// generation the attempt owns — exactly what production captures at attempt
-/// admission.
-fn parent_of(resources: &RuntimeResourceSnapshot) -> InvokingAgentAuthority {
-    InvokingAgentAuthority::frozen(resources.capability(), NativeAgentExtensions::none())
-}
-
-fn parent_with_extensions(
-    resources: &RuntimeResourceSnapshot,
-    extensions: NativeAgentExtensions,
-) -> InvokingAgentAuthority {
-    InvokingAgentAuthority::frozen(resources.capability(), extensions)
-}
-
 /// One main-model (dynamic delegation) resolution.
 fn delegate(
     resources: &RuntimeResourceSnapshot,
     name: &str,
     invocation: Option<&SubagentInvocationOverride>,
-    parent: &InvokingAgentAuthority,
 ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
     SubagentResolver::resolve(&SubagentResolution {
         resources,
@@ -151,8 +129,6 @@ fn delegate(
         models: &model_registry(),
 
         invocation,
-
-        invoking: parent,
     })
 }
 
@@ -187,7 +163,6 @@ impl Lab {
         std::fs::create_dir_all(lab.workspace().join(".agents/agents")).expect("role directory");
         std::fs::create_dir_all(lab.workspace().join(".agents/workflows"))
             .expect("workflow directory");
-        std::fs::write(lab.root().join("models.toml"), MODELS).expect("models.toml");
         std::fs::write(lab.workspace().join("AGENTS.md"), "workspace guidance\n")
             .expect("AGENTS.md");
         lab
@@ -237,26 +212,22 @@ impl Lab {
             .collect::<Vec<_>>();
         let root_agents = serde_json::Value::Array(names);
         crate::launch_fixture::write_roles(&self.workspace(), &mut subagents);
-        let document = serde_json::json!({"schema_version": 8, "agent_id": "agent-issue258", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "agents": root_agents, "workflows": []}});
+        let document = serde_json::json!({"schema_version": 9, "agent_id": "agent-issue258", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "agents": root_agents, "workflows": []}});
         std::fs::write(
             self.root().join("rustx.toml"),
-            toml::to_string_pretty(&document).expect("config document"),
+            format!(
+                "{}\n{MODELS}",
+                toml::to_string_pretty(&document).expect("config document")
+            ),
         )
         .expect("rustx.toml");
     }
 
     fn paths(&self) -> LaunchFixture {
         LaunchFixture {
-            models: self.root().join("models.toml"),
             config: self.root().join("rustx.toml"),
-            skill_paths: Vec::new(),
-            no_automatic_skills: false,
-            no_builtin_tools: false,
-            no_direct_tools: false,
             startup_session: rustx::local_runtime::StartupSession::Empty,
             session_name: None,
-            tools: None,
-            exclude_tools: Vec::new(),
             workspace: self.workspace(),
             runtime_root: self.root().join("runtime"),
         }
@@ -276,16 +247,20 @@ impl Lab {
     /// here — before any runtime, provider, MCP connection, Python
     /// environment, process, Session, or worktree exists.
     fn offline_error(&self) -> String {
-        self.paths()
-            .try_resolve()
-            .expect_err("offline inspection rejects the configuration")
+        match self.paths().try_resolve() {
+            Err(error) => error,
+            Ok(prospective) => format!(
+                "{:?}",
+                prospective.resource_inspection().resource_diagnostics
+            ),
+        }
     }
 }
 
 /// The role every replacement test specializes: read-only, one Skill, and the
 /// authored extension defaults (which compose Agent Status).
 fn reviewer_roles() -> serde_json::Value {
-    serde_json::json!({"reviewer": {"description": "Review one bounded change.", "extensions": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}, "tools": {"builtin": ["read"]}, "skills": ["review-guidance"]}})
+    serde_json::json!({"reviewer": {"description": "Review one bounded change.", "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}, "tools": {"builtin": ["read"]}, "skills": ["review-guidance"]}})
 }
 
 // =====================================================================
@@ -303,13 +278,11 @@ async fn sub258_no_override_and_an_empty_override_both_reproduce_the_definition(
     lab.write_config(&reviewer_roles(), &["read"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let parent = parent_of(&resources);
 
-    let none = delegate(&resources, "reviewer", None, &parent).expect("defaults resolve");
+    let none = delegate(&resources, "reviewer", None).expect("defaults resolve");
     let empty = parse_override(serde_json::json!({}));
     assert!(empty.is_empty());
-    let explicit_empty =
-        delegate(&resources, "reviewer", Some(&empty), &parent).expect("defaults resolve");
+    let explicit_empty = delegate(&resources, "reviewer", Some(&empty)).expect("defaults resolve");
 
     assert_eq!(tool_names(&none), vec!["builtin:read".to_owned()]);
     assert_eq!(skill_names(&none), vec!["review-guidance".to_owned()]);
@@ -338,7 +311,6 @@ async fn sub258_each_present_dimension_replaces_and_missing_dimensions_inherit()
     lab.write_config(&reviewer_roles(), &["read", "grep"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let parent = parent_of(&resources);
 
     // Tools only.
     let tools_only = delegate(
@@ -347,7 +319,6 @@ async fn sub258_each_present_dimension_replaces_and_missing_dimensions_inherit()
         Some(&parse_override(
             serde_json::json!({"tools": {"builtin": ["grep"]}}),
         )),
-        &parent,
     )
     .expect("a parent-held capability is delegable");
     assert_eq!(
@@ -372,7 +343,6 @@ async fn sub258_each_present_dimension_replaces_and_missing_dimensions_inherit()
         Some(&parse_override(
             serde_json::json!({"skills": ["security-review"]}),
         )),
-        &parent,
     )
     .expect("a Skill the parent can see is delegable");
     assert_eq!(
@@ -389,9 +359,8 @@ async fn sub258_each_present_dimension_replaces_and_missing_dimensions_inherit()
         Some(&parse_override(serde_json::json!({
             "tools": {"builtin": ["grep"]},
             "skills": ["security-review"],
-            "extensions": {},
+            "plugins": {},
         }))),
-        &parent,
     )
     .expect("every dimension is independently authorized");
     assert_eq!(tool_names(&combined), vec!["builtin:grep".to_owned()]);
@@ -409,7 +378,6 @@ async fn sub258_explicit_empty_dimensions_have_their_documented_meaning() {
     lab.write_config(&reviewer_roles(), &["read"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let parent = parent_of(&resources);
 
     let cleared = delegate(
         &resources,
@@ -417,9 +385,8 @@ async fn sub258_explicit_empty_dimensions_have_their_documented_meaning() {
         Some(&parse_override(serde_json::json!({
             "tools": {},
             "skills": [],
-            "extensions": {},
+            "plugins": {},
         }))),
-        &parent,
     )
     .expect("clearing every dimension is narrowing and always authorized");
     assert!(
@@ -441,7 +408,7 @@ async fn sub258_explicit_empty_dimensions_have_their_documented_meaning() {
     );
 
     // The default really is non-empty, so the assertion above is meaningful.
-    let defaults = delegate(&resources, "reviewer", None, &parent).expect("defaults resolve");
+    let defaults = delegate(&resources, "reviewer", None).expect("defaults resolve");
     assert!(defaults.extensions.agent_status().is_some());
     assert_ne!(cleared.profile_digest(), defaults.profile_digest());
 }
@@ -455,7 +422,6 @@ async fn sub258_concurrent_invocations_do_not_mutate_each_other_or_the_role() {
     lab.write_config(&reviewer_roles(), &["read", "grep"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let parent = parent_of(&resources);
 
     let role_before = resources
         .subagents()
@@ -466,7 +432,6 @@ async fn sub258_concurrent_invocations_do_not_mutate_each_other_or_the_role() {
     let (first, second) = tokio::join!(
         {
             let resources = Arc::clone(&resources);
-            let parent = parent.clone();
             async move {
                 delegate(
                     &resources,
@@ -474,20 +439,17 @@ async fn sub258_concurrent_invocations_do_not_mutate_each_other_or_the_role() {
                     Some(&parse_override(
                         serde_json::json!({"tools": {"builtin": ["grep"]}}),
                     )),
-                    &parent,
                 )
                 .expect("first invocation")
             }
         },
         {
             let resources = Arc::clone(&resources);
-            let parent = parent.clone();
             async move {
                 delegate(
                     &resources,
                     "reviewer",
                     Some(&parse_override(serde_json::json!({"tools": {}}))),
-                    &parent,
                 )
                 .expect("second invocation")
             }
@@ -511,10 +473,10 @@ async fn sub258_concurrent_invocations_do_not_mutate_each_other_or_the_role() {
         "the shared definition is untouched"
     );
     assert_eq!(
-        delegate(&resources, "reviewer", None, &parent)
+        delegate(&resources, "reviewer", None,)
             .expect("the defaults still resolve")
             .profile_digest(),
-        delegate(&resources, "reviewer", None, &parent)
+        delegate(&resources, "reviewer", None,)
             .expect("the defaults still resolve")
             .profile_digest(),
         "resolution is a pure projection of the generation"
@@ -529,258 +491,53 @@ async fn sub258_concurrent_invocations_do_not_mutate_each_other_or_the_role() {
 /// parent does not hold, a parent capability the role does not hold, their
 /// combination, and a capability only the generation knows.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sub258_the_delegation_ceiling_is_role_union_parent_and_nothing_more() {
+async fn cfg3_named_agent_and_invocation_tools_are_independent_of_root_visibility() {
     let lab = Lab::new();
-    lab.write_config(
-        &serde_json::json!({"reviewer": {"description": "Read-only reviewer.", "tools": {"builtin": ["read"]}}, "builder": {"description": "A different role that holds bash.", "tools": {"builtin": ["bash"]}}}),
-        // The invoking model holds grep and glob, and deliberately not read:
-        // a role default must stay delegable regardless.
-        &["grep", "glob"],
-    );
+    lab.write_config(&serde_json::json!({"reviewer":{"description":"Independent child", "tools":{"builtin":["read"]}, "plugins":{"todo":{"enabled":true}}}}), &[]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let parent = parent_of(&resources);
-
-    assert!(
-        !resources
-            .capability()
-            .tool_registry()
-            .names()
-            .contains(&"read"),
-        "the invoking model really does not expose read"
-    );
     assert!(
         resources
             .capability()
-            .available_tools()
+            .tool_registry()
             .definitions()
             .iter()
-            .any(|definition| definition.name == "write"),
-        "the generation really does know write"
+            .all(|tool| tool.name != "read")
     );
-
-    for (dimension, expected) in [
-        (serde_json::json!({"builtin": ["read"]}), "builtin:read"),
-        (serde_json::json!({"builtin": ["grep"]}), "builtin:grep"),
-    ] {
-        let resolved = delegate(
-            &resources,
-            "reviewer",
-            Some(&parse_override(serde_json::json!({"tools": dimension}))),
-            &parent,
-        )
-        .expect("authorized by the role or by the invoking model");
-        assert_eq!(tool_names(&resolved), vec![expected.to_owned()]);
+    let own = delegate(&resources, "reviewer", None).unwrap();
+    assert_eq!(tool_names(&own), ["builtin:read"]);
+    assert!(own.extensions.todo().is_some());
+    for name in ["grep", "write", "bash"] {
+        let requested = parse_override(serde_json::json!({"tools":{"builtin":[name]}}));
+        let child = delegate(&resources, "reviewer", Some(&requested)).unwrap();
+        assert_eq!(tool_names(&child), [format!("builtin:{name}")]);
     }
-    let both = delegate(
-        &resources,
-        "reviewer",
-        Some(&parse_override(
-            serde_json::json!({"tools": {"builtin": ["read", "grep"]}}),
-        )),
-        &parent,
-    )
-    .expect("a valid combination of role and parent authority succeeds");
-    assert_eq!(
-        tool_names(&both),
-        vec!["builtin:grep".to_owned(), "builtin:read".to_owned()]
-    );
-
-    // Generation-only authority.
-    assert_eq!(
-        delegate(
-            &resources,
-            "reviewer",
-            Some(&parse_override(
-                serde_json::json!({"tools": {"builtin": ["write"]}})
-            )),
-            &parent,
-        ),
-        Err(SubagentResolutionError::UnauthorizedTool {
-            selector: "builtin:write".to_owned()
-        }),
-        "a capability only the generation knows is not delegable"
-    );
-    // Other-role-only authority.
-    assert_eq!(
-        delegate(
-            &resources,
-            "reviewer",
-            Some(&parse_override(
-                serde_json::json!({"tools": {"builtin": ["bash"]}})
-            )),
-            &parent,
-        ),
-        Err(SubagentResolutionError::UnauthorizedTool {
-            selector: "builtin:bash".to_owned()
-        }),
-        "authority held only by another role is not delegable"
-    );
-    // ...while that other role's own default still resolves, so the refusal
-    // above is about the caller and not about the capability.
-    assert_eq!(
-        tool_names(
-            &delegate(&resources, "builder", None, &parent).expect("the role's own default")
-        ),
-        vec!["builtin:bash".to_owned()]
-    );
+    product.runtime().shutdown().await.unwrap();
 }
 
 /// Skill delegation is its own authorization domain, gated by the #234
 /// visibility rule: a parent with no Read sees no Skills and can delegate
 /// none, while the role's own Skills stay delegable.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sub258_skill_delegation_follows_frozen_model_visible_authority() {
+async fn cfg3_child_skill_and_plugin_selection_is_independent_of_root_visibility() {
     let lab = Lab::new();
-    lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_skill("security-review", "How to review security", "security body");
-    lab.write_config(&reviewer_roles(), &["read"]);
-    let with_read = lab.compose().await;
-    let seeing = with_read.runtime().runtime_resources();
-    let seeing_parent = parent_of(&seeing);
-    assert!(
-        !seeing.capability().model_skill_entries().is_empty(),
-        "a parent holding read sees the Skill catalog"
-    );
-    assert_eq!(
-        skill_names(
-            &delegate(
-                &seeing,
-                "reviewer",
-                Some(&parse_override(
-                    serde_json::json!({"skills": ["security-review"]})
-                )),
-                &seeing_parent,
-            )
-            .expect("a Skill the parent can see is delegable")
-        ),
-        vec!["security-review".to_owned()]
-    );
-
-    // The same generation, resolved for a caller whose frozen profile has no
-    // Read: the Skill catalog is invisible to it, so it may delegate only the
-    // role's own Skill.
-    let blind = Lab::new();
-    blind.write_skill("review-guidance", "How to review", "guidance body");
-    blind.write_skill("security-review", "How to review security", "security body");
-    blind.write_config(&reviewer_roles(), &["grep"]);
-    let product = blind.compose().await;
+    lab.write_skill("review-guidance", "Review", "Review body");
+    lab.write_skill("security-review", "Security", "Security body");
+    lab.write_config(&reviewer_roles(), &[]);
+    let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let parent = parent_of(&resources);
-    assert!(
-        resources.capability().model_skill_entries().is_empty(),
-        "the #234 Read gate really does hide the catalog from this caller"
-    );
+    assert!(resources.capability().model_skill_entries().is_empty());
     assert_eq!(
-        skill_names(
-            &delegate(
-                &resources,
-                "reviewer",
-                Some(&parse_override(
-                    serde_json::json!({"skills": ["review-guidance"]})
-                )),
-                &parent,
-            )
-            .expect("the role's own Skill stays delegable")
-        ),
-        vec!["review-guidance".to_owned()]
+        skill_names(&delegate(&resources, "reviewer", None).unwrap()),
+        ["review-guidance"]
     );
-    assert_eq!(
-        delegate(
-            &resources,
-            "reviewer",
-            Some(&parse_override(
-                serde_json::json!({"skills": ["security-review"]})
-            )),
-            &parent,
-        ),
-        Err(SubagentResolutionError::UnauthorizedSkill {
-            skill: "security-review".to_owned()
-        }),
-        "a Skill this caller cannot see is not delegable"
+    let requested = parse_override(
+        serde_json::json!({"skills":["security-review"], "plugins":{"agentStatus":{"enabled":true}}}),
     );
-
-    // An extension refusal names exactly what was requested, derived from the
-    // closed vocabulary rather than written out at the call site, and its
-    // detail names the first uncovered contributor rather than the whole
-    // composition — the ceiling is a per-contributor union.
-    let bare = Lab::new();
-    bare.write_config(
-        &serde_json::json!({"reviewer": {"description": "Read-only reviewer with no extension.", "tools": {"builtin": ["read"]}, "extensions": {"agent_status": {"enabled": false}}}}),
-        &["read"],
-    );
-    let bare_product = bare.compose().await;
-    let bare_resources = bare_product.runtime().runtime_resources();
-    let refused = delegate(
-        &bare_resources,
-        "reviewer",
-        Some(&parse_override(
-            serde_json::json!({"extensions": {"agentStatus": {"enabled": true}}}),
-        )),
-        &parent_of(&bare_resources),
-    )
-    .expect_err("neither the role nor this caller composes Agent Status");
-    let SubagentResolutionError::UnauthorizedExtension { extension, detail } = &refused else {
-        panic!("an unauthorized extension is its own failure class: {refused:?}");
-    };
-    assert_eq!(extension, "agentStatus", "the refusal names the extension");
-    assert_eq!(
-        detail, "neither authority composes the Agent Status extension at all",
-        "the refusal names the contributor no authority source covers"
-    );
-
-    // The same caller and the same role authorize the request as soon as one
-    // legitimate source holds it, so the refusal above is an authority
-    // verdict rather than a path that refuses every extension.
-    let entitled = parent_with_extensions(
-        &bare_resources,
-        rustx::extensions::NativeAgentExtensions::with_todo()
-            .and_agent_status(rustx::context::AgentStatusConfig::default()),
-    );
-    assert!(
-        delegate(
-            &bare_resources,
-            "reviewer",
-            Some(&parse_override(
-                serde_json::json!({"extensions": {"agentStatus": {"enabled": true}}}),
-            )),
-            &entitled,
-        )
-        .expect("the caller's own composition authorizes it")
-        .extensions
-        .agent_status()
-        .is_some()
-    );
-
-    // Selecting a Skill grants no Tool: the effective tool set is exactly the
-    // role's, and Read is not silently added.
-    let resolved = delegate(
-        &resources,
-        "reviewer",
-        Some(&parse_override(
-            serde_json::json!({"skills": ["review-guidance"]}),
-        )),
-        &parent,
-    )
-    .expect("resolution");
-    assert_eq!(tool_names(&resolved), vec!["builtin:read".to_owned()]);
-    let no_direct_tools = delegate(
-        &resources,
-        "reviewer",
-        Some(&parse_override(
-            serde_json::json!({"tools": {}, "skills": ["review-guidance"]}),
-        )),
-        &parent,
-    )
-    .expect("resolution");
-    assert!(
-        no_direct_tools.tools.is_empty(),
-        "selecting a Skill never implicitly grants Read or any other tool"
-    );
-    assert_eq!(
-        skill_names(&no_direct_tools),
-        vec!["review-guidance".to_owned()]
-    );
+    let child = delegate(&resources, "reviewer", Some(&requested)).unwrap();
+    assert_eq!(skill_names(&child), ["security-review"]);
+    assert!(child.extensions.agent_status().is_some());
+    product.runtime().shutdown().await.unwrap();
 }
 
 /// An unknown or hidden reference keeps its own failure class: it is never
@@ -792,7 +549,6 @@ async fn sub258_unknown_references_keep_their_own_failure_class() {
     lab.write_config(&reviewer_roles(), &["read"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let parent = parent_of(&resources);
 
     assert_eq!(
         delegate(
@@ -801,7 +557,6 @@ async fn sub258_unknown_references_keep_their_own_failure_class() {
             Some(&parse_override(
                 serde_json::json!({"tools": {"builtin": ["definitely_not_a_capability"]}})
             )),
-            &parent,
         ),
         Err(SubagentResolutionError::UnknownCapability {
             selector: "builtin:definitely_not_a_capability".to_owned()
@@ -814,7 +569,6 @@ async fn sub258_unknown_references_keep_their_own_failure_class() {
             Some(&parse_override(
                 serde_json::json!({"skills": ["not-a-skill"]})
             )),
-            &parent,
         ),
         Err(SubagentResolutionError::UnknownSkill {
             skill: "not-a-skill".to_owned()
@@ -831,7 +585,6 @@ async fn sub258_unknown_references_keep_their_own_failure_class() {
                     &resources,
                     "reviewer",
                     Some(&parse_override(spelling.clone())),
-                    &parent
                 ),
                 Err(SubagentResolutionError::InvalidOverride { .. })
             ),
@@ -864,7 +617,7 @@ block:
         tools:
           builtin: [read, grep, bash]
         skills: [security-review]
-        extensions:
+        plugins:
           agentStatus:
             enabled: true
       output:
@@ -916,13 +669,12 @@ async fn sub258_equivalent_dynamic_overrides_have_one_frozen_identity() {
     lab.write_config(&reviewer_roles(), &["read", "grep"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let parent = parent_of(&resources);
 
     let requested = parse_override(serde_json::json!({
         "tools": {"builtin": ["grep", "read"]},
         "skills": ["review-guidance"],
     }));
-    let from_tool = delegate(&resources, "reviewer", Some(&requested), &parent)
+    let from_tool = delegate(&resources, "reviewer", Some(&requested))
         .expect("the main model holds both capabilities");
     // A differently spelled but semantically identical request agrees too.
     let respelled = parse_override(serde_json::json!({
@@ -930,7 +682,7 @@ async fn sub258_equivalent_dynamic_overrides_have_one_frozen_identity() {
         "skills": ["review-guidance", "review-guidance"],
     }));
     assert_eq!(
-        delegate(&resources, "reviewer", Some(&respelled), &parent)
+        delegate(&resources, "reviewer", Some(&respelled),)
             .expect("resolution")
             .profile_digest(),
         from_tool.profile_digest(),
@@ -1023,7 +775,7 @@ async fn sub258_a_workflow_override_cannot_smuggle_nested_delegation() {
     lab.write_config(&reviewer_roles(), &["read"]);
     let error = lab.offline_error();
     assert!(
-        error.contains("nested subagent delegation is unsupported"),
+        error.contains("Workflow graph, control structure, or configured bound is invalid"),
         "structural child rules survive into Workflow authoring: {error}"
     );
     assert!(
@@ -1042,82 +794,30 @@ async fn sub258_a_workflow_override_cannot_smuggle_nested_delegation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sub258_r1_resolution_and_authority_survive_r2_publication() {
     let lab = Lab::new();
-    lab.write_skill("review-guidance", "How to review", "R1 guidance");
-    lab.write_config(&reviewer_roles(), &["read", "grep"]);
+    lab.write_skill("review-guidance", "First generation", "First body");
+    lab.write_config(&reviewer_roles(), &["read"]);
     let product = lab.compose().await;
     let r1 = product.runtime().runtime_resources();
-    let r1_parent = parent_of(&r1);
-
-    let requested = parse_override(serde_json::json!({
-        "tools": {"builtin": ["grep"]},
-        "skills": ["review-guidance"],
-    }));
-    let frozen = delegate(&r1, "reviewer", Some(&requested), &r1_parent).expect("R1 resolution");
-    let frozen_digest = frozen.profile_digest();
-
-    // R2 narrows the role, rewrites the Skill, and shrinks the model-facing
-    // selection out from under the already-frozen R1 caller.
-    lab.write_skill("review-guidance", "How to review", "R2 guidance");
-    lab.write_config(
-        &serde_json::json!({"reviewer": {"description": "Review one bounded change.", "tools": {"builtin": ["read"]}, "skills": []}}),
-        &["read"],
-    );
-    product
-        .runtime()
-        .reload_resources()
-        .await
-        .expect("R2 publishes");
+    let requested = parse_override(serde_json::json!({"tools":{"builtin":["grep"]}}));
+    let frozen = delegate(&r1, "reviewer", Some(&requested)).unwrap();
+    lab.write_skill("review-guidance", "Second generation", "Second body");
+    lab.write_config(&reviewer_roles(), &[]);
+    assert_eq!(delegate(&r1, "reviewer", Some(&requested)).unwrap(), frozen);
+    product.runtime().reload_configuration().await.unwrap();
     let r2 = product.runtime().runtime_resources();
-    assert!(r2.revision().get() > r1.revision().get());
-
-    // The already-frozen specification is unchanged, and still resolves the
-    // same way from its own generation.
-    let again = delegate(&r1, "reviewer", Some(&requested), &r1_parent).expect("R1 still resolves");
-    assert_eq!(again, frozen);
-    assert_eq!(again.profile_digest(), frozen_digest);
+    assert_eq!(delegate(&r1, "reviewer", Some(&requested)).unwrap(), frozen);
+    let next = delegate(&r2, "reviewer", Some(&requested)).unwrap();
+    assert_eq!(tool_names(&next), ["builtin:grep"]);
     assert_eq!(
-        frozen.skills[0].catalog_entry.description, "How to review",
-        "the R1 child keeps the Skill binding R1 admitted"
+        frozen.skills[0].catalog_entry.description,
+        "First generation"
     );
-
-    // Frozen authority cannot be widened by live state: an R2 caller no
-    // longer holds grep at all.
-    let r2_parent = parent_of(&r2);
     assert_eq!(
-        delegate(&r2, "reviewer", Some(&requested), &r2_parent),
-        Err(SubagentResolutionError::UnauthorizedTool {
-            selector: "builtin:grep".to_owned()
-        }),
-        "a later generation's caller no longer holds grep"
+        next.skills[0].catalog_entry.description,
+        "Second generation"
     );
-
-    // Conversely, an R1-frozen authority does not travel *into* R2 either.
-    // Its Tool identities are generation-independent, so grep stays
-    // delegable...
-    let tools_only = parse_override(serde_json::json!({"tools": {"builtin": ["grep"]}}));
-    let in_r2 = delegate(&r2, "reviewer", Some(&tools_only), &r1_parent)
-        .expect("an exact ToolId the R1 caller holds is still that capability");
-    assert_eq!(tool_names(&in_r2), vec!["builtin:grep".to_owned()]);
-    assert!(
-        in_r2.skills.is_empty(),
-        "resolution reads the generation it was given: R2 selects no Skill"
-    );
-
-    // ...while its Skill authority is *version*-exact, so the rewritten
-    // package is a different identity that the R1 authority cannot cover.
-    // A matching Skill name is not authorization.
-    assert_eq!(
-        delegate(&r2, "reviewer", Some(&requested), &r1_parent),
-        Err(SubagentResolutionError::UnauthorizedSkill {
-            skill: "review-guidance".to_owned()
-        }),
-        "frozen Skill authority names an exact version, not a name"
-    );
-    assert_ne!(
-        in_r2.profile_digest(),
-        frozen_digest,
-        "a materially different effective profile has a different identity"
-    );
+    assert_ne!(next.profile_digest(), frozen.profile_digest());
+    product.runtime().shutdown().await.unwrap();
 }
 
 /// A default that the invocation replaced away is not a dependency any more:
@@ -1130,7 +830,6 @@ async fn sub258_a_replaced_away_default_is_no_longer_a_requirement() {
     lab.write_config(&reviewer_roles(), &["read", "grep"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let parent = parent_of(&resources);
 
     // Only the effective Skill is frozen for materialization; the role's
     // default Skill is absent from the specification entirely.
@@ -1138,7 +837,6 @@ async fn sub258_a_replaced_away_default_is_no_longer_a_requirement() {
         &resources,
         "reviewer",
         Some(&parse_override(serde_json::json!({"skills": []}))),
-        &parent,
     )
     .expect("resolution");
     assert!(
@@ -1155,7 +853,7 @@ async fn sub258_a_replaced_away_default_is_no_longer_a_requirement() {
 
     // The role's own admission is unchanged: its default still resolves.
     assert_eq!(
-        skill_names(&delegate(&resources, "reviewer", None, &parent).expect("defaults")),
+        skill_names(&delegate(&resources, "reviewer", None,).expect("defaults")),
         vec!["review-guidance".to_owned()]
     );
 }
@@ -1170,11 +868,10 @@ async fn sub258_the_effective_profile_digest_follows_its_documented_contract() {
     lab.write_config(&reviewer_roles(), &["read", "grep"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let parent = parent_of(&resources);
 
     let profile = |value: Option<serde_json::Value>| {
         let requested = value.map(parse_override);
-        delegate(&resources, "reviewer", requested.as_ref(), &parent)
+        delegate(&resources, "reviewer", requested.as_ref())
             .expect("resolution")
             .profile_digest()
     };
@@ -1187,9 +884,9 @@ async fn sub258_the_effective_profile_digest_follows_its_documented_contract() {
         profile(Some(serde_json::json!({"tools": {}}))),
         profile(Some(serde_json::json!({"skills": ["security-review"]}))),
         profile(Some(serde_json::json!({"skills": []}))),
-        profile(Some(serde_json::json!({"extensions": {}}))),
+        profile(Some(serde_json::json!({"plugins": {}}))),
         profile(Some(serde_json::json!({
-            "extensions": {"agentStatus": {"time": {"enabled": false}}}
+            "plugins": {"agentStatus": {"enabled": true, "time": {"enabled": false}}}
         }))),
     ];
     let mut unique = distinct.to_vec();
@@ -1216,7 +913,7 @@ async fn sub258_the_effective_profile_digest_follows_its_documented_contract() {
         extensions: Some(NativeAgentExtensionSelection::of(role.extensions())),
     };
     assert_eq!(
-        delegate(&resources, "reviewer", Some(&restated), &parent)
+        delegate(&resources, "reviewer", Some(&restated),)
             .expect("resolution")
             .profile_digest(),
         defaults,
@@ -1224,7 +921,7 @@ async fn sub258_the_effective_profile_digest_follows_its_documented_contract() {
     );
 
     // The identity is a value, not an authority token, and survives the wire.
-    let frozen = delegate(&resources, "reviewer", None, &parent).expect("resolution");
+    let frozen = delegate(&resources, "reviewer", None).expect("resolution");
     let over_the_wire: ResolvedSubagentSpec =
         serde_json::from_slice(&serde_json::to_vec(&frozen).expect("encode"))
             .expect("the frozen contract round-trips");
@@ -1265,37 +962,27 @@ async fn sub258_replaced_defaults_and_routing_prose_do_not_change_the_profile_di
     let requested = parse_override(serde_json::json!({
         "tools": {"builtin": ["read"]},
         "skills": ["review-guidance"],
-        "extensions": {"agentStatus": {"enabled": true}},
+        "plugins": {"agentStatus": {"enabled": true}},
     }));
 
     let r1 = product.runtime().runtime_resources();
     // The caller holds Agent Status itself, so the extension dimension stays
     // authorized across both generations regardless of the role's default.
-    let r1_parent = parent_with_extensions(
-        &r1,
-        rustx::extensions::NativeAgentExtensions::with_todo()
-            .and_agent_status(rustx::context::AgentStatusConfig::default()),
-    );
-    let before = delegate(&r1, "reviewer", Some(&requested), &r1_parent).expect("R1 resolution");
+    let before = delegate(&r1, "reviewer", Some(&requested)).expect("R1 resolution");
 
     // R2 rewrites the role's routing prose and every default the request
     // replaces. Nothing else about the role changes.
     lab.write_config(
-        &serde_json::json!({"reviewer": {"description": "An entirely different routing description.", "tools": {"builtin": ["grep"]}, "skills": ["security-review"], "extensions": {"agent_status": {"enabled": false}}}}),
+        &serde_json::json!({"reviewer": {"description": "An entirely different routing description.", "tools": {"builtin": ["grep"]}, "skills": ["security-review"], "plugins": {"agent_status": {"enabled": false}}}}),
         &["read", "grep"],
     );
     product
         .runtime()
-        .reload_resources()
+        .reload_configuration()
         .await
         .expect("R2 publishes");
     let r2 = product.runtime().runtime_resources();
-    let r2_parent = parent_with_extensions(
-        &r2,
-        rustx::extensions::NativeAgentExtensions::with_todo()
-            .and_agent_status(rustx::context::AgentStatusConfig::default()),
-    );
-    let after = delegate(&r2, "reviewer", Some(&requested), &r2_parent).expect("R2 resolution");
+    let after = delegate(&r2, "reviewer", Some(&requested)).expect("R2 resolution");
 
     assert_ne!(
         before.definition_digest, after.definition_digest,
@@ -1323,9 +1010,8 @@ async fn sub258_replaced_defaults_and_routing_prose_do_not_change_the_profile_di
         Some(&parse_override(serde_json::json!({
             "tools": {"builtin": ["grep"]},
             "skills": ["review-guidance"],
-            "extensions": {"agentStatus": {"enabled": true}},
+            "plugins": {"agentStatus": {"enabled": true}},
         }))),
-        &r2_parent,
     )
     .expect("resolution");
     assert_ne!(
@@ -1353,18 +1039,12 @@ async fn sub258_extension_composition_is_not_an_ordinary_tool_selection() {
     lab.write_config(&reviewer_roles(), &["read"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let parent = parent_with_extensions(
-        &resources,
-        rustx::extensions::NativeAgentExtensions::with_todo()
-            .and_agent_status(rustx::context::AgentStatusConfig::default()),
-    );
 
     // Clearing every ordinary tool leaves the composed extension untouched.
     let no_direct_tools = delegate(
         &resources,
         "reviewer",
         Some(&parse_override(serde_json::json!({"tools": {}}))),
-        &parent,
     )
     .expect("resolution");
     assert!(no_direct_tools.tools.is_empty());
@@ -1379,9 +1059,8 @@ async fn sub258_extension_composition_is_not_an_ordinary_tool_selection() {
         "reviewer",
         Some(&parse_override(serde_json::json!({
             "tools": {},
-            "extensions": {"agentStatus": {"enabled": true}},
+            "plugins": {"agentStatus": {"enabled": true}},
         }))),
-        &parent,
     )
     .expect("the caller's own composition authorizes this");
     assert!(
@@ -1399,7 +1078,6 @@ async fn sub258_a_child_override_never_mutates_the_parent() {
     lab.write_config(&reviewer_roles(), &["read", "grep"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let parent = parent_of(&resources);
 
     let before_tools = resources.capability().tool_registry().names().join(",");
     let before_revision = resources.revision();
@@ -1411,9 +1089,8 @@ async fn sub258_a_child_override_never_mutates_the_parent() {
         Some(&parse_override(serde_json::json!({
             "tools": {"builtin": ["grep"]},
             "skills": [],
-            "extensions": {},
+            "plugins": {},
         }))),
-        &parent,
     )
     .expect("resolution");
 
@@ -1427,11 +1104,6 @@ async fn sub258_a_child_override_never_mutates_the_parent() {
         product.runtime().native_extensions(),
         before_extensions,
         "the parent's extension composition is untouched"
-    );
-    assert_eq!(
-        parent_of(&resources),
-        parent,
-        "the caller's frozen authority is a value, not mutable state"
     );
 }
 
@@ -1465,7 +1137,7 @@ async fn ext259_a_role_todo_default_and_its_invocation_override_freeze_exactly()
                 // The role declares its own Todo default, and switches Agent
                 // Status off — proving the two dimensions are independent in
                 // role authoring as well.
-                "extensions": {
+                "plugins": {
                     "todo": {"enabled": true},
                     "agent_status": {"enabled": false},
                 },
@@ -1477,9 +1149,8 @@ async fn ext259_a_role_todo_default_and_its_invocation_override_freeze_exactly()
     let resources = product.runtime().runtime_resources();
     // The invoking Agent composes Todo, which is what entitles it to ask for
     // Todo at all under the delegation ceiling.
-    let parent = parent_with_extensions(&resources, NativeAgentExtensions::with_todo());
 
-    let role_default = delegate(&resources, "reviewer", None, &parent).expect("resolution");
+    let role_default = delegate(&resources, "reviewer", None).expect("resolution");
     assert_eq!(
         role_default.extensions,
         NativeAgentExtensions::with_todo(),
@@ -1491,7 +1162,6 @@ async fn ext259_a_role_todo_default_and_its_invocation_override_freeze_exactly()
         &resources,
         "reviewer",
         Some(&parse_override(serde_json::json!({"tools": {}}))),
-        &parent,
     )
     .expect("resolution");
     assert_eq!(
@@ -1504,9 +1174,8 @@ async fn ext259_a_role_todo_default_and_its_invocation_override_freeze_exactly()
         &resources,
         "reviewer",
         Some(&parse_override(
-            serde_json::json!({"extensions": {"todo": {"enabled": false}}}),
+            serde_json::json!({"plugins": {"todo": {"enabled": false}}}),
         )),
-        &parent,
     )
     .expect("narrowing needs no authority");
     assert!(
@@ -1517,8 +1186,7 @@ async fn ext259_a_role_todo_default_and_its_invocation_override_freeze_exactly()
         delegate(
             &resources,
             "reviewer",
-            Some(&parse_override(serde_json::json!({"extensions": {}}))),
-            &parent,
+            Some(&parse_override(serde_json::json!({"plugins": {}}))),
         )
         .expect("resolution")
         .extensions,
@@ -1541,12 +1209,11 @@ async fn ext259_a_role_todo_default_and_its_invocation_override_freeze_exactly()
         &resources,
         "reviewer",
         Some(&parse_override(serde_json::json!({
-            "extensions": serde_json::to_value(NativeAgentExtensionSelection::of(
+            "plugins": serde_json::to_value(NativeAgentExtensionSelection::of(
                 &role_default.extensions
             ))
             .expect("the selection serializes"),
         }))),
-        &parent,
     )
     .expect("restating a held composition is authorized");
     assert_eq!(restated.profile_digest(), role_default.profile_digest());
@@ -1567,45 +1234,26 @@ async fn ext259_a_role_todo_default_and_its_invocation_override_freeze_exactly()
 /// decided before child ownership commits: the refusal is a typed resolution
 /// error, so no process, worktree, or Session is created.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn ext259_todo_obeys_the_shared_override_authority_distinction() {
+async fn cfg3_child_todo_override_needs_no_root_plugin_ceiling() {
     let lab = Lab::new();
-    lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_config(
-        &serde_json::json!({"reviewer": {"description": "Review one bounded change.", "tools": {"builtin": ["read"]}, "skills": ["review-guidance"], "extensions": {"todo": {"enabled": false}, "agent_status": {"enabled": false}}}}),
-        &["read"],
-    );
+    lab.write_config(&serde_json::json!({"reviewer":{"description":"No default Plugins", "tools":{"builtin":[]}}}), &[]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let enable_todo =
-        parse_override(serde_json::json!({"extensions": {"todo": {"enabled": true}}}));
-
-    // Neither authority source composes Todo, so the request is refused by
-    // name — with the vocabulary's own diagnostic, not assembled prose.
-    let refusal = delegate(
-        &resources,
-        "reviewer",
-        Some(&enable_todo),
-        &parent_with_extensions(&resources, NativeAgentExtensions::none()),
-    )
-    .expect_err("Todo cannot be manufactured from neither source");
-    match &refusal {
-        SubagentResolutionError::UnauthorizedExtension { extension, detail } => {
-            assert_eq!(extension, "todo");
-            assert!(detail.contains("Todo"), "{detail}");
-        }
-        other => panic!("unexpected refusal class: {other:?}"),
-    }
-
-    // The invoking Agent's own composition is a legitimate authority source.
-    assert_eq!(
-        delegate(
-            &resources,
-            "reviewer",
-            Some(&enable_todo),
-            &parent_with_extensions(&resources, NativeAgentExtensions::with_todo()),
-        )
-        .expect("an entitled caller may compose Todo for its child")
-        .extensions,
-        NativeAgentExtensions::with_todo()
+    assert!(
+        delegate(&resources, "reviewer", None)
+            .unwrap()
+            .extensions
+            .todo()
+            .is_none()
     );
+    let requested = parse_override(serde_json::json!({"plugins":{"todo":{"enabled":true}}}));
+    assert!(
+        delegate(&resources, "reviewer", Some(&requested))
+            .unwrap()
+            .extensions
+            .todo()
+            .is_some()
+    );
+    assert!(product.runtime().native_extensions().todo().is_none());
+    product.runtime().shutdown().await.unwrap();
 }

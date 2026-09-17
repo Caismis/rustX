@@ -3,13 +3,13 @@
 
 use std::sync::Arc;
 
+use crate::common::discover_python_packages;
 use rustx::runtime::identity::ToolId;
 use rustx::tools::ToolProgressCapability;
 use rustx::tools::Workspace;
 use rustx::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
 };
-use rustx::tools::python::discover_python_packages;
 use rustx::tools::types::{
     ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
     ToolExecutionResult, ToolInvocation, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,

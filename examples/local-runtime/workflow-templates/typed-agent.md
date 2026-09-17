@@ -1,9 +1,9 @@
 # Typed Agent → Return
 
 Copy `.agents/workflows/typed_agent.yaml` and the canonical
-`.agents/agents/reviewer.toml` into your trusted workspace. Select a model in
+`.agents/agents/reviewer.toml` into your Workspace. Select a model in
 user settings (`model.model = "your-provider/your-model"`), or supply
-`--models <catalog> --model <provider/model>` at launch and inspection.
+`--config <absolute-rustx.toml> --model <model-name>` at launch and inspection.
 
 Minimum project selection:
 

@@ -60,8 +60,6 @@ async fn capability_projection_carries_mcp_origin_metadata() {
         rustx::runtime::identity::McpServerId::new("fixture"),
         rustx::tools::mcp::McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -79,10 +77,12 @@ async fn capability_projection_carries_mcp_origin_metadata() {
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
         },
     )]);
-    let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder("conv-37-mcp")
-        .mcp_servers(mcp_bindings)
-        .build()
-        .await;
+    let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder(
+        "conv_119cd575-494a-7c52-8213-069259d9272c",
+    )
+    .mcp_servers(mcp_bindings)
+    .build()
+    .await;
     let host = fixture.host.clone();
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)

@@ -67,7 +67,7 @@ use support::fake::{
 };
 use tokio::sync::watch;
 
-const CONVERSATION: &str = "conv-204";
+const CONVERSATION: &str = "conv_e3e186f5-725f-77bf-bd58-e3706c883e2b";
 const GUARD: Duration = Duration::from_secs(5);
 
 fn request(model: &Arc<FakeModel>) -> AgentExecutionRequest {
@@ -1695,7 +1695,7 @@ async fn issue204_batch_siblings_settle_exactly_once_in_model_order() {
 /// though a second execution admits the same tool under a far larger one.
 /// (The composition-level freeze — a reloaded resource generation never
 /// reaching a running invocation — is covered by the configuration and
-/// runtime-level regressions; `reload_resources` is attempt-exclusive, so a
+/// runtime-level regressions; `reload_configuration` is attempt-exclusive, so a
 /// mid-attempt reload is structurally refused.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn issue204_admitted_executions_obey_their_own_frozen_policy() {

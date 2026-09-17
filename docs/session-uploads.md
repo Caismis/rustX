@@ -59,8 +59,8 @@ and renders exactly one prefix per upload-bearing User message:
 
 ```xml
 <user_uploaded_files>
-  <file name="report.pdf" path="/project/.agents/uploads/session-1/batch/report.pdf" />
-  <file name="data.csv" path="/project/.agents/uploads/session-1/batch/data.csv" />
+  <file name="report.pdf" path="/project/.agents/uploads/ses_01900000-0000-7000-8000-000000000001/batch/report.pdf" />
+  <file name="data.csv" path="/project/.agents/uploads/ses_01900000-0000-7000-8000-000000000001/batch/data.csv" />
 </user_uploaded_files>
 
 Please analyze these files.
@@ -125,10 +125,10 @@ another Session's root.
 
 ## Protocol and schema boundaries
 
-App Server v5 is the one mandatory vocabulary; its WebSocket subprotocol is
-`rustx.app-server.v5`. `session/upload` replaces the old user carrier. `artifact/read`
+App Server v6 is the one mandatory vocabulary; its WebSocket subprotocol is
+`rustx.app-server.v6`. `session/upload` replaces the old user carrier. `artifact/read`
 remains for Tool-managed artifact presentation only. Session catalog schema 9,
-SQLite schema 37 and native Runtime Client version 37 reject older development
+SQLite schema 38 and native Runtime Client version 38 reject older development
 contracts without migrations or compatibility modes.
 
 JSON/base64 is a bounded current carrier: 1–8 files, at most 256 KiB each and

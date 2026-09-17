@@ -8,7 +8,6 @@ pub(crate) enum Effect {
     Provider,
     Session,
     State,
-    Trust,
     Preparation,
     Credentials,
     WorkflowRun,
@@ -18,7 +17,7 @@ pub(crate) enum Effect {
     AuthorityMutation,
 }
 
-thread_local! { static COUNTS: RefCell<Option<[usize; 13]>> = const { RefCell::new(None) }; }
+thread_local! { static COUNTS: RefCell<Option<[usize; 12]>> = const { RefCell::new(None) }; }
 
 pub(crate) fn observe(effect: Effect) {
     COUNTS.with(|counts| {
@@ -28,7 +27,7 @@ pub(crate) fn observe(effect: Effect) {
     });
 }
 
-pub(crate) fn measure<T>(operation: impl FnOnce() -> T) -> (T, [usize; 13]) {
+pub(crate) fn measure<T>(operation: impl FnOnce() -> T) -> (T, [usize; 12]) {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
@@ -37,7 +36,7 @@ pub(crate) fn measure<T>(operation: impl FnOnce() -> T) -> (T, [usize; 13]) {
     }
     COUNTS.with(|counts| {
         assert!(counts.borrow().is_none());
-        *counts.borrow_mut() = Some([0; 13]);
+        *counts.borrow_mut() = Some([0; 12]);
     });
     let _reset = Reset;
     let value = operation();

@@ -71,7 +71,7 @@ function attached(
   messages: MessageBlock[] = [],
 ): PresentationState {
   return replaceFromSnapshot(
-    clientSnapshot({ messages, todos }),
+    clientSnapshot({ messages, todos, effective_plugins: { todo: {} } }),
     runtimeCursor(1),
   );
 }
@@ -82,7 +82,7 @@ function todoDisabled(messages: MessageBlock[] = []): PresentationState {
     clientSnapshot({
       messages,
       todos: null,
-      effective_extensions: { goal: null,
+      effective_plugins: { goal: null,
         agent_status: {
           time: { enabled: true, timezone: null },
           background: { enabled: true },
@@ -243,7 +243,7 @@ describe("the derived task list", () => {
     assert.equal(renderTodoPanel(selectTodos(state), { columns: 80 }), "");
     assert.match(
       renderTodoInspection(selectTodos(state), isTodoComposed(state)),
-      /Todo extension is not composed/,
+      /Todo Plugin is off/,
     );
     assert.ok(
       state.transcript.some(

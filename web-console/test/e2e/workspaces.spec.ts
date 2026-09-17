@@ -5,20 +5,20 @@ import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
-test('two isolated Product Hosts/processes, untrusted cold Sessions and responsive Workspace navigation', async ({ page }) => {
-  const a = await startDogfood('web_console_dogfood', false), b = await startDogfood('web_console_dogfood', false);
+test('two isolated Product Hosts/processes, cold Sessions and responsive Workspace navigation', async ({ page }) => {
+  const a = await startDogfood(), b = await startDogfood();
   const remoteA = await AppServerHost.connectRemote({ endpoint: a.endpoint, token: a.token });
   const remoteB = await AppServerHost.connectRemote({ endpoint: b.endpoint, token: b.token });
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   try {
-    // Deliberately invalid/untrusted authored inputs must remain unread/inactive.
-    writeFileSync(join(a.workspaceA, 'rustx.toml'), 'invalid project = [');
+    // Unselected malformed resources warn without preventing unrelated composition.
+    writeFileSync(join(a.workspaceA, 'rustx.toml'), '[agent]\ninstructions = "Workspace guidance"\n');
     for (const kind of ['agents', 'skills', 'workflows', 'tools']) {
       mkdirSync(join(a.workspaceA, '.agents', kind), { recursive: true });
       writeFileSync(join(a.workspaceA, '.agents', kind, 'invalid.toml'), 'must never activate');
     }
-    writeFileSync(join(a.workspaceA, 'AGENTS.md'), 'UNTRUSTED_PROJECT_INSTRUCTIONS');
+    writeFileSync(join(a.workspaceA, 'AGENTS.md'), 'WORKSPACE_PROJECT_INSTRUCTIONS');
     const wa = (await a.workspaceHost.host.listWorkspaces()).workspaces[0];
     const wb = (await b.workspaceHost.host.listWorkspaces()).workspaces[0];
     await expect(a.workspaceHost.host.resolveWorkspace(wb.id, a.endpoint)).rejects.toThrow('Unknown');
@@ -27,7 +27,7 @@ test('two isolated Product Hosts/processes, untrusted cold Sessions and responsi
     const created = await remoteA.createSession(cwd);
     const id = created.session.id;
     const read = () => remoteA.client.call('settings/read', { session_id: id }, 'settings');
-    const original = await read(); expect(original.settings.cwd).toBe(a.workspaceA); expect(original.project_trusted).toBe(false);
+    const original = await read(); expect(original.settings.cwd).toBe(a.workspaceA);
     await expect(remoteB.readSession(id)).rejects.toThrow();
     const listed = await remoteA.client.call('session/list', { offset: 0, limit: 32 }, 'sessions');
     expect(listed.sessions.find(row => row.id === id)?.cwd).toBe(a.workspaceA);
@@ -47,21 +47,19 @@ test('two isolated Product Hosts/processes, untrusted cold Sessions and responsi
     expect((await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.loaded).toBe(0);
     expect(await remoteA.readSettings(denied.session.id)).toEqual(deniedBefore);
     await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace A' });
-    await expect(page.getByRole('button', { name: 'Workspace settings' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Workspace settings' })).toBeEnabled();
     expect((await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.loaded).toBe(0);
     await page.getByRole('button', { name: `Open ${id}`, exact: true }).click();
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
-    await expect(page.getByText(/Untrusted project source/)).toBeVisible();
+    await expect(page.getByText(/Untrusted project source/)).toHaveCount(0);
     expect(await read()).toEqual(original);
     const resident = (await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot;
     expect(resident.loaded).toBe(1);
     await page.getByRole('button', { name: 'Detach', exact: true }).click();
     const attached = await remoteA.client.call('session/attach', { session_id: id }, 'attached');
-    expect(attached.snapshot.resources?.context_files).toEqual([]);
-    expect(JSON.stringify(attached.snapshot.resources)).not.toContain('UNTRUSTED_PROJECT_INSTRUCTIONS');
-    await remoteA.client.call('resources/reload', { target: attached.target }, 'resources_reloaded');
+    await remoteA.client.call('configuration/reload', { target: attached.target }, 'configuration_reloaded');
     const refreshed = await remoteA.client.call('session/snapshot', { target: attached.target }, 'snapshot');
-    expect(refreshed.snapshot.resources?.context_files).toEqual([]);
+    expect(refreshed.snapshot.resources?.revision).not.toBe(attached.snapshot.resources?.revision);
     await remoteA.client.call('session/detach', { target: attached.target }, 'detached');
     await page.getByRole('button', { name: 'Attach / cold resume' }).click();
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
@@ -98,12 +96,12 @@ test('two isolated Product Hosts/processes, untrusted cold Sessions and responsi
     expect((await b.workspaceHost.host.listWorkspaces()).workspaces[0]).toEqual(wb);
     expect((await remoteB.listSessions()).sessions).toHaveLength(0);
     const other = await remoteB.createSession(await b.workspaceHost.host.resolveWorkspace(wb.id, b.endpoint));
-    expect(other.session.id).toBe(id); // Native IDs are scoped to each process root.
-    expect((await remoteB.readSettings(id)).settings.cwd).toBe(b.workspaceA);
+    expect(other.session.id).toMatch(/^ses_[0-9a-f-]+$/);
+    expect((await remoteB.readSettings(other.session.id)).settings.cwd).toBe(b.workspaceA);
     expect((await read()).settings.cwd).toBe(a.workspaceA);
     expect(await a.workspaceHost.host.classifyLocations([b.workspaceA], a.endpoint)).toEqual([{ authorized: false }]);
     expect(existsSync(join(a.directory, 'state', 'rustx', 'trust'))).toBe(false);
-    expect(readFileSync(join(a.workspaceA, 'rustx.toml'), 'utf8')).toBe('invalid project = [');
+    expect(readFileSync(join(a.workspaceA, 'rustx.toml'), 'utf8')).toContain('Workspace guidance');
     expect(errors).toEqual([]);
   } finally { await remoteA.shutdown(); await remoteB.shutdown(); await a.stop(false); await b.stop(false); }
 });

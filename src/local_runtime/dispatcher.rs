@@ -1134,7 +1134,7 @@ mod tests {
         let dispatcher = ChildControlDispatcher::start(child, observation_child);
         let handle = dispatcher.handle();
         let first = InteractionRef::new(
-            ConversationId::new("child-conversation"),
+            ConversationId::new("conv_b520d0ec-730a-7133-8d51-7de417e31c5a"),
             InteractionId::new("interaction-1"),
         );
         let first_waiter = tokio::spawn({
@@ -1149,7 +1149,7 @@ mod tests {
         assert_eq!(first_request.interaction, first);
         let mut mismatched = first_request.clone();
         mismatched.interaction = InteractionRef::new(
-            ConversationId::new("child-conversation"),
+            ConversationId::new("conv_b520d0ec-730a-7133-8d51-7de417e31c5a"),
             InteractionId::new("interaction-2"),
         );
         mismatched.admitted = true;
@@ -1165,7 +1165,7 @@ mod tests {
         );
 
         let second = InteractionRef::new(
-            ConversationId::new("child-conversation"),
+            ConversationId::new("conv_b520d0ec-730a-7133-8d51-7de417e31c5a"),
             InteractionId::new("interaction-2"),
         );
         let second_waiter = tokio::spawn({
@@ -1388,7 +1388,7 @@ mod tests {
 
         let approval = InteractionRequest {
             id: InteractionId::new("approval-1"),
-            conversation_id: ConversationId::new("child-conversation"),
+            conversation_id: ConversationId::new("conv_b520d0ec-730a-7133-8d51-7de417e31c5a"),
             attempt_id: AttemptId::new("attempt-1"),
             turn: 1,
             kind: InteractionKind::Approval {

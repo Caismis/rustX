@@ -236,9 +236,7 @@ export function footerSegments(
   // No cached selection: snapshots/events are the only approval authority.
   if (state.effectiveApprovalMode != null) {
     const mode = approvalLabel(state.effectiveApprovalMode).toUpperCase();
-    const pending = state.pendingApprovalMode == null ? "" :
-      ` · next attempt ${approvalLabel(state.pendingApprovalMode).toUpperCase()}`;
-    segments.push({ text: (state.effectiveApprovalMode === "full_access" ? role.warning : role.meta)(`approval ${mode}${pending}`), priority: 0, compact: role.meta(`${mode}${state.pendingApprovalMode == null ? "" : `; next ${approvalLabel(state.pendingApprovalMode).toUpperCase()}`}`) });
+    segments.push({ text: (state.effectiveApprovalMode === "full_access" ? role.warning : role.meta)(`approval ${mode}`), priority: 0, compact: role.meta(mode) });
   }
   segments.push(...models.slice(1));
   if (conversation?.parentConversationId != null) {

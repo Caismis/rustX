@@ -32,7 +32,7 @@ use crate::runtime::types::CancellationReason;
 /// the tool. The runtime validates it at registration and never mutates it:
 /// model-selectable invocation metadata is added only to the compiled
 /// model-facing definition.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ToolDefinition {
     /// Identity of the tool within the capability set.
     pub id: ToolId,
@@ -1196,7 +1196,9 @@ mod tests {
             truncation: None,
             workflow: None,
             managed_output: Some(super::ManagedOutputContinuation::Complete {
-                locator: std::path::PathBuf::from("/tmp/rustx/results/result_7.txt"),
+                locator: std::path::PathBuf::from(
+                    "/owned/conversation/tool-output/results/result_01900000-0000-7000-8000-000000000007.txt",
+                ),
             }),
         };
 
@@ -1208,7 +1210,7 @@ mod tests {
         assert!(
             text.contains("Tool call failed: input schema validation failed: query is required")
         );
-        assert!(text.contains("Complete output: /tmp/rustx/results/result_7.txt"));
+        assert!(text.contains("Complete output: /owned/conversation/tool-output/results/result_01900000-0000-7000-8000-000000000007.txt"));
         assert!(text.contains("Read or Grep"));
         assert!(text.contains("tool-owned result content truncated"));
         assert_eq!(result.status, status, "typed status remains authoritative");
@@ -1255,7 +1257,9 @@ mod tests {
             truncation: None,
             workflow: None,
             managed_output: Some(super::ManagedOutputContinuation::Complete {
-                locator: std::path::PathBuf::from("/tmp/rustx/results/result_8.txt"),
+                locator: std::path::PathBuf::from(
+                    "/owned/conversation/tool-output/results/result_01900000-0000-7000-8000-000000000008.txt",
+                ),
             }),
         };
 
@@ -1264,7 +1268,7 @@ mod tests {
         let text = projection.as_text();
         assert!(text.contains("Tool call failed: e"));
         assert!(text.contains("...[tool status truncated]"));
-        assert!(text.contains("Complete output: /tmp/rustx/results/result_8.txt"));
+        assert!(text.contains("Complete output: /owned/conversation/tool-output/results/result_01900000-0000-7000-8000-000000000008.txt"));
         assert!(text.contains("Read or Grep"));
         assert_eq!(result.status, status, "typed status remains authoritative");
     }

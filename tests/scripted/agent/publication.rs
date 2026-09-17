@@ -232,7 +232,7 @@ async fn many_provider_deltas_coalesce_into_few_publication_writes() {
     script.push(done(ModelFinishReason::Stop));
     let model = fake_model(vec![script]);
     let run = run(
-        "conv-coalesce",
+        "conv_52da5d5b-4895-7cc9-a592-012b9626a213",
         &model,
         CoalescePolicy {
             max_bytes: 10,
@@ -278,7 +278,12 @@ async fn latency_flush_is_driven_by_the_injected_clock() {
     };
 
     // The clock never advances, so only the terminal transaction flushes.
-    let parked = run("conv-latency-parked", &fake_model(script()), quiet_policy()).await;
+    let parked = run(
+        "conv_3ca052fa-fbf2-72af-8f93-5d4c315a82b1",
+        &fake_model(script()),
+        quiet_policy(),
+    )
+    .await;
     assert_eq!(
         parked.audit.publication_frames.len(),
         1,
@@ -289,7 +294,7 @@ async fn latency_flush_is_driven_by_the_injected_clock() {
     // The same script under a clock that always reports the threshold as
     // elapsed flushes on every delta instead.
     let flushing = run(
-        "conv-latency-flushing",
+        "conv_d764b1ab-7946-7581-b9bd-fdd59d5af45c",
         &fake_model(script()),
         CoalescePolicy {
             max_bytes: usize::MAX,
@@ -322,14 +327,15 @@ async fn chatty_provider_cannot_postpone_the_oldest_publication_deadline() {
         FakeStep::ParkUntilReleased(second_receiver),
         done(ModelFinishReason::Stop),
     ]]);
-    let fixture = common::tool_runtime_with_store("conv-latency-chatty", None);
+    let fixture =
+        common::tool_runtime_with_store("conv_5088f8c6-d684-7d86-8008-bcdd7b9ac230", None);
     let tool_runtime: rustx::tools::runtime::ConversationToolRuntime = (*fixture).clone();
     let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let publication = common::RecordingPublicationObserver::default();
     let clock = Arc::new(ManualMonotonicClock::new());
     let mut execution = AgentExecution::new(
-        request("conv-latency-chatty", &model),
+        request("conv_5088f8c6-d684-7d86-8008-bcdd7b9ac230", &model),
         capability.into_lease(),
         &cancellation,
         support::default_execution_policy(),
@@ -406,14 +412,15 @@ async fn quiet_provider_is_woken_by_the_publication_deadline() {
         FakeStep::ParkUntilReleased(receiver),
         done(ModelFinishReason::Stop),
     ]]);
-    let fixture = common::tool_runtime_with_store("conv-latency-quiet", None);
+    let fixture =
+        common::tool_runtime_with_store("conv_99c4255f-a23f-7e98-aad5-c738b458e2a5", None);
     let tool_runtime: rustx::tools::runtime::ConversationToolRuntime = (*fixture).clone();
     let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let publication = common::RecordingPublicationObserver::default();
     let clock = Arc::new(ManualMonotonicClock::new());
     let mut execution = AgentExecution::new(
-        request("conv-latency-quiet", &model),
+        request("conv_99c4255f-a23f-7e98-aad5-c738b458e2a5", &model),
         capability.into_lease(),
         &cancellation,
         support::default_execution_policy(),
@@ -498,7 +505,14 @@ async fn tool_proposal_boundaries_are_released_as_their_own_frames() {
     let mut tools = ToolRegistry::new();
     support::fake::FakeTool::new(definition, support::fake::success_result("ok"))
         .register(&mut tools);
-    let run = run_with("conv-structural", &model, tools, quiet_policy(), None).await;
+    let run = run_with(
+        "conv_6a0e034d-cbae-7d44-91e1-1601d8effa70",
+        &model,
+        tools,
+        quiet_policy(),
+        None,
+    )
+    .await;
 
     let payloads: Vec<&PublicationPayload> = run
         .audit
@@ -532,7 +546,7 @@ async fn tool_proposal_boundaries_are_released_as_their_own_frames() {
 async fn no_frame_is_released_before_its_staging_commit() {
     let store = Arc::new(
         rustx::durable::SqliteConversationStore::in_memory(ConversationId::new(
-            "conv-staging-fault",
+            "conv_f927f4f5-3c30-76ad-855f-361912246400",
         ))
         .expect("durable store"),
     );
@@ -543,7 +557,7 @@ async fn no_frame_is_released_before_its_staging_commit() {
         done(ModelFinishReason::Stop),
     ]]);
     let run = run_with(
-        "conv-staging-fault",
+        "conv_f927f4f5-3c30-76ad-855f-361912246400",
         &model,
         ToolRegistry::new(),
         CoalescePolicy {
@@ -579,7 +593,7 @@ async fn no_frame_is_released_before_its_staging_commit() {
 async fn a_failed_publication_terminal_releases_no_final_payload() {
     let store = Arc::new(
         rustx::durable::SqliteConversationStore::in_memory(ConversationId::new(
-            "conv-terminal-fault",
+            "conv_773452a9-b122-7082-8fb0-4a674050176c",
         ))
         .expect("durable store"),
     );
@@ -590,7 +604,7 @@ async fn a_failed_publication_terminal_releases_no_final_payload() {
         done(ModelFinishReason::Stop),
     ]]);
     let run = run_with(
-        "conv-terminal-fault",
+        "conv_773452a9-b122-7082-8fb0-4a674050176c",
         &model,
         ToolRegistry::new(),
         quiet_policy(),
@@ -642,7 +656,12 @@ async fn assembler_finish_failure_after_published_frames_is_incomplete() {
         proposal_start("call-1"),
         done(ModelFinishReason::ToolCalls),
     ]]);
-    let run = run("conv-finish-failure", &model, quiet_policy()).await;
+    let run = run(
+        "conv_28323f58-01b4-7ec8-82ba-e5156e469e84",
+        &model,
+        quiet_policy(),
+    )
+    .await;
 
     assert!(
         !run.audit.publication_frames.is_empty(),
@@ -694,7 +713,12 @@ async fn preflight_failure_after_a_complete_proposal_is_unaccepted() {
         proposal_complete("call-1"),
         done(ModelFinishReason::ToolCalls),
     ]]);
-    let run = run("conv-preflight-failure", &model, quiet_policy()).await;
+    let run = run(
+        "conv_57b70711-c789-73c2-a31e-df12a1c97700",
+        &model,
+        quiet_policy(),
+    )
+    .await;
 
     assert!(
         run.audit
@@ -741,8 +765,10 @@ async fn preflight_failure_after_a_complete_proposal_is_unaccepted() {
 #[tokio::test]
 async fn a_canonically_accepted_turn_creates_no_audit_and_no_staging() {
     let store = Arc::new(
-        rustx::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-canonical"))
-            .expect("durable store"),
+        rustx::durable::SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_5fae99b2-17ed-70c2-8c0a-d9455f2477d8",
+        ))
+        .expect("durable store"),
     );
     let model = fake_model(vec![vec![
         started(),
@@ -751,7 +777,7 @@ async fn a_canonically_accepted_turn_creates_no_audit_and_no_staging() {
         done(ModelFinishReason::Stop),
     ]]);
     let run = run_with(
-        "conv-canonical",
+        "conv_5fae99b2-17ed-70c2-8c0a-d9455f2477d8",
         &model,
         ToolRegistry::new(),
         quiet_policy(),
@@ -797,8 +823,10 @@ async fn a_canonically_accepted_turn_creates_no_audit_and_no_staging() {
 #[tokio::test]
 async fn a_failed_audit_terminalization_leaves_the_stream_unsettled() {
     let store = Arc::new(
-        rustx::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-audit-fault"))
-            .expect("durable store"),
+        rustx::durable::SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_6d41dbd2-3d82-7b3c-8f38-47d602ea7b7e",
+        ))
+        .expect("durable store"),
     );
     store.arm_fail_publication_audit_times(1);
     // A proposal that never completes rejects `assembler.finish()`, so the
@@ -810,7 +838,7 @@ async fn a_failed_audit_terminalization_leaves_the_stream_unsettled() {
         done(ModelFinishReason::ToolCalls),
     ]]);
     let run = run_with(
-        "conv-audit-fault",
+        "conv_6d41dbd2-3d82-7b3c-8f38-47d602ea7b7e",
         &model,
         ToolRegistry::new(),
         quiet_policy(),
@@ -848,7 +876,7 @@ async fn a_failed_audit_terminalization_leaves_the_stream_unsettled() {
 async fn failed_overflow_audit_blocks_the_retry_request() {
     let store = Arc::new(
         rustx::durable::SqliteConversationStore::in_memory(ConversationId::new(
-            "conv-overflow-audit-fault",
+            "conv_487d78b2-8e80-7af8-85a4-30ac967fb263",
         ))
         .expect("durable store"),
     );
@@ -873,7 +901,7 @@ async fn failed_overflow_audit_blocks_the_retry_request() {
         vec![started(), done(ModelFinishReason::Stop)],
     ]);
     let run = run_with(
-        "conv-overflow-audit-fault",
+        "conv_487d78b2-8e80-7af8-85a4-30ac967fb263",
         &model,
         ToolRegistry::new(),
         quiet_policy(),
@@ -965,8 +993,8 @@ async fn the_event_journal_is_independent_of_the_delta_count() {
         run.audit.event_history.len()
     }
 
-    let quiet = journal_len("conv-journal-quiet", 2).await;
-    let chatty = journal_len("conv-journal-chatty", 200).await;
+    let quiet = journal_len("conv_bf971fb7-a072-7c1a-bb8c-0337887594bc", 2).await;
+    let chatty = journal_len("conv_28351899-1298-7aa1-8b2d-ed78ff260826", 200).await;
     assert_eq!(
         quiet, chatty,
         "198 additional released increments cost zero additional Event Journal rows"
@@ -1022,6 +1050,7 @@ async fn runtime_fixture(conversation: &str, model: Arc<FakeModel>) -> RuntimeFi
     coordinator.commit(candidate).expect("commit");
     let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
     let runtime = ConversationRuntime::new(RuntimeConversationConfig {
+        explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: support::model::scripted_session_model(model),
         approval_mode: rustx::runtime::ApprovalMode::Policy,
@@ -1097,7 +1126,11 @@ async fn a_resource_edit_during_streaming_cannot_splice_a_new_generation() {
         done(ModelFinishReason::Stop),
     ]]);
     let mut parked = model.parked();
-    let fixture = runtime_fixture("conv-generation", Arc::clone(&model)).await;
+    let fixture = runtime_fixture(
+        "conv_3ab9aa31-39b0-7e4a-aecf-f824cb4d73d4",
+        Arc::clone(&model),
+    )
+    .await;
 
     fixture
         .tool_runtime
@@ -1123,7 +1156,7 @@ async fn a_resource_edit_during_streaming_cannot_splice_a_new_generation() {
 
     // The external edit lands while the attempt owns the session.
     write_skill(&fixture.dir.path().join("workspace"), "late-skill");
-    let rejected = fixture.runtime.reload_resources().await;
+    let rejected = fixture.runtime.reload_configuration().await;
     assert!(
         matches!(
             rejected,

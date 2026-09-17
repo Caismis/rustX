@@ -19,14 +19,8 @@ impl Fixture {
     fn create(root: &std::path::Path, borrowers: u64) -> Self {
         let catalog = SessionCatalog::create(root, &state()).unwrap();
         let (session, node, _) = catalog
-            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-            .map(|(node, state)| {
-                (
-                    crate::local_runtime::SessionId::new("session-1"),
-                    node,
-                    state,
-                )
-            })
+            .lineage(&first_session(&catalog), None)
+            .map(|(node, state)| (first_session(&catalog), node, state))
             .unwrap();
         let database = catalog.database_path(&session, &node.conversation_id);
         let parent = store_for(&catalog, &session, &node.conversation_id);
@@ -89,7 +83,7 @@ impl Fixture {
 
     fn borrow_profile(&mut self, root: &std::path::Path, ordinal: u64, profile: &str) {
         let subagent = SubagentId::for_conversation(&self.run.conversation_id, ordinal);
-        let child = ConversationId::new(subagent.as_str());
+        let child = ConversationId::generate();
         let mut borrowed = self.workspace.clone();
         borrowed.borrowed_from = Some(self.run.clone());
         self.parent
@@ -107,7 +101,8 @@ impl Fixture {
                 Utc::now(),
             ))
             .unwrap();
-        let database = crate::runtime::subagent::child_conversation_store_path(root, &child);
+        let database =
+            crate::runtime::subagent::child_conversation_store_path(root, &self.session, &child);
         std::fs::create_dir_all(database.parent().unwrap()).unwrap();
         SqliteConversationStore::open(child.clone(), &database)
             .unwrap()
@@ -182,14 +177,8 @@ fn deletion_borrowed_workspace_crash_before_child_terminal_disposes_only_workflo
     process.wait().unwrap();
     let catalog = reopen_catalog(root.path());
     let (session, node, _) = catalog
-        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-        .map(|(node, state)| {
-            (
-                crate::local_runtime::SessionId::new("session-1"),
-                node,
-                state,
-            )
-        })
+        .lineage(&first_session(&catalog), None)
+        .map(|(node, state)| (first_session(&catalog), node, state))
         .unwrap();
     let parent = store_for(&catalog, &session, &node.conversation_id);
     let events = parent.read_events(None, 100).unwrap().events;
@@ -347,7 +336,7 @@ fn deletion_borrowed_workspace_foreign_or_invalid_run_fails_closed() {
     let fixture = Fixture::create(root.path(), 1);
     for run in [
         WorkflowRunId {
-            conversation_id: ConversationId::new("foreign"),
+            conversation_id: ConversationId::new("conv_65677190-5e1e-7731-865c-d0a0d9fb0612"),
             ..fixture.run.clone()
         },
         WorkflowRunId {
@@ -402,6 +391,10 @@ fn deletion_overridden_borrowers_keep_profile_identity_out_of_ownership_revision
     let root = tempfile::tempdir().unwrap();
     let mut fixture = Fixture::create(root.path(), 0);
     let mut spec = ResolvedSubagentSpec {
+        environment: Vec::new(),
+        generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
+        skill_roots: Vec::new(),
+
         selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
         agent: crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
         definition_digest: serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
@@ -419,8 +412,8 @@ fn deletion_overridden_borrowers_keep_profile_identity_out_of_ownership_revision
         extensions: crate::extensions::NativeAgentExtensions::none(),
     };
     let profiles: Vec<_> = [
-        serde_json::json!({"extensions": {}}),
-        serde_json::json!({"extensions": {"agentStatus": {"time": {"enabled": true}}}}),
+        serde_json::json!({"plugins": {}}),
+        serde_json::json!({"plugins": {"agentStatus": {"enabled": true, "time": {"enabled": true}}}}),
     ]
     .into_iter()
     .map(|value| {

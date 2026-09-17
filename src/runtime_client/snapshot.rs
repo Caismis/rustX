@@ -70,8 +70,6 @@ pub struct RuntimeDurabilityFailure {
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientSnapshot {
     pub settings_evidence: super::settings::SettingsEvidence,
-    /// Immutable resolver facts; unavailable for durable-only or frozen-child attachment.
-    pub launch_settings: Option<super::settings::LaunchSettings>,
     /// The frozen effective native Agent Extension composition of the Agent
     /// runtime this snapshot projects (Issue #256).
     ///
@@ -92,9 +90,7 @@ pub struct RuntimeClientSnapshot {
     /// current disk configuration or built-in defaults. Inside the value,
     /// `agent_status: None` is the separate fact that the extension is not
     /// part of this Agent's composition at all.
-    pub effective_extensions: Option<super::settings::EffectiveNativeAgentExtensions>,
-    /// Application boundaries of the existing canonical sections.
-    pub settings_lifetimes: super::settings::SettingsLifetimes,
+    pub effective_plugins: Option<super::settings::EffectivePlugins>,
     /// Bounded native Workflow state, never reconstructed from the journal.
     pub workflows: crate::runtime::workflow::read_model::WorkflowSnapshot,
     /// The conversation this snapshot belongs to.
@@ -104,12 +100,6 @@ pub struct RuntimeClientSnapshot {
     pub shutting_down: bool,
     /// The authoritative mode used by the current attempt boundary.
     pub effective_approval_mode: ApprovalMode,
-    /// The latest requested mode when it is waiting for an attempt to settle.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pending_approval_mode: Option<ApprovalMode>,
-    /// The runtime control-plane revision of the mode state.
-    #[serde(default)]
-    pub approval_mode_revision: u64,
     /// The runtime's durable-authority failure, when it has entered the
     /// explicit degraded state. While set, no new durable admission/execution
     /// work may begin.
@@ -1166,11 +1156,6 @@ pub enum CapabilitySourceDescriptor {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum CapabilitySourceStateView {
-    /// Discovered without permission to prepare.
-    Inactive {
-        /// Source activation decision, containing no credential material.
-        activation: crate::capabilities::activation::SourceActivation,
-    },
     /// Prospective coordinator state before first preparation. Normal Session
     /// composition completes preparation before publishing this projection.
     Unprepared,

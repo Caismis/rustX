@@ -6,7 +6,6 @@ use std::time::Duration;
 use serde::Serialize;
 
 use super::configuration::ProspectiveSessionConfig;
-use crate::capabilities::activation::{SourceActivation, SourceEnablement};
 use crate::runtime::CancellationSignal;
 use crate::runtime::identity::McpServerId;
 use crate::tools::mcp::{McpInvalidationState, McpServerRuntime, OwnedConnect};
@@ -40,7 +39,7 @@ pub(super) struct ProbeHooks {
 pub(super) struct ProbeTarget {
     pub target: String,
     pub kind: &'static str,
-    pub activation: SourceActivation,
+    pub admitted: bool,
     pub spawn_process: bool,
     pub network: bool,
     pub prepare_environment: bool,
@@ -81,7 +80,7 @@ impl ProbePlan {
                 "{} [{}; {:?}]: process={}, network={}, prepare={}, credentials={}, deadline={}ms",
                 target.target,
                 target.kind,
-                target.activation,
+                target.admitted,
                 target.spawn_process,
                 target.network,
                 target.prepare_environment,
@@ -114,10 +113,16 @@ pub(super) fn render_results(results: &[ProbeResult], json: bool) -> String {
 }
 
 pub(super) fn plan(launch: &ProspectiveSessionConfig, prepare: bool) -> ProbePlan {
+    let demand = super::composition::admitted_source_demand(
+        &launch.config,
+        &launch.subagents,
+        &launch.workflows,
+        launch.managed_python.clone(),
+    );
     let mut targets = vec![ProbeTarget {
-        target: launch.config.initial_model().model.to_string(),
+        target: launch.session_model().model.to_string(),
         kind: "provider",
-        activation: SourceActivation::Unconfigured,
+        admitted: false,
         spawn_process: false,
         network: false,
         prepare_environment: false,
@@ -125,21 +130,13 @@ pub(super) fn plan(launch: &ProspectiveSessionConfig, prepare: bool) -> ProbePla
         deadline_ms: 0,
     }];
     for (id, source) in &launch.config.mcp_servers {
-        let activation = SourceActivation::evaluate(
-            source.enabled.map(|enabled| {
-                if enabled {
-                    SourceEnablement::Enabled
-                } else {
-                    SourceEnablement::Disabled
-                }
-            }),
-            launch.trusted,
-        );
-        let admitted = activation.admit().is_ok();
+        let admitted = demand
+            .sources
+            .contains(&crate::capabilities::ToolSourceId::Mcp(id.clone()));
         targets.push(ProbeTarget {
             target: id.to_string(),
             kind: "mcp",
-            activation,
+            admitted,
             spawn_process: admitted && source.command.is_some(),
             network: admitted,
             prepare_environment: false,
@@ -149,14 +146,11 @@ pub(super) fn plan(launch: &ProspectiveSessionConfig, prepare: bool) -> ProbePla
         });
     }
     for id in launch.managed_python.packages().keys() {
-        let activation = SourceActivation::Unconfigured;
-        let admitted = activation.admit().is_ok()
-            && prepare
-            && launch.managed_python.packages().contains_key(id);
+        let admitted = prepare && demand.sources.contains(id);
         targets.push(ProbeTarget {
             target: id.to_string(),
             kind: "python",
-            activation,
+            admitted,
             spawn_process: admitted,
             network: admitted,
             prepare_environment: admitted,
@@ -179,7 +173,7 @@ pub(super) async fn execute(
     plan: &ProbePlan,
     cancellation: CancellationSignal,
 ) -> Vec<ProbeResult> {
-    if launch.trusted && launch.validate_resource_authority().is_err() {
+    if launch.validate_resource_authority().is_err() {
         return unavailable_targets(plan, "workspace resource authority changed before effects");
     }
     let Ok(workspace) = Workspace::new(&launch.workspace) else {
@@ -204,12 +198,8 @@ pub(super) async fn execute(
             results.push(result);
             continue;
         }
-        if target.activation.admit().is_err() {
-            result.state = if target.activation == SourceActivation::Untrusted {
-                ProbeState::Unavailable
-            } else {
-                ProbeState::Skipped
-            };
+        if !target.admitted {
+            result.state = ProbeState::Skipped;
             result.reason = "source authority did not admit effects";
             results.push(result);
             continue;
@@ -229,16 +219,12 @@ pub(super) async fn execute(
                 results.push(result);
                 continue;
             }
-            // The managed Python owner performs discovery and preparation;
-            // doctor neither invokes uv itself nor builds another environment.
-            let packages =
-                crate::tools::python::discover_admitted_python_packages(&workspace, |candidate| {
-                    candidate == &id
-                });
-            let package = packages
+            // Reuse the complete source bytes captured by CFG3 discovery. No
+            // second Workspace-only reader can bypass shadowing or reread edits.
+            let package = crate::capabilities::ToolSourceId::try_from(target.target.clone())
                 .ok()
-                .and_then(|packages| packages.into_iter().find(|package| package.server_id == id))
-                .and_then(|package| package.outcome.ok());
+                .and_then(|source| launch.managed_python.packages().get(&source))
+                .and_then(|package| package.as_ref().ok());
             let Some(package) = package else {
                 result.state = ProbeState::Unavailable;
                 result.reason = "managed package is missing or invalid";
@@ -269,7 +255,7 @@ pub(super) async fn execute(
                 continue;
             };
             let owned = cancellation.child();
-            let step = store.ensure_prepared(&package, &owned);
+            let step = store.ensure_prepared(package, &owned);
             let (state, prepared) =
                 await_owned(step, &owned, tokio::time::sleep_until(deadline)).await;
             result.state = state;
@@ -288,21 +274,17 @@ pub(super) async fn execute(
             };
             prepared.server_binding()
         } else {
-            let Ok(mut bindings) = super::composition::mcp_bindings_with_authority(
-                &launch.config,
-                &launch.workspace,
-                &launch.provenance,
-                &credentials,
-            ) else {
+            let Ok(mut bindings) =
+                super::composition::captured_mcp_bindings(&launch.config, &credentials)
+            else {
                 result.state = ProbeState::Failed;
                 result.reason = "source binding is invalid";
                 results.push(result);
                 continue;
             };
-            let Some(mut binding) = bindings.remove(&id) else {
+            let Some(binding) = bindings.remove(&id) else {
                 continue;
             };
-            binding.activation = target.activation;
             binding
         };
         let owned = cancellation.child();

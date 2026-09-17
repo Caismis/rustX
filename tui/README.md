@@ -26,7 +26,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v5. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v6. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -111,7 +111,7 @@ TUI composition root; local mode owns one `rustx app-server --listen stdio` chil
 Build/install as described there, configure the host model through Rust, then run:
 
 ```sh
-pnpm --dir dev tui -- --user-settings /absolute/path/settings.toml --workspace /absolute/path/project
+pnpm --dir dev tui -- --config /absolute/path/rustx.toml --workspace /absolute/path/project
 ```
 
 Connect to an externally managed App Server with:
@@ -120,13 +120,11 @@ Connect to an externally managed App Server with:
 pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/socket-token --workspace /srv/project --session SESSION_ID
 ```
 
-Both modes use the same typed client and generated v5 DTOs. `--user-settings`,
-`--models`, and `--runtime-root` bind the local child process. Session settings
-such as `--workspace`, `--config`, and `--model` travel through `session/create`;
-paths resolve on the server. Local mode may default `--workspace` from the TUI
-process cwd. Remote mode requires an explicit absolute server-side `--workspace`,
-even with `--session`, since `/new` can create Sessions later. The TUI never reads runtime configuration or
-provider credentials. `--name` calls `session/name` for the initial Session.
+Both modes use App Server V6. `--config` and `--runtime-root` bind the owned
+local child process; they do not become Session settings. `--workspace` supplies
+the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
+paths are absolute server paths. The TUI never parses authored configuration or
+reads provider credentials. `--name` names the initial Session.
 
 By default, a launch creates a new Session. `--session ID` selects one explicitly;
 `--resume` browses the durable catalog without loading or attaching a Session.
@@ -147,39 +145,17 @@ unanswered mutations are never replayed. If recovery fails,
 Ctrl+R retries connection recovery and Ctrl+C exits. Unsubmitted editor text stays
 local. See [the complete client architecture](../docs/tui-app-server.md).
 
-The TUI may also forward the runtime's bounded startup controls:
-`--skill <path>` (repeatable), `--no-automatic-skills`, `--no-builtin-tools`,
-`--no-direct-tools`, `--tools <a,b,c>`, and `--exclude-tools <a,b,c>`. It preserves
-their supplied values and order; Rust owns discovery, validation, activation,
-and all semantic errors. `--skill` is the explicit Skill launch authority and
-`--no-automatic-skills` disables automatic discovery; the automatic sources themselves
-are `global` (`~/.agents/skills`) and `workspace`
-(`<workspace>/.agents/skills`), selected by the runtime's `[skills].sources`
-policy, with `workspace` shadowing `global` and explicit paths shadowing both. `--no-direct-tools` removes ordinary direct Tools,
-including Read. Agent/Workflow dispatch remains independently selected by
-`agent.agents` / `agent.workflows`, and Extensions keep their own composition.
-`--tools` selects exact direct Tools and exclusions
-subtract last. `--no-direct-tools` conflicts with the other three Tool flags, and
-`--tools` conflicts with `--no-builtin-tools`. Lists reject empty entries,
-duplicates and unknown/unavailable/ambiguous names.
-
-All four flags address the *ordinary* capability plane only. A Tool contributed
-by a Native Agent Extension — `todo` — is composed under `extensions` in the
-launch configuration and cannot be named here: listing it is a validation
-error, and `--no-direct-tools` does not remove it. A model request with no Tools at
-all therefore needs zero direct Tools, empty Agent/Workflow selections, and
-a composition with no Tool-providing Extensions. `/settings` shows which extensions the attached Agent is actually
-running with. `/tools` distinguishes
-model authority from available but inactive capabilities; exposure filtering
-does not disable source preparation. Lazy Skills require native Read in the
-model's own frozen registry. See the
-[native default table](../docs/runtime-resources.md#exact-tool-authority-and-native-defaults).
+Root Tool/Skill/Plugin/Agent/Workflow capability selection is authored in
+`rustx.toml`; named Agents own independent complete profiles. `/settings` shows
+native effective/source/provenance/generation facts. `/model` changes Session
+intent. `/reload` calls the single full configuration reload operation. File
+saves alone leave the loaded generation unchanged.
 
 ## Startup sequence
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v5)
+  -> initialize (App Server protocol v6)
   -> session/create or choose a durable Session
   -> session/attach (authoritative snapshot, cursor, subscription)
   -> interactive
@@ -514,7 +490,7 @@ The selector searches the model reference *and* useful metadata the catalog
 publishes — protocol, modalities, capabilities, reasoning profiles, and
 limits. It preserves configured, effective, and attempt-frozen identities and
 shows the highlighted row's effective facts exactly as published. The client
-does not read `models.toml`, infer provider behavior from a model prefix, or
+does not read `rustx.toml`, infer provider behavior from a model prefix, or
 invent a reasoning scale. Selecting a row calls the canonical dispatcher
 `settings/setModel` path; subsequent events publish the effective model without
 process replacement.

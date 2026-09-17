@@ -496,39 +496,25 @@ impl ConversationToolRuntime {
                 event_sink: config.event_sink,
             },
         );
-        // The Todo extension's materialization seam (Issue #259). The task
-        // list is conversation state that was already published as canonical
-        // tool results, so it is *rebuilt* here rather than restored from a
-        // second persistence path: whatever the last committed `todo` result
-        // said the list was, it still is. A conversation with no such result
-        // opens with an empty list.
-        //
-        // A composition without the extension does not read that history at
-        // all — not even read-only. Reconstruction exists to serve a current
-        // Todo authority, and this runtime has none; the canonical results
-        // stay exactly where they are, as historical facts of the
-        // conversation, and a later launch that composes Todo again rebuilds
-        // the same latest accepted snapshot from them without replaying a
-        // single mutation.
-        let todos = match config.extensions.todo() {
-            None => None,
-            Some(crate::extensions::TodoExtensionConfig {}) => Some(
-                ConversationTodoList::rebuilt(
-                    conversation_id.clone(),
-                    &durable_binding
-                        .full_store()
-                        .load_canonical()
-                        .map_err(|error| {
-                            ConversationRuntimeError::DurableConversation(error.to_string())
-                        })?,
-                )
-                .map_err(ConversationRuntimeError::TodoList)?,
-            ),
-        };
-        let goal = config
-            .extensions
-            .goal()
-            .map(|_| crate::goal::GoalDomain::new(durable_binding.full_store(), mailbox.wake()));
+        // Conversation state survives Plugin selection changes. Owning this
+        // state grants no model capability; each generation selects its Plugin
+        // Tool surfaces independently.
+        let todos = Some(
+            ConversationTodoList::rebuilt(
+                conversation_id.clone(),
+                &durable_binding
+                    .full_store()
+                    .load_canonical()
+                    .map_err(|error| {
+                        ConversationRuntimeError::DurableConversation(error.to_string())
+                    })?,
+            )
+            .map_err(ConversationRuntimeError::TodoList)?,
+        );
+        let goal = Some(crate::goal::GoalDomain::new(
+            durable_binding.full_store(),
+            mailbox.wake(),
+        ));
         Ok(Self {
             uploads: None,
             _lifecycle: config.lifecycle,
@@ -656,30 +642,15 @@ impl ConversationToolRuntime {
         )
     }
 
-    /// This conversation's complete model Tool set: `ordinary` composed with
-    /// the extension Tools this runtime's frozen composition materialized
-    /// (Issue #259).
-    ///
-    /// The two planes are composed exactly as the capability coordinator
-    /// composes them, and the composition is named by the conversation whose
-    /// state backs it: there is no way to obtain one conversation's extension
-    /// Tools and register them somewhere unrelated.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first [`ToolRegistryError`] the composition violates — in
-    /// practice, an identity collision between an ordinary Tool and an
-    /// extension-provided one.
-    ///
-    /// [`ToolRegistryError`]: crate::tools::executor::ToolRegistryError
-    pub fn compose_model_tools(
+    #[must_use]
+    pub fn extension_tool_plane_for(
         &self,
-        ordinary: crate::tools::executor::ToolRegistry,
-    ) -> Result<crate::tools::executor::ToolRegistry, crate::tools::executor::ToolRegistryError>
-    {
-        let mut composed = ordinary;
-        self.extension_tool_plane().register_into(&mut composed)?;
-        Ok(composed)
+        profile: &crate::extensions::NativeAgentExtensions,
+    ) -> crate::extensions::ExtensionToolPlane {
+        crate::extensions::ExtensionToolPlane::of_materialized_owners(
+            self.todos.as_ref().filter(|_| profile.todo().is_some()),
+            self.goal.as_ref().filter(|_| profile.goal().is_some()),
+        )
     }
 
     /// Process-local Workflow read authority shared with the native orchestrator.
@@ -939,7 +910,7 @@ mod tests {
     fn construction_validates_the_workspace_root() {
         let dir = tempfile::tempdir().expect("temp dir");
         let runtime = ConversationToolRuntime::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             &dir,
             dir.path().join("artifacts"),
         );
@@ -949,17 +920,20 @@ mod tests {
         );
         fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let runtime = ConversationToolRuntime::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             dir.path().join("workspace"),
             dir.path().join("artifacts"),
         )
         .expect("runtime");
-        assert_eq!(runtime.conversation_id(), &ConversationId::new("conv-1"));
+        assert_eq!(
+            runtime.conversation_id(),
+            &ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18")
+        );
         assert!(runtime.workspace().root().is_dir());
         assert!(runtime.artifacts().root().is_dir());
         assert_eq!(
             runtime.mailbox().conversation_id(),
-            &ConversationId::new("conv-1")
+            &ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18")
         );
     }
 
@@ -967,8 +941,12 @@ mod tests {
     fn artifact_root_equal_to_workspace_is_rejected() {
         let dir = tempfile::tempdir().expect("temp dir");
         fs::create_dir_all(&dir).expect("create");
-        let error = ConversationToolRuntime::new(ConversationId::new("conv-1"), &dir, &dir)
-            .expect_err("equal roots must be rejected");
+        let error = ConversationToolRuntime::new(
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+            &dir,
+            &dir,
+        )
+        .expect_err("equal roots must be rejected");
         assert!(matches!(
             error,
             ConversationRuntimeError::OverlappingStorage { .. }
@@ -980,7 +958,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let error = ConversationToolRuntime::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             dir.path().join("workspace"),
             dir.path().join("workspace/artifacts"),
         )
@@ -996,7 +974,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         fs::create_dir_all(dir.path().join("artifacts/workspace")).expect("create");
         let error = ConversationToolRuntime::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             dir.path().join("artifacts/workspace"),
             dir.path().join("artifacts"),
         )
@@ -1019,7 +997,7 @@ mod tests {
         )
         .expect("symlink");
         let error = ConversationToolRuntime::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             dir.path().join("workspace"),
             dir.path().join("linked-artifacts"),
         )
@@ -1043,7 +1021,7 @@ mod tests {
         )
         .expect("symlink");
         let error = ConversationToolRuntime::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             dir.path().join("workspace"),
             dir.path().join("artifacts"),
         )
@@ -1072,7 +1050,7 @@ mod tests {
         )
         .expect("symlink");
         let error = ConversationToolRuntime::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             dir.path().join("workspace"),
             dir.path().join("artifacts"),
         )
@@ -1102,7 +1080,7 @@ mod tests {
         )
         .expect("symlink");
         let error = ConversationToolRuntime::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             dir.path().join("workspace"),
             dir.path().join("artifacts"),
         )
@@ -1127,7 +1105,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let runtime = ConversationToolRuntime::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             dir.path().join("workspace"),
             dir.path().join("artifacts"),
         )
@@ -1162,7 +1140,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let first = ConversationToolRuntime::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             dir.path().join("workspace"),
             dir.path().join("artifacts"),
         )
@@ -1174,7 +1152,7 @@ mod tests {
         drop(first);
 
         let second = ConversationToolRuntime::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             dir.path().join("workspace"),
             dir.path().join("artifacts"),
         )
@@ -1199,7 +1177,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let runtime = ConversationToolRuntime::new(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             dir.path().join("workspace"),
             dir.path().join("artifacts"),
         )
@@ -1216,11 +1194,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let store = std::sync::Arc::new(
-            SqliteConversationStore::in_memory(ConversationId::new("conv-A")).expect("store"),
+            SqliteConversationStore::in_memory(ConversationId::new(
+                "conv_9daa9c30-9f88-76a8-833e-4cfe6b80c7ae",
+            ))
+            .expect("store"),
         );
         let binding = ConversationStoreBinding::new(store.clone());
         let runtime = ConversationToolRuntime::from_config(
-            ConversationId::new("conv-A"),
+            ConversationId::new("conv_9daa9c30-9f88-76a8-833e-4cfe6b80c7ae"),
             ConversationRuntimeConfig {
                 durable_binding: Some(binding),
                 ..ConversationRuntimeConfig::new(
@@ -1256,10 +1237,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let store = std::sync::Arc::new(
-            SqliteConversationStore::in_memory(ConversationId::new("conv-B")).expect("store"),
+            SqliteConversationStore::in_memory(ConversationId::new(
+                "conv_530bdfb5-8243-79aa-8d17-20f3da5355fc",
+            ))
+            .expect("store"),
         );
         let error = ConversationToolRuntime::from_config(
-            ConversationId::new("conv-A"),
+            ConversationId::new("conv_9daa9c30-9f88-76a8-833e-4cfe6b80c7ae"),
             ConversationRuntimeConfig {
                 durable_binding: Some(ConversationStoreBinding::new(store)),
                 ..ConversationRuntimeConfig::new(
@@ -1282,14 +1266,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let runtime = ConversationToolRuntime::new(
-            ConversationId::new("conv-A"),
+            ConversationId::new("conv_9daa9c30-9f88-76a8-833e-4cfe6b80c7ae"),
             dir.path().join("workspace"),
             dir.path().join("artifacts"),
         )
         .expect("runtime");
         assert_eq!(
             runtime.mailbox().conversation_id(),
-            &ConversationId::new("conv-A"),
+            &ConversationId::new("conv_9daa9c30-9f88-76a8-833e-4cfe6b80c7ae"),
             "the canonical mailbox belongs to the runtime's own conversation"
         );
     }

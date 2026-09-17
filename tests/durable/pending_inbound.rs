@@ -68,8 +68,11 @@ fn agent(text: &str) -> InboundDraft {
 fn file_store() -> (SqliteConversationStore, std::path::PathBuf) {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("inbound.db");
-    let store =
-        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("open store");
+    let store = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("open store");
     // Leak the temp dir so the file survives this scope; tests reopen it.
     std::mem::forget(dir);
     (store, path)
@@ -96,8 +99,11 @@ fn accepted_inbound_survives_reopen_before_adoption() {
     );
     drop(store);
 
-    let reopened =
-        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen store");
+    let reopened = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("reopen store");
     let pending = reopened.load_pending().expect("load pending");
     assert_eq!(pending.len(), 3);
     assert_eq!(pending[0].message_id, accepted[0].message_id);
@@ -137,17 +143,29 @@ fn mixed_provenance_uses_one_durable_sequence_domain() {
     store.accept_inbound(agent("c")).expect("agent");
     drop(store);
 
-    let reopened =
-        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let reopened = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("reopen");
     let pending = reopened.load_pending().expect("load");
     assert_eq!(
         pending.iter().map(|i| i.sequence.get()).collect::<Vec<_>>(),
         vec![1, 2, 3],
         "committed order is stable across reopen"
     );
-    assert_eq!(pending[0].message_id.as_str(), "conv-1-inbound-1");
-    assert_eq!(pending[1].message_id.as_str(), "conv-1-inbound-2");
-    assert_eq!(pending[2].message_id.as_str(), "conv-1-inbound-3");
+    assert_eq!(
+        pending[0].message_id.as_str(),
+        "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-inbound-1"
+    );
+    assert_eq!(
+        pending[1].message_id.as_str(),
+        "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-inbound-2"
+    );
+    assert_eq!(
+        pending[2].message_id.as_str(),
+        "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-inbound-3"
+    );
     let _ = path;
 }
 
@@ -156,7 +174,10 @@ fn mixed_provenance_uses_one_durable_sequence_domain() {
 #[test]
 fn finite_watermark_excludes_post_watermark_arrivals() {
     let store = Arc::new(
-        SqliteConversationStore::in_memory(ConversationId::new("conv-1")).expect("in-memory"),
+        SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ))
+        .expect("in-memory"),
     );
     store.accept_inbound(human("A")).expect("A");
     store.accept_inbound(human("B")).expect("B");
@@ -179,7 +200,10 @@ fn finite_watermark_excludes_post_watermark_arrivals() {
         .expect("remaining");
     assert_eq!(remaining.watermark.get(), 3);
     assert_eq!(remaining.items.len(), 1);
-    assert_eq!(remaining.items[0].message_id.as_str(), "conv-1-inbound-3");
+    assert_eq!(
+        remaining.items[0].message_id.as_str(),
+        "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-inbound-3"
+    );
 }
 
 /// Crash before adoption leaves the item pending; crash after adoption leaves
@@ -201,8 +225,11 @@ fn adoption_is_atomic_and_exactly_once_across_reopen() {
 
     // Crash after the adoption commit: canonical owns both messages exactly
     // once and they are no longer independently re-adoptable.
-    let reopened =
-        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let reopened = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("reopen");
     assert!(
         reopened.load_pending().expect("load pending").is_empty(),
         "no pending record survives adoption"
@@ -215,8 +242,8 @@ fn adoption_is_atomic_and_exactly_once_across_reopen() {
             .map(rustx::conversation::message_id_of)
             .collect::<Vec<_>>(),
         vec![
-            MessageId::new("conv-1-inbound-1"),
-            MessageId::new("conv-1-inbound-2"),
+            MessageId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-inbound-1"),
+            MessageId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-inbound-2"),
         ],
         "each adopted inbound is a distinct canonical message in sequence order"
     );
@@ -237,7 +264,10 @@ fn adoption_is_atomic_and_exactly_once_across_reopen() {
 #[test]
 fn producer_correlation_retry_is_exactly_once() {
     let store = Arc::new(
-        SqliteConversationStore::in_memory(ConversationId::new("conv-1")).expect("in-memory"),
+        SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ))
+        .expect("in-memory"),
     );
     let draft = InboundDraft {
         message_id: Some(MessageId::new("background-exec_1-terminal")),
@@ -288,7 +318,10 @@ fn producer_correlation_retry_is_exactly_once() {
 #[test]
 fn failed_acceptance_leaves_nothing() {
     let store = Arc::new(
-        SqliteConversationStore::in_memory(ConversationId::new("conv-1")).expect("in-memory"),
+        SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ))
+        .expect("in-memory"),
     );
     // Empty content is rejected before any durable work.
     let empty = InboundDraft {
@@ -303,7 +336,9 @@ fn failed_acceptance_leaves_nothing() {
     // nothing.
     store.accept_inbound(human("ok")).expect("ok");
     let duplicate = InboundDraft {
-        message_id: Some(MessageId::new("conv-1-inbound-1")),
+        message_id: Some(MessageId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-inbound-1",
+        )),
         ..human("duplicate")
     };
     assert!(matches!(
@@ -354,24 +389,37 @@ fn store_identity_binds_on_create_and_rejects_a_mismatched_reopen() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("inbound.db");
     // First open binds the database to conv-A.
-    let store = SqliteConversationStore::open(ConversationId::new("conv-A"), &path).expect("open");
+    let store = SqliteConversationStore::open(
+        ConversationId::new("conv_9daa9c30-9f88-76a8-833e-4cfe6b80c7ae"),
+        &path,
+    )
+    .expect("open");
     store.accept_inbound(human("hi")).expect("accept");
     drop(store);
     // Reopen as conv-A succeeds with the original data intact.
-    let reopened =
-        SqliteConversationStore::open(ConversationId::new("conv-A"), &path).expect("reopen");
+    let reopened = SqliteConversationStore::open(
+        ConversationId::new("conv_9daa9c30-9f88-76a8-833e-4cfe6b80c7ae"),
+        &path,
+    )
+    .expect("reopen");
     assert_eq!(reopened.load_pending().expect("load").len(), 1);
     drop(reopened);
     // Reopen as conv-B is a typed failure.
-    let mismatch = SqliteConversationStore::open(ConversationId::new("conv-B"), &path);
+    let mismatch = SqliteConversationStore::open(
+        ConversationId::new("conv_530bdfb5-8243-79aa-8d17-20f3da5355fc"),
+        &path,
+    );
     assert!(matches!(
         mismatch,
         Err(ConversationStoreError::ConversationIdMismatch { stored, requested })
-            if stored == ConversationId::new("conv-A") && requested == ConversationId::new("conv-B")
+            if stored == ConversationId::new("conv_9daa9c30-9f88-76a8-833e-4cfe6b80c7ae") && requested == ConversationId::new("conv_530bdfb5-8243-79aa-8d17-20f3da5355fc")
     ));
     // No mutation: conv-A still owns its accepted pending item.
-    let again =
-        SqliteConversationStore::open(ConversationId::new("conv-A"), &path).expect("reopen A");
+    let again = SqliteConversationStore::open(
+        ConversationId::new("conv_9daa9c30-9f88-76a8-833e-4cfe6b80c7ae"),
+        &path,
+    )
+    .expect("reopen A");
     assert_eq!(
         again.load_pending().expect("load").len(),
         1,
@@ -386,7 +434,11 @@ fn store_identity_binds_on_create_and_rejects_a_mismatched_reopen() {
 fn canonical_ledger_preserves_intervening_assistant_and_tool_facts_across_reopen() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("inbound.db");
-    let store = SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    let store = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("open");
     // Initial canonical prefix.
     store
         .initialize(&[MessageBlock::User(
@@ -419,8 +471,11 @@ fn canonical_ledger_preserves_intervening_assistant_and_tool_facts_across_reopen
 
     // Reopen: the durable ledger is the complete ordered prefix, never a
     // filtered subsequence.
-    let reopened =
-        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let reopened = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("reopen");
     let canonical = reopened.load_canonical().expect("load canonical");
     let ids: Vec<String> = canonical
         .iter()
@@ -430,10 +485,10 @@ fn canonical_ledger_preserves_intervening_assistant_and_tool_facts_across_reopen
         ids,
         vec![
             "msg-user-0",
-            "conv-1-inbound-1",
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-inbound-1",
             "assistant-1",
             "tool-1",
-            "conv-1-inbound-2",
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-inbound-2",
         ],
         "the durable ledger is the exact canonical ordering"
     );
@@ -459,19 +514,29 @@ fn initialize_verifies_the_initial_history() {
             timestamp: None,
         },
     )];
-    let store = SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    let store = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("open");
     store.initialize(&initial).expect("seed");
     drop(store);
 
     // A matching re-supply is accepted.
-    let reopened =
-        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let reopened = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("reopen");
     reopened.initialize(&initial).expect("matching seed");
     drop(reopened);
 
     // A mismatched re-supply is a typed failure, not a silent ignore.
-    let reopened =
-        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let reopened = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("reopen");
     let mismatch = reopened.initialize(&[MessageBlock::User(
         rustx::message::types::UserMessageBlock {
             id: MessageId::new("msg-user-OTHER"),
@@ -551,8 +616,11 @@ fn a_seeded_lineage_keeps_canonical_facts_its_surface_does_not_show() {
     let seed = LineageSeed::replayed(canonical.clone(), surface_history.clone())
         .expect("a Surface history over the seeded Ledger");
 
-    let store =
-        SqliteConversationStore::open(ConversationId::new("conv-seeded"), &path).expect("open");
+    let store = SqliteConversationStore::open(
+        ConversationId::new("conv_3fa2e4ba-1bce-77e9-8bb7-54fdaf29d519"),
+        &path,
+    )
+    .expect("open");
     store.initialize_lineage(&seed).expect("seed the lineage");
 
     assert_eq!(
@@ -589,8 +657,11 @@ fn a_seeded_lineage_keeps_canonical_facts_its_surface_does_not_show() {
     // Reopening re-supplies the canonical half. The projection is durable
     // state the store already holds, so there is nothing to contradict.
     drop(store);
-    let reopened =
-        SqliteConversationStore::open(ConversationId::new("conv-seeded"), &path).expect("reopen");
+    let reopened = SqliteConversationStore::open(
+        ConversationId::new("conv_3fa2e4ba-1bce-77e9-8bb7-54fdaf29d519"),
+        &path,
+    )
+    .expect("reopen");
     assert_eq!(
         reopened
             .load_bootstrap_history()
@@ -763,7 +834,11 @@ fn initial_history_identity_is_exact() {
     let original = vec![user("msg-a", "A"), user("msg-b", "B")];
 
     // First bootstrap establishes the identity (and the seed rows).
-    let store = SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    let store = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("open");
     store.initialize(&original).expect("first bootstrap");
     // Grow the durable Ledger beyond the bootstrap boundary, exactly as
     // live execution does (adopted inbound, assistant facts, ...).
@@ -775,8 +850,11 @@ fn initial_history_identity_is_exact() {
 
     // Reopen with the exact original: accepted even though the Ledger has
     // grown past the bootstrap boundary.
-    let reopened =
-        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let reopened = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("reopen");
     reopened
         .initialize(&original)
         .expect("the exact original initial history is accepted");
@@ -817,8 +895,11 @@ fn initial_history_identity_is_exact() {
     drop(reopened);
     // The exact original is still accepted after every rejected attempt:
     // a failed validation mutates nothing.
-    let reopened =
-        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let reopened = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("reopen");
     reopened
         .initialize(&original)
         .expect("rejected validations never consume the identity");
@@ -842,15 +923,22 @@ fn empty_initial_history_is_an_explicit_bootstrap_identity() {
     let path = dir.path().join("inbound.db");
 
     // First bootstrap with an explicitly empty initial history.
-    let store = SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    let store = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("open");
     store
         .initialize(&[])
         .expect("an empty initial history is a valid bootstrap");
     drop(store);
 
     // Reopen: empty matches the recorded empty bootstrap exactly.
-    let reopened =
-        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let reopened = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("reopen");
     reopened
         .initialize(&[])
         .expect("the recorded empty bootstrap accepts an empty re-supply");
@@ -872,7 +960,11 @@ fn empty_initial_history_is_an_explicit_bootstrap_identity() {
 fn ledger_without_bootstrap_identity_fails_closed() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("inbound.db");
-    let store = SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    let store = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .expect("open");
     // Build canonical content without ever seeding (accepted + adopted
     // inbound appends to the Ledger directly).
     store.accept_inbound(human("A")).expect("accept A");
@@ -898,7 +990,10 @@ fn ledger_without_bootstrap_identity_fails_closed() {
 #[test]
 fn correlation_conflict_is_rejected_typed() {
     let store = Arc::new(
-        SqliteConversationStore::in_memory(ConversationId::new("conv-1")).expect("in-memory"),
+        SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ))
+        .expect("in-memory"),
     );
     let base = InboundDraft {
         message_id: Some(MessageId::new("background-exec_1-terminal")),
@@ -1081,8 +1176,11 @@ fn mutation_competing_edits_have_one_cas_winner_across_connections() {
     let threads: Vec<_> = ["A", "B"]
         .into_iter()
         .map(|text| {
-            let store =
-                SqliteConversationStore::open(ConversationId::new("conv-1"), &path).unwrap();
+            let store = SqliteConversationStore::open(
+                ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+                &path,
+            )
+            .unwrap();
             let barrier = barrier.clone();
             let expected = pending_ref(&accepted);
             std::thread::spawn(move || {
@@ -1166,7 +1264,11 @@ fn mutation_response_loss_and_reopen_expose_exact_committed_outcome() {
         .unwrap();
     let _ = store.remove_pending(&pending_ref(&removed)).unwrap();
     drop(store);
-    let reopened = SqliteConversationStore::open(ConversationId::new("conv-1"), &path).unwrap();
+    let reopened = SqliteConversationStore::open(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        &path,
+    )
+    .unwrap();
     let pending = reopened.load_pending().unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].message.content, text_blocks("durable"));
@@ -1201,7 +1303,10 @@ fn mutation_failed_sql_transaction_changes_neither_payload_nor_revision() {
 fn mutation_exact_identity_isolates_conversations_and_protects_typed_content() {
     use rustx::durable::inbox::PendingMutationOutcome as Outcome;
     let (store, _) = file_store();
-    let other = SqliteConversationStore::in_memory(ConversationId::new("other")).unwrap();
+    let other = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_d9298a10-d1b0-7358-87dc-4bd85dac641b",
+    ))
+    .unwrap();
     let accepted = store.accept_inbound(human("A")).unwrap();
     let other_accepted = other.accept_inbound(human("B")).unwrap();
     assert_eq!(
@@ -1238,7 +1343,11 @@ fn mutation_concurrent_edit_remove_and_two_removes_have_one_winner() {
     for edit in [true, false] {
         let (store, path) = file_store();
         let accepted = store.accept_inbound(human("old")).unwrap();
-        let other = SqliteConversationStore::open(ConversationId::new("conv-1"), &path).unwrap();
+        let other = SqliteConversationStore::open(
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+            &path,
+        )
+        .unwrap();
         let barrier = Arc::new(std::sync::Barrier::new(2));
         let contender = {
             let barrier = barrier.clone();

@@ -103,6 +103,7 @@ fn try_config(
 {
     let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
     let conversation_runtime = ConversationRuntime::new(RuntimeConversationConfig {
+        explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: support::model::scripted_session_model(model),
         approval_mode: rustx::runtime::ApprovalMode::Policy,
@@ -261,7 +262,7 @@ fn text(text: &str) -> Vec<rustx::message::types::UserContentBlock> {
 /// clone is not a second bindable runtime.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cloning_a_tool_runtime_does_not_create_a_new_binding_identity() {
-    let bundle = new_bundle("conv-37-bind-clone").await;
+    let bundle = new_bundle("conv_978c7a00-2dc9-77bb-883d-e0ffc411cb3c").await;
     let clone = bundle.runtime.clone();
     let second_clone = clone.clone();
     assert!(!bundle.runtime.is_runtime_client_bound());
@@ -286,7 +287,10 @@ async fn cloning_a_tool_runtime_does_not_create_a_new_binding_identity() {
     assert!(bundle.runtime.is_runtime_client_bound());
     assert!(clone.is_runtime_client_bound());
     assert!(bundle.coordinator.is_runtime_client_bound());
-    assert_eq!(runtime.conversation_id().as_str(), "conv-37-bind-clone");
+    assert_eq!(
+        runtime.conversation_id().as_str(),
+        "conv_978c7a00-2dc9-77bb-883d-e0ffc411cb3c"
+    );
 }
 
 /// A second host over a clone of the same runtime identity is rejected with
@@ -297,7 +301,7 @@ async fn cloning_a_tool_runtime_does_not_create_a_new_binding_identity() {
 #[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() {
-    let bundle = new_bundle("conv-37-bind-reject").await;
+    let bundle = new_bundle("conv_393348a9-8841-75ff-87c1-ba2c77dfe158").await;
     let model = Arc::new(FakeModel::new(vec![one_turn_stop(), one_turn_stop()]));
     let (runtime, host_config) = config(
         bundle.runtime.clone(),
@@ -324,7 +328,10 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
     });
     match rejected {
         Err(HostConstructionError::RuntimeClientAlreadyBound { conversation_id }) => {
-            assert_eq!(conversation_id.as_str(), "conv-37-bind-reject");
+            assert_eq!(
+                conversation_id.as_str(),
+                "conv_393348a9-8841-75ff-87c1-ba2c77dfe158"
+            );
         }
         Err(HostConstructionError::ObservationBridgeAlreadyInstalled { .. }) => {
             panic!("the binding claim must reject a second host before the bridge")
@@ -412,7 +419,10 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
     .await
     .expect("the runtime settlement handoff must complete before reload");
     write_skill(&bundle.dir.path().join("workspace"), "binding-skill");
-    let committed = runtime.reload_resources().await.expect("resource reload");
+    let committed = runtime
+        .reload_configuration()
+        .await
+        .expect("resource reload");
     // The background registry transition is published under the registry's
     // ownership commit, so its arrival at the observer is exact.
     let background_id = dispatch_background(&bundle.runtime);
@@ -471,7 +481,7 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
 /// runtime identity is required — and is accepted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dropping_the_host_never_rebinds_the_runtime_identity() {
-    let bundle = new_bundle("conv-37-bind-lifetime").await;
+    let bundle = new_bundle("conv_a84801f6-efc4-7057-a622-44f40e7c36b0").await;
     let (runtime, host_config) = config(
         bundle.runtime.clone(),
         bundle.coordinator.clone(),
@@ -502,14 +512,14 @@ async fn dropping_the_host_never_rebinds_the_runtime_identity() {
             rebind,
             Err(rustx::runtime::ConversationRuntimeError::RuntimeAlreadyBound {
                 conversation_id,
-            }) if conversation_id.as_str() == "conv-37-bind-lifetime"
+            }) if conversation_id.as_str() == "conv_a84801f6-efc4-7057-a622-44f40e7c36b0"
         ),
         "a surviving runtime bundle is never rebound: recovery policy is not a host-binding concern"
     );
 
     // A genuinely fresh runtime identity binds normally, even under the
     // same conversation id.
-    let fresh = new_bundle("conv-37-bind-lifetime").await;
+    let fresh = new_bundle("conv_a84801f6-efc4-7057-a622-44f40e7c36b0").await;
     assert!(!fresh.runtime.is_runtime_client_bound());
     let (fresh_runtime, fresh_host_config) = config(
         fresh.runtime.clone(),
@@ -527,7 +537,7 @@ async fn dropping_the_host_never_rebinds_the_runtime_identity() {
 /// attachment on the same host, and yields a fresh attachment identity.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reconnect_replaces_the_attachment_not_the_host() {
-    let bundle = new_bundle("conv-37-bind-reconnect").await;
+    let bundle = new_bundle("conv_090b02e3-c92a-7a0d-a2ef-7550fd8604bb").await;
     let (runtime, host_config) = config(
         bundle.runtime.clone(),
         bundle.coordinator.clone(),
@@ -616,7 +626,7 @@ async fn await_message_committed(
 /// admitted attempt.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_host_conversation_identity_is_the_tool_runtime_identity() {
-    let bundle = new_bundle("conv-37-authority").await;
+    let bundle = new_bundle("conv_8be1e7cd-b2fb-777b-9ef7-7c224acce42c").await;
     let model = Arc::new(FakeModel::new(vec![one_turn_stop()]));
     let (runtime, host_config) = config(
         bundle.runtime.clone(),

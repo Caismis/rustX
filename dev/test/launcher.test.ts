@@ -27,14 +27,14 @@ function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-dev-test-'));
   const a = join(directory, 'workspace with spaces'), b = join(directory, 'second');
   mkdirSync(a); mkdirSync(b); writeFileSync(join(a, 'user-owned'), 'keep');
-  const args = parseArguments(['web', '--binary', process.execPath, '--user-settings', '/settings with spaces.toml', '--runtime-root', '/runtime with spaces', '--workspace', a, '--workspace', b], root);
+  const args = parseArguments(['web', '--binary', process.execPath, '--config', '/settings with spaces.toml', '--runtime-root', '/runtime with spaces', '--workspace', a, '--workspace', b], root);
   return { directory, a, b, args, remove: () => rmSync(directory, { recursive: true, force: true }) };
 }
 
 test('composition grammar consumes only owned options; native values remain opaque', () => {
-  const result = parseArguments(['app-server', '--', '--binary', process.execPath, '--user-settings', '/a b', '--models', '--binary', '--runtime-root', '/r'], root);
+  const result = parseArguments(['app-server', '--', '--binary', process.execPath, '--config', '/a b', '--model', '--binary', '--runtime-root', '/r'], root);
   assert.equal(result.binary, process.execPath);
-  assert.deepEqual(result.forwarded, ['--user-settings', '/a b', '--models', '--binary', '--runtime-root', '/r']);
+  assert.deepEqual(result.forwarded, ['--config', '/a b', '--model', '--binary', '--runtime-root', '/r']);
   assert.equal(parseArguments(['app-server'], root).binary, join(root, 'target/debug/rustx'));
   for (const argv of [[], ['invalid'], ['web'], ['web', '--workspace'], ['web', '--workspace', 'relative'], ['web', '--listen', 'ws://x'], ['web', '--token-file', '/x'], ['app-server', '--binary'], ['app-server', '--binary', '/a', '--binary', '/b']]) {
     assert.throws(() => parseArguments(argv, root));
@@ -43,7 +43,7 @@ test('composition grammar consumes only owned options; native values remain opaq
 
 test('App Server invokes the selected native executable with exact configuration arguments and propagates failure', async () => {
   const h = harness(), launcher = new Launcher(root, h.spawn);
-  const forwarded = ['--user-settings', '/path with spaces', '--models', '/models', '--runtime-root', '/runtime', '--listen', 'stdio'];
+  const forwarded = ['--config', '/path with spaces', '--model', 'default', '--runtime-root', '/runtime', '--listen', 'stdio'];
   await launcher.start(parseArguments(['app-server', '--binary', process.execPath, ...forwarded], root));
   const child = h.calls[0];
   assert.equal(child.spec.command, process.execPath);
@@ -56,14 +56,15 @@ test('App Server invokes the selected native executable with exact configuration
 
 test('TUI delegates unchanged arguments to the existing composition root and native host contract', async () => {
   const h = harness(), launcher = new Launcher(root, h.spawn);
-  const forwarded = ['--user-settings', '/settings', '--models', '/models', '--runtime-root', '/runtime', '--workspace', '/workspace with spaces', '--resume'];
+  const forwarded = ['--config', '/user/rustx.toml', '--model', 'default', '--runtime-root', '/runtime', '--workspace', '/workspace with spaces', '--resume'];
   await launcher.start(parseArguments(['tui', '--binary', process.execPath, ...forwarded], root));
   const child = h.calls[0];
   assert.equal(child.spec.command, process.execPath);
   assert.deepEqual(child.spec.args, [join(root, 'tui/src/main.ts'), '--binary', process.execPath, ...forwarded]);
   const parsed = parseTui(child.spec.args.slice(1));
-  assert.deepEqual(parsed.mode, { kind: 'local', binary: process.execPath, launch: { userSettings: '/settings', models: '/models', runtimeRoot: '/runtime' } });
+  assert.deepEqual(parsed.mode, { kind: 'local', binary: process.execPath, launch: { config: '/user/rustx.toml', runtimeRoot: '/runtime' } });
   assert.equal(parsed.sessionSettings.cwd, '/workspace with spaces');
+  assert.deepEqual(parsed.sessionSettings.model, { model: 'default' });
   assert.throws(() => parseTui(['--binary', process.execPath, '--unknown']), /unknown/);
   assert.throws(() => parseTui(['--binary', process.execPath, '--cwd', '/obsolete']), /unknown/);
   const stopping = launcher.settle(0); child.reap.resolve(); await stopping;
@@ -202,7 +203,7 @@ for (const [forwarded, expected] of [
   [['--listen', 'stdio'], 'shutdown-on-eof'],
   [['--listen', 'ws://127.0.0.1:8080'], undefined],
   [['--help'], undefined],
-  [['--models', '--listen'], 'shutdown-on-eof'],
+  [['--model', '--listen'], 'shutdown-on-eof'],
 ] as const) test(`standalone transport ownership is explicit for ${JSON.stringify(forwarded)}`, async () => {
   const h = harness(), launcher = new Launcher(root, h.spawn);
   await launcher.start(parseArguments(['app-server', '--binary', process.execPath, ...forwarded], root));

@@ -502,7 +502,7 @@ async fn write_and_edit_follow_final_component_symlinks_without_replacing_the_li
 #[tokio::test]
 async fn managed_output_is_readable_but_model_mutation_cannot_replace_a_live_inode() {
     let fixture = native_fixture();
-    let execution_id = ToolExecutionId::background(91);
+    let execution_id = ToolExecutionId::new("exec_01900000-0000-7000-8000-00000000005b");
     let advertised = fixture
         .runtime
         .tool_output()

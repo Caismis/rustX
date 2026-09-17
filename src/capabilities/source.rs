@@ -87,7 +87,7 @@ mod tests {
             let config: crate::local_runtime::config::CurrentRuntimeConfig =
                 serde_json::from_value(serde_json::json!({
                     "agent": {"model": {"model":"local/test"}},
-                    "mcpServers": {name: {"command":"unused", "enabled":true}}
+                    "mcpServers": {name: {"command":"unused"}}
                 }))
                 .unwrap();
             let bindings = config.mcp_bindings();

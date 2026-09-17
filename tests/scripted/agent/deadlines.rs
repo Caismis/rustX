@@ -44,7 +44,7 @@ use rustx::tools::types::ToolCallStart;
 use support::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
 use support::fake::{FakeModel, FakeStep, fake_model, model_release};
 
-const CONVERSATION: &str = "conv-135";
+const CONVERSATION: &str = "conv_27183d89-efe9-768e-8a3d-58ea962d8013";
 
 fn conversation() -> ConversationId {
     ConversationId::new(CONVERSATION)
@@ -251,6 +251,7 @@ async fn runtime_with_manual_clock(
         ));
     let runtime = ConversationRuntime::with_test_monotonic_clock(
         RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-135-shared-clock"),
             model: support::model::scripted_session_model(adapter),
             approval_mode: rustx::runtime::ApprovalMode::Policy,
@@ -1239,7 +1240,7 @@ async fn runtime_composition_shares_one_clock_between_primary_and_summarizer() {
     let (summary_release, summary_release_rx) = model_release();
     let (primary_release, primary_release_rx) = model_release();
     let (_dir, runtime, model) = runtime_with_manual_clock(
-        "conv-135-shared-clock",
+        "conv_35c3f1ab-0dbc-72bb-9aec-9cef7db19762",
         vec![user("retired", &"old history ".repeat(512))],
         vec![
             vec![

@@ -45,7 +45,7 @@ fn fake(scripts: Vec<Vec<FakeStep>>) -> std::sync::Arc<FakeModel> {
 fn request(attempt: &str, model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {
         agent_id: AgentId::new("agent-a"),
-        conversation_id: ConversationId::new("conv-1"),
+        conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         attempt_id: AttemptId::new(attempt),
         conversation: rustx::conversation::ConversationState::from_messages(vec![
             MessageBlock::User(UserMessageBlock {
@@ -95,7 +95,7 @@ async fn run(
     tools: ToolRegistry,
     cancellation: &AgentCancellation,
 ) -> common::DurableExecutionAudit {
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let publication = common::RecordingPublicationObserver::default();
@@ -2493,7 +2493,7 @@ async fn conversation_mismatch_with_the_tool_runtime_is_rejected() {
     let model = fake(Vec::new());
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-other");
+    let tool_runtime = common::tool_runtime("conv_d35c96df-51dd-78bb-bf06-63356e9ff6ef");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let error = AgentExecution::new(
         request("attempt-1", &model),
@@ -2540,7 +2540,7 @@ async fn foreground_tools_with_empty_mailbox_keep_exact_behavior() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
 
     assert_trace(&result.event_history, &expected_single_tool_trace());
@@ -2608,7 +2608,7 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let controller = tokio::spawn(async move {
@@ -2725,7 +2725,7 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let controller = tokio::spawn(async move {
@@ -2814,7 +2814,7 @@ async fn stop_with_pending_inbound_does_not_settle_until_batch_consumed() {
     ]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let mut model_parked = model.parked();
@@ -2880,7 +2880,7 @@ async fn empty_snapshot_settlement_is_finite_and_never_reopens() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
 
@@ -2933,7 +2933,7 @@ async fn cancellation_before_safe_boundary_leaves_mailbox_untouched() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let controller_cancellation = cancellation.clone();
@@ -3021,7 +3021,7 @@ async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
     first_tool.register(&mut tools);
     second_tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let controller_cancellation = cancellation.clone();
@@ -3084,7 +3084,7 @@ async fn terminal_model_failure_leaves_pending_inbound_untouched() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let mut model_parked = model.parked();
@@ -3146,7 +3146,7 @@ async fn unknown_tool_failure_leaves_pending_inbound_untouched() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let mut emitted = model.emitted();
@@ -3213,7 +3213,7 @@ async fn continuation_retained_across_inbound_drain() {
     ]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let mut model_parked = model.parked();
@@ -3294,7 +3294,7 @@ async fn one_attempt_consumes_multiple_batches_at_different_boundaries() {
     first_tool.register(&mut tools);
     second_tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let controller = tokio::spawn(async move {

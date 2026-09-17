@@ -1022,7 +1022,8 @@ pub fn native_fixture_with_extensions(
     std::fs::create_dir_all(&workspace_root).expect("workspace directory");
     let artifacts = dir.path().join("artifacts");
     std::fs::create_dir_all(&artifacts).expect("artifact directory");
-    let conversation_id = rustx::runtime::identity::ConversationId::new("conv-m5");
+    let conversation_id =
+        rustx::runtime::identity::ConversationId::new("conv_161360a8-58d1-7c90-8acb-24a22e5d6832");
     let store = Arc::new(
         rustx::durable::SqliteConversationStore::open(
             conversation_id.clone(),
@@ -1058,9 +1059,10 @@ pub fn native_fixture_with_extensions(
     // backs it: the extension half is derived from the owners the tool runtime
     // just materialized, never registered from the composition a second time
     // (Issue #259).
-    let registry = runtime
-        .compose_model_tools(registry)
-        .expect("extension Tool registration");
+    runtime
+        .extension_tool_plane_for(extensions)
+        .register_into(&mut registry)
+        .expect("explicit Plugin Tool registration");
     let mailbox = runtime.mailbox();
     NativeFixture {
         _dir: dir,
@@ -1394,6 +1396,7 @@ pub async fn capability_lease(
     tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
 ) -> CapabilityFixture {
     let mut activation = rustx::capabilities::AgentActivation::default();
+    activation.profile.extensions = plugin_document(tool_runtime.extensions());
     activation.profile.tools.builtin = tools
         .definitions()
         .into_iter()
@@ -1401,6 +1404,29 @@ pub async fn capability_lease(
         .map(|tool| tool.name.clone())
         .collect();
     capability_lease_with(tools, tool_runtime, activation).await
+}
+
+/// Explicit profile input matching this fixture's deliberately composed Plugins.
+pub fn plugin_document(
+    plugins: &rustx::extensions::NativeAgentExtensions,
+) -> rustx::extensions::NativeAgentExtensionsDocument {
+    rustx::extensions::NativeAgentExtensionsDocument {
+        agent_status: plugins
+            .agent_status()
+            .map_or_else(Default::default, |status| {
+                rustx::extensions::AgentStatusExtensionDocument {
+                    enabled: true,
+                    time: status.time.clone(),
+                    background: status.background.clone(),
+                }
+            }),
+        todo: rustx::extensions::TodoExtensionDocument {
+            enabled: plugins.todo().is_some(),
+        },
+        goal: rustx::extensions::GoalExtensionDocument {
+            enabled: plugins.goal().is_some(),
+        },
+    }
 }
 
 /// The same lease, composed against an explicit ordinary activation policy
@@ -1722,17 +1748,20 @@ pub fn source_demand(
     workspace: &std::path::Path,
     names: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> rustx::capabilities::source::ToolSourceDemand {
-    let packages = std::fs::read_dir(workspace.join(".agents/tools"))
+    let workspace = rustx::tools::workspace::Workspace::new(workspace).unwrap();
+    let packages = discover_python_packages(&workspace)
+        .unwrap()
         .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().is_dir())
-        .map(|entry| {
+        .map(|package| {
+            let name = package
+                .server_id
+                .as_str()
+                .strip_prefix("python:")
+                .expect("Python identity")
+                .to_owned();
             (
-                rustx::capabilities::ToolSourceId::ManagedPython(
-                    entry.file_name().to_str().unwrap().to_owned(),
-                ),
-                entry.path(),
+                rustx::capabilities::ToolSourceId::ManagedPython(name),
+                package.outcome,
             )
         })
         .collect();
@@ -1743,3 +1772,30 @@ pub fn source_demand(
         rustx::runtime::resources::ManagedPythonCatalog::new(packages),
     )
 }
+
+/// Inert package fixtures use the same two-root catalog owner as composition.
+pub fn discover_python_packages(
+    workspace: &rustx::tools::Workspace,
+) -> Result<Vec<rustx::tools::python::DiscoveredPythonPackage>, rustx::tools::python::PythonToolError>
+{
+    rustx::local_runtime::managed_python_resources::discover(
+        workspace.root(),
+        &workspace.root().join("absent-user/.agents"),
+    )
+    .map(|catalog| {
+        catalog
+            .packages()
+            .iter()
+            .map(
+                |(source, outcome)| rustx::tools::python::DiscoveredPythonPackage {
+                    server_id: rustx::runtime::identity::McpServerId::new(source.to_string()),
+                    outcome: outcome.clone(),
+                },
+            )
+            .collect()
+    })
+    .map_err(|error| rustx::tools::python::PythonToolError::Storage(error.to_string()))
+}
+
+#[path = "identity.rs"]
+pub mod identity;

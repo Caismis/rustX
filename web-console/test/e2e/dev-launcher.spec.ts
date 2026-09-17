@@ -13,11 +13,13 @@ test('development launcher serves the real Web carrier, native App Server and ex
   const root = fileURLToPath(new URL('../../../', import.meta.url));
   const workspace = join(directory, 'workspace with spaces'); mkdirSync(workspace);
   const nested = join(workspace, 'unauthorized descendant'); mkdirSync(nested);
-  const settings = join(directory, 'settings.toml'); writeFileSync(settings, '[agent.model]\nmodel = "local/local-model"\n');
-  const models = join(directory, 'models.toml'); writeFileSync(models, `[providers.local]
+  const settings = join(directory, 'rustx.toml'); writeFileSync(settings, `[agent.model]
+model = "local/local-model"
+[providers.local]
 base_url = "http://127.0.0.1:1/v1"
 api_key = "launcher-test-unused"
-[[providers.local.models]]
+[models."local/local-model"]
+provider = "local"
 id = "local-model"
 protocol = "openai_chat_completions"
 context_window = 128000
@@ -32,7 +34,7 @@ compat = { chat_reasoning_replay = "omit" }
   });
   let scratch: string | undefined;
   try {
-    const ready = await launcher.start(parseArguments(['web', '--user-settings', settings, '--models', models,
+    const ready = await launcher.start(parseArguments(['web', '--config', settings,
       '--runtime-root', join(directory, 'runtime'), '--workspace', workspace], root));
     expect(ready).toBeDefined();
     if (!ready) throw new Error(`Launcher failed: ${await launcher.done}`);

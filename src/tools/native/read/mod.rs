@@ -374,7 +374,7 @@ mod tests {
     async fn reads_skill_files_at_their_published_host_paths() {
         let directory = tempfile::tempdir().expect("temporary root");
         let workspace = Workspace::new(directory.path()).expect("workspace");
-        let skill_root = directory.path().join("configured-skills");
+        let skill_root = directory.path().join(".agents/skills");
         let skill = skill_root.join("release-guide");
         std::fs::create_dir_all(skill.join("assets")).expect("Skill root");
         std::fs::write(
@@ -385,13 +385,13 @@ mod tests {
         std::fs::write(skill.join("assets/checklist.md"), "procedure\n").expect("asset");
         let discovered = SkillDiscovery::with_config(
             &workspace,
-            SkillDiscoveryConfig::explicit(vec![skill_root]),
+            SkillDiscoveryConfig::workspace_root(skill_root),
         )
-        .discover()
-        .expect("Skill discovery");
+        .discover();
         let snapshot = SkillSnapshot::from_discovery(discovered);
         let location = snapshot.catalog_entries()[0].location.clone();
-        let frozen_catalog = crate::skills::render_skill_catalog(snapshot.catalog_entries());
+        let frozen_catalog =
+            crate::skills::render_skill_catalog(snapshot.catalog_entries(), snapshot.roots());
         assert_eq!(
             Path::new(&location),
             // Canonical, so this holds on platforms whose temporary root is
@@ -402,7 +402,7 @@ mod tests {
             "the catalog publishes the canonical host path of SKILL.md"
         );
 
-        let conversation_id = ConversationId::new("read-skill");
+        let conversation_id = ConversationId::new("conv_ad60d32d-eec8-76ec-895d-640e87778462");
         let artifacts_root = directory.path().join("artifacts");
         let artifacts =
             ArtifactStore::new(conversation_id.clone(), &artifacts_root).expect("artifacts");
@@ -467,7 +467,7 @@ mod tests {
             "the earlier ToolResult value is not rewritten"
         );
         assert_eq!(
-            crate::skills::render_skill_catalog(snapshot.catalog_entries()),
+            crate::skills::render_skill_catalog(snapshot.catalog_entries(), snapshot.roots()),
             frozen_catalog,
             "editing a known body cannot mutate the frozen catalog"
         );
@@ -506,7 +506,7 @@ mod tests {
     fn skill_resource_symlink_escape_is_rejected_at_discovery() {
         let directory = tempfile::tempdir().expect("temporary root");
         let workspace = Workspace::new(directory.path()).expect("workspace");
-        let skill_root = directory.path().join("configured-skills");
+        let skill_root = directory.path().join(".agents/skills");
         let skill = skill_root.join("escape-guide");
         std::fs::create_dir_all(&skill).expect("Skill root");
         std::fs::write(
@@ -521,10 +521,9 @@ mod tests {
 
         let outcome = SkillDiscovery::with_config(
             &workspace,
-            SkillDiscoveryConfig::explicit(vec![skill_root]),
+            SkillDiscoveryConfig::workspace_root(skill_root),
         )
-        .discover()
-        .expect("an explicit path that exists is not a launch failure");
+        .discover();
         assert!(outcome.packages.is_empty());
         assert!(matches!(
             outcome.diagnostics.as_slice(),
@@ -570,7 +569,7 @@ mod tests {
         fn new() -> Self {
             let directory = tempfile::tempdir().expect("temporary root");
             let workspace = Workspace::new(directory.path()).expect("workspace");
-            let conversation_id = ConversationId::new("read-document");
+            let conversation_id = ConversationId::new("conv_82600fb2-6716-7582-89ab-f9b94f09c78f");
             let artifacts =
                 ArtifactStore::new(conversation_id.clone(), directory.path().join("artifacts"))
                     .expect("artifacts");

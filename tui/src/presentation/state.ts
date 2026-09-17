@@ -179,7 +179,6 @@ export interface PresentationState {
   resources: RuntimeClientResourcesView;
   /** The session's *desired* model configuration. */
   sessionModel: SessionModelView | null;
-  launchSettings: import("../protocol/app-server.ts").LaunchSettings | null;
   /**
    * The attached Agent runtime's frozen native Agent Extension composition.
    *
@@ -188,8 +187,7 @@ export interface PresentationState {
    * distinction between an absent extension and a disabled contributor lives
    * inside the value itself.
    */
-  effectiveExtensions: import("../protocol/app-server.ts").EffectiveNativeAgentExtensions | null;
-  settingsLifetimes: import("../protocol/app-server.ts").SettingsLifetimes | null;
+  effectivePlugins: import("../protocol/app-server.ts").EffectivePlugins | null;
   /** True once runtime drain begins; shutdown responses complete at quiescence. */
   runtimeShutdown: boolean;
   /**
@@ -207,11 +205,8 @@ export interface PresentationState {
    * {@link isTodoComposed} for the composition fact itself.
    */
   todos?: TodoSnapshot;
-  /** Runtime-authoritative ApprovalMode control state. */
+  /** Approval policy of the published configuration generation. */
   effectiveApprovalMode: ApprovalMode;
-  pendingApprovalMode?: ApprovalMode;
-  /** The runtime control-plane revision. An exact `u64` decimal domain. */
-  approvalModeRevision: string;
 }
 
 /** Whether the attempt is doing work the UI should show as busy. */

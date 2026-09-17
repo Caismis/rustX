@@ -23,7 +23,6 @@ import type {
   RoutedInteraction,
 } from "../src/protocol/app-server.ts";
 import {
-  compareInteractionRefs,
   reconcileInteractionFocus,
 } from "../src/presentation/interaction-focus.ts";
 import {
@@ -90,8 +89,7 @@ function surface(initial?: {
     onToggleExpand: (interaction) => recorded.expansions.push(interaction),
   });
   const interactions = (initial?.interactions ?? [approvalInteraction()])
-    .slice()
-    .sort((left, right) => compareInteractionRefs(left.interaction, right.interaction));
+    .slice();
   const focused =
     initial?.focused ?? reconcileInteractionFocus(interactions, undefined)!;
   overlay.update(
@@ -110,8 +108,7 @@ function sync(
   preferences = defaultPreferences(),
 ): InteractionRef | undefined {
   const sorted = interactions
-    .slice()
-    .sort((left, right) => compareInteractionRefs(left.interaction, right.interaction));
+    .slice();
   const focus = reconcileInteractionFocus(sorted, currentFocus);
   if (focus !== undefined) {
     overlay.update(sorted, focus, preferences);
@@ -161,12 +158,12 @@ describe("human-input surface", () => {
     const { overlay } = surface({ interactions: [approval] });
     const text = rendered(overlay);
     assert.ok(text.includes("Approval from reviewer"), "child source context");
-    assert.ok(text.includes("conv-child-1"), "child conversation context");
+    assert.ok(text.includes("conv_01900000-0000-7000-8000-000000000001"), "child conversation context");
     assert.ok(text.includes("bash"));
     assert.ok(text.includes("foreground · native · call call-1"));
     assert.ok(text.includes("native policy requires approval"));
     assert.ok(text.includes("printf original"), "bounded arguments");
-    assert.ok(text.includes("conv-child-1::attempt-1-interaction-approval-1"));
+    assert.ok(text.includes("conv_01900000-0000-7000-8000-000000000001::attempt-1-interaction-approval-1"));
   });
 
   it("opens with Deny preselected so a generic Enter can never allow", () => {
@@ -205,15 +202,15 @@ describe("human-input surface", () => {
   it("resets an armed Allow once when focus moves to another interaction", () => {
     const first = approvalInteraction("attempt-1-interaction-approval-a");
     const second = childApprovalInteraction("child-a-interaction-1");
-    const interactions = [first, second];
+    const interactions = [second, first];
     const { overlay, recorded } = surface({ interactions });
-    // Focus starts on the child approval (conv-child-1 sorts first). Arm it.
+    // The child approval is the first native publication. Arm it.
     overlay.handleInput(DOWN);
     // Navigate to the primary approval: the app moves the focus, and the
     // surface must not carry the armed selection over.
     overlay.handleInput(CTRL_DOWN);
     assert.deepEqual(recorded.navigations, [
-      { conversation_id: "conv-test", interaction_id: "attempt-1-interaction-approval-a" },
+      { conversation_id: "conv_01900000-0000-7000-8000-000000000002", interaction_id: "attempt-1-interaction-approval-a" },
     ]);
     overlay.update(interactions, recorded.navigations[0]!, defaultPreferences());
     overlay.handleInput(ENTER);
@@ -290,9 +287,9 @@ describe("human-input surface", () => {
     assert.deepEqual(
       recorded.navigations.map((interaction) => interaction.interaction_id),
       [
-        "attempt-1-interaction-approval-a",
         "attempt-1-interaction-question-b",
-        "attempt-1-interaction-approval-a",
+        "child-a-interaction-1",
+        "attempt-1-interaction-question-b",
       ],
     );
     assert.equal(recorded.decisions.length, 0);
@@ -332,19 +329,19 @@ describe("human-input surface", () => {
 
   it("advances the panel deterministically when the focused interaction settles", () => {
     const interactions = [
-      approvalInteraction("attempt-1-interaction-approval-a"),
       childApprovalInteraction("child-a-interaction-1"),
+      approvalInteraction("attempt-1-interaction-approval-a"),
     ];
     const { overlay, recorded } = surface({ interactions });
     const focused = overlay.focusedInteraction!.interaction;
-    assert.equal(focused.conversation_id, "conv-child-1");
+    assert.equal(focused.conversation_id, "conv_01900000-0000-7000-8000-000000000001");
     // The runtime settles the focused child approval; the surface follows.
     const remaining = interactions.filter(
       (entry) => entry.interaction !== focused,
     );
     const next = sync(overlay, remaining, focused);
     assert.deepEqual(next, {
-      conversation_id: "conv-test",
+      conversation_id: "conv_01900000-0000-7000-8000-000000000002",
       interaction_id: "attempt-1-interaction-approval-a",
     });
     assert.equal(recorded.decisions.length, 0, "settlement needs no local answer");
@@ -399,7 +396,7 @@ describe("human-input surface", () => {
     const approval = approvalInteraction();
     const questionnaire = childQuestionnaireInteraction("child-b-interaction-1");
     const { overlay, recorded } = surface({
-      interactions: [approval, questionnaire],
+      interactions: [questionnaire, approval],
     });
     // Focus is the child questionnaire; its rejection must not touch the
     // approval's submitting state, and vice versa.
@@ -417,7 +414,7 @@ describe("human-input surface", () => {
     const second = approvalInteraction("attempt-1-interaction-approval-b");
     const interactions = [first, second];
     const { overlay, recorded } = surface({ interactions });
-    // Focus starts on A (the smallest identity). Submit A; its response stays
+    // Focus starts on A (the first native publication). Submit A; its response stays
     // in flight until the authoritative projection removes A.
     overlay.handleInput(ENTER);
     assert.equal(recorded.decisions.length, 1);

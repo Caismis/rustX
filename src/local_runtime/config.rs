@@ -1,18 +1,11 @@
-//! The bounded explicit current runtime/project configuration (Issue #96).
-//!
-//! This is deliberately a current-runtime input, never durable Session state.
-//! It is read for every process start, including resume, so changing MCP,
-//! Skill, Tool, environment, context, native Agent Extension, or agent
-//! settings takes effect without rewriting the Session catalog. Resource
-//! reload does not reread this launch-scoped document, which is exactly why
-//! the native Agent Extension composition it declares is launch-scoped: a
-//! running `ConversationRuntime` executes against the composition frozen for
-//! its launch (Issue #256).
-//!
-//! Unknown fields are rejected everywhere. A typo must fail startup loudly
-//! rather than silently changing runtime semantics.
+//! Resolved runtime policy and complete Agent profiles for one CFG3 generation.
+//! Authored partial documents live in `authoring::RuntimeLayer`; this type is
+//! neither a file binding nor durable Session authority. Cold composition and
+//! reload resolve current User/Workspace sources before preparing this value.
+//! A published generation is immutable and contains policy, model bindings,
+//! Agent profiles, resource catalogs, and prepared finite source demand.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -30,21 +23,20 @@ use crate::runtime::identity::{AgentId, McpServerId};
 use crate::runtime::subagent::{SubagentExecutionDeadline, SubagentName};
 use crate::runtime::workflow::WorkflowId;
 use crate::runtime::workspace::WorkspacePolicy;
-use crate::skills::AutomaticSkillSource;
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentError};
 use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
 use crate::tools::native::NativeToolPolicies;
 use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy};
 
 /// The only current runtime configuration schema version this runtime accepts.
-pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 8;
+pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 9;
 
-/// The explicit current runtime/project configuration.
+/// Resolved policies and Root profile within one published configuration.
 ///
 /// No field in this type is persisted by [`SessionCatalog`](super::session::SessionCatalog).
 /// The selected Session contributes its separate [`SessionModelConfig`] state
 /// during composition. This is materialized current source/default content,
-/// frozen per Session composition, not process configuration or live state.
+/// frozen per runtime generation, not mutable Session intent.
 /// Source bindings and explicit input presence live in `configuration` owners;
 /// no complete effective value is durable Session configuration authority.
 /// See docs/launch-configuration.md for the exhaustive field ownership table.
@@ -97,75 +89,9 @@ pub struct CurrentRuntimeConfig {
     /// The current base authorized tool environment.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
-    /// The named subagent definitions and their launch-scoped capacity
-    /// (Issue #144).
+    /// Runtime-global child capacity for the published generation.
     #[serde(default)]
     pub subagents: SubagentsDocument,
-    /// The **launch-scoped** Skill source policy (Issue #280): which
-    /// automatic roots this session scans. It is deliberately not reread by
-    /// resource reload — a running composition keeps the source authorities
-    /// it was launched with, while the *contents* of those roots stay
-    /// current.
-    #[serde(default)]
-    pub skills: SkillsDocument,
-}
-
-/// The session-level Skill source policy.
-///
-/// ```toml
-/// [skills]
-/// sources = ["global", "workspace"]
-/// ```
-///
-/// This decides **where Skill packages may be discovered**. It selects no
-/// individual Skill for any Agent, it preloads no Skill content, and its
-/// array order is not precedence: precedence is the architectural rule
-/// `workspace > global`, carried by
-/// [`SkillSource`](crate::skills::SkillSource).
-///
-/// The only supported identities are `global` (`~/.agents/skills`) and
-/// `workspace` (`<workspace>/.agents/skills`). An unknown name is a hard
-/// configuration authoring error, as is a duplicate entry. An explicitly
-/// empty array selects no automatic source at all.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields, default)]
-#[derive(schemars::JsonSchema)]
-pub struct SkillsDocument {
-    /// The selected automatic Skill sources.
-    pub sources: Vec<AutomaticSkillSource>,
-}
-
-impl Default for SkillsDocument {
-    fn default() -> Self {
-        Self {
-            sources: vec![
-                AutomaticSkillSource::Global,
-                AutomaticSkillSource::Workspace,
-            ],
-        }
-    }
-}
-
-impl SkillsDocument {
-    /// The selected sources as a deterministic set.
-    ///
-    /// # Errors
-    ///
-    /// Returns the duplicate-entry detail. Following the repository's strict
-    /// authoring convention, a repeated source is a hard error rather than a
-    /// silently order-dependent mode.
-    pub fn selected(&self) -> Result<BTreeSet<AutomaticSkillSource>, String> {
-        let mut selected = BTreeSet::new();
-        for source in &self.sources {
-            if !selected.insert(*source) {
-                return Err(format!(
-                    "skills.sources contains duplicate source {:?}",
-                    source.source().as_str()
-                ));
-            }
-        }
-        Ok(selected)
-    }
 }
 
 /// The resolved native representation of the named-subagent plane.
@@ -173,7 +99,7 @@ impl SkillsDocument {
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
 pub struct SubagentsDocument {
-    /// The **launch-scoped** per-conversation concurrency bound.
+    /// The per-conversation concurrency bound frozen at admission.
     ///
     /// It is read once, at composition, and is deliberately not resized by
     /// resource reload: capacity is live-registry state, and shrinking it
@@ -232,30 +158,9 @@ pub struct AgentProfileDocument {
     /// The exact source-qualified capability selection.
     #[serde(default)]
     pub tools: ToolSelectionDocument,
-    /// The exact Skill allowlist over the admitted Skill catalog.
-    ///
-    /// **Named Agents only.** Authoring it on the root Agent is an error even
-    /// when the list is empty: the root sees every eligible catalog Skill and
-    /// subtracts `disabled_skills`, so `skills = []` would state the opposite
-    /// of what the runtime does.
-    //
-    // The `Option` preserves *authored presence*, which is the whole
-    // contract: a field illegal for an Agent kind is rejected whenever it is
-    // authored, never merely when its decoded collection is non-empty.
-    // Presence stops at this authoring layer — lowering resolves it into the
-    // runtime's `AgentSkillSelection` polarity, which has no notion of an
-    // omitted field.
+    /// Skill descriptions advertised in the prompt: "all", exact names, or [].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skills: Option<Vec<String>>,
-    /// The root Agent's Skill deny-list over the effective catalog.
-    ///
-    /// **Root only.** Authoring it on a named Agent is an error even when the
-    /// list is empty; a named Agent selects Skill identities explicitly with
-    /// `skills`. This is capability *visibility*, not catalog membership: a
-    /// disabled Skill stays in the generation's catalog and a named Agent that
-    /// selects it explicitly still gets it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub disabled_skills: Option<Vec<String>>,
+    pub skills: Option<crate::runtime::agent_profile::AgentSkillSelection>,
     /// The project-instruction policy of this agent.
     #[serde(default)]
     pub agents_md: AgentProjectInstructionsDocument,
@@ -266,6 +171,7 @@ pub struct AgentProfileDocument {
     /// product defaults are an explicit lower-priority authoring layer,
     /// independent of this complete document's semantics.
     #[serde(default)]
+    #[serde(rename = "plugins")]
     pub extensions: NativeAgentExtensionsDocument,
 }
 
@@ -476,40 +382,12 @@ const fn default_schema_version() -> u32 {
     CURRENT_RUNTIME_SCHEMA_VERSION
 }
 
-fn root_builtin_tools() -> Vec<String> {
-    [
-        "execution",
-        "ask_user",
-        "read",
-        "write",
-        "edit",
-        "glob",
-        "grep",
-        "bash",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect()
-}
-
 fn default_agent_id() -> AgentId {
     AgentId::new("rustx")
 }
 
 pub(crate) fn builtin_root_profile() -> AgentProfileDocument {
-    AgentProfileDocument {
-        model: None,
-        extensions: NativeAgentExtensionsDocument {
-            agent_status: crate::extensions::AgentStatusExtensionDocument::default(),
-            todo: crate::extensions::TodoExtensionDocument::default(),
-            goal: crate::extensions::GoalExtensionDocument::default(),
-        },
-        tools: ToolSelectionDocument {
-            builtin: root_builtin_tools(),
-            sources: BTreeMap::new(),
-        },
-        ..AgentProfileDocument::default()
-    }
+    AgentProfileDocument::default()
 }
 
 impl CurrentRuntimeConfig {
@@ -541,7 +419,6 @@ impl CurrentRuntimeConfig {
             native_tools: NativeToolPoliciesDocument::default(),
             environment: BTreeMap::default(),
             subagents: SubagentsDocument::default(),
-            skills: SkillsDocument::default(),
         }
     }
 
@@ -593,9 +470,6 @@ impl CurrentRuntimeConfig {
             Vec::new(),
         )
         .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
-        self.skills
-            .selected()
-            .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
         if self.agent.worktree.enabled || self.agent.timeout_ms.is_some() {
             return Err(CurrentRuntimeConfigError::Invalid {
                 detail: "root scope cannot acquire a child worktree or child lifecycle deadline"
@@ -606,6 +480,20 @@ impl CurrentRuntimeConfig {
             .tools
             .validate_spelling()
             .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
+        let native = crate::tools::native::definitions(
+            crate::tools::native::NativeToolPolicies::default(),
+            &crate::runtime::subagent::AgentCatalog::default(),
+        );
+        for name in &self.agent.tools.builtin {
+            if !native
+                .iter()
+                .any(|(definition, _)| definition.name == *name)
+            {
+                return Err(CurrentRuntimeConfigError::Invalid {
+                    detail: format!("unknown Native Tool {name:?}"),
+                });
+            }
+        }
         self.agent
             .execution_deadline()
             .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
@@ -778,8 +666,6 @@ pub(super) fn resolve_mcp_bindings(
                         headers: document.sensitive_headers.clone(),
                         ..Default::default()
                     },
-                    activation: document.activation(),
-                    resource_workspace: None,
                     transport,
                     policy: policies
                         .get(server_id)
@@ -1168,8 +1054,6 @@ pub struct McpServerDocument {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sensitive_headers: BTreeMap<String, crate::credentials::EnvironmentReference>,
     /// Omission is discovery only; true explicitly admits preparation under host trust.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
     /// The explicit transport selector, when the entry declares one.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub transport_type: Option<McpTransportType>,
@@ -1207,21 +1091,6 @@ pub enum McpTransportType {
 }
 
 impl McpServerDocument {
-    /// Normalize explicit presence without treating discovery as enablement.
-    #[must_use]
-    pub fn activation(&self) -> crate::capabilities::activation::SourceActivation {
-        use crate::capabilities::activation::{SourceActivation, SourceEnablement};
-        SourceActivation::evaluate(
-            self.enabled.map(|enabled| {
-                if enabled {
-                    SourceEnablement::Enabled
-                } else {
-                    SourceEnablement::Disabled
-                }
-            }),
-            true,
-        )
-    }
     fn validate_transport_values(&self) -> Result<(), String> {
         if self.cwd.as_ref().is_some_and(|path| {
             path.as_os_str().is_empty() || path.as_os_str().as_encoded_bytes().contains(&0)
@@ -1817,27 +1686,27 @@ timezone = "UTC""#,
         for (fragment, expected) in [
             ("future = true", "unknown field `future`"),
             (
-                "[agent.extensions]\n[agent.extensions.future_goal]\nenabled = true\n",
+                "[agent.plugins]\n[agent.plugins.future_goal]\nenabled = true\n",
                 "unknown field `future_goal`",
             ),
             (
-                "[agent.extensions]\n[agent.extensions.todo]\nenabled = true\nfuture = true\n",
+                "[agent.plugins]\n[agent.plugins.todo]\nenabled = true\nfuture = true\n",
                 "unknown field `future`",
             ),
             (
-                "[agent.extensions]\n[agent.extensions.todo]\nenabled = \"true\"\n",
+                "[agent.plugins]\n[agent.plugins.todo]\nenabled = \"true\"\n",
                 "expected a boolean",
             ),
             (
-                "[agent.extensions]\n[agent.extensions.agent_status]\nfuture = true\n",
+                "[agent.plugins]\n[agent.plugins.agent_status]\nfuture = true\n",
                 "unknown field `future`",
             ),
             (
-                "[agent.extensions]\n[agent.extensions.agent_status]\n[agent.extensions.agent_status.time]\nenabled = true\nfuture = true\n",
+                "[agent.plugins]\n[agent.plugins.agent_status]\n[agent.plugins.agent_status.time]\nenabled = true\nfuture = true\n",
                 "unknown field `future`",
             ),
             (
-                "[agent.extensions]\n[agent.extensions.agent_status]\n[agent.extensions.agent_status.background]\nfuture = true\n",
+                "[agent.plugins]\n[agent.plugins.agent_status]\n[agent.plugins.agent_status.background]\nfuture = true\n",
                 "unknown field `future`",
             ),
         ] {
@@ -1863,7 +1732,7 @@ timezone = "UTC""#,
         let enabled = MINIMAL.replace(
             r"[agent]",
             r#"[agent]
-extensions = { "agent_status" = { "time" = { "timezone" = "Asia/Shanghai" }, "background" = { "enabled" = false } } }"#,
+plugins = { "agent_status" = { "enabled" = true, "time" = { "timezone" = "Asia/Shanghai" }, "background" = { "enabled" = false } } }"#,
         );
         let config = CurrentRuntimeConfig::from_toml_slice(enabled.as_bytes()).expect("valid");
         let composition = config.extension_composition();
@@ -1876,7 +1745,7 @@ extensions = { "agent_status" = { "time" = { "timezone" = "Asia/Shanghai" }, "ba
         let disabled = MINIMAL.replace(
             r"[agent]",
             r#"[agent]
-extensions = { "agent_status" = { "enabled" = false } }"#,
+plugins = { "agent_status" = { "enabled" = false } }"#,
         );
         let config = CurrentRuntimeConfig::from_toml_slice(disabled.as_bytes()).expect("valid");
         assert!(
@@ -1889,7 +1758,7 @@ extensions = { "agent_status" = { "enabled" = false } }"#,
         let neither = MINIMAL.replace(
             r"[agent]",
             r#"[agent]
-extensions = { "agent_status" = { "enabled" = false }, "todo" = { "enabled" = false } }"#,
+plugins = { "agent_status" = { "enabled" = false }, "todo" = { "enabled" = false } }"#,
         );
         assert!(
             CurrentRuntimeConfig::from_toml_slice(neither.as_bytes())
@@ -2022,16 +1891,14 @@ mod profile_authoring_tests {
     use super::*;
     #[test]
     fn cfg273_root_and_named_share_the_complete_profile_document() {
-        // Every dimension but the Skill *polarity* is literally the same
-        // document. #280 splits only that one field: the root subtracts,
-        // a named Agent selects.
+        // Root and named Agents share complete profile dimensions.
         let named = r"description = 'review'
 instructions = 'Review carefully'
 agents = ['helper']
 workflows = ['check']
 [tools]
 builtin = ['read']
-[extensions]
+[plugins]
 [model]
 model = 'provider/model'
 ";
@@ -2039,7 +1906,7 @@ model = 'provider/model'
             "[agent]\n{}",
             named
                 .replace("[tools]", "[agent.tools]")
-                .replace("[extensions]", "[agent.extensions]")
+                .replace("[plugins]", "[agent.plugins]")
                 .replace("[model]", "[agent.model]")
         );
         let root = CurrentRuntimeConfig::from_toml_slice(root.as_bytes()).unwrap();
@@ -2047,50 +1914,39 @@ model = 'provider/model'
         assert_eq!(root.agent, named);
         assert_eq!(named.extensions.resolve(), NativeAgentExtensions::none());
     }
-    /// #280 (6)(7): the root has no positive Skill list and a named Agent
-    /// has no deny-list. Naming the wrong polarity is a hard authoring
-    /// error, never a silently ignored field.
-    ///
-    /// The rejection is driven by **authored presence**, not by whether the
-    /// decoded collection is empty: `skills = []` on the root states "no
-    /// Skills" while root semantics are "every eligible Skill", so accepting
-    /// it would silently invert the author's intent.
     #[test]
-    fn cfg280_skill_selection_polarity_is_owned_by_the_authoring_boundary() {
-        let root = CurrentRuntimeConfig::from_toml_slice(
-            MINIMAL
-                .replace("[agent]", "[agent]\ndisabled_skills = ['legacy-java']")
-                .as_bytes(),
-        )
-        .expect("a root deny-list is valid authoring");
-        assert_eq!(
-            root.agent.disabled_skills.as_deref(),
-            Some(["legacy-java".to_owned()].as_slice())
-        );
-        // Omission is the only legal root state of `skills`, and it stays
-        // distinguishable from an authored empty list.
-        assert_eq!(root.agent.skills, None);
-        let root_omitted = CurrentRuntimeConfig::from_toml_slice(MINIMAL.as_bytes())
-            .expect("an omitted root skills field is valid authoring");
-        assert_eq!(root_omitted.agent.skills, None);
-        assert_eq!(root_omitted.agent.disabled_skills, None);
-
-        let named = crate::local_runtime::agent_resources::parse(
-            "description = 'r'\ninstructions = 'i'\nskills = ['repository-guide']",
-        )
-        .expect("a named exact selection is valid authoring");
-        assert_eq!(
-            named.skills.as_deref(),
-            Some(["repository-guide".to_owned()].as_slice())
-        );
-        let named_omitted =
-            crate::local_runtime::agent_resources::parse("description = 'r'\ninstructions = 'i'")
-                .expect("an omitted named disabled_skills field is valid authoring");
-        assert_eq!(named_omitted.disabled_skills, None);
-
-        // An illegal field is rejected whenever it is *authored*, whether it
-        // carries identities or is explicitly empty.
-        for authored in ["skills = ['repository-guide']", "skills = []"] {
+    fn cfg332_root_and_named_skill_visibility_share_all_exact_none_semantics() {
+        use crate::runtime::agent_profile::AgentSkillSelection;
+        for (authored, expected) in [
+            ("skills = 'all'", AgentSkillSelection::All),
+            (
+                "skills = ['guide']",
+                AgentSkillSelection::Exact(vec!["guide".into()]),
+            ),
+            ("skills = []", AgentSkillSelection::Exact(vec![])),
+        ] {
+            let root = CurrentRuntimeConfig::from_toml_slice(
+                MINIMAL
+                    .replace("[agent]", &format!("[agent]\n{authored}"))
+                    .as_bytes(),
+            )
+            .unwrap();
+            let named = crate::local_runtime::agent_resources::parse(&format!(
+                "description = 'r'\ninstructions = 'i'\n{authored}"
+            ))
+            .unwrap();
+            assert_eq!(root.agent.skills, Some(expected.clone()));
+            assert_eq!(named.skills, Some(expected));
+        }
+        let omitted = CurrentRuntimeConfig::from_toml_slice(MINIMAL.as_bytes()).unwrap();
+        assert_eq!(omitted.agent.skills, None);
+        let named = crate::local_runtime::agent_resources::parse("description = 'r'").unwrap();
+        assert_eq!(named.skills, None);
+        for authored in [
+            "disabled_skills = []",
+            "skills = ['NOT VALID']",
+            "skills = 'none'",
+        ] {
             assert!(
                 CurrentRuntimeConfig::from_toml_slice(
                     MINIMAL
@@ -2098,73 +1954,26 @@ model = 'provider/model'
                         .as_bytes(),
                 )
                 .is_err(),
-                "the root Agent must not author skills: {authored}"
+                "{authored}"
             );
-        }
-        for authored in ["disabled_skills = ['legacy-java']", "disabled_skills = []"] {
             assert!(
                 crate::local_runtime::agent_resources::parse(&format!(
-                    "description = 'r'\ninstructions = 'i'\n{authored}"
-                ))
+                    "description = 'r'\n{authored}"
+                ),)
                 .is_err(),
-                "disabled_skills is root-only Skill visibility: {authored}"
-            );
-        }
-
-        // A malformed identity stays a hard error in both polarities.
-        for text in ["skills = ['NOT VALID']", "disabled_skills = ['NOT VALID']"] {
-            assert!(
-                CurrentRuntimeConfig::from_toml_slice(
-                    MINIMAL
-                        .replace("[agent]", &format!("[agent]\n{text}"))
-                        .as_bytes()
-                )
-                .is_err(),
-                "{text}"
+                "{authored}"
             );
         }
     }
 
-    /// #280 (4): the source policy is closed. An unknown identity, a
-    /// duplicate, and an unknown field are all hard configuration errors.
     #[test]
-    fn cfg280_skill_source_policy_is_closed_and_duplicate_free() {
-        let default = CurrentRuntimeConfig::from_toml_slice(MINIMAL.as_bytes())
-            .expect("valid")
-            .skills;
-        assert_eq!(
-            default.sources,
-            [
-                crate::skills::AutomaticSkillSource::Global,
-                crate::skills::AutomaticSkillSource::Workspace
-            ]
-        );
-        let explicit = CurrentRuntimeConfig::from_toml_slice(
-            format!("{MINIMAL}\n[skills]\nsources = [\"workspace\", \"global\"]").as_bytes(),
-        )
-        .expect("both identities in either order");
-        assert_eq!(explicit.skills.selected().expect("no duplicates").len(), 2);
-        // An explicitly empty array selects no automatic source at all.
-        let none = CurrentRuntimeConfig::from_toml_slice(
-            format!("{MINIMAL}\n[skills]\nsources = []").as_bytes(),
-        )
-        .expect("an empty array is explicit authoring");
-        assert!(none.skills.selected().expect("no duplicates").is_empty());
-
-        for bad in [
-            "sources = [\"all\"]",
-            "sources = [\"explicit\"]",
-            "sources = [\"user\"]",
-            "sources = [\"*\"]",
-            "sources = [\"global\", \"global\"]",
-            "roots = [\"global\"]",
-        ] {
+    fn cfg332_skill_roots_are_process_bindings_not_authored_source_policy() {
+        for sources in ["[]", "['workspace']", "['user', 'workspace']"] {
             assert!(
                 CurrentRuntimeConfig::from_toml_slice(
-                    format!("{MINIMAL}\n[skills]\n{bad}").as_bytes()
+                    format!("{MINIMAL}\n[skills]\nsources = {sources}").as_bytes(),
                 )
-                .is_err(),
-                "{bad} must be a hard configuration authoring error"
+                .is_err()
             );
         }
     }

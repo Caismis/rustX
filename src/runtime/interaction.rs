@@ -2462,7 +2462,7 @@ mod tests {
             ) {
                 self.0.push(ConversationObservation::InteractionSettled {
                     interaction: InteractionRef::new(
-                        ConversationId::new("interaction-cut"),
+                        ConversationId::new("conv_d4414864-5f68-7e4e-8937-dfb61ccc4692"),
                         id.clone(),
                     ),
                     outcome: outcome.clone(),
@@ -2470,7 +2470,7 @@ mod tests {
                 });
             }
         }
-        let id = ConversationId::new("interaction-cut");
+        let id = ConversationId::new("conv_d4414864-5f68-7e4e-8937-dfb61ccc4692");
         let store = Arc::new(SqliteConversationStore::in_memory(id.clone()).unwrap());
         let queue = Arc::new(PendingObservations::new());
         assert_eq!(store.observe_journal(queue.clone()).unwrap(), 0);
@@ -2888,7 +2888,7 @@ mod tests {
     fn audited_coordinator() -> (Arc<InteractionCoordinator>, Arc<RecordingInteractionAudit>) {
         let lifecycle = ConversationLifecycle::new();
         assert!(lifecycle.activate());
-        let conversation_id = ConversationId::new("conversation");
+        let conversation_id = ConversationId::new("conv_8b34dbc2-c05e-74d7-825d-48efeace8245");
         let audit = RecordingInteractionAudit::new(conversation_id.clone());
         let coordinator = Arc::new(InteractionCoordinator::new(
             conversation_id,
@@ -2903,7 +2903,8 @@ mod tests {
         let (owner, audit) = audited_coordinator();
         owner.set_provider_available(true);
         let mut instance = crate::runtime::workflow::test_instance("review", "human");
-        instance.block.run.conversation_id = ConversationId::new("conversation");
+        instance.block.run.conversation_id =
+            ConversationId::new("conv_8b34dbc2-c05e-74d7-825d-48efeace8245");
         let candidate = crate::runtime::workspace::CandidateReference {
             run: instance.block.run.clone(),
             version: 1,
@@ -2938,7 +2939,8 @@ mod tests {
             let (first, audit) = audited_coordinator();
             first.set_provider_available(true);
             let mut instance = crate::runtime::workflow::test_instance("review", "human");
-            instance.block.run.conversation_id = ConversationId::new("conversation");
+            instance.block.run.conversation_id =
+                ConversationId::new("conv_8b34dbc2-c05e-74d7-825d-48efeace8245");
             let review = crate::events::review::ReviewSpecification {
                 instance: Box::new(instance),
                 subject: crate::events::review::ReviewSubject::Plan {
@@ -2974,7 +2976,7 @@ mod tests {
             let lifecycle = ConversationLifecycle::new();
             assert!(lifecycle.activate());
             let restarted = InteractionCoordinator::new(
-                ConversationId::new("conversation"),
+                ConversationId::new("conv_8b34dbc2-c05e-74d7-825d-48efeace8245"),
                 lifecycle,
                 audit.clone(),
             );
@@ -3559,7 +3561,7 @@ mod tests {
         let admitted = admitted_receiver.await.expect("admission frontier entered");
         assert_eq!(
             admitted.conversation_id,
-            ConversationId::new("conversation")
+            ConversationId::new("conv_8b34dbc2-c05e-74d7-825d-48efeace8245")
         );
         assert_eq!(coordinator.pending_count(), 0);
         assert!(
@@ -4386,7 +4388,7 @@ mod tests {
         let lifecycle = ConversationLifecycle::new();
         assert!(lifecycle.activate());
         let restarted = Arc::new(InteractionCoordinator::new(
-            ConversationId::new("conversation"),
+            ConversationId::new("conv_8b34dbc2-c05e-74d7-825d-48efeace8245"),
             lifecycle,
             audit.clone(),
         ));

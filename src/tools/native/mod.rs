@@ -62,7 +62,6 @@ pub(crate) use goal::registrations as goal_tool_registrations;
 mod grep;
 mod input;
 mod read;
-pub(crate) use read::TOOL_ID as READ_TOOL_ID;
 mod registration;
 // The private native-search substrate shared by Glob and Grep. It is not a
 // tool: it is never registered, never reaches the model, and exists only
@@ -747,7 +746,9 @@ mod tests {
         // And the extension plane does register it — from a *materialized*
         // Todo state owner, which is the one seam that can (Issue #259).
         let list = crate::tools::todo::ConversationTodoList::new(
-            crate::runtime::identity::ConversationId::new("conv-todo-plane"),
+            crate::runtime::identity::ConversationId::new(
+                "conv_76a81bf7-d858-7c44-81f8-d4f3684a63ef",
+            ),
         );
         let mut composed = ToolRegistry::new();
         crate::extensions::ExtensionToolPlane::of_materialized_owners(Some(&list), None)

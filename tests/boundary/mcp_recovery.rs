@@ -67,8 +67,6 @@ fn recovery_binding(
 ) -> rustx::tools::mcp::McpServerBinding {
     rustx::tools::mcp::McpServerBinding {
         credentials: rustx::credentials::SourceCredentials::default(),
-        activation: rustx::capabilities::activation::SourceActivation::Enabled,
-        resource_workspace: None,
         transport: rustx::tools::mcp::McpTransportConfig::Stdio {
             program: std::env::current_exe()
                 .expect("test executable")
@@ -1476,38 +1474,26 @@ async fn a_failed_capability_refresh_keeps_the_last_known_good_generation() {
         "G1 is the validated last-known-good catalog"
     );
     let before = capability.coordinator.current_snapshot();
-    let revision_before = before.revision();
 
-    let candidate = capability
+    let failure = capability
         .coordinator
         .prepare_candidate()
         .await
-        .expect("an unreachable optional MCP source never fails preparation");
-    assert!(
-        matches!(
-            candidate
-                .availability()
-                .get(&rustx::capabilities::ToolSourceId::Mcp(
-                    capability.server_id.clone()
-                )),
-            Some(rustx::capabilities::CapabilitySourceState::Unavailable { .. })
-        ),
-        "the refresh reports the transport as currently unavailable"
-    );
-    capability
-        .coordinator
-        .commit(candidate)
-        .expect("the carried-forward candidate commits");
-
+        .expect_err("selected-source failure rejects the entire candidate");
+    assert!(matches!(
+        failure,
+        rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
+    ));
     wait_for_journal_entry(&control, &format!("{}2", recovery::JOURNAL_REFUSED_PREFIX));
     let after = capability.coordinator.current_snapshot();
     assert!(
-        capability.definition_names().is_empty(),
-        "unavailable profile capabilities are suppressed for future admissions"
+        std::sync::Arc::ptr_eq(&before, &after),
+        "failed preparation cannot publish any part of a generation"
     );
-    assert_eq!(known_mcp_tools(&after, &capability.server_id), published);
-    assert_ne!(after.revision(), revision_before);
-    assert!(!after.resolved_profile().unwrap().diagnostics.is_empty());
+    assert_eq!(
+        published_mcp_tools(&after, &capability.server_id),
+        published_mcp_tools(&before, &capability.server_id)
+    );
     let result = direct_mcp_call(&fixture, &before, recovery::TOOL_ECHO).await;
     assert!(
         matches!(result.status, ToolExecutionStatus::Success),
@@ -2296,42 +2282,10 @@ fn published_mcp_tools(
         .collect()
 }
 
-fn known_mcp_tools(
-    snapshot: &Arc<rustx::capabilities::CapabilitySnapshot>,
-    server_id: &McpServerId,
-) -> Vec<String> {
-    snapshot
-        .available_tools()
-        .definitions()
-        .into_iter()
-        .filter(|definition| {
-            matches!(
-                &definition.origin,
-                rustx::tools::types::ToolOrigin::Mcp { server_id: owner } if owner == server_id
-            )
-        })
-        .map(|definition| definition.name)
-        .collect()
-}
-
-/// Issue #205 review finding 2, direction A: a refresh of the **same**
-/// binding that cannot validate keeps the last-known-good capability
-/// generation, and the published binding identity is what makes that legal.
-///
-/// This is the same contract
-/// [`a_failed_capability_refresh_keeps_the_last_known_good_generation`]
-/// proves end to end; what it adds is the explicit statement of *why* the
-/// carry-forward is allowed — the candidate's binding for this server is
-/// byte-for-byte the binding the published generation was validated under,
-/// so the executors it reuses talk to the transport the published metadata
-/// names.
-///
-/// Synchronization proof: the fixture's generation 2 refuses to handshake,
-/// and the parent waits for the server-side `refused:` journal line before
-/// asserting, so "the refresh failed" is a fact the child process wrote, not
-/// a timing assumption.
+/// A selected-source handshake failure preserves the complete published generation.
+/// The server-written refusal journal establishes failure deterministically.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn same_binding_carry_forward_keeps_the_published_binding_identity() {
+async fn same_binding_failure_preserves_the_published_generation() {
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
@@ -2343,13 +2297,13 @@ async fn same_binding_carry_forward_keeps_the_published_binding_identity() {
     };
     let capability = recovery_capability(
         &fixture.runtime,
-        "boundary_suites::mcp_recovery::same_binding_carry_forward_keeps_the_published_binding_identity",
+        "boundary_suites::mcp_recovery::same_binding_failure_preserves_the_published_generation",
         &control,
         &script,
     )
     .await;
     let binding = recovery_binding(
-        "boundary_suites::mcp_recovery::same_binding_carry_forward_keeps_the_published_binding_identity",
+        "boundary_suites::mcp_recovery::same_binding_failure_preserves_the_published_generation",
         &control,
         &script,
     );
@@ -2364,7 +2318,7 @@ async fn same_binding_carry_forward_keeps_the_published_binding_identity() {
 
     // The reload path with exactly the same binding: the only difference
     // from the published state is that the refresh cannot validate.
-    let candidate = capability
+    let failure = capability
         .coordinator
         .prepare_candidate_with_inputs(reload_inputs(
             &fixture.runtime,
@@ -2372,39 +2326,22 @@ async fn same_binding_carry_forward_keeps_the_published_binding_identity() {
             binding.clone(),
         ))
         .await
-        .expect("an unreachable optional MCP source never fails preparation");
-    capability
-        .coordinator
-        .commit(candidate)
-        .expect("the carried-forward candidate commits");
+        .expect_err("selected-source failure rejects the entire candidate");
+    assert!(matches!(
+        failure,
+        rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
+    ));
     wait_for_journal_entry(&control, &format!("{}2", recovery::JOURNAL_REFUSED_PREFIX));
 
     let after = capability.coordinator.current_snapshot();
-    assert_eq!(
-        known_mcp_tools(&after, &capability.server_id),
-        published,
-        "an unchanged binding may carry its last-known-good catalog forward verbatim"
-    );
-    assert_eq!(
-        after.mcp_servers().get(&capability.server_id),
-        Some(&binding),
-        "the published binding is unchanged, which is what makes the carry-forward \
-         internally coherent"
-    );
     assert!(
-        matches!(
-            capability
-                .coordinator
-                .availability()
-                .get(&rustx::capabilities::ToolSourceId::Mcp(
-                    capability.server_id.clone()
-                )),
-            Some(rustx::capabilities::CapabilitySourceState::Unavailable { .. })
-        ),
-        "availability and capability knowledge stay separate facts"
+        std::sync::Arc::ptr_eq(&before, &after),
+        "failed preparation cannot publish any part of a generation"
     );
-    // The retained generation's own live transport still serves calls.
-    assert!(published_mcp_tools(&after, &capability.server_id).is_empty());
+    assert_eq!(
+        published_mcp_tools(&after, &capability.server_id),
+        published_mcp_tools(&before, &capability.server_id)
+    );
     let result = direct_mcp_call(&fixture, &before, recovery::TOOL_ECHO).await;
     assert!(
         matches!(result.status, ToolExecutionStatus::Success),
@@ -2422,33 +2359,8 @@ async fn same_binding_carry_forward_keeps_the_published_binding_identity() {
     drop(capability);
 }
 
-/// Issue #205 review finding 2, direction B: when the configured binding
-/// **changes** and the replacement cannot validate, the previous binding's
-/// executors are never published under the new binding's authority.
-///
-/// # The split-brain this forbids
-///
-/// ```text
-/// published:   S -> B2      (authoritative capability metadata)
-/// executor:    S -> connection negotiated from B1
-/// ```
-///
-/// A server id alone is not sufficient identity for the last-known-good
-/// fallback: the carried-forward registrations carry their executors, and
-/// those executors dispatch through the connection the *published* binding
-/// established. Reusing them under a different program, argument,
-/// environment, cwd, endpoint, header, or policy would publish metadata that
-/// disagrees with the transport that actually runs the call.
-///
-/// # Synchronization proof
-///
-/// B1 and B2 differ in an execution-relevant, **server-provable** field: the
-/// stdio environment names a different journal file, so which binding
-/// spawned a process is a fact the child process itself writes. B2's first
-/// generation refuses to handshake, so its refresh deterministically fails,
-/// and the parent waits for B2's own `refused:` line before asserting. B1's
-/// journal is then checked to have gained nothing — the old binding was
-/// never reused to satisfy the new one.
+/// A failed changed binding cannot publish new metadata over old executors.
+/// The candidate's own journal proves which transport failed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_changed_binding_never_publishes_the_previous_bindings_executors() {
     if recovery::serve_if_recovery_fixture_mode().await {
@@ -2462,8 +2374,7 @@ async fn a_changed_binding_never_publishes_the_previous_bindings_executors() {
     let before = capability.coordinator.current_snapshot();
     let published = published_mcp_tools(&before, &capability.server_id);
     assert_eq!(published.len(), 3, "B1/G1 is the authoritative generation");
-    let b1_generations = first.established_generations();
-    assert_eq!(b1_generations, 1);
+    assert_eq!(first.established_generations(), 1);
 
     // B2: the same executable, a different execution-relevant environment
     // (its own journal, and a first generation that refuses to handshake),
@@ -2480,7 +2391,7 @@ async fn a_changed_binding_never_publishes_the_previous_bindings_executors() {
         "the test really does change the binding"
     );
 
-    let candidate = capability
+    let failure = capability
         .coordinator
         .prepare_candidate_with_inputs(reload_inputs(
             &fixture.runtime,
@@ -2488,67 +2399,34 @@ async fn a_changed_binding_never_publishes_the_previous_bindings_executors() {
             b2.clone(),
         ))
         .await
-        .expect("an unreachable optional MCP source never fails preparation");
-    capability
-        .coordinator
-        .commit(candidate)
-        .expect("the replacement candidate commits");
+        .expect_err("selected-source failure rejects the entire candidate");
+    assert!(matches!(
+        failure,
+        rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
+    ));
     wait_for_journal_entry(&second, &format!("{}1", recovery::JOURNAL_REFUSED_PREFIX));
 
     let after = capability.coordinator.current_snapshot();
-    assert_eq!(
-        after.mcp_servers().get(&capability.server_id),
-        Some(&b2),
-        "the published binding is the configured desired state"
-    );
     assert!(
-        published_mcp_tools(&after, &capability.server_id).is_empty(),
-        "no executor of B1 is published under B2's authority: {:?}",
-        published_mcp_tools(&after, &capability.server_id)
-    );
-    assert!(
-        matches!(
-            capability
-                .coordinator
-                .availability()
-                .get(&rustx::capabilities::ToolSourceId::Mcp(
-                    capability.server_id.clone()
-                )),
-            Some(rustx::capabilities::CapabilitySourceState::Unavailable { .. })
-        ),
-        "B2 is reported unavailable rather than silently satisfied by B1"
+        std::sync::Arc::ptr_eq(&before, &after),
+        "failed preparation cannot publish any part of a generation"
     );
     assert_eq!(
-        first.established_generations(),
-        b1_generations,
-        "B1 spawned nothing to serve B2: its journal is untouched"
-    );
-    assert_eq!(
-        first.accepted_calls(recovery::TOOL_ECHO),
-        0,
-        "no call was routed to B1 under B2's authority"
+        published_mcp_tools(&after, &capability.server_id),
+        published_mcp_tools(&before, &capability.server_id)
     );
     drop(capability);
 }
 
-/// Issue #205 review finding 2, policy direction: `policy` is part of
-/// `McpServerBinding` and part of execution semantics — invocation,
-/// concurrency, and approval policy all reach the published
-/// `ToolDefinition` — so a policy-only change is a binding change, and a
-/// failed refresh of it may not carry the previous generation forward
-/// either.
-///
-/// Synchronization proof: the transport is byte-for-byte identical, so the
-/// refresh spawns generation 2 of the same fixture identity, which the
-/// script makes refuse; the parent waits for that server-written `refused:`
-/// line before asserting.
+/// Global invocation policy and source executors publish in one generation.
+/// A failed candidate leaves both exactly unchanged.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_policy_only_binding_change_also_forfeits_carry_forward() {
+async fn a_policy_change_failure_preserves_the_published_generation() {
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
     let test_name =
-        "boundary_suites::mcp_recovery::a_policy_only_binding_change_also_forfeits_carry_forward";
+        "boundary_suites::mcp_recovery::a_policy_change_failure_preserves_the_published_generation";
     let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     let script = recovery::RecoveryScript {
@@ -2567,7 +2445,7 @@ async fn a_policy_only_binding_change_also_forfeits_carry_forward() {
         "an approval-policy change is a binding change"
     );
 
-    let candidate = capability
+    let failure = capability
         .coordinator
         .prepare_candidate_with_inputs(reload_inputs(
             &fixture.runtime,
@@ -2575,20 +2453,21 @@ async fn a_policy_only_binding_change_also_forfeits_carry_forward() {
             b2.clone(),
         ))
         .await
-        .expect("an unreachable optional MCP source never fails preparation");
-    capability
-        .coordinator
-        .commit(candidate)
-        .expect("the replacement candidate commits");
+        .expect_err("selected-source failure rejects the entire candidate");
+    assert!(matches!(
+        failure,
+        rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
+    ));
     wait_for_journal_entry(&control, &format!("{}2", recovery::JOURNAL_REFUSED_PREFIX));
 
     let after = capability.coordinator.current_snapshot();
-    assert_eq!(after.mcp_servers().get(&capability.server_id), Some(&b2));
     assert!(
-        published_mcp_tools(&after, &capability.server_id).is_empty(),
-        "tools validated under the previous policy are never republished under a \
-         different one: {:?}",
-        published_mcp_tools(&after, &capability.server_id)
+        std::sync::Arc::ptr_eq(&before, &after),
+        "failed preparation cannot publish any part of a generation"
+    );
+    assert_eq!(
+        published_mcp_tools(&after, &capability.server_id),
+        published_mcp_tools(&before, &capability.server_id)
     );
     drop(capability);
 }

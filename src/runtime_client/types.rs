@@ -47,6 +47,7 @@
 
 use std::fmt;
 
+use crate::local_runtime::{SessionId, SessionNodeId};
 use serde::{Deserialize, Serialize};
 
 use super::event::RuntimeClientEvent;
@@ -63,16 +64,15 @@ use crate::runtime::identity::{
 };
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::{InteractionRef, InteractionResponse};
-use crate::runtime::types::ApprovalMode;
 
 /// The protocol view of one native Session graph node.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionNodeView {
     /// Node identity.
-    pub id: String,
+    pub id: SessionNodeId,
     /// Parent node in the same Session graph.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
+    pub parent: Option<SessionNodeId>,
     /// The independent linear `ConversationId` of this node.
     pub conversation_id: ConversationId,
     /// Product-level origin metadata.
@@ -88,18 +88,18 @@ pub enum SessionNodeOriginView {
     /// A clone selected at one exact source revision.
     Clone {
         /// Source Session identity.
-        source_session: String,
+        source_session: SessionId,
         /// Source node identity.
-        source_node: String,
+        source_node: SessionNodeId,
         /// Source revision selected for the seed.
         source_surface_revision: SurfaceRevision,
     },
     /// A fork selected immediately before one source user message.
     Fork {
         /// Source Session identity.
-        source_session: String,
+        source_session: SessionId,
         /// Source node identity.
-        source_node: String,
+        source_node: SessionNodeId,
         /// Source revision selected for the seed.
         source_surface_revision: SurfaceRevision,
         /// Selected source user message.
@@ -114,7 +114,7 @@ pub enum SessionNodeOriginView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionView {
     /// Session identity.
-    pub id: String,
+    pub id: SessionId,
     /// The user-chosen display name, absent until this Session is named.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -123,7 +123,7 @@ pub struct SessionView {
     /// Last metadata/active-node publication instant.
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Active node identity.
-    pub active_node: String,
+    pub active_node: SessionNodeId,
     /// Conversation identity owned by the active node.
     pub active_conversation_id: ConversationId,
     /// Number of nodes in the Session graph, without embedding the graph.
@@ -134,7 +134,7 @@ pub struct SessionView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionSummaryView {
     /// Session identity.
-    pub id: String,
+    pub id: SessionId,
     /// The user-chosen display name, absent until this Session is named.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -145,7 +145,7 @@ pub struct SessionSummaryView {
     /// Last metadata/active-node publication instant.
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Active node identity.
-    pub active_node: String,
+    pub active_node: SessionNodeId,
 }
 
 /// One historical user-message boundary exposed by `/fork` and `/tree`.
@@ -162,14 +162,14 @@ pub struct SessionUserMessageBoundaryView {
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeClientSessionRequest {
     /// Finite native deletion preview.
-    DeletePreview { session_id: String },
+    DeletePreview { session_id: SessionId },
     /// Execute against a native semantic revision.
     Delete {
-        session_id: String,
+        session_id: SessionId,
         expected_target_revision: String,
     },
     /// Retry the existing frozen record only.
-    DeleteRecover { session_id: String },
+    DeleteRecover { session_id: SessionId },
     /// Read one bounded, searchable persisted-session page.
     List {
         /// Optional case-insensitive query over Session id/name.
@@ -197,9 +197,9 @@ pub enum RuntimeClientSessionRequest {
     /// Select an existing Session/node.
     Select {
         /// Session identity.
-        session_id: String,
+        session_id: SessionId,
         /// Optional node; absent selects the Session's active node.
-        node_id: Option<String>,
+        node_id: Option<SessionNodeId>,
     },
     /// Clone the committed current Surface head.
     Clone,
@@ -307,7 +307,7 @@ pub enum RuntimeClientSessionRequest {
 /// compatibility shim, no dual questionnaire mode, and no fallback parser.
 /// Version 25 adds captured launch facts, explicit lifetimes, bounded user-default
 /// operations, and nullable historical model/admission evidence. No v24 decoding.
-/// Version 26 adds `effective_extensions`: the frozen effective native Agent
+/// Version 26 adds `effective_plugins`: the frozen effective native Agent
 /// Extension composition of the attached Agent runtime, plus its
 /// `settings_lifetimes.extensions` boundary (Issue #256). It is a closed
 /// typed record — one named member per native extension — projected from the
@@ -327,7 +327,7 @@ pub enum RuntimeClientSessionRequest {
 /// Version 28 adds crash-safe native Session deletion preview/execute/recovery.
 ///
 /// Version 29 carries Issue #259's Todo Agent Extension projection.
-/// `effective_extensions` gains a `todo` member — the authoritative answer to
+/// `effective_plugins` gains a `todo` member — the authoritative answer to
 /// "does the attached runtime own a current task list, publish the `todo`
 /// Tool, and offer a Todo panel?" — and `RuntimeClientSnapshot.todos` becomes
 /// nullable, so *no Todo extension composed* and *Todo composed over an empty
@@ -338,7 +338,7 @@ pub enum RuntimeClientSessionRequest {
 /// they can never disagree on the wire.
 ///
 /// The change is deliberately breaking. Version 28 is Issue #255's protocol —
-/// crash-safe Session deletion — and its `effective_extensions` record has no
+/// crash-safe Session deletion — and its `effective_plugins` record has no
 /// `todo` member and its `todos` is a bare snapshot, so serving it this schema
 /// under the same number would give two materially different contracts one
 /// identity. rustX is pre-1.0, which means the protocol may break without a
@@ -357,7 +357,7 @@ pub enum RuntimeClientSessionRequest {
 /// Version 34 clients are rejected; Trace introduces no execution authority.
 /// Version 36 adds typed Session workspace uploads to canonical presentation.
 /// Version 37 adds exact pending revisions and committed mutation projections.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 37;
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 38;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -510,7 +510,7 @@ pub enum RuntimeClientRequest {
         id: RequestId,
     },
     /// Atomically reload the runtime-owned resource/capability generation.
-    ReloadResources {
+    ReloadConfiguration {
         /// Attachment-scoped request id.
         id: RequestId,
     },
@@ -563,7 +563,7 @@ pub enum RuntimeClientRequest {
     /// Read the safe public model catalog: which models and reasoning
     /// profiles this runtime can select.
     ///
-    /// This exists so a client never reads `models.toml` itself. The result
+    /// This exists so a client never reads `rustx.toml` itself. The result
     /// carries no credential, no adapter internal, and no compat
     /// implementation object.
     ModelCatalogGet {
@@ -588,35 +588,22 @@ pub enum RuntimeClientRequest {
         /// The complete desired session model configuration.
         config: Box<SessionModelConfig>,
     },
-    /// Read only the declared user default document, separately from live state.
-    DefaultsRead {
-        id: RequestId,
-        scope: super::settings::DefaultScope,
-    },
-    /// Explicit, revision-checked disk write; never a live mutation.
-    DefaultSave {
-        id: RequestId,
-        scope: super::settings::DefaultScope,
-        expected_revision: String,
-        target: super::settings::DefaultTarget,
-    },
-    /// Request a runtime `ApprovalMode` transition.
-    ApprovalModeSet {
-        /// Attachment-scoped request id.
-        id: RequestId,
-        /// The latest desired runtime approval mode.
-        mode: ApprovalMode,
-    },
     /// Preview a historical deletion without retaining confirmation locks.
-    SessionDeletePreview { id: RequestId, session_id: String },
+    SessionDeletePreview {
+        id: RequestId,
+        session_id: SessionId,
+    },
     /// Commit deletion of exactly the confirmed semantic target.
     SessionDelete {
         id: RequestId,
-        session_id: String,
+        session_id: SessionId,
         expected_target_revision: String,
     },
     /// Reconcile an existing deletion; never discovers a new workset.
-    SessionDeleteRecover { id: RequestId, session_id: String },
+    SessionDeleteRecover {
+        id: RequestId,
+        session_id: SessionId,
+    },
     /// List persisted native Sessions for `/resume`.
     SessionList {
         /// Attachment-scoped request id.
@@ -663,9 +650,9 @@ pub enum RuntimeClientRequest {
         /// Attachment-scoped request id.
         id: RequestId,
         /// Session identity.
-        session_id: String,
+        session_id: SessionId,
         /// Optional node; absent means that Session's active node.
-        node_id: Option<String>,
+        node_id: Option<SessionNodeId>,
     },
     /// Clone the exact current committed canonical Surface head.
     SessionClone {
@@ -762,7 +749,7 @@ impl RuntimeClientRequest {
             | Self::SubmitInbound { id, .. }
             | Self::CancelCurrentAttempt { id, .. }
             | Self::CompactContext { id, .. }
-            | Self::ReloadResources { id, .. }
+            | Self::ReloadConfiguration { id, .. }
             | Self::InteractionRespond { id, .. }
             | Self::SnapshotGet { id, .. }
             | Self::TranscriptPageGet { id, .. }
@@ -771,9 +758,6 @@ impl RuntimeClientRequest {
             | Self::ModelCatalogGet { id, .. }
             | Self::ModelGet { id, .. }
             | Self::ModelSet { id, .. }
-            | Self::DefaultsRead { id, .. }
-            | Self::DefaultSave { id, .. }
-            | Self::ApprovalModeSet { id, .. }
             | Self::SessionDeletePreview { id, .. }
             | Self::SessionDelete { id, .. }
             | Self::SessionDeleteRecover { id, .. }
@@ -805,7 +789,7 @@ impl RuntimeClientRequest {
             Self::CancelCurrentAttempt { .. } => "cancel_current_attempt",
             Self::Goal { .. } => "goal",
             Self::CompactContext { .. } => "compact_context",
-            Self::ReloadResources { .. } => "reload_resources",
+            Self::ReloadConfiguration { .. } => "reload_configuration",
             Self::InteractionRespond { .. } => "interaction_respond",
             Self::SnapshotGet { .. } => "snapshot_get",
             Self::TranscriptPageGet { .. } => "transcript_page_get",
@@ -814,9 +798,6 @@ impl RuntimeClientRequest {
             Self::ModelCatalogGet { .. } => "model_catalog_get",
             Self::ModelGet { .. } => "model_get",
             Self::ModelSet { .. } => "model_set",
-            Self::DefaultsRead { .. } => "defaults_read",
-            Self::DefaultSave { .. } => "default_save",
-            Self::ApprovalModeSet { .. } => "approval_mode_set",
             Self::SessionDeletePreview { .. } => "session_delete_preview",
             Self::SessionDelete { .. } => "session_delete",
             Self::SessionDeleteRecover { .. } => "session_delete_recover",
@@ -866,9 +847,7 @@ impl RuntimeClientRequest {
         matches!(
             self,
             Self::CompactContext { .. }
-                | Self::DefaultsRead { .. }
-                | Self::DefaultSave { .. }
-                | Self::ReloadResources { .. }
+                | Self::ReloadConfiguration { .. }
                 | Self::InteractionRespond { .. }
                 | Self::SubagentWorkspaceDispose { .. }
                 | Self::Shutdown { .. }
@@ -888,11 +867,9 @@ impl RuntimeClientRequest {
             Self::SubmitInbound { .. }
                 | Self::CancelCurrentAttempt { .. }
                 | Self::CompactContext { .. }
-                | Self::ReloadResources { .. }
+                | Self::ReloadConfiguration { .. }
                 | Self::InteractionRespond { .. }
                 | Self::ModelSet { .. }
-                | Self::DefaultSave { .. }
-                | Self::ApprovalModeSet { .. }
                 | Self::SessionDelete { .. }
                 | Self::SessionDeleteRecover { .. }
                 | Self::SessionName { .. }
@@ -1063,8 +1040,8 @@ pub enum RuntimeClientResult {
         /// The authoritative context projection after the commit.
         context: RuntimeClientContextView,
     },
-    /// `reload_resources` published a complete new generation.
-    ResourcesReloaded {
+    /// `reload_configuration` published a complete new generation.
+    ConfigurationReloaded {
         /// Published process-local resource generation.
         resource_revision: u64,
         /// Compatible published capability generation.
@@ -1166,14 +1143,6 @@ pub enum RuntimeClientResult {
         /// Bounded diagnostic for the replacement path.
         diagnostic: String,
     },
-    /// Declared disk document, not an effective live projection.
-    Defaults {
-        document: super::settings::DefaultDocument,
-    },
-    /// Published disk outcome; live state is unchanged.
-    DefaultSaved {
-        result: super::settings::SaveDefaultResult,
-    },
     /// `model_set` succeeded: the update was applied and published.
     ///
     /// The result carries the *session* state after the update. It never
@@ -1181,16 +1150,6 @@ pub enum RuntimeClientResult {
     ModelSet {
         /// The redacted session model view after the update.
         model: Box<SessionModelView>,
-    },
-    /// `approval_mode_set` succeeded.
-    ApprovalModeSet {
-        /// The authoritative effective mode.
-        effective_approval_mode: ApprovalMode,
-        /// The desired mode when it is pending reconciliation.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pending_approval_mode: Option<ApprovalMode>,
-        /// The monotonic control-plane revision.
-        revision: u64,
     },
     /// `background_status` succeeded.
     BackgroundStatus {
@@ -1260,10 +1219,15 @@ pub enum RuntimeClientError {
     },
     /// No attempt is currently cancellable.
     NoCurrentAttempt,
-    /// Resource reload was refused because semantic work owns the Session.
-    ResourceReloadBusy {
-        /// Bounded machine-readable busy category.
-        reason: String,
+    /// Configuration publication was refused because semantic work owns the Session.
+    ConfigurationReloadBusy {
+        /// Native owner preventing publication.
+        reason: crate::runtime::RuntimeResourceReloadBusyReason,
+    },
+    /// A complete configuration candidate failed; the old generation remains authoritative.
+    ConfigurationReloadFailed {
+        /// Bounded native diagnostic, with authored secrets redacted by the source owner.
+        diagnostic: String,
     },
     /// The interaction was no longer pending. Duplicate, stale, pre-crash,
     /// and post-quiescent responses all use this bounded contract.
@@ -1399,14 +1363,14 @@ mod tests {
     use crate::runtime_client::event::RuntimeClientEvent;
 
     #[test]
-    fn session_list_v34_round_trips_without_global_active() {
+    fn session_list_round_trips_typed_identities_without_global_active() {
         let wire = serde_json::json!({
             "type": "session_list",
             "sessions": [{
-                "id": "session-a",
+                "id": "ses_01900000-0000-7000-8000-000000000001",
                 "name": "A",
                 "updated_at": "2026-09-14T00:00:00Z",
-                "active_node": "node-a"
+                "active_node": "node_01900000-0000-7000-8000-000000000002"
             }]
         });
         let result: RuntimeClientResult = serde_json::from_value(wire.clone()).unwrap();
@@ -1421,7 +1385,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 37);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 38);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1442,7 +1406,7 @@ mod tests {
         let subagent = RuntimeClientSubagent {
             subagent_id: crate::runtime::identity::SubagentId::new("subagent-1"),
             child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
-            child_conversation_id: ConversationId::new("conversation-child"),
+            child_conversation_id: ConversationId::new("conv_15cf935a-5ce7-72bc-89a4-dbf96abf5352"),
             agent: "conformance".to_owned(),
             definition_digest: "sha256:definition".to_owned(),
             profile_digest: "sha256:profile".to_owned(),
@@ -1529,7 +1493,7 @@ mod tests {
         let request = RuntimeClientRequest::InteractionRespond {
             id: super::RequestId::new(11),
             interaction: InteractionRef::new(
-                ConversationId::new("conversation-1"),
+                ConversationId::new("conv_413055e0-cb3a-7c6d-89b6-b446a98e0ad1"),
                 InteractionId::new("attempt-1-interaction-1"),
             ),
             response: InteractionResponse::Approval {
@@ -1540,7 +1504,10 @@ mod tests {
         };
         let value = serde_json::to_value(&request).expect("serialize request");
         assert_eq!(value["method"], "interaction_respond");
-        assert_eq!(value["interaction"]["conversation_id"], "conversation-1");
+        assert_eq!(
+            value["interaction"]["conversation_id"],
+            "conv_413055e0-cb3a-7c6d-89b6-b446a98e0ad1"
+        );
         assert_eq!(
             value["interaction"]["interaction_id"],
             "attempt-1-interaction-1"
@@ -1567,6 +1534,35 @@ mod tests {
         assert!(serde_json::from_str::<RuntimeClientRequest>(unknown_field).is_err());
     }
 
+    #[test]
+    fn session_protocol_rejects_obsolete_sequential_identities() {
+        for method in [
+            "session_select",
+            "session_delete_preview",
+            "session_delete_recover",
+        ] {
+            assert!(
+                serde_json::from_value::<RuntimeClientRequest>(serde_json::json!({
+                    "method": method, "id": 1, "session_id": "session-1"
+                }))
+                .is_err()
+            );
+        }
+        assert!(
+            serde_json::from_value::<super::SessionNodeView>(serde_json::json!({
+                "id": "node-1", "conversation_id": "conv_01900000-0000-7000-8000-000000000001",
+                "origin": {"type": "new"}
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<
+                crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult,
+            >(serde_json::json!({"status": "deleted", "session_id": "session-1"}))
+            .is_err()
+        );
+    }
+
     /// Responses echo the request id and carry exactly one of result/error.
     #[test]
     fn responses_correlate_request_ids() {
@@ -1590,12 +1586,18 @@ mod tests {
         let now = chrono::Utc::now();
         let result = RuntimeClientResult::SessionCommittedRestartRequired {
             session: SessionView {
-                id: "session-2".to_owned(),
+                id: crate::local_runtime::SessionId::new(
+                    "ses_01900000-0000-7000-8000-000000000002",
+                ),
                 name: None,
                 created_at: now,
                 updated_at: now,
-                active_node: "node-2".to_owned(),
-                active_conversation_id: ConversationId::new("conversation-2"),
+                active_node: crate::local_runtime::SessionNodeId::new(
+                    "node_01900000-0000-7000-8000-000000000002",
+                ),
+                active_conversation_id: ConversationId::new(
+                    "conv_016710bb-f342-71a6-8be8-f2c61649abee",
+                ),
                 node_count: 1,
             },
             editor_content: Some(vec![
@@ -1689,7 +1691,7 @@ mod tests {
             RuntimeClientError::NoCurrentAttempt,
             RuntimeClientError::InteractionNotPending {
                 interaction: InteractionRef::new(
-                    ConversationId::new("conversation-1"),
+                    ConversationId::new("conv_413055e0-cb3a-7c6d-89b6-b446a98e0ad1"),
                     InteractionId::new("attempt-1-interaction-1"),
                 ),
             },
@@ -1697,7 +1699,7 @@ mod tests {
                 message: "bounded".to_owned(),
             },
             RuntimeClientError::UnknownBackgroundExecution {
-                execution_id: ToolExecutionId::new("exec_1"),
+                execution_id: ToolExecutionId::new("exec_215a03ee-2332-70b6-8e2d-634da8066f98"),
             },
             RuntimeClientError::ResyncRequired {
                 after_cursor: RuntimeClientCursor::new(3),

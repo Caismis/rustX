@@ -138,8 +138,6 @@ struct Setup {
     summary_model: Option<String>,
     /// Explicit Skill resources for this isolated provider fixture.
     skill_paths: Vec<PathBuf>,
-    /// Keep the provider fixture independent from the invoking user's roots.
-    no_automatic_skills: bool,
 }
 
 impl Setup {
@@ -151,7 +149,6 @@ impl Setup {
             keep_recent_tokens: 8_192,
             summary_model: None,
             skill_paths: Vec::new(),
-            no_automatic_skills: true,
         }
     }
 }
@@ -169,23 +166,15 @@ impl Driver {
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(
-            root.path().join("models.toml"),
-            models_json(emulator, setup),
+            root.path().join("rustx.toml"),
+            format!("{}\n{}", session_json(setup), models_json(emulator, setup)),
         )
-        .expect("models.toml");
-        std::fs::write(root.path().join("rustx.toml"), session_json(setup)).expect("rustx.toml");
+        .expect("rustx.toml");
 
         let paths = LaunchFixture {
-            models: root.path().join("models.toml"),
             config: root.path().join("rustx.toml"),
-            skill_paths: setup.skill_paths.clone(),
-            no_automatic_skills: setup.no_automatic_skills,
-            no_builtin_tools: false,
-            no_direct_tools: false,
             startup_session: rustx::local_runtime::StartupSession::Empty,
             session_name: None,
-            tools: None,
-            exclude_tools: Vec::new(),
             workspace,
             runtime_root: root.path().join("private"),
         };
@@ -298,43 +287,33 @@ impl Driver {
 /// pointed at the emulator. The credential is resolved by the runtime from
 /// the environment exactly as in production.
 fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
-    let openai = emulator.openai_base_url();
-    let anthropic = emulator.base_url();
     let window = setup.context_window;
+    let mut models = serde_json::Map::new();
+    for id in [CHAT_MODEL, SECOND_MODEL, SUMMARY_MODEL] {
+        let mut model = chat_model(id, window);
+        model["provider"] = "emulator".into();
+        models.insert(format!("emulator/{id}"), model);
+    }
+    for (provider, id, protocol) in [
+        ("emulator", RESPONSES_MODEL, "openai_responses"),
+        ("emulator-anthropic", ANTHROPIC_MODEL, "anthropic_messages"),
+    ] {
+        models.insert(
+            format!("{provider}/{id}"),
+            serde_json::json!({
+                "provider": provider, "id": id, "protocol": protocol,
+                "context_window": window, "max_output_tokens": 1024,
+                "capabilities": text_capabilities(),
+            }),
+        );
+    }
     toml::to_string_pretty(&serde_json::json!({
         "providers": {
-            "emulator": {
-                "base_url": openai,
-                "api_key": format!("${CREDENTIAL_VARIABLE}"),
-                "models": [
-                    chat_model(CHAT_MODEL, window),
-                    chat_model(SECOND_MODEL, window),
-                    chat_model(SUMMARY_MODEL, window),
-                    {
-                        "id": RESPONSES_MODEL,
-                        "protocol": "openai_responses",
-                        "context_window": window,
-                        "max_output_tokens": 1024,
-                        "capabilities": text_capabilities(),
-                    },
-                ],
-            },
-            "emulator-anthropic": {
-                "base_url": anthropic,
-                "api_key": format!("${CREDENTIAL_VARIABLE}"),
-                "models": [
-                    {
-                        "id": ANTHROPIC_MODEL,
-                        "protocol": "anthropic_messages",
-                        "context_window": window,
-                        "max_output_tokens": 1024,
-                        "capabilities": text_capabilities(),
-                    },
-                ],
-            },
+            "emulator": { "base_url": emulator.openai_base_url(), "api_key": format!("${CREDENTIAL_VARIABLE}") },
+            "emulator-anthropic": { "base_url": emulator.base_url(), "api_key": format!("${CREDENTIAL_VARIABLE}") },
         },
-    }))
-    .unwrap()
+        "models": models,
+    })).unwrap()
 }
 
 fn chat_model(id: &str, window: u64) -> serde_json::Value {
@@ -364,9 +343,7 @@ fn session_json(setup: &Setup) -> String {
     }
     toml::to_string_pretty(&serde_json::json!({
         "agent_id": "agent-issue47",
-        // The root Agent needs no positive Skill list (#280): it sees every
-        // eligible Skill in the effective catalog automatically.
-        "agent": {"model": model},
+        "agent": {"model": model, "skills": "all", "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash"]}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
         "context": {
             "reserve_tokens": setup.reserve_tokens,
             "keep_recent_tokens": setup.keep_recent_tokens,
@@ -601,8 +578,16 @@ async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
         "the catalog publishes the package's host SKILL.md path: {published}"
     );
     assert!(
-        first.contains(&published),
-        "the provider receives that exact host location"
+        first.contains(
+            std::path::Path::new(&published)
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_str()
+                .unwrap()
+        ) && !first.contains(&published),
+        "the provider receives the absolute Skill root and package name, without path enumeration"
     );
     assert!(
         !first.contains(SKILL_BODY_MARKER),
@@ -727,10 +712,12 @@ async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
     let store = rustx::durable::SqliteConversationStore::open(
         driver.runtime.runtime().conversation_id().clone(),
         &driver
-            .root
-            .path()
-            .join("private")
-            .join("artifacts")
+            .runtime
+            .tool_runtime()
+            .tool_output()
+            .root()
+            .parent()
+            .unwrap()
             .join("conversation.sqlite"),
     )
     .expect("open the durable store for event assertions");
@@ -1261,22 +1248,18 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     std::fs::write(
-        root.path().join("models.toml"),
-        models_json(&emulator, &setup),
+        root.path().join("rustx.toml"),
+        format!(
+            "{}\n{}",
+            session_json(&setup),
+            models_json(&emulator, &setup)
+        ),
     )
-    .expect("models.toml");
-    std::fs::write(root.path().join("rustx.toml"), session_json(&setup)).expect("rustx.toml");
+    .expect("rustx.toml");
     let paths = LaunchFixture {
-        models: root.path().join("models.toml"),
         config: root.path().join("rustx.toml"),
-        skill_paths: setup.skill_paths.clone(),
-        no_automatic_skills: setup.no_automatic_skills,
-        no_builtin_tools: false,
-        no_direct_tools: false,
         startup_session: rustx::local_runtime::StartupSession::Empty,
         session_name: None,
-        tools: None,
-        exclude_tools: Vec::new(),
         workspace,
         runtime_root: root.path().join("private"),
     };
@@ -1326,9 +1309,23 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
     emulator.release_gate("before-remaining-text").await;
 
     // ---- runtime instance #2 over the same durable conversation ----
-    let recovered = HeadlessConversationRuntime::compose(&(paths).resolve(), &dependencies())
-        .await
-        .expect("the second runtime recovers the durable conversation");
+    let catalog = rustx::local_runtime::SessionCatalog::open_existing(&paths.runtime_root)
+        .unwrap()
+        .unwrap();
+    let mut resume_paths = paths.clone();
+    resume_paths.startup_session = rustx::local_runtime::StartupSession::Select {
+        session: catalog.persisted_session_ids()[0].clone(),
+        node: None,
+    };
+    let recovered = HeadlessConversationRuntime::compose(
+        &resume_paths.resolve(),
+        &LocalRuntimeDependencies {
+            startup_session: resume_paths.startup_session.clone(),
+            ..dependencies()
+        },
+    )
+    .await
+    .expect("the second runtime recovers the durable conversation");
     let report = recovered.runtime().recovery();
 
     // The crash boundary is the drop of the first execution runtime. The

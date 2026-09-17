@@ -32,10 +32,13 @@ fn fixture() -> (
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
-    let artifacts = ArtifactStore::new(ConversationId::new("conv-1"), dir.path().join("artifacts"))
-        .expect("artifacts");
+    let artifacts = ArtifactStore::new(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        dir.path().join("artifacts"),
+    )
+    .expect("artifacts");
     let tool_output = ManagedToolOutput::new(
-        ConversationId::new("conv-1"),
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         dir.path().join("tool-output"),
     )
     .expect("managed tool output");
@@ -104,7 +107,7 @@ async fn run_with_control(
     let reporter = NoopProgress;
     let context = ToolExecutionContext {
         goal: None,
-        conversation_id: &ConversationId::new("conv-1"),
+        conversation_id: &ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         execution_id: None,
         cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
             cancellation,
@@ -292,12 +295,14 @@ async fn spill_write_failure_fails_the_invocation_explicitly() {
     );
 }
 
-/// A spill allocation failure (sequence exhaustion) is represented
+/// A spill allocation failure (unavailable output directory) is represented
 /// explicitly as well.
 #[tokio::test]
 async fn spill_allocation_failure_fails_the_invocation_explicitly() {
     let (_dir, artifacts, tool_output, workspace) = fixture();
-    tool_output.exhaust_sequence();
+    let results = tool_output.root().join("results");
+    std::fs::remove_dir(&results).unwrap();
+    std::fs::write(&results, b"not a directory").unwrap();
     let result = run_with(
         "yes x | head -c 40000",
         &artifacts,
@@ -401,7 +406,12 @@ async fn cancellation_owns_the_outcome_and_a_failed_spill_is_never_advertised() 
     .await
     .expect("the spill transition happens (liveness guard)")
     .expect("the spill watch stays open");
-    let partial = tool_output.root().join("results/result_1.txt");
+    let files = std::fs::read_dir(tool_output.root().join("results"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(files.len(), 1);
+    let partial = files[0].clone();
     assert!(partial.exists(), "the spill was allocated at the crossing");
     cancellation.cancel();
     let result = tokio::time::timeout(Duration::from_secs(30), task)

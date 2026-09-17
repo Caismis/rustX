@@ -15,7 +15,7 @@
  * touching the terminal itself. That keeps it testable without a real
  * terminal and keeps Pi at the outermost layer.
  *
- * What it must never do: read `models.toml`, resolve a credential, execute a
+ * What it must never do: read `rustx.toml`, resolve a credential, execute a
  * tool, read a `SKILL.md`, compose an Agent Status, drain a mailbox, or reach
  * a provider. Every one of those is Rust-owned, and several are reachable
  * only through operations this file calls.
@@ -64,7 +64,6 @@ export type CommandOutcome =
   | { kind: "none" }
   | { kind: "inspect"; title: string; body: string }
   | { kind: "transient"; level: "info" | "error"; text: string }
-  | { kind: "choose_approval" }
   | { kind: "choose_model"; models: CatalogModelView[] }
   | {
       kind: "choose_session";
@@ -232,28 +231,7 @@ export class CommandDispatcher {
         case "/help":
           return inspect("Help", renderHelp());
         case "/settings":
-          return inspect("Effective settings", renderSettings(state));
-        case "/defaults": {
-          if (argument !== "user") return transient("error", "usage: /defaults user");
-          const document = await session.defaultsRead();
-          return inspect("Future user defaults", [
-            `Document: ${document.document}`,
-            `Revision: ${document.revision}`,
-            `Model: ${document.model?.model ?? "not set"}`,
-            `Reasoning profile: ${document.model?.reasoning_profile ?? "model default"}`,
-            `Approval: ${document.approval_mode ?? "not set"}`,
-            "Future launch only; project/CLI precedence still applies. This is not the running Session.",
-            "Save explicitly with /save-default user <model|approval> <revision>.",
-          ].join("\n"));
-        }
-        case "/save-default": {
-          const [scope, field, revision, extra] = argument.split(/\s+/);
-          if (scope !== "user" || !["model", "approval"].includes(field ?? "") || !revision || extra)
-            return transient("error", "usage: /save-default user <model|approval> <revision>; read /defaults user first");
-          const target = field === "model" ? "model_selection" : "approval_mode";
-          const saved = await session.defaultSave(revision, target);
-          return transient("info", `Saved ${field} to ${saved.document}; revision ${saved.revision}. Live Session unchanged; applies at ${boundaryLabel(saved.applies_at)}, subject to project/CLI precedence.`);
-        }
+          return inspect("Effective settings", renderSettings(state, await session.configuration()));
         case "/model":
           return await this.#model(session, state, argument);
         case "/new":
@@ -303,8 +281,6 @@ export class CommandDispatcher {
           return expandPreference(argument);
         case "/cancel":
           return await this.#cancel(session, argument);
-        case "/approval":
-          return argument.length === 0 ? { kind: "choose_approval" } : usage("/approval");
         case "/quit":
           return { kind: "quit" };
         default:
@@ -473,10 +449,10 @@ export class CommandDispatcher {
     if (argument.length > 0) {
       return transient("error", "usage: /reload");
     }
-    const reloaded = await session.reloadResources();
+    const reloaded = await session.reloadConfiguration();
     return transient(
       "info",
-      `runtime resources reloaded to generation ${reloaded.resourceRevision} (capabilities ${reloaded.capabilityRevision})`,
+      `configuration reloaded to generation ${reloaded.resourceRevision} (capabilities ${reloaded.capabilityRevision})`,
     );
   }
 
@@ -857,7 +833,7 @@ export function renderModel(state: PresentationState): string {
     return "Historical evidence is partial. Active Session model, approval, resources, and launch sources are unavailable. Consult retained Request Snapshots for request-specific evidence.";
   }
   const lines = [
-    `### ${state.settingsEvidence === "frozen_child" ? "Parent-provided child" : "Session"} model (${lifetime(state, "model")})`,
+    `### ${state.settingsEvidence === "frozen_child" ? "Parent-provided child" : "Session"} model (next eligible admission)`,
     `- configured: \`${session.configured.model}\``,
     `- effective: \`${session.effective.model}\` via ${session.effective.protocol}`,
     `- context window: ${session.effective.contextWindow}`,
@@ -901,7 +877,7 @@ export function renderModel(state: PresentationState): string {
   if (attempt !== undefined) {
     lines.push(
       "",
-      `### Active attempt model (${lifetime(state, "attempt")})`,
+      `### Active attempt model (frozen at admission)`,
       `- attempt: \`${attempt.attemptId}\` (${attempt.phase.type})`,
       `- model: \`${attempt.model?.primary.model ?? "unavailable"}\``,
       `- reasoning: ${(attempt.model ? describeReasoning(attempt.model.primary) : "unavailable")}`,
@@ -1099,124 +1075,19 @@ function contextDiagnosticsLines(state: PresentationState): string[] {
   ];
 }
 
-function lifetime(state: PresentationState, field: keyof import("../protocol/app-server.ts").SettingsLifetimes): string {
-  const boundary = state.settingsLifetimes?.[field];
-  if (boundary === undefined) return "lifetime unavailable";
-  return boundaryLabel(boundary);
-}
-
-function boundaryLabel(boundary: import("../protocol/app-server.ts").SettingsBoundary): string {
-  const labels: Record<import("../protocol/app-server.ts").SettingsBoundary, string> = {
-    launch_capture: "launch capture", next_admission: "next eligible admission",
-    safe_boundary: "safe boundary", resource_publication: "resource publication",
-    frozen_admission: "frozen at admission", client_local: "immediate, client-local",
-    next_launch: "future launch",
-  };
-  return labels[boundary];
-}
-
-/**
- * Render the attached Agent's frozen native Agent Extension composition
- * (Issue #256).
- *
- * Three states are deliberately distinct here, because they are distinct
- * native facts:
- *
- * - `effectiveExtensions === null` — the runtime published no authoritative
- *   composition to project (historical-only inspection). Nothing is filled
- *   in from disk configuration or built-in defaults;
- * - a member `=== null` — that extension is not part of this Agent's
- *   composition at all;
- * - a member present — the extension is composed, and its frozen
- *   contributor configuration is shown as the runtime froze it.
- *
- * Each member is read independently, because the extensions compose
- * independently (Issue #259): Todo is not implied by Agent Status, and
- * disabling Agent Status does not disable Todo.
- *
- * Enablement is read from this projection alone: the `statuses` window says
- * what was composed for a step, and an enabled extension with no eligible
- * contribution yet is still enabled. Todo's line is likewise never inferred
- * from `todo` results in the transcript, which are history rather than facts
- * about this runtime.
- */
-function renderExtensions(state: PresentationState): string[] {
-  const effective = state.effectiveExtensions;
-  if (effective === null) {
-    // No composition exists, so no boundary is claimed for one either.
-    return [
-      "### Native Agent Extensions (evidence unavailable)",
-      "- no effective extension composition exists for historical-only inspection",
-    ];
-  }
-  const heading = `### Native Agent Extensions (${lifetime(state, "extensions")})`;
-  const status = effective.agent_status;
-  const agentStatusLines =
-    status == null
-      ? ["- Agent Status: disabled (not composed for this Agent)"]
-      : [
-          "- Agent Status: enabled",
-          `  - Time: ${status.time.enabled ? "enabled" : "disabled"}`,
-          `  - timezone: ${status.time.timezone ?? "none configured"}`,
-          `  - Background: ${status.background.enabled ? "enabled" : "disabled"}`,
-        ];
-  const todoLines =
-    effective.todo == null
-      ? ["- Todo: disabled (not composed for this Agent)"]
-      : [
-          "- Todo: enabled",
-          "  - provides the model-facing `todo` Tool, independently of ordinary Tool selection",
-        ];
-  return [heading, ...agentStatusLines, ...todoLines, extensionNote(state)];
-}
-
-/** The lifetime this composition actually has, in the reader's terms. */
-function extensionNote(state: PresentationState): string {
-  return state.settingsEvidence === "frozen_child"
-    ? "This is the child execution profile its invoking generation resolved and froze; a later role or resource publication does not change it."
-    : "Frozen for this launch: /reload republishes resources and never recomposes extensions, while a restart resolves the current document and may compose a different set. `rustx config show --sources` describes that prospective next launch, not this composition.";
-}
-
-/** Render only native facts; never consult disk or reconstruct old requests. */
-export function renderSettings(state: PresentationState): string {
-  if (state.settingsEvidence === "historical_partial") {
-    return [renderModel(state), ...renderExtensions(state)].join("\n");
-  }
-
-  const launch = state.launchSettings;
-  const source = (value: import("../protocol/app-server.ts").SettingOrigin) =>
-    "document" in value ? `${value.kind}: ${value.document}` : value.kind;
-  const admitted = state.attempt?.executionSettings;
+/** Render native publication facts without parsing or resolving configuration. */
+export function renderSettings(state: PresentationState, configuration?: import("../protocol/app-server.ts").EffectiveConfiguration): string {
   return [
-    `### Launch capture (${lifetime(state, "launch")}; disk may now differ)`,
-    ...(launch ? [
-      `- model: ${launch.model.model}; source ${source(launch.model_origin)}`,
-      `- reasoning profile: ${launch.model.reasoning_profile ?? "model default"}; source ${source(launch.reasoning_origin)}`,
-      `- approval: ${launch.approval_mode}; source ${source(launch.approval_origin)}`,
-      `- launch ordinary tool selection source: ${source(launch.tool_selection_origin)}`,
-      `- runtime root source: ${source(launch.runtime_root_origin)}; restart required`,
-    ] : ["- launch provenance unavailable"]),
-    `### ${state.settingsEvidence === "frozen_child" ? "Child" : "Active Session"} selection (${lifetime(state, "model")})`,
+    `Published generation: ${configuration?.generation ?? state.resources.revision}`,
     renderModel(state),
-    `### Runtime policy (${lifetime(state, "approval")})`,
-    `- effective approval: ${state.effectiveApprovalMode}`,
-    `- pending approval: ${state.pendingApprovalMode ?? "none"}`,
-    `### Current resource generation (${lifetime(state, "resources")})`,
-    `- published revision: ${state.resources.revision}; capability revision: ${state.capabilities.revision}`,
-    renderTools(state),
-    renderSkills(state),
-    "Generation capability facts (active selections, suppression, source state and Workflow admission):",
-    JSON.stringify(state.resources.inspection, null, 2),
-    ...renderExtensions(state),
-    `### Admitted execution (${lifetime(state, "attempt")})`,
-    `- model: ${state.attempt?.model?.primary.model ?? "unavailable / no admitted attempt"}`,
-    `- resource revision: ${admitted?.resource_revision ?? "unavailable"}`,
-    `- approval: ${admitted?.approval_mode ?? "unavailable"}`,
-    "Child profiles/capabilities and admitted Workflow programs remain frozen; missing historical evidence is never filled from current state.",
-    `### Presentation (${lifetime(state, "presentation")})`,
-    "/show-reasoning on|off changes rendering only. /model profile changes generation-time reasoning.",
-    `### Defaults (${lifetime(state, "saved_defaults")}; separate disk authority)`,
-    "Read /defaults user, then explicitly /save-default user model|approval <revision>. Live selections do not save defaults automatically.",
-    "/reload publishes resources only; it is not startup settings hot reload. Reconnect repairs this view without replaying controls.",
+    `Approval policy: ${state.effectiveApprovalMode}`,
+    `Plugins: ${JSON.stringify(state.effectivePlugins)}`,
+    ...(configuration ? [
+      `Root default model: ${configuration.root_agent.model?.model ?? "none"}`,
+      `Session explicit model: ${configuration.session_model?.model ?? "none"}`,
+      `Admitted Attempt: ${JSON.stringify(configuration.admitted_attempt ?? null)}`,
+      "Effective configuration and provenance:", JSON.stringify(configuration, null, 2),
+    ] : []),
+    "Save commits authored sources. /reload publishes a complete configuration generation. Restart rereads current files.",
   ].join("\n");
 }

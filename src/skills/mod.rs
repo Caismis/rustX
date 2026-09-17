@@ -44,7 +44,6 @@ pub mod materialization;
 pub(crate) mod package;
 pub mod source;
 
-pub(crate) use catalog::admitted_skill_entries;
 pub use catalog::{SkillCatalogEntry, SkillSnapshot, render_skill_catalog};
 pub use dependencies::{
     DependencyConflict, DependencyError, DependencyManifest, Ecosystem, merge_dependency_manifests,
@@ -57,10 +56,8 @@ pub use environments::{
     python_environment_digest,
 };
 pub use package::{
-    SkillDiscovery, SkillDiscoveryConfig, SkillDiscoveryError, SkillDiscoveryOutcome, SkillPackage,
-    SkillPackageError,
+    SkillDiscovery, SkillDiscoveryConfig, SkillDiscoveryOutcome, SkillPackage, SkillPackageError,
 };
 pub use source::{
-    AutomaticSkillRoot, AutomaticSkillSource, SKILLS_DIRECTORY, SKILLS_ROOT, SkillSource,
-    automatic_skill_roots, default_automatic_sources,
+    AutomaticSkillRoot, SKILLS_DIRECTORY, SKILLS_ROOT, SkillSource, automatic_skill_roots,
 };

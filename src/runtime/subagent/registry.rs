@@ -440,6 +440,10 @@ impl SubagentRecord {
 }
 
 struct RegistryState {
+    max_active: usize,
+    model_timeout_policy: crate::model::ModelTimeoutPolicy,
+    tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
+    context_policy: crate::context::SessionContextPolicy,
     /// Registered staged children, ordered by their already allocated native
     /// identity ordinal. Notifications never confer eligibility.
     capacity_waiters: BTreeMap<u64, CancellationSignal>,
@@ -1294,6 +1298,7 @@ pub struct SubagentRegistryConfig {
 /// contract as the background registry.
 pub struct SubagentRegistry {
     config: SubagentRegistryConfig,
+    identities: Arc<dyn crate::runtime::identity::UuidV7Generator>,
     state: Arc<Mutex<RegistryState>>,
     state_version: tokio::sync::watch::Sender<u64>,
     #[cfg(test)]
@@ -1400,9 +1405,18 @@ impl SubagentRegistry {
     /// Creates the registry for one conversation.
     #[must_use]
     pub fn new(config: SubagentRegistryConfig) -> Self {
+        let max_active = config.max_active;
+        let model_timeout_policy = config.spawn.model_timeout_policy;
+        let tool_deadline_policy = config.spawn.tool_deadline_policy;
+        let context_policy = config.spawn.context;
         Self {
             config,
+            identities: Arc::new(crate::runtime::identity::SystemUuidV7Generator),
             state: Arc::new(Mutex::new(RegistryState {
+                max_active,
+                model_timeout_policy,
+                tool_deadline_policy,
+                context_policy,
                 capacity_waiters: BTreeMap::new(),
                 #[cfg(test)]
                 capacity_wait_entered: None,
@@ -1456,6 +1470,17 @@ impl SubagentRegistry {
         state.durability_gate = Some(gate);
     }
 
+    /// Supplies allocation independently of ordering, including deterministic
+    /// collision generators at the real preparation boundary.
+    #[must_use]
+    pub fn with_identity_generator(
+        mut self,
+        identities: Arc<dyn crate::runtime::identity::UuidV7Generator>,
+    ) -> Self {
+        self.identities = identities;
+        self
+    }
+
     /// The conversation this registry belongs to (construction ownership
     /// validation of the runtime that consumes it).
     #[must_use]
@@ -1475,6 +1500,28 @@ impl SubagentRegistry {
     #[must_use]
     pub(crate) fn shares_mailbox_domain(&self, other: &ConversationInboundMailbox) -> bool {
         self.config.mailbox.shares_domain_with(other)
+    }
+
+    /// Called only under the configuration publication gate after quiescence.
+    /// Previously admitted child specs already own copies of these values.
+    pub(crate) fn publish_configuration(
+        &self,
+        config: &crate::local_runtime::config::CurrentRuntimeConfig,
+    ) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.max_active = config.subagents.max_concurrent;
+        state.model_timeout_policy = config.timeout_policy().expect("validated generation");
+        state.tool_deadline_policy = config.tool_deadline_policy().expect("validated generation");
+        state.context_policy = config.context_policy();
+    }
+
+    pub(crate) fn configuration_busy(&self) -> bool {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        !state.capacity_waiters.is_empty()
+            || state.records.iter().any(|record| {
+                record.lifecycle.is_active()
+                    || matches!(record.lifecycle, SubagentLifecycle::PublishingTerminal)
+            })
     }
 
     /// Whether the registry owns no committed child record yet.
@@ -1953,12 +2000,19 @@ impl SubagentRegistry {
         let profile = SubagentExecutionProfile::from_frozen(&spec.resolved.model);
         // Workspace acquisition and physical-root allocation are both staged
         // child ownership. A pre-commit crash can leave a durable store for
-        // the ordinal that was never published; skip that identity rather
+        // an identity that was never published; skip that identity rather
         // than ever allowing a new child to append to its history.
+        let mut identity_attempts = 0;
         let (subagent_id, child_conversation_id, child_agent_id, workspace_lease, runtime_root) = loop {
             if preparation_cancellation.is_cancelled() {
                 return Err(SubagentStartError::Cancelled);
             }
+            if identity_attempts == 16 {
+                return Err(SubagentStartError::Spawn {
+                    detail: "Conversation identity reservation exhausted".into(),
+                });
+            }
+            identity_attempts += 1;
             let ordinal = {
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 let ordinal = state.next_ordinal;
@@ -1966,7 +2020,19 @@ impl SubagentRegistry {
                 ordinal
             };
             let subagent_id = SubagentId::for_conversation(&self.config.conversation_id, ordinal);
-            let child_conversation_id = ConversationId::new(subagent_id.as_str());
+            let child_conversation_id = ConversationId::from_uuid(self.identities.next_uuid())
+                .map_err(|detail| SubagentStartError::Spawn { detail })?;
+            if child_conversation_id == self.config.conversation_id
+                || self
+                    .state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .records
+                    .iter()
+                    .any(|record| record.child_conversation_id == child_conversation_id)
+            {
+                continue;
+            }
             let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
             // Workspace acquisition is staged child ownership. It happens
             // after resolution/freeze and before any child preparation, but
@@ -2030,7 +2096,11 @@ impl SubagentRegistry {
                     });
                 }
             }
-            let runtime_root = match self.config.spawn.allocate_child_runtime_root(&subagent_id) {
+            let runtime_root = match self
+                .config
+                .spawn
+                .allocate_child_runtime_root(&child_conversation_id)
+            {
                 Ok(runtime_root) => runtime_root,
                 Err(super::process::SpawnError::ConversationIdentityInUse { .. }) => {
                     let borrowed = matches!(workspace_lease, WorkspaceUse::Borrowed(_));
@@ -2061,7 +2131,7 @@ impl SubagentRegistry {
                 runtime_root,
             );
         };
-        let child_spec = self.config.spawn.child_spec(
+        let mut child_spec = self.config.spawn.child_spec(
             &subagent_id,
             &child_conversation_id,
             &child_agent_id,
@@ -2072,6 +2142,12 @@ impl SubagentRegistry {
             &workspace_lease,
             &spec.terminal,
         );
+        {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            child_spec.model_timeout_policy = state.model_timeout_policy;
+            child_spec.tool_deadline_policy = state.tool_deadline_policy;
+            child_spec.context = state.context_policy;
+        }
         let staged = match super::process::spawn_staged(
             &self.config.spawn,
             &child_spec,
@@ -2348,8 +2424,8 @@ impl SubagentRegistry {
                         // never wake order. Ordinary commit cannot bypass an
                         // existing waiter, but remains strictly non-waiting.
                         if wait_for_capacity
-                            && config.max_active > 0
-                            && (active >= config.max_active || !state.capacity_waiters.is_empty())
+                            && state.max_active > 0
+                            && (active >= state.max_active || !state.capacity_waiters.is_empty())
                         {
                             state
                                 .capacity_waiters
@@ -2360,9 +2436,9 @@ impl SubagentRegistry {
                             .capacity_waiters
                             .first_key_value()
                             .is_none_or(|(first, _)| wait_for_capacity && *first == ordinal);
-                        if active >= config.max_active || !eligible {
+                        if active >= state.max_active || !eligible {
                             return Decision::Failed(SubagentStartError::CapacityExceeded {
-                                max: config.max_active,
+                                max: state.max_active,
                             });
                         }
                         if attempt_cancellation.is_cancelled() {
@@ -2460,7 +2536,12 @@ impl SubagentRegistry {
                 }
             };
             if wait_for_capacity
-                && self.config.max_active > 0
+                && self
+                    .state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .max_active
+                    > 0
                 && matches!(
                     decision,
                     Decision::Failed(SubagentStartError::CapacityExceeded { .. })
@@ -2669,6 +2750,7 @@ impl SubagentRegistry {
     fn clone_for_task(&self) -> Self {
         Self {
             config: self.config.clone(),
+            identities: Arc::clone(&self.identities),
             state: Arc::clone(&self.state),
             state_version: self.state_version.clone(),
             #[cfg(test)]
@@ -5313,7 +5395,7 @@ mod tests {
         let runtime_root = dir.path().join("runtime");
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::create_dir_all(&runtime_root).expect("runtime root");
-        let conversation_id = ConversationId::new("conv-test");
+        let conversation_id = ConversationId::new("conv_5d71cacf-35af-790f-8022-fe16cd1b9fe0");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
                 .expect("in-memory store"),
@@ -5334,6 +5416,10 @@ mod tests {
             clock: Arc::new(SystemClock),
             monotonic_clock: monotonic_clock.clone(),
             spawn: SubagentSpawnPlan {
+                session_id: crate::runtime::identity::SessionId::new(
+                    "ses_01900000-0000-7000-8000-000000000001",
+                ),
+
                 program: std::path::PathBuf::from("/nonexistent/rustx"),
                 product_root: crate::runtime::local_storage::ProductRoot::create(
                     &runtime_root.clone(),
@@ -5566,6 +5652,10 @@ mod tests {
     /// lifecycle, so resolution is already complete before it is involved.
     fn resolved(agent: &str) -> ResolvedSubagentSpec {
         ResolvedSubagentSpec {
+            environment: Vec::new(),
+            generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
+            skill_roots: Vec::new(),
+
             selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
             agent: SubagentName::parse(agent).expect("canonical name"),
             definition_digest: serde_json::from_value(serde_json::json!(
@@ -8860,7 +8950,7 @@ mod tests {
         let accepted = start(&plane, &start_spec("inspect")).await;
         assert_eq!(
             accepted.subagent_id.as_str(),
-            "conv-test-subagent-8",
+            "conv_5d71cacf-35af-790f-8022-fe16cd1b9fe0-subagent-8",
             "the next ordinal never reissues a durable identity"
         );
         child
@@ -8879,11 +8969,35 @@ mod tests {
     /// to a fresh child identity instead of reusing it.
     #[tokio::test]
     async fn prepare_skips_an_unpublished_durable_child_identity() {
-        let plane = plane(4);
-        let stale_id = SubagentId::new("conv-test-subagent-1");
+        #[derive(Debug)]
+        struct Identities(std::sync::Mutex<std::collections::VecDeque<uuid::Uuid>>);
+        impl crate::runtime::identity::UuidV7Generator for Identities {
+            fn next_uuid(&self) -> uuid::Uuid {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("finite allocation sequence")
+            }
+        }
+        let ids = [
+            "01900000-0000-7000-8000-000000000011",
+            "01900000-0000-7000-8000-000000000012",
+            "01900000-0000-7000-8000-000000000013",
+        ]
+        .map(|id| uuid::Uuid::parse_str(id).unwrap());
+        let mut plane = plane(4);
+        plane.registry =
+            plane
+                .registry
+                .with_identity_generator(Arc::new(Identities(std::sync::Mutex::new(
+                    ids.into_iter().collect(),
+                ))));
+        let stale_id = ConversationId::from_uuid(ids[0]).unwrap();
         let stale_store = crate::runtime::subagent::child_conversation_store_path(
             &plane.runtime_root,
-            &ConversationId::new(stale_id.as_str()),
+            &plane.registry.config.spawn.session_id,
+            &stale_id,
         );
         std::fs::create_dir_all(
             stale_store
@@ -8910,8 +9024,8 @@ mod tests {
             .await
             .expect("the following identity is fresh");
         assert_eq!(
-            prepared.child_conversation_id.as_str(),
-            "conv-test-subagent-3"
+            prepared.child_conversation_id,
+            ConversationId::from_uuid(ids[2]).unwrap()
         );
         prepared.staged.rollback().await.expect("rollback");
         assert_eq!(
@@ -8999,7 +9113,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_of_an_unknown_or_terminal_subagent_is_a_noop() {
         let plane = plane(4);
-        let unknown = SubagentId::new("conv-test-subagent-99");
+        let unknown = SubagentId::new("conv_5d71cacf-35af-790f-8022-fe16cd1b9fe0-subagent-99");
         assert!(
             plane
                 .registry
@@ -9411,7 +9525,7 @@ mod tests {
 
         // Unknown identities are a no-op.
         plane.registry.apply_activity(
-            &SubagentId::new("conv-test-subagent-99"),
+            &SubagentId::new("conv_5d71cacf-35af-790f-8022-fe16cd1b9fe0-subagent-99"),
             observation.clone(),
         );
 
@@ -9518,7 +9632,9 @@ mod tests {
         state.records.push(SubagentRecord {
             subagent_id: subagent_id.clone(),
             child_agent_id: AgentId::new(format!("agent-{id}")),
-            child_conversation_id: ConversationId::new(format!("conv-{id}")),
+            child_conversation_id: ConversationId::new(format!(
+                "conv_00000000-0000-7000-8000-{index:012x}"
+            )),
             tool_call_id: ToolCallId::new(format!("call-{id}")),
             agent: SubagentName::parse("reviewer").expect("agent name"),
             definition_digest: serde_json::from_value(serde_json::Value::String(format!(
@@ -9826,7 +9942,7 @@ mod tests {
                 subagent_id: subagent_id.clone(),
                 child_agent_id: crate::runtime::identity::AgentId::new("agent-recovered"),
                 child_conversation_id: crate::runtime::identity::ConversationId::new(
-                    "conv-recovered-child",
+                    "conv_5c5feea1-e5d8-7965-8253-00af9a91ea8c",
                 ),
                 tool_call_id: ToolCallId::new("call-recovered"),
                 agent: "explore".to_owned(),

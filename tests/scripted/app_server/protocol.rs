@@ -70,7 +70,7 @@ async fn initialize(connection: &AppServerConnection) {
         connection,
         0,
         Method::Initialize(InitializeParams {
-            protocol_version: 5,
+            protocol_version: crate::app_server::protocol::APP_SERVER_PROTOCOL_VERSION,
             client: ClientIdentity {
                 name: "scripted".into(),
                 version: "1".into(),
@@ -246,9 +246,8 @@ async fn admitted_async_operation_drains_before_unload_releases_resources() {
             call(
                 &worker,
                 200,
-                Method::DefaultsRead {
+                Method::ConfigurationGet {
                     target: operation_target,
-                    scope: crate::runtime_client::settings::DefaultScope::User,
                 },
             )
             .await
@@ -302,7 +301,7 @@ async fn admitted_async_operation_drains_before_unload_releases_resources() {
         probe.before_operation.release();
         assert!(matches!(
             operation.await.unwrap(),
-            MethodResult::Defaults { .. }
+            MethodResult::EffectiveConfiguration { .. }
         ));
         assert!(matches!(
             unload.await.unwrap(),
@@ -365,7 +364,7 @@ async fn unload_claim_rejects_late_operations_and_old_incarnations() {
         let replacement = f.manager.load(&old.session_id, None).await.unwrap();
         assert_ne!(old.runtime_incarnation, replacement.incarnation_id());
         assert_eq!(
-            rejected(&connection, Method::ResourcesReload { target: old }).await,
+            rejected(&connection, Method::ConfigurationReload { target: old }).await,
             ErrorData::StaleRuntime
         );
         assert!(f.provider.request_bodies().is_empty());
@@ -654,9 +653,8 @@ async fn cancelled_attach_releases_reservation_but_not_manager_owned_load() {
             call(
                 &worker,
                 501,
-                Method::DefaultsRead {
+                Method::ConfigurationGet {
                     target: operation_target,
-                    scope: crate::runtime_client::settings::DefaultScope::User,
                 },
             )
             .await
@@ -705,7 +703,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":2,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 5, .. })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 6, .. })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -716,7 +714,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
             (r#"{"jsonrpc":"2.0","id":9007199254740993,"method":"session/create","params":{}}"#, -32600),
             (r#"{"jsonrpc":"2.0","id":9,"method":"session/list","params":{"offset":9007199254740993,"limit":32}}"#, -32602),
             (r#"{"jsonrpc":"2.0","id":8,"method":"session/name","params":{"session_id":"s","name":"first","name":"second"}}"#, -32602),
-            (r#"{"jsonrpc":"2.0","id":6,"method":"settings/saveDefault","params":{"target":{"session_id":"s","conversation_id":"c","runtime_incarnation":1,"attachment_id":"a"},"scope":"user","expected_revision":"r","setting":"settings/saveDefault"}}"#, -32602),
+            (r#"{"jsonrpc":"2.0","id":6,"method":"settings/saveDefault","params":{"target":{"session_id":"s","conversation_id":"c","runtime_incarnation":1,"attachment_id":"a"},"scope":"user","expected_revision":"r","setting":"settings/saveDefault"}}"#, -32601),
             (r#"{"jsonrpc":"2.0","id":7,"method":"turn/start","params":{"target":{"session_id":"s","conversation_id":"c","runtime_incarnation":1,"attachment_id":"a"},"content":[{"type":"text","text":"never","extra":true}]}}"#, -32602),
         ] {
             let Response::Failure(failure) = connection.handle_json(json).await.unwrap() else { panic!("invalid request accepted") };
@@ -797,7 +795,9 @@ async fn durable_session_operations_never_compose_a_runtime() {
         else {
             panic!("settings");
         };
-        settings.no_builtin_tools = true;
+        settings.model = Some(crate::model::session::SessionModelConfig::of(
+            crate::model::catalog::ModelRef::parse("local/b").unwrap(),
+        ));
         let MethodResult::SettingsReplaced { revision: updated } = call(
             &connection,
             103,
@@ -1438,17 +1438,10 @@ async fn admitted_mutation_survives_close_before_native_dispatch() {
         let probe = f.manager.probe(&target.conversation_id);
         probe.before_operation.arm();
         let worker = connection.clone();
-        let pending = tokio::spawn(async move {
-            call(
-                &worker,
-                10,
-                Method::ApprovalModeSet {
-                    target,
-                    mode: crate::runtime::ApprovalMode::FullAccess,
-                },
-            )
-            .await
-        });
+        let pending =
+            tokio::spawn(
+                async move { call(&worker, 10, Method::ConfigurationReload { target }).await },
+            );
         probe.before_operation.entered().await; // manager lease acquired, native call not executed
         connection.close();
         assert_eq!(connection.attachment_counts(), (0, 0));
@@ -1458,10 +1451,7 @@ async fn admitted_mutation_survives_close_before_native_dispatch() {
         probe.before_operation.release();
         assert!(matches!(
             pending.await.unwrap(),
-            MethodResult::ApprovalMode {
-                effective_approval_mode: crate::runtime::ApprovalMode::FullAccess,
-                ..
-            }
+            MethodResult::ConfigurationReloaded { .. }
         ));
         let MethodResult::Snapshot { snapshot, .. } = call(
             &replacement,
@@ -1475,10 +1465,7 @@ async fn admitted_mutation_survives_close_before_native_dispatch() {
         else {
             panic!("snapshot");
         };
-        assert_eq!(
-            snapshot.effective_approval_mode,
-            crate::runtime::ApprovalMode::FullAccess
-        );
+        assert_eq!(snapshot.resources.revision.get(), 2);
         assert!(matches!(
             rejected(&connection, Method::ServerInfo {}).await,
             ErrorData::StaleAttachment
@@ -2027,7 +2014,9 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
             }
         ));
         let mut wrong = a.clone();
-        wrong.conversation_id = crate::runtime::identity::ConversationId::new("wrong");
+        wrong.conversation_id = crate::runtime::identity::ConversationId::new(
+            "conv_8810ad58-1e59-72bc-8928-b261707a7130",
+        );
         assert_eq!(
             rejected(
                 &connection,
@@ -2196,16 +2185,9 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
         else {
             panic!()
         };
-        assert!(projection.resolution_available);
-        assert!(projection.workspace.active);
-        assert!(
-            projection
-                .catalog
-                .models
-                .models
-                .iter()
-                .any(|m| m.model.to_string() == "local/b")
-        );
+        assert!(projection.user.authored.is_some());
+        assert!(projection.workspace.authored.is_some());
+        assert!(projection.user.authored.as_ref().unwrap().models.as_ref().unwrap().contains_key("local/b"));
         let expected = projection.user.revision.clone();
         let selection = Some(SessionModelConfig::of(ModelRef::parse("local/b").unwrap()));
         let MethodResult::SourceSettings {
@@ -2216,14 +2198,14 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
             Method::SourcesWrite {
                 session_id: id.clone(),
                 expected_revision: expected.clone(),
-                mutation: SourceMutation::UserModel {
+                mutation: SourceMutation::Config { scope: SourceScope::User, mutation: crate::local_runtime::configuration::settings::ConfigMutation::RootModel {
                     authored: Some(
-                        crate::local_runtime::configuration::settings::AuthoredModelSelection {
+                        crate::local_runtime::authoring::ModelLayer {
                             model: Some(ModelRef::parse("local/b").unwrap()),
                             ..Default::default()
                         },
                     ),
-                },
+                } },
             },
         )
         .await
@@ -2232,7 +2214,7 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
         };
         assert_ne!(saved.user.revision, expected);
         assert_eq!(
-            saved.user.authored.as_ref().unwrap().model,
+            saved.user.authored.as_ref().unwrap().agent.as_ref().unwrap().model.as_ref().unwrap().model,
             selection.as_ref().map(|s| s.model.clone())
         );
         assert!(matches!(
@@ -2241,7 +2223,7 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
                 Method::SourcesWrite {
                     session_id: id.clone(),
                     expected_revision: expected,
-                    mutation: SourceMutation::UserModel { authored: None }
+                    mutation: SourceMutation::Config { scope: SourceScope::User, mutation: crate::local_runtime::configuration::settings::ConfigMutation::RootModel { authored: None } }
                 }
             )
             .await,
@@ -2306,10 +2288,7 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
             panic!()
         };
         assert_eq!(session_selection, selection);
-        assert!(matches!(
-            projection.provenance["agent.model.model"],
-            crate::local_runtime::configuration::Origin::Explicit { .. }
-        ));
+        assert_eq!(projection.loaded, None);
         call(
             &connection,
             6,
@@ -2350,29 +2329,43 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             .source_settings(&f.sessions[0].id, None)
             .await
             .unwrap();
-        let mut providers = initial.catalog.providers;
-        providers.get_mut("local").unwrap().models[0].reasoning =
-            Some(crate::model::authoring::Reasoning {
-                default_profile: crate::model::catalog::ReasoningProfileId::new("old"),
-                profiles: ["old", "new"]
-                    .into_iter()
-                    .map(|name| {
-                        (
-                            crate::model::catalog::ReasoningProfileId::new(name),
-                            crate::model::authoring::Profile {
-                                enabled: false,
-                                request_params: crate::toml_authoring::RequestParamsToml::default(),
-                            },
-                        )
-                    })
-                    .collect(),
-            });
+        let mut model = initial
+            .user
+            .authored
+            .as_ref()
+            .unwrap()
+            .models
+            .as_ref()
+            .unwrap()["local/a"]
+            .clone();
+        model.reasoning = Some(crate::model::authoring::Reasoning {
+            default_profile: crate::model::catalog::ReasoningProfileId::new("old"),
+            profiles: ["old", "new"]
+                .into_iter()
+                .map(|name| {
+                    (
+                        crate::model::catalog::ReasoningProfileId::new(name),
+                        crate::model::authoring::Profile {
+                            enabled: false,
+                            request_params: crate::toml_authoring::RequestParamsToml::default(),
+                        },
+                    )
+                })
+                .collect(),
+        });
         f.manager
             .source_settings(
                 &f.sessions[0].id,
                 Some((
-                    initial.catalog.revision,
-                    SourceMutation::Catalog { providers },
+                    initial.user.revision,
+                    SourceMutation::Config {
+                        scope: crate::local_runtime::configuration::settings::SourceScope::User,
+                        mutation:
+                            crate::local_runtime::configuration::settings::ConfigMutation::Model {
+                                id: "local/a".into(),
+                                authored: Some(model),
+                            },
+                    },
                 )),
             )
             .await
@@ -2403,8 +2396,15 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
         else {
             panic!()
         };
-        let mut providers = projection.catalog.providers;
-        let model = &mut providers.get_mut("local").unwrap().models[0];
+        let mut model = projection
+            .user
+            .authored
+            .as_ref()
+            .unwrap()
+            .models
+            .as_ref()
+            .unwrap()["local/a"]
+            .clone();
         model.max_output_tokens = 2048;
         model.reasoning.as_mut().unwrap().default_profile =
             crate::model::catalog::ReasoningProfileId::new("new");
@@ -2416,41 +2416,51 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             103,
             Method::SourcesWrite {
                 session_id: target.session_id.clone(),
-                expected_revision: projection.catalog.revision,
-                mutation: SourceMutation::Catalog { providers },
+                expected_revision: projection.user.revision,
+                mutation: SourceMutation::Config {
+                    scope: crate::local_runtime::configuration::settings::SourceScope::User,
+                    mutation:
+                        crate::local_runtime::configuration::settings::ConfigMutation::Model {
+                            id: "local/a".into(),
+                            authored: Some(model),
+                        },
+                },
             },
         )
         .await;
-        // WEB-09 source save must preserve the same loaded/frozen generations.
-        f.manager.source_settings(&target.session_id, Some((projection.user.revision,
-            SourceMutation::Mcp {
-                scope: crate::local_runtime::configuration::integrations::IntegrationScope::User,
-                id: crate::runtime::identity::McpServerId::new("web09-inert"),
-                authored: Some(crate::local_runtime::configuration::integrations::McpDraft {
-                    enabled: Some(false), command: Some("never-start-inert-fixture".into()), ..Default::default()
-                }),
-            }
-        ))).await.unwrap();
         let after = runtime.client().snapshot().unwrap().0;
         assert_eq!(before.resources, after.resources);
         assert_eq!(before.capabilities, after.capabilities);
-        assert_eq!(before.attempt.as_ref().unwrap().execution_settings, after.attempt.as_ref().unwrap().execution_settings);
+        assert_eq!(
+            before.attempt.as_ref().unwrap().execution_settings,
+            after.attempt.as_ref().unwrap().execution_settings
+        );
         assert_eq!(before.model, after.model);
         assert_eq!(
             before.attempt.as_ref().unwrap().model,
             after.attempt.as_ref().unwrap().model
         );
-        let (prospective, _, _) = f
+        let prospective = f
             .manager
-            .source_settings(&target.session_id, None)
-            .await
+            .configuration
+            .resolve_session(
+                &crate::local_runtime::configuration::SessionConfigInput::new(
+                    f.workspaces[0].clone(),
+                ),
+            )
             .unwrap();
-        let next = prospective.effective_request.unwrap();
+        let next = prospective
+            .models
+            .model(&crate::model::catalog::ModelRef::parse("local/a").unwrap())
+            .unwrap();
         let frozen = after.attempt.as_ref().unwrap().model.as_ref().unwrap();
-        assert_eq!(next.model, frozen.primary.model);
+        assert_eq!(next.id.as_str(), "a");
         assert_eq!(next.max_output_tokens, 2048);
         assert_eq!(frozen.primary.max_output_tokens, 4096);
-        assert_eq!(next.reasoning_profile.as_ref().unwrap().as_str(), "new");
+        assert_eq!(
+            next.reasoning.as_ref().unwrap().default_profile.as_str(),
+            "new"
+        );
         assert_eq!(
             frozen.primary.reasoning_profile.as_ref().unwrap().as_str(),
             "old"
@@ -2495,19 +2505,19 @@ fn source_gate(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn web08_source_document_wait_releases_catalog_and_rejects_mixed_session_revision() {
+async fn cfg3_source_document_wait_releases_catalog_and_rejects_mixed_session_revision() {
     bounded(async {
         let f = Fixture::new().await;
         let id = f.sessions[0].id.clone();
         let (before, revision, _) = f.manager.source_settings(&id, None).await.unwrap();
-        let document_lock = crate::local_runtime::settings::lock_document(std::path::Path::new(&before.user.document)).unwrap();
+        let document_lock = crate::local_runtime::settings::lock_document(std::path::Path::new(&before.user.path)).unwrap();
         let (entered, resume) = source_gate(&f, "before_documents");
         let manager = f.manager.clone();
         let read_id = id.clone();
         let read = tokio::spawn(async move { manager.source_settings(&read_id, None).await });
         entered.await.unwrap();
         resume.send(()).unwrap();
-        // Source worker owns trust and is about to wait on this held document lock.
+        // Source worker is about to wait on this held document lock.
         // Unrelated catalog access and a durable same-Session commit both finish.
         let mut catalog = f.manager.sessions.catalog.lock().await;
         catalog.settings_revision(&f.sessions[1].id).unwrap();
@@ -2553,15 +2563,15 @@ async fn web08_selection_validation_releases_catalog_and_commits_with_original_c
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn web08_source_commit_with_changed_session_is_uncertain_and_never_replayed() {
+async fn cfg3_source_commit_with_changed_session_is_uncertain_and_never_replayed() {
     use crate::local_runtime::configuration::settings::{SettingsError, SourceMutation};
     bounded(async {
         let f = Fixture::new().await;
         let id = f.sessions[0].id.clone();
         let (before, revision, _) = f.manager.source_settings(&id, None).await.unwrap();
         let (entered, resume) = source_gate(&f, "before_publication");
-        let mut providers = before.catalog.providers;
-        providers.get_mut("local").unwrap().models[0].max_output_tokens = 2048;
+        let mut model = before.user.authored.as_ref().unwrap().models.as_ref().unwrap()["local/a"].clone();
+        model.max_output_tokens = 2048;
         let manager = f.manager.clone();
         let write_id = id.clone();
         let write = tokio::spawn(async move {
@@ -2569,8 +2579,8 @@ async fn web08_source_commit_with_changed_session_is_uncertain_and_never_replaye
                 .source_settings(
                     &write_id,
                     Some((
-                        before.catalog.revision,
-                        SourceMutation::Catalog { providers },
+                        before.user.revision,
+                        SourceMutation::Config { scope: crate::local_runtime::configuration::settings::SourceScope::User, mutation: crate::local_runtime::configuration::settings::ConfigMutation::Model { id: "local/a".into(), authored: Some(model) } },
                     )),
                 )
                 .await
@@ -2589,7 +2599,7 @@ async fn web08_source_commit_with_changed_session_is_uncertain_and_never_replaye
         ));
         let (fresh, _, _) = f.manager.source_settings(&id, None).await.unwrap();
         assert_eq!(
-            fresh.catalog.providers["local"].models[0].max_output_tokens,
+            fresh.user.authored.as_ref().unwrap().models.as_ref().unwrap()["local/a"].max_output_tokens,
             2048
         );
         f.close().await;
@@ -2598,10 +2608,9 @@ async fn web08_source_commit_with_changed_session_is_uncertain_and_never_replaye
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn web09_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary() {
-    use crate::local_runtime::configuration::{
-        integrations::{IntegrationScope, McpDraft},
-        settings::{SettingsError, SourceMutation},
+async fn cfg3_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary() {
+    use crate::local_runtime::configuration::settings::{
+        McpWrite, SettingsError, SourceMutation, SourceScope,
     };
     bounded(async {
         let f = Fixture::new().await;
@@ -2610,18 +2619,21 @@ async fn web09_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary(
         initialize(&connection).await;
         let (before, revision, _) = f.manager.source_settings(&id, None).await.unwrap();
         let mutation = SourceMutation::Mcp {
-            scope: IntegrationScope::User,
+            scope: SourceScope::User,
             id: crate::runtime::identity::McpServerId::new("fixture"),
-            authored: Some(McpDraft {
-                command: Some("never-start-disabled-fixture".into()),
-                enabled: Some(false),
-                ..Default::default()
+            authored: Some(McpWrite {
+                definition: serde_json::from_value(
+                    serde_json::json!({"command":"never-start-unselected-fixture"}),
+                )
+                .unwrap(),
+                retained_env: vec![],
+                retained_headers: vec![],
             }),
         };
         let (entered, resume) = source_gate(&f, "before_publication");
         let manager = f.manager.clone();
         let write_id = id.clone();
-        let expected = before.user.revision.clone();
+        let expected = before.user_mcp.revision.clone();
         let write = tokio::spawn(async move {
             manager
                 .source_settings(&write_id, Some((expected, mutation)))
@@ -2652,15 +2664,22 @@ async fn web09_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary(
         else {
             panic!()
         };
-        assert_eq!(fresh.integrations.mcp[0].id.as_str(), "fixture");
+        assert!(
+            fresh
+                .user_mcp
+                .authored
+                .as_ref()
+                .unwrap()
+                .contains_key(&crate::runtime::identity::McpServerId::new("fixture"))
+        );
         assert!(matches!(
             rejected(
                 &connection,
                 Method::SourcesWrite {
                     session_id: id.clone(),
-                    expected_revision: before.user.revision,
+                    expected_revision: before.user_mcp.revision,
                     mutation: SourceMutation::Mcp {
-                        scope: IntegrationScope::User,
+                        scope: SourceScope::User,
                         id: crate::runtime::identity::McpServerId::new("fixture"),
                         authored: None
                     }
@@ -2677,9 +2696,9 @@ async fn web09_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary(
             2,
             Method::SourcesWrite {
                 session_id: id,
-                expected_revision: fresh.user.revision,
+                expected_revision: fresh.user_mcp.revision,
                 mutation: SourceMutation::Mcp {
-                    scope: IntegrationScope::User,
+                    scope: SourceScope::User,
                     id: crate::runtime::identity::McpServerId::new("fixture"),
                     authored: None,
                 },
@@ -2689,7 +2708,7 @@ async fn web09_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary(
         else {
             panic!()
         };
-        assert!(deleted.integrations.mcp.is_empty());
+        assert!(deleted.user_mcp.authored.as_ref().unwrap().is_empty());
         assert!(f.provider.request_bodies().is_empty());
         f.close().await;
     })
@@ -2697,10 +2716,9 @@ async fn web09_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn web09_workspace_policy_remains_user_owned_and_repairable_over_protocol() {
-    use crate::local_runtime::configuration::{
-        integrations::{IntegrationScope, McpDraft, McpPolicyState},
-        settings::SourceMutation,
+async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_owners() {
+    use crate::local_runtime::configuration::settings::{
+        ConfigMutation, McpWrite, SourceMutation, SourceScope,
     };
     use crate::runtime::identity::McpServerId;
     bounded(async {
@@ -2710,29 +2728,33 @@ async fn web09_workspace_policy_remains_user_owned_and_repairable_over_protocol(
         initialize(&connection).await;
         let (before, _, _) = f.manager.source_settings(&id, None).await.unwrap();
         let MethodResult::SourceSettings {
-            projection: workspace,
+            projection: definition,
             ..
         } = call(
             &connection,
             1,
             Method::SourcesWrite {
                 session_id: id.clone(),
-                expected_revision: before.workspace.revision,
+                expected_revision: before.workspace_mcp.revision,
                 mutation: SourceMutation::Mcp {
-                    scope: IntegrationScope::Workspace,
-                    id: McpServerId::new("project-only"),
-                    authored: Some(McpDraft {
-                        command: Some("inert-workspace".into()),
-                        enabled: Some(false),
-                        ..Default::default()
+                    scope: SourceScope::Workspace,
+                    id: McpServerId::new("service"),
+                    authored: Some(McpWrite {
+                        definition: serde_json::from_value(
+                            serde_json::json!({"command":"never-start-unselected-fixture"}),
+                        )
+                        .unwrap(),
+                        retained_env: vec![],
+                        retained_headers: vec![],
                     }),
                 },
             },
         )
         .await
         else {
-            panic!()
+            panic!("source projection")
         };
+        assert_eq!(definition.workspace.revision, before.workspace.revision);
         let MethodResult::SourceSettings {
             projection: policy, ..
         } = call(
@@ -2740,128 +2762,38 @@ async fn web09_workspace_policy_remains_user_owned_and_repairable_over_protocol(
             2,
             Method::SourcesWrite {
                 session_id: id.clone(),
-                expected_revision: before.user.revision,
-                mutation: SourceMutation::McpPolicy {
-                    id: McpServerId::new("project-only"),
-                    authored: Some(crate::local_runtime::config::InvocationPolicyDocument {
-                        approval: crate::local_runtime::config::ApprovalPolicyDocument::Always,
-                        ..Default::default()
-                    }),
+                expected_revision: definition.workspace.revision,
+                mutation: SourceMutation::Config {
+                    scope: SourceScope::Workspace,
+                    mutation: ConfigMutation::McpPolicy {
+                        id: McpServerId::new("service"),
+                        authored: Some(crate::local_runtime::config::InvocationPolicyDocument {
+                            approval: crate::local_runtime::config::ApprovalPolicyDocument::Always,
+                            ..Default::default()
+                        }),
+                    },
                 },
             },
         )
         .await
         else {
-            panic!()
+            panic!("policy projection")
         };
-        assert!(policy.integrations.mcp_valid);
-        assert_eq!(policy.workspace.revision, workspace.workspace.revision);
-        let MethodResult::SourceSettings {
-            projection: edited, ..
-        } = call(
-            &connection,
-            3,
-            Method::SourcesWrite {
-                session_id: id.clone(),
-                expected_revision: policy.user.revision,
-                mutation: SourceMutation::Mcp {
-                    scope: IntegrationScope::User,
-                    id: McpServerId::new("unrelated"),
-                    authored: Some(McpDraft {
-                        command: Some("inert-user".into()),
-                        enabled: Some(false),
-                        ..Default::default()
-                    }),
-                },
-            },
-        )
-        .await
-        else {
-            panic!()
-        };
-        assert!(edited.integrations.mcp_valid);
         assert_eq!(
-            edited.integrations.mcp_tool_policies,
-            policy.integrations.mcp_tool_policies
+            policy.workspace_mcp.revision,
+            definition.workspace_mcp.revision
         );
-        let host = super::HostEnvironment::from_paths(
-            f.workspaces[0].clone(),
-            f.workspaces[0].parent().unwrap().join("home"),
-            None,
-            None,
-        )
-        .unwrap();
-        super::launch::change_trust(
-            &super::LaunchRequest {
-                workspace: Some(f.workspaces[0].clone()),
-                ..Default::default()
-            },
-            &host,
-            super::TrustAction::Revoke,
-        )
-        .unwrap();
-        std::fs::write(
-            f.workspaces[0].join("rustx.toml"),
-            "private invalid untrusted content",
-        )
-        .unwrap();
-        let MethodResult::SourceSettings {
-            projection: revoked,
-            ..
-        } = call(
-            &connection,
-            4,
-            Method::SourcesRead {
-                session_id: id.clone(),
-            },
-        )
-        .await
+        assert_ne!(policy.workspace.revision, before.workspace.revision);
+        assert_eq!(policy.user.revision, before.user.revision);
+        let target = attach(&connection, &f, 0).await;
+        let MethodResult::EffectiveConfiguration { projection } =
+            call(&connection, 3, Method::ConfigurationGet { target }).await
         else {
-            panic!()
+            panic!("native effective projection")
         };
-        assert!(!revoked.workspace.active);
-        assert!(!revoked.integrations.mcp_valid);
-        let row = revoked
-            .integrations
-            .mcp
-            .iter()
-            .find(|row| row.id.as_str() == "project-only")
-            .unwrap();
-        assert_eq!(row.policy_state, McpPolicyState::Dangling);
-        assert!(row.workspace.is_none() && row.user.is_none() && row.winning.is_none());
-        assert_eq!(revoked.user.revision, edited.user.revision);
-        assert_eq!(
-            revoked.integrations.mcp_tool_policies,
-            edited.integrations.mcp_tool_policies
-        );
-        let MethodResult::SourceSettings {
-            projection: reset, ..
-        } = call(
-            &connection,
-            5,
-            Method::SourcesWrite {
-                session_id: id,
-                expected_revision: revoked.user.revision,
-                mutation: SourceMutation::McpPolicy {
-                    id: McpServerId::new("project-only"),
-                    authored: None,
-                },
-            },
-        )
-        .await
-        else {
-            panic!()
-        };
-        assert!(reset.integrations.mcp_valid);
-        assert!(reset.integrations.mcp_tool_policies.is_empty());
-        assert!(
-            reset
-                .integrations
-                .mcp
-                .iter()
-                .all(|row| row.id.as_str() != "project-only")
-        );
+        assert!(projection.root_agent.tools.sources.is_empty());
         assert!(f.provider.request_bodies().is_empty());
+        connection.close();
         f.close().await;
     })
     .await;

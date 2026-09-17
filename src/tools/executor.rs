@@ -2029,19 +2029,23 @@ mod tests {
         };
         let workspace = Workspace::new(&dir).expect("workspace");
         let artifacts = ArtifactStore::new(
-            crate::runtime::identity::ConversationId::new("conv-1"),
+            crate::runtime::identity::ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ),
             dir.path().join("artifacts"),
         )
         .expect("store");
         let tool_output = crate::tools::managed_output::ManagedToolOutput::new(
-            crate::runtime::identity::ConversationId::new("conv-1"),
+            crate::runtime::identity::ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ),
             dir.path().join("tool-output"),
         )
         .expect("managed tool output");
         let reporter = Capturing;
         let context = ToolExecutionContext {
             goal: None,
-            conversation_id: &ConversationId::new("conv-1"),
+            conversation_id: &ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             execution_id: None,
             cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
                 crate::runtime::cancellation::CancellationSignal::new(),

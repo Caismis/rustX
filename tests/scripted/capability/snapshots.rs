@@ -94,10 +94,12 @@ fn node_deps(json: &str) -> (&'static str, &'static str) {
     )
 }
 
-/// The root Agent needs no positive Skill list (#280): it automatically sees
-/// every eligible Skill in the effective catalog.
+/// This fixture explicitly admits Read and all eligible Skill metadata.
 fn fixture_activation() -> rustx::capabilities::AgentActivation {
-    rustx::capabilities::AgentActivation::default()
+    let mut selection = rustx::capabilities::AgentActivation::default();
+    selection.profile.tools.builtin = vec!["read".into()];
+    selection.profile.skills = Some(rustx::runtime::agent_profile::AgentSkillSelection::All);
+    selection
 }
 
 fn conversation() -> Conversation {
@@ -123,7 +125,7 @@ fn conversation_with(
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let workspace = Workspace::new(&workspace_root).expect("workspace");
-    let conversation_id = ConversationId::new("conv-m6");
+    let conversation_id = ConversationId::new("conv_6c966d7f-bdde-792f-8692-51542a5c1834");
     let mailbox = ConversationInboundMailbox::new(conversation_id.clone());
     let artifacts = ArtifactStore::new(conversation_id.clone(), dir.path().join("artifacts"))
         .expect("artifacts");
@@ -218,7 +220,17 @@ async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
     assert_eq!(rendered_catalog.matches("## Skills").count(), 1);
     assert!(rendered_catalog.contains("visible"));
     assert!(rendered_catalog.contains("<description>Visible guidance.</description>"));
-    assert!(rendered_catalog.contains(&format!("<location>{visible_location}</location>")));
+    assert!(
+        rendered_catalog.contains(
+            conversation
+                .workspace
+                .root()
+                .join(".agents/skills")
+                .to_str()
+                .unwrap()
+        )
+    );
+    assert!(!rendered_catalog.contains(&visible_location));
     assert!(!rendered_catalog.contains("runtime-only"));
     // The hidden Skill stays in the snapshot with its own host location, but
     // never reaches the model-visible catalog.
@@ -255,22 +267,30 @@ async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
 /// Main filters suppress lazy guidance without erasing discovered packages
 /// from the independent child-admission authority.
 #[tokio::test]
-async fn lazy_skills_follow_frozen_read_authority_without_changing_discovery() {
+async fn selected_skills_remain_visible_independently_of_native_read() {
     let policies = [
         rustx::capabilities::AgentActivation {
-            no_direct_tools: true,
+            profile: {
+                let mut profile = fixture_activation().profile;
+                profile.tools.builtin = Vec::new();
+                profile
+            },
             ..fixture_activation()
         },
         rustx::capabilities::AgentActivation {
-            no_builtin_tools: true,
+            profile: {
+                let mut profile = fixture_activation().profile;
+                profile.tools.builtin = Vec::new();
+                profile
+            },
             ..fixture_activation()
         },
         rustx::capabilities::AgentActivation {
-            tools: Some(vec!["write".to_owned()]),
-            ..fixture_activation()
-        },
-        rustx::capabilities::AgentActivation {
-            exclude_tools: vec!["read".to_owned()],
+            profile: {
+                let mut profile = fixture_activation().profile;
+                profile.tools.builtin = vec!["write".to_owned()];
+                profile
+            },
             ..fixture_activation()
         },
         rustx::capabilities::AgentActivation {
@@ -300,9 +320,9 @@ async fn lazy_skills_follow_frozen_read_authority_without_changing_discovery() {
         assert!(!snapshot.tool_registry().names().contains(&"read"));
         assert_eq!(snapshot.skills().catalog_entries().len(), 1);
         assert_eq!(snapshot.skills().catalog_entries()[0].location, location);
-        assert!(snapshot.skill_catalog().is_none());
+        assert!(snapshot.skill_catalog().is_some());
         let view = crate::runtime_client::projection::capability_view(&snapshot, &BTreeMap::new());
-        assert!(view.skills.is_empty());
+        assert_eq!(view.skills.len(), 1);
     }
 }
 
@@ -314,22 +334,16 @@ async fn lazy_skills_follow_frozen_read_authority_without_changing_discovery() {
 /// the workspace root. The global root is never the developer's real home.
 fn conversation_with_sources(
     activation: rustx::capabilities::AgentActivation,
-    selected: &std::collections::BTreeSet<rustx::skills::AutomaticSkillSource>,
     home_name: &'static str,
 ) -> (Conversation, std::path::PathBuf) {
     let mut home = std::path::PathBuf::new();
     let conversation = conversation_with(activation, |root, workspace| {
         home = root.join(home_name);
         rustx::skills::SkillDiscoveryConfig {
-            automatic: rustx::skills::automatic_skill_roots(
-                Some(&home),
-                workspace.root(),
-                selected,
-            ),
-            explicit_paths: Vec::new(),
+            automatic: rustx::skills::automatic_skill_roots(Some(&home), workspace.root()),
         }
     });
-    (conversation, home)
+    (conversation, home.join("rustx"))
 }
 
 /// #280 (6)(7)(9)(11)(13)(14): the whole ownership chain proven through the
@@ -341,12 +355,13 @@ async fn cfg280_the_committed_generation_owns_sources_merge_and_root_visibility(
     let (conversation, home) = conversation_with_sources(
         rustx::capabilities::AgentActivation {
             profile: rustx::local_runtime::config::AgentProfileDocument {
-                disabled_skills: Some(vec!["legacy-java".into(), "never-authored".into()]),
+                skills: Some(rustx::runtime::agent_profile::AgentSkillSelection::Exact(
+                    vec!["rust-review".into(), "shared".into()],
+                )),
                 ..rustx::local_runtime::config::builtin_root_profile()
             },
             ..Default::default()
         },
-        &rustx::skills::default_automatic_sources(),
         "home",
     );
     write_skill(&home, "legacy-java", "Legacy Java guidance.", &[]);
@@ -394,10 +409,10 @@ async fn cfg280_the_committed_generation_owns_sources_merge_and_root_visibility(
     assert_eq!(provenance.shadowed.len(), 1);
     assert_eq!(
         provenance.shadowed[0].source,
-        rustx::skills::SkillSource::Global
+        rustx::skills::SkillSource::User
     );
     let rendered = snapshot.skill_catalog().expect("catalog");
-    assert!(!rendered.contains("shadow"));
+    assert!(!rendered.contains("<name>shadow</name>"));
     assert!(!rendered.contains("Global shared guidance."));
 
     // Typed, canonically ordered diagnostics travel with the generation.
@@ -444,73 +459,29 @@ async fn cfg280_the_committed_generation_owns_sources_merge_and_root_visibility(
             .collect::<Vec<_>>(),
         ["rust-review", "shared"]
     );
-    // (8): the absent deny-list identity is exactly one generation fact.
-    assert_eq!(
-        profile
-            .diagnostics
-            .iter()
-            .filter(|fact| matches!(
-                fact,
-                rustx::runtime::agent_profile::AgentProfileDiagnostic::DisabledSkillAbsent { .. }
-            ))
-            .count(),
-        1
-    );
 }
 
-/// #280 (2)(3)(5): the session source policy decides which roots are
-/// scanned, and a missing root is a benign empty set rather than a failure.
 #[tokio::test]
-async fn cfg280_the_source_policy_selects_the_scanned_roots() {
-    for (selected, expected) in [
-        (
-            vec![rustx::skills::AutomaticSkillSource::Global],
-            vec!["global-only"],
-        ),
-        (
-            vec![rustx::skills::AutomaticSkillSource::Workspace],
-            vec!["workspace-only"],
-        ),
-        (Vec::new(), Vec::new()),
-    ] {
-        let (conversation, home) = conversation_with_sources(
-            fixture_activation(),
-            &selected.into_iter().collect(),
-            "home",
-        );
-        write_skill(&home, "global-only", "Global.", &[]);
-        write_skill(
-            conversation.workspace.root(),
-            "workspace-only",
-            "Workspace.",
-            &[],
-        );
-        let snapshot = prepare_and_commit(&conversation.coordinator).await;
-        assert_eq!(
-            snapshot
-                .skills()
-                .catalog_entries()
-                .iter()
-                .map(|entry| entry.name.as_str())
-                .collect::<Vec<_>>(),
-            expected
-        );
-    }
-
-    // (5) A selected-but-absent root contributes a benign fact only.
-    let (conversation, _home) = conversation_with_sources(
-        fixture_activation(),
-        &rustx::skills::default_automatic_sources(),
-        "absent-home",
+async fn cfg332_both_fixed_roots_are_discovered_and_missing_roots_are_empty() {
+    let (conversation, home) = conversation_with_sources(fixture_activation(), "home");
+    let missing = prepare_and_commit(&conversation.coordinator).await;
+    assert!(missing.skills().packages().is_empty());
+    write_skill(&home, "user-only", "User.", &[]);
+    write_skill(
+        conversation.workspace.root(),
+        "workspace-only",
+        "Workspace.",
+        &[],
     );
     let snapshot = prepare_and_commit(&conversation.coordinator).await;
-    assert!(snapshot.skills().packages().is_empty());
-    assert!(
+    assert_eq!(
         snapshot
             .skills()
-            .diagnostics()
+            .catalog_entries()
             .iter()
-            .all(|fact| fact.severity() == rustx::skills::SkillDiagnosticSeverity::Fact)
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["user-only", "workspace-only"]
     );
 }
 
@@ -615,11 +586,7 @@ async fn cfg280_a_later_generation_never_mutates_an_admitted_attempt() {
 #[tokio::test]
 async fn cfg280_generation_scoped_skill_facts_are_published_not_collapsed() {
     for (change, diagnostics_only) in [("diagnostics", true), ("provenance", false)] {
-        let (conversation, home) = conversation_with_sources(
-            fixture_activation(),
-            &rustx::skills::default_automatic_sources(),
-            "home",
-        );
+        let (conversation, home) = conversation_with_sources(fixture_activation(), "home");
         write_skill(conversation.workspace.root(), "foo", "Foo guidance.", &[]);
         let first = prepare_and_commit(&conversation.coordinator).await;
         assert_eq!(first.skills().catalog_entries().len(), 1);
@@ -704,7 +671,7 @@ async fn cfg280_generation_scoped_skill_facts_are_published_not_collapsed() {
             assert_eq!(provenance.source, rustx::skills::SkillSource::Workspace);
             assert_eq!(
                 provenance.shadowed[0].source,
-                rustx::skills::SkillSource::Global
+                rustx::skills::SkillSource::User
             );
             assert!(
                 second
@@ -726,8 +693,8 @@ async fn cfg280_generation_scoped_skill_facts_are_published_not_collapsed() {
 
         // Neither generation fact is model-visible.
         let rendered = second.skill_catalog().expect("catalog");
-        assert!(!rendered.contains("broken"), "{change}");
-        assert!(!rendered.contains("shadow"), "{change}");
+        assert!(!rendered.contains("<name>broken</name>"), "{change}");
+        assert!(!rendered.contains("<name>shadow</name>"), "{change}");
         let view = crate::runtime_client::projection::capability_view(&second, &BTreeMap::new());
         assert_eq!(
             view.skills
@@ -912,7 +879,7 @@ async fn absolute_store_path_does_not_change_the_digest() {
         let workspace_root = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace_root).expect("workspace");
         let workspace = Workspace::new(&workspace_root).expect("workspace");
-        let conversation_id = ConversationId::new("conv-m6-two");
+        let conversation_id = ConversationId::new("conv_a281bd6a-26a3-731b-8d0c-560b79b2276f");
         let mailbox = ConversationInboundMailbox::new(conversation_id.clone());
         let background = ConversationBackgroundRegistry::new(
             conversation_id.clone(),
@@ -920,12 +887,12 @@ async fn absolute_store_path_does_not_change_the_digest() {
                 mailbox,
                 workspace: workspace.clone(),
                 artifacts: ArtifactStore::new(
-                    ConversationId::new("conv-m6-two"),
+                    ConversationId::new("conv_a281bd6a-26a3-731b-8d0c-560b79b2276f"),
                     dir.path().join("artifacts"),
                 )
                 .expect("artifacts"),
                 tool_output: rustx::tools::managed_output::ManagedToolOutput::new(
-                    ConversationId::new("conv-m6-two"),
+                    ConversationId::new("conv_a281bd6a-26a3-731b-8d0c-560b79b2276f"),
                     dir.path().join("artifacts/tool-output"),
                 )
                 .expect("managed tool output"),
@@ -940,7 +907,20 @@ async fn absolute_store_path_does_not_change_the_digest() {
                 source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: workspace.clone(),
-                base_tool_registry: Arc::new(ToolRegistry::new()),
+                base_tool_registry: {
+                    let mut registry = ToolRegistry::new();
+                    register_native_tools(
+                        &mut registry,
+                        NativeToolResources {
+                            subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
+                            background: background.clone(),
+                            subagents: None,
+                        },
+                        NativeToolPolicies::default(),
+                    )
+                    .unwrap();
+                    Arc::new(registry)
+                },
                 extension_tools: rustx::extensions::ExtensionToolPlane::none(),
                 agent_activation: fixture_activation(),
                 skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
@@ -1400,7 +1380,7 @@ fn environment_store_inside_workspace_is_rejected_before_creation() {
     let Err(error) = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
             source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-            conversation_id: ConversationId::new("conv-isolation"),
+            conversation_id: ConversationId::new("conv_d1c8ffd4-e55a-7688-84ec-b44b65b846f7"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
@@ -1431,7 +1411,7 @@ fn workspace_inside_environment_store_is_rejected() {
     let Err(error) = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
             source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-            conversation_id: ConversationId::new("conv-isolation"),
+            conversation_id: ConversationId::new("conv_d1c8ffd4-e55a-7688-84ec-b44b65b846f7"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
@@ -1461,7 +1441,7 @@ fn external_environment_store_is_accepted() {
     let coordinator = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
             source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-            conversation_id: ConversationId::new("conv-isolation"),
+            conversation_id: ConversationId::new("conv_d1c8ffd4-e55a-7688-84ec-b44b65b846f7"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
@@ -1499,7 +1479,7 @@ fn symlink_prefix_environment_store_is_rejected_before_creation() {
     let Err(error) = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
             source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-            conversation_id: ConversationId::new("conv-isolation"),
+            conversation_id: ConversationId::new("conv_d1c8ffd4-e55a-7688-84ec-b44b65b846f7"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
@@ -1623,30 +1603,21 @@ async fn commit_is_busy_while_a_lease_is_active_then_commits_atomically() {
         rustx::runtime::identity::CapabilityRevision::new(revision_n.get() + 1)
     );
     assert_eq!(snapshot.skill_catalog(), None);
-    assert_eq!(
-        committed.skill_catalog().as_deref(),
-        Some(
-            format!(
-                concat!(
-                    "## Skills\n\n",
-                    "The following skills provide specialized instructions for specific tasks.\n",
-                    "Use the Read tool to load a skill when the task matches its description.\n",
-                    "When a skill file references a relative path, resolve it against the skill ",
-                    "directory (the parent of its SKILL.md) and use that absolute path in tool ",
-                    "commands.\n\n",
-                    "<available_skills>\n",
-                    "  <skill>\n",
-                    "    <name>pdf</name>\n",
-                    "    <description>PDF skill.</description>\n",
-                    "    <location>{location}</location>\n",
-                    "  </skill>\n",
-                    "</available_skills>"
-                ),
-                location = skill_location(conversation.workspace.root(), "pdf")
-            )
-            .as_str()
-        ),
-        "a later capability revision owns its own catalog rather than inheriting history"
+    let prompt = committed.skill_catalog().unwrap();
+    assert!(prompt.contains("<name>pdf</name>"));
+    assert!(
+        prompt.contains(
+            conversation
+                .workspace
+                .root()
+                .join(".agents/skills")
+                .to_str()
+                .unwrap()
+        )
+    );
+    assert!(
+        !prompt.contains(&skill_location(conversation.workspace.root(), "pdf")),
+        "prompt lists roots and names, never every absolute package path"
     );
     // The next attempt snapshots the new revision.
     let next_lease = conversation.coordinator.acquire_attempt_lease();
@@ -2164,7 +2135,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     let coordinator = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
             source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-            conversation_id: ConversationId::new("conv-m6"),
+            conversation_id: ConversationId::new("conv_6c966d7f-bdde-792f-8692-51542a5c1834"),
             workspace: conversation.workspace.clone(),
             base_tool_registry: tools.clone(),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
@@ -2241,7 +2212,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         ],
     ]);
     let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::new(
-        ConversationId::new("conv-m6"),
+        ConversationId::new("conv_6c966d7f-bdde-792f-8692-51542a5c1834"),
         conversation.workspace.root(),
         conversation.dir.path().join("agent-artifacts"),
     )
@@ -2251,7 +2222,9 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     );
     let request = rustx::agent::AgentExecutionRequest {
         agent_id: rustx::runtime::identity::AgentId::new("agent-1"),
-        conversation_id: rustx::runtime::identity::ConversationId::new("conv-m6"),
+        conversation_id: rustx::runtime::identity::ConversationId::new(
+            "conv_6c966d7f-bdde-792f-8692-51542a5c1834",
+        ),
         attempt_id: rustx::runtime::identity::AttemptId::new("attempt-1"),
         conversation: rustx::conversation::ConversationState::new(),
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,

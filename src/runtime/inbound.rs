@@ -1470,7 +1470,9 @@ mod tests {
     }
 
     fn mailbox() -> ConversationInboundMailbox {
-        ConversationInboundMailbox::new(ConversationId::new("conv-1"))
+        ConversationInboundMailbox::new(ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ))
     }
 
     /// The first successful acceptance receives sequence 1.
@@ -1491,7 +1493,7 @@ mod tests {
         assert_eq!(
             mailbox.enqueue(human("m1", "early")),
             Err(MailboxError::ConversationInactive {
-                conversation_id: ConversationId::new("conv-1"),
+                conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             })
         );
         assert!(mailbox.select_pending_batch().expect("select").is_none());
@@ -1562,8 +1564,10 @@ mod tests {
     /// The durable sequence domain cannot wrap: exhaustion fails explicitly.
     #[test]
     fn sequence_exhaustion_fails_explicitly() {
-        let store = SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
-            .expect("in-memory store");
+        let store = SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ))
+        .expect("in-memory store");
         // Force the counter to the max value directly in the database.
         store.force_next_sequence_for_test(i64::MAX);
         let mailbox = ConversationInboundMailbox::over_store(Arc::new(store));
@@ -1612,7 +1616,10 @@ mod tests {
             .map(|item| item.sequence().get())
             .collect();
         assert_eq!(sequences, vec![1, 2, 3]);
-        assert_eq!(batch.conversation_id(), &ConversationId::new("conv-1"));
+        assert_eq!(
+            batch.conversation_id(),
+            &ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18")
+        );
         // Selection is non-destructive: the batch is still pending.
         let again = mailbox
             .select_pending_batch()

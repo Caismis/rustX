@@ -59,7 +59,7 @@ describe("subagent activity section", () => {
       subagent("explore", "sha256:d1", "succeeded"),
     ]);
     assert.match(rendered, /Subagents · 0 active of 1 known/);
-    assert.match(rendered, /explore · succeeded · conv-1-subagent-1/);
+    assert.match(rendered, /explore · succeeded · conv_57d68983-5497-771e-baaa-5f1356061697/);
     assert.doesNotMatch(rendered, /awaiting activity/);
   });
 
@@ -67,14 +67,14 @@ describe("subagent activity section", () => {
     const rendered = render([
       child({ type: "awaiting_activity" }),
       subagent("worker", "sha256:d2", "succeeded", {
-        subagent_id: "conv-1-subagent-2",
-        child_conversation_id: "conv-1-subagent-2",
+        subagent_id: "conv_7563d0be-1638-75d5-8d79-6768bd57808c",
+        child_conversation_id: "conv_7563d0be-1638-75d5-8d79-6768bd57808c",
       }),
     ]);
     assert.match(rendered, /Subagents · 1 active of 2 known/);
     assert.match(rendered, /explore · running/);
     assert.match(rendered, /worker/);
-    assert.match(rendered, /conv-1-subagent-2/);
+    assert.match(rendered, /conv_7563d0be-1638-75d5-8d79-6768bd57808c/);
   });
 
   it("advertises disposal for retained and unresolved physical resources", () => {
@@ -131,11 +131,11 @@ describe("subagent activity section", () => {
     const rendered = render([
       child({ type: "awaiting_activity" }),
       subagent("worker", "sha256:d2", "failed", {
-        subagent_id: "conv-1-subagent-2",
-        child_conversation_id: "conv-1-subagent-2",
+        subagent_id: "conv_7563d0be-1638-75d5-8d79-6768bd57808c",
+        child_conversation_id: "conv_7563d0be-1638-75d5-8d79-6768bd57808c",
       }),
-    ], "conv-1-subagent-2");
-    assert.match(rendered, /▸ .*worker · failed · conv-1-subagent-2/);
+    ], "conv_7563d0be-1638-75d5-8d79-6768bd57808c");
+    assert.match(rendered, /▸ .*worker · failed · conv_7563d0be-1638-75d5-8d79-6768bd57808c/);
     assert.doesNotMatch(rendered, /detail/);
   });
 
@@ -217,7 +217,7 @@ describe("subagent activity section", () => {
         progress: { message: huge },
       }),
       subagent(`agent-${"y".repeat(50_000)}`, "sha256:d1", "running", {
-        subagent_id: "conv-1-subagent-2",
+        subagent_id: "conv_7563d0be-1638-75d5-8d79-6768bd57808c",
         observation: subagentObservation({ type: "awaiting_activity" }),
       }),
     ]);

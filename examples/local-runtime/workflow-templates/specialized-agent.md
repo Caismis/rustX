@@ -62,13 +62,12 @@ to the role definition alone.
 ## Running the checks
 
 ```sh
-rustx --workspace examples/local-runtime/workflow-templates --trust grant
 rustx workflow check specialized_agent \
   --workspace examples/local-runtime/workflow-templates \
-  --models examples/local-runtime/minimal/models.toml --model example/demo-model --json
+  --config "$(pwd)/examples/local-runtime/rustx.toml" --model example/demo-model --json
 rustx workflow explain specialized_agent \
   --workspace examples/local-runtime/workflow-templates \
-  --models examples/local-runtime/minimal/models.toml --model example/demo-model --json
+  --config "$(pwd)/examples/local-runtime/rustx.toml" --model example/demo-model --json
 ```
 
 `explain` projects each node's override as identities only — capability

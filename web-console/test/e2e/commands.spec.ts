@@ -27,7 +27,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(message).toBeEnabled();
     const originalId = JSON.parse(await facts.innerText()).SessionId as string;
     const originalConversation = JSON.parse(await facts.innerText()).ConversationId as string;
-    await message.fill('/mdl'); await message.press('Enter');
+    await message.fill('/model'); await message.press('Enter');
     let popup = page.getByRole('dialog', { name: '/model', exact: true });
     await popup.getByLabel('Filter options').fill('second');
     await popup.getByRole('option', { name: /fixture\/second-model/ }).click();
@@ -36,16 +36,12 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     popup = await command('tools');
     await expect(message).toHaveValue(''); await expect(popup).toBeVisible();
     await popup.getByRole('button', { name: 'Close dialog' }).click();
-    popup = await command('permission');
-    await popup.getByRole('option', { name: 'Full access', exact: true }).click();
-    await expect(popup).toHaveCount(0); await expect(facts).toContainText('full_access');
     popup = await command('model'); await popup.getByLabel('Filter options').press('Escape');
     await expect(popup).toHaveCount(0); await expect(message).toBeFocused();
     await expect(message).toHaveValue('/model');
     await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
     await expect(page.locator('.status strong')).toHaveText('connected');
     await expect(facts).toContainText('fixture/second-model');
-    await expect(facts).toContainText('full_access');
     await message.fill('/not-a-command'); await message.press('Enter');
     await expect(page.getByRole('alert')).toContainText('Unsupported command');
     await expect(message).toHaveValue('/not-a-command');

@@ -6,15 +6,14 @@ for the shared generation projection.
 
 ```text
 rustx workflow check <id> [--workspace <dir>] [--config <path>]
-  [--models <path>] [--model <provider/model>] [--json]
+  [--model <model-name>] [--json]
 rustx workflow explain <id> [--workspace <dir>] [--config <path>]
-  [--models <path>] [--model <provider/model>] [--json]
+  [--model <model-name>] [--json]
 ```
 
-Both commands inspect a prospective launch. The identity resolves to the trusted
-workspace's `.agents/workflows/<id>.yaml`; it is not an execution entry point.
-Another malformed canonical resource can prevent construction of the candidate.
-Trust/Session mutations, probe flags, runtime-state paths and Tool/Skill launch
+Both commands inspect a prospective launch. The identity resolves to the effective User/Workspace `.agents/workflows/<id>.yaml`; it is not an execution entry point.
+Unused malformed resources produce bounded diagnostics without preventing unrelated analysis.
+Session mutations, probe flags, runtime-state paths and Tool/Skill launch
 overrides are rejected by this command grammar.
 
 The version-2 report contains `workflow.id`, `source`, typed `admission`, and an
@@ -49,7 +48,7 @@ retains its own frozen admitted program after later resource publication.
 
 Disabled admission carries deterministic node paths such as
 `block.nodes.inspect.selector` and native `WorkflowDependencyFailure` facts.
-Tool reasons distinguish an undefined source, disabled/untrusted/unprepared
+Tool reasons distinguish an undefined source, undefined/unprepared
 source, preparation failure and exact Tool absent from a ready source. Agent
 reasons preserve unavailable Skills/Agents/Workflows and unsupported native
 Extension scope. These are typed facts, not conclusions reconstructed from prose.

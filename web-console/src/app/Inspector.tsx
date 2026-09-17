@@ -23,10 +23,9 @@ export function Inspector({ client, state, view }: { client: AppServerClient; st
     attempt: snapshot?.attempt, pending_interactions: snapshot?.pending_interactions,
     background_count: snapshot?.background?.length ?? 0, subagent_count: snapshot?.subagents?.length ?? 0,
     workflows: snapshot?.workflows, model: snapshot?.model,
-    settings_evidence: snapshot?.settings_evidence, launch_settings: snapshot?.launch_settings,
-    settings_lifetimes: snapshot?.settings_lifetimes,
+    settings_evidence: snapshot?.settings_evidence,
     resource_revision: snapshot?.resources?.revision, capability_revision: snapshot?.capabilities.revision,
-    approval_mode: snapshot?.effective_approval_mode, pending_approval_mode: snapshot?.pending_approval_mode,
+    approval_mode: snapshot?.effective_approval_mode,
     shutting_down: snapshot?.shutting_down, durability_failure: snapshot?.durability_failure,
   };
   return <div className="inspector">

@@ -1644,7 +1644,9 @@ mod tests {
     use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
     fn list() -> ConversationTodoList {
-        ConversationTodoList::new(ConversationId::new("conv-todo"))
+        ConversationTodoList::new(ConversationId::new(
+            "conv_97f22362-c165-70d9-8ae7-6f04b44108e1",
+        ))
     }
 
     /// A list, the one batch open over it, and that batch's writer.
@@ -1961,8 +1963,11 @@ mod tests {
         let latest = working(&todos);
 
         let history = vec![todo_result(&first), todo_result(&latest)];
-        let rebuilt = ConversationTodoList::rebuilt(ConversationId::new("conv-todo"), &history)
-            .expect("rebuild");
+        let rebuilt = ConversationTodoList::rebuilt(
+            ConversationId::new("conv_97f22362-c165-70d9-8ae7-6f04b44108e1"),
+            &history,
+        )
+        .expect("rebuild");
         assert_eq!(rebuilt.committed(), latest);
 
         // The rebuilt list keeps allocating where the conversation left off.
@@ -2465,8 +2470,11 @@ mod tests {
         }];
 
         let history = vec![todo_result(&superseded), malformed];
-        let error = ConversationTodoList::rebuilt(ConversationId::new("conv-todo"), &history)
-            .expect_err("the newest record is unusable");
+        let error = ConversationTodoList::rebuilt(
+            ConversationId::new("conv_97f22362-c165-70d9-8ae7-6f04b44108e1"),
+            &history,
+        )
+        .expect_err("the newest record is unusable");
         assert!(
             matches!(error, TodoRebuildError::Undecodable(_)),
             "{error:?}"
@@ -2483,8 +2491,11 @@ mod tests {
             text: "Created #1".to_owned(),
         })];
         assert_eq!(
-            ConversationTodoList::rebuilt(ConversationId::new("conv-todo"), &[missing])
-                .expect_err("no list"),
+            ConversationTodoList::rebuilt(
+                ConversationId::new("conv_97f22362-c165-70d9-8ae7-6f04b44108e1"),
+                &[missing]
+            )
+            .expect_err("no list"),
             TodoRebuildError::Missing
         );
     }
@@ -2492,7 +2503,7 @@ mod tests {
     #[test]
     fn history_without_a_todo_result_rebuilds_an_empty_list() {
         let rebuilt = ConversationTodoList::rebuilt(
-            ConversationId::new("conv-todo"),
+            ConversationId::new("conv_97f22362-c165-70d9-8ae7-6f04b44108e1"),
             &[MessageBlock::Tool(ToolMessageBlock {
                 id: MessageId::new("message-bash"),
                 tool_call_id: ToolCallId::new("call-bash"),

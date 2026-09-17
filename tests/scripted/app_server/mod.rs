@@ -10,7 +10,7 @@ mod transports;
 use super::*;
 use crate::events::types::RuntimeEvent;
 use crate::local_runtime::configuration::SessionConfigInput;
-use crate::local_runtime::launch::{self, HostEnvironment, LaunchRequest, TrustAction};
+use crate::local_runtime::launch::{self, HostEnvironment, LaunchRequest};
 use crate::local_runtime::session::{SessionPersistentState, SessionSnapshot};
 use crate::message::content::TextBlock;
 use crate::message::types::UserContentBlock;
@@ -137,13 +137,8 @@ impl Fixture {
             )
             .unwrap();
         }
-        let host = HostEnvironment::from_paths(
-            workspaces[0].clone(),
-            root.path().join("home"),
-            None,
-            None,
-        )
-        .unwrap();
+        let host =
+            HostEnvironment::from_paths(workspaces[0].clone(), root.path().join("home")).unwrap();
         let args = [
             "--template",
             "openai-chat",
@@ -173,21 +168,16 @@ impl Fixture {
         // multimodal adapter or bypassing the real request validator.
         let mut catalog: toml::Value =
             toml::from_str(std::str::from_utf8(&documents[0]).unwrap()).unwrap();
-        let models = catalog["providers"]["local"]["models"]
-            .as_array_mut()
-            .unwrap();
-        let mut alternate = models[0].clone();
+        let mut alternate = catalog["models"]["local/a"].clone();
         alternate["id"] = toml::Value::String("b".into());
-        models.push(alternate);
+        catalog["models"]
+            .as_table_mut()
+            .unwrap()
+            .insert("local/b".into(), alternate);
+        catalog["agent"].as_table_mut().unwrap().insert("tools".into(),
+            toml::Value::try_from(serde_json::json!({"builtin":["read", "write", "edit", "glob", "grep", "bash", "ask_user", "execution"]})).unwrap());
         documents[0] = toml::to_string(&catalog).unwrap().into_bytes();
         crate::local_runtime::initialization::initialize(&host, &documents);
-        for workspace in &workspaces {
-            let request = LaunchRequest {
-                workspace: Some(workspace.clone()),
-                ..LaunchRequest::default()
-            };
-            launch::change_trust(&request, &host, TrustAction::Grant).unwrap();
-        }
         let paths = launch::analyze(&LaunchRequest::default(), &host)
             .unwrap()
             .admit(CredentialSnapshot::default)

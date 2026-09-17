@@ -466,7 +466,7 @@ async fn a_new_tool_runtime_rebuilds_the_list_from_conversation_history() {
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     std::fs::create_dir_all(dir.path().join("artifacts")).expect("artifacts");
-    let conversation_id = ConversationId::new("conv-resumed");
+    let conversation_id = ConversationId::new("conv_e146bb2f-d1c6-7a68-86b0-47f89b0c2dd5");
     let store = std::sync::Arc::new(
         SqliteConversationStore::open(
             conversation_id.clone(),

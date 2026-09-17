@@ -485,8 +485,9 @@ mod tests {
         let snapshot = owner.snapshot();
         assert_eq!(snapshot.runs.len(), MAX_PROJECTED_RUNS);
         let mut foreign = run(99);
-        foreign.id.conversation_id =
-            crate::runtime::identity::ConversationId::new("another-conversation");
+        foreign.id.conversation_id = crate::runtime::identity::ConversationId::new(
+            "conv_8369d697-8721-7d8d-820f-81e6bfd70ef7",
+        );
         owner.register(foreign);
         assert_eq!(
             owner.snapshot(),

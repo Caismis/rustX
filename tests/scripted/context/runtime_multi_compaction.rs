@@ -405,7 +405,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     .expect("the session model resolves");
 
     let status_seam = rustx::context::AgentStatusTestSeam::new();
-    let fixture = RuntimeClientFixture::builder("conv-27-proactive")
+    let fixture = RuntimeClientFixture::builder("conv_1778c31f-3925-7199-9ba6-e52366afec4a")
         .session_model(session_model)
         .context_policy(SessionContextPolicy {
             reserve_tokens: RESERVE,
@@ -507,9 +507,9 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     assert_eq!(
         attempt_ids,
         [
-            "conv-27-proactive-attempt-0",
-            "conv-27-proactive-attempt-1",
-            "conv-27-proactive-attempt-2"
+            "conv_1778c31f-3925-7199-9ba6-e52366afec4a-attempt-0",
+            "conv_1778c31f-3925-7199-9ba6-e52366afec4a-attempt-1",
+            "conv_1778c31f-3925-7199-9ba6-e52366afec4a-attempt-2"
         ]
     );
     assert!(snapshots[0].surface_revision < snapshots[1].surface_revision);
@@ -578,8 +578,14 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     assert_eq!(
         compacted,
         [
-            ("conv-27-proactive-attempt-1".to_owned(), 1),
-            ("conv-27-proactive-attempt-2".to_owned(), 2)
+            (
+                "conv_1778c31f-3925-7199-9ba6-e52366afec4a-attempt-1".to_owned(),
+                1
+            ),
+            (
+                "conv_1778c31f-3925-7199-9ba6-e52366afec4a-attempt-2".to_owned(),
+                2
+            )
         ]
     );
     let (snapshot, _) = host.snapshot().expect("snapshot");
@@ -644,7 +650,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_complete_tool_units()
  {
-    const CONVERSATION: &str = "conv-27-overflow";
+    const CONVERSATION: &str = "conv_1c38a39f-df8c-7318-8aeb-0e41aec287aa";
     let call = ScriptedCall {
         id: "call-1",
         tool_id: "tool-alpha",
@@ -811,12 +817,30 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     let snapshots = common::request_snapshots(&history);
     assert_eq!(snapshots.len(), 6);
     let attempt = |index: usize| snapshots[index].identity.attempt_id.as_str();
-    assert_eq!(attempt(0), "conv-27-overflow-attempt-0");
-    assert_eq!(attempt(1), "conv-27-overflow-attempt-1");
-    assert_eq!(attempt(2), "conv-27-overflow-attempt-1");
-    assert_eq!(attempt(3), "conv-27-overflow-attempt-1");
-    assert_eq!(attempt(4), "conv-27-overflow-attempt-2");
-    assert_eq!(attempt(5), "conv-27-overflow-attempt-2");
+    assert_eq!(
+        attempt(0),
+        "conv_1c38a39f-df8c-7318-8aeb-0e41aec287aa-attempt-0"
+    );
+    assert_eq!(
+        attempt(1),
+        "conv_1c38a39f-df8c-7318-8aeb-0e41aec287aa-attempt-1"
+    );
+    assert_eq!(
+        attempt(2),
+        "conv_1c38a39f-df8c-7318-8aeb-0e41aec287aa-attempt-1"
+    );
+    assert_eq!(
+        attempt(3),
+        "conv_1c38a39f-df8c-7318-8aeb-0e41aec287aa-attempt-1"
+    );
+    assert_eq!(
+        attempt(4),
+        "conv_1c38a39f-df8c-7318-8aeb-0e41aec287aa-attempt-2"
+    );
+    assert_eq!(
+        attempt(5),
+        "conv_1c38a39f-df8c-7318-8aeb-0e41aec287aa-attempt-2"
+    );
     assert_eq!(snapshots[2].identity.retry_number, 0);
     assert_eq!(snapshots[3].identity.retry_number, 1);
     assert_eq!(snapshots[4].identity.retry_number, 0);
@@ -902,8 +926,14 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     assert_eq!(
         compacted,
         [
-            ("conv-27-overflow-attempt-1".to_owned(), 1),
-            ("conv-27-overflow-attempt-2".to_owned(), 2)
+            (
+                "conv_1c38a39f-df8c-7318-8aeb-0e41aec287aa-attempt-1".to_owned(),
+                1
+            ),
+            (
+                "conv_1c38a39f-df8c-7318-8aeb-0e41aec287aa-attempt-2".to_owned(),
+                2
+            )
         ]
     );
     let (snapshot, _) = host.snapshot().expect("snapshot");
@@ -947,7 +977,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
         turn_text("SUMMARY-TWO".to_owned()),
         turn_text("three".to_owned()),
     ]));
-    let fixture = RuntimeClientFixture::builder("conv-27-ownership")
+    let fixture = RuntimeClientFixture::builder("conv_51801d0c-4654-79b4-b546-6021abd3936c")
         .session_model(scripted_session_model(
             adapter.clone() as Arc<dyn ModelAdapter>
         ))
@@ -1120,7 +1150,7 @@ async fn session_summary_mode_freezes_the_attempt_summary_model_against_mid_atte
         SessionModelConfig::of(ModelRef::parse("fixture/model-a").expect("valid reference")),
     )
     .expect("the session model resolves");
-    let fixture = RuntimeClientFixture::builder("conv-27-race")
+    let fixture = RuntimeClientFixture::builder("conv_bb1d2d90-66f4-7971-9454-dbaef53034a1")
         .session_model(session_model)
         .build()
         .await;

@@ -278,23 +278,33 @@ async fn dispatch_to_terminal(fixture: &BackgroundFixture) -> ToolExecutionId {
     execution_id
 }
 
-/// Deterministic `exec_1`, `exec_2`, ... allocation under the registry
-/// synchronization boundary.
+/// Durable UUID identity is independent of registry admission order.
 #[tokio::test]
-async fn execution_ids_are_deterministic_and_monotonic() {
-    let fixture = background_fixture("conv-bg");
-    let first = dispatch_to_terminal(&fixture).await;
-    assert_eq!(first.as_str(), "exec_1");
-    let second = dispatch_to_terminal(&fixture).await;
-    assert_eq!(second.as_str(), "exec_2");
-    let third = dispatch_to_terminal(&fixture).await;
-    assert_eq!(third.as_str(), "exec_3");
+async fn execution_ids_are_unique_and_order_uses_admission_metadata() {
+    let fixture = background_fixture("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
+    let mut admitted = Vec::new();
+    for _ in 0..3 {
+        let id = dispatch_to_terminal(&fixture).await;
+        let uuid = uuid::Uuid::parse_str(id.as_str().strip_prefix("exec_").unwrap()).unwrap();
+        assert_eq!(uuid.get_version_num(), 7);
+        assert!(!admitted.contains(&id));
+        admitted.push(id);
+    }
+    assert_eq!(
+        fixture
+            .registry
+            .all_snapshots()
+            .into_iter()
+            .map(|s| s.execution_id)
+            .collect::<Vec<_>>(),
+        admitted
+    );
 }
 
 /// The runner cannot begin before the dispatch commit gate is released.
 #[tokio::test]
 async fn runner_cannot_begin_before_commit_gate() {
-    let fixture = background_fixture("conv-bg");
+    let fixture = background_fixture("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
     let (executor, mut started) = ControlledExecutor::instant(success());
     let registry = fixture.registry.clone();
     let prepared = registry
@@ -324,7 +334,7 @@ async fn runner_cannot_begin_before_commit_gate() {
 /// detached execution.
 #[tokio::test]
 async fn cancellation_before_ownership_commit_rolls_back() {
-    let fixture = background_fixture("conv-bg");
+    let fixture = background_fixture("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
     let (executor, mut started) = ControlledExecutor::instant(success());
     let registry = fixture.registry.clone();
     let prepared = registry
@@ -365,7 +375,7 @@ async fn cancellation_before_ownership_commit_rolls_back() {
 /// when the attempt cancels afterwards.
 #[tokio::test]
 async fn ownership_commit_wins_over_later_attempt_cancellation() {
-    let fixture = background_fixture("conv-bg");
+    let fixture = background_fixture("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
     let (executor, mut started, _release) = ControlledExecutor::parking(success());
     let registry = fixture.registry.clone();
     let prepared = registry
@@ -398,7 +408,7 @@ async fn ownership_commit_wins_over_later_attempt_cancellation() {
     // Issue #162: the accepted result returns the typed execution handle.
     assert_eq!(
         accepted["execution"],
-        serde_json::json!({"kind": "tool", "id": "exec_1"}),
+        serde_json::json!({"kind": "tool", "id": execution_id.as_str()}),
         "the creation result returns the execution handle"
     );
     assert!(
@@ -412,7 +422,7 @@ async fn ownership_commit_wins_over_later_attempt_cancellation() {
     let output_path = accepted["output_path"].as_str().expect("output_path");
     assert!(std::path::Path::new(output_path).is_absolute());
     assert!(
-        output_path.ends_with("tasks/exec_1.output"),
+        output_path.ends_with(&format!("tasks/{execution_id}.output")),
         "{output_path}"
     );
     assert!(std::path::Path::new(output_path).exists());
@@ -435,7 +445,7 @@ async fn ownership_commit_wins_over_later_attempt_cancellation() {
 /// an idempotent no-op returning the terminal snapshot.
 #[tokio::test]
 async fn natural_completion_wins_over_later_cancel() {
-    let fixture = background_fixture("conv-bg");
+    let fixture = background_fixture("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
     let execution_id = dispatch_to_terminal(&fixture).await;
     let terminal = fixture.registry.snapshot(&execution_id).expect("snapshot");
     assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
@@ -448,7 +458,7 @@ async fn natural_completion_wins_over_later_cancel() {
     assert_eq!(batch.items().len(), 1);
     assert_eq!(
         batch.items()[0].message().id.as_str(),
-        "background-exec_1-terminal",
+        format!("background-{execution_id}-terminal"),
         "deterministic terminal message identity"
     );
     let _ = fixture
@@ -476,7 +486,7 @@ async fn natural_completion_wins_over_later_cancel() {
 /// the registry settles `Cancelled` with its retained reason.
 #[tokio::test]
 async fn cancel_before_completion_wins_settlement() {
-    let fixture = background_fixture("conv-bg");
+    let fixture = background_fixture("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
     let (executor, mut started, _release) = ControlledExecutor::parking(success());
     let registry = fixture.registry.clone();
     let prepared = registry
@@ -509,7 +519,7 @@ async fn cancel_before_completion_wins_settlement() {
 /// Repeated cancel is idempotent and never destructive.
 #[tokio::test]
 async fn repeated_cancel_is_idempotent() {
-    let fixture = background_fixture("conv-bg");
+    let fixture = background_fixture("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
     let (executor, mut started, _release) = ControlledExecutor::parking(success());
     let registry = fixture.registry.clone();
     let prepared = registry
@@ -540,7 +550,7 @@ async fn repeated_cancel_is_idempotent() {
 /// Starting executions can be cancelled.
 #[tokio::test]
 async fn starting_can_be_cancelled() {
-    let fixture = background_fixture("conv-bg");
+    let fixture = background_fixture("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
     let (executor, started, _release) = ControlledExecutor::parking(success());
     let registry = fixture.registry.clone();
     let prepared = registry
@@ -583,7 +593,7 @@ async fn starting_can_be_cancelled() {
 /// publication, even under duplicate settlement calls.
 #[tokio::test]
 async fn one_terminal_transition_and_one_publication_only() {
-    let fixture = background_fixture("conv-bg");
+    let fixture = background_fixture("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
     let execution_id = dispatch_to_terminal(&fixture).await;
     let terminal = fixture.registry.snapshot(&execution_id).expect("snapshot");
     assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
@@ -598,7 +608,7 @@ async fn one_terminal_transition_and_one_publication_only() {
     assert_eq!(batch.items().len(), 1);
     assert_eq!(
         batch.items()[0].message().id.as_str(),
-        "background-exec_1-terminal"
+        format!("background-{execution_id}-terminal")
     );
     let _ = fixture
         .mailbox
@@ -618,7 +628,7 @@ async fn one_terminal_transition_and_one_publication_only() {
 /// emits the canonical execution fact through the narrow event seam.
 #[tokio::test]
 async fn background_progress_updates_the_latest_snapshot() {
-    let fixture = background_fixture("conv-bg");
+    let fixture = background_fixture("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
     let (executor, mut started, release) = ControlledExecutor::parking(success());
     let executor = executor.with_progress(vec![
         ToolProgress {
@@ -675,7 +685,7 @@ async fn background_progress_updates_the_latest_snapshot() {
             progress,
         } if tool_call_id.as_str() == "call-1"
             && tool_id.as_str() == "tool-bash"
-            && reported.as_str() == "exec_1"
+            && reported == &execution_id
             && progress.message.as_deref() == Some("compiling workspace")
     ));
     release.send_replace(true);
@@ -685,7 +695,7 @@ async fn background_progress_updates_the_latest_snapshot() {
 /// Terminal records remain queryable for the conversation lifetime.
 #[tokio::test]
 async fn terminal_records_remain_queryable() {
-    let fixture = background_fixture("conv-bg");
+    let fixture = background_fixture("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
     let execution_id = dispatch_to_terminal(&fixture).await;
     for _ in 0..3 {
         let snapshot = fixture
@@ -701,8 +711,8 @@ async fn terminal_records_remain_queryable() {
 /// id: cross-conversation access is structurally impossible.
 #[tokio::test]
 async fn cross_conversation_isolation() {
-    let fixture_a = background_fixture("conv-a");
-    let fixture_b = background_fixture("conv-b");
+    let fixture_a = background_fixture("conv_bf9033a7-86e2-71aa-8314-b791ebfdbfec");
+    let fixture_b = background_fixture("conv_449370cc-308b-7409-84bd-ff539142e4fb");
     let execution_id = dispatch_to_terminal(&fixture_a).await;
     assert!(
         fixture_b.registry.snapshot(&execution_id).is_none(),
@@ -724,17 +734,15 @@ async fn wait_for_state(
     execution_id: &ToolExecutionId,
     state: BackgroundLifecycle,
 ) -> BackgroundExecutionSnapshot {
-    // Polls the authoritative registry state itself (the very state under
-    // test) with a strict deadlock guard.
-    for _ in 0..400 {
-        let snapshot = registry.snapshot(execution_id).expect("snapshot");
-        if snapshot.state == state {
-            return snapshot;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    let snapshot = registry.snapshot(execution_id).expect("snapshot");
-    panic!("state {state:?} never reached; last snapshot: {snapshot:?}");
+    let snapshot = tokio::time::timeout(
+        Duration::from_secs(20),
+        registry.wait_until_terminal(execution_id),
+    )
+    .await
+    .expect("terminal transition deadlock guard")
+    .expect("execution remains owned");
+    assert_eq!(snapshot.state, state);
+    snapshot
 }
 
 async fn await_background_started(
@@ -757,7 +765,7 @@ async fn await_background_started(
 fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {
         agent_id: AgentId::new("agent-a"),
-        conversation_id: ConversationId::new("conv-1"),
+        conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         attempt_id: AttemptId::new("attempt-1"),
         conversation: rustx::conversation::ConversationState::from_messages(vec![
             MessageBlock::User(UserMessageBlock {
@@ -861,7 +869,7 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let tool_runtime = ConversationToolRuntime::new(
-        ConversationId::new("conv-1"),
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         &workspace_root,
         dir.path().join("artifacts"),
     )
@@ -925,10 +933,13 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
         ToolResultContent::Json { value } => value.clone(),
         other => panic!("expected JSON, got {other:?}"),
     };
+    let execution_id = tool_runtime.background().all_snapshots()[0]
+        .execution_id
+        .clone();
     // Issue #162: the accepted result returns the typed execution handle.
     assert_eq!(
         accepted["execution"],
-        serde_json::json!({"kind": "tool", "id": "exec_1"})
+        serde_json::json!({"kind": "tool", "id": execution_id.as_str()})
     );
     let committed_count = result.messages().len();
     let terminal_events = result
@@ -940,7 +951,6 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
     // The detached execution settles only after the attempt settled; the
     // terminal notification lands in the conversation mailbox and the
     // settled attempt is never altered.
-    let execution_id = ToolExecutionId::new("exec_1");
     release_bg.send_replace(true);
     let settled = wait_for_state(
         tool_runtime.background(),
@@ -956,7 +966,7 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
     assert_eq!(batch.items().len(), 1);
     assert_eq!(
         batch.items()[0].message().id.as_str(),
-        "background-exec_1-terminal"
+        format!("background-{execution_id}-terminal")
     );
     assert_eq!(
         result.messages().len(),
@@ -984,7 +994,7 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let tool_runtime = ConversationToolRuntime::new(
-        ConversationId::new("conv-1"),
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         &workspace_root,
         dir.path().join("artifacts"),
     )
@@ -1049,7 +1059,12 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
         // already committed before the safe-boundary snapshot of this turn.
         await_background_started(&mut bg_started, "bg started").await;
         release_bg.send_replace(true);
-        let execution_id = ToolExecutionId::new("exec_1");
+        let execution_id = controller_registry
+            .all_snapshots()
+            .into_iter()
+            .next()
+            .unwrap()
+            .execution_id;
         wait_for_state(
             &controller_registry,
             &execution_id,
@@ -1074,7 +1089,7 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
     let inbound_in_continuation = requests[1]
         .messages
         .iter()
-        .any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if user.id.as_str() == "background-exec_1-terminal"));
+        .any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if user.id.as_str() == format!("background-{}-terminal", tool_runtime.background().all_snapshots()[0].execution_id)));
     assert!(
         inbound_in_continuation,
         "the terminal inbound joined the drained batch of the tool turn"
@@ -1111,7 +1126,7 @@ async fn execution_tool_status_and_cancel() {
     let outcome = registry
         .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
         .expect("dispatch commits");
-    let BackgroundDispatchOutcome::Accepted { .. } = outcome else {
+    let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
     await_background_started(&mut started, "runner started").await;
@@ -1119,7 +1134,7 @@ async fn execution_tool_status_and_cancel() {
     let status = common::run_tool(
         &fixture,
         "execution",
-        serde_json::json!({"action": "status", "target": {"kind": "tool", "id": "exec_1"}}),
+        serde_json::json!({"action": "status", "target": {"kind": "tool", "id": execution_id.as_str()}}),
     )
     .await;
     assert_eq!(status.status, ToolExecutionStatus::Success);
@@ -1128,14 +1143,14 @@ async fn execution_tool_status_and_cancel() {
         other => panic!("expected JSON, got {other:?}"),
     };
     assert_eq!(snapshot["kind"], "tool");
-    assert_eq!(snapshot["execution_id"], "exec_1");
+    assert_eq!(snapshot["execution_id"], execution_id.as_str());
     assert_eq!(snapshot["tool_name"], "bash");
     assert_eq!(snapshot["state"], "running");
 
     let cancelled = common::run_tool(
         &fixture,
         "execution",
-        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_1"}}),
+        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": execution_id.as_str()}}),
     )
     .await;
     assert_eq!(cancelled.status, ToolExecutionStatus::Success);
@@ -1148,11 +1163,10 @@ async fn execution_tool_status_and_cancel() {
     let again = common::run_tool(
         &fixture,
         "execution",
-        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_1"}}),
+        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": execution_id.as_str()}}),
     )
     .await;
     assert_eq!(again.status, ToolExecutionStatus::Success);
-    let execution_id = ToolExecutionId::new("exec_1");
     // Deterministic settlement synchronization through the registry's own
     // state-version watch, never scheduler-yield polling.
     let settled = registry
@@ -1163,7 +1177,7 @@ async fn execution_tool_status_and_cancel() {
     let terminal = common::run_tool(
         &fixture,
         "execution",
-        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_1"}}),
+        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": execution_id.as_str()}}),
     )
     .await;
     let snapshot = match &terminal.content[0] {
@@ -1184,14 +1198,14 @@ async fn execution_unknown_and_foreign_ids_fail_normally() {
     let unknown = common::run_tool(
         &fixture,
         "execution",
-        serde_json::json!({"action": "status", "target": {"kind": "tool", "id": "exec_999"}}),
+        serde_json::json!({"action": "status", "target": {"kind": "tool", "id": "exec_00000000-0000-7000-8000-000000000999"}}),
     )
     .await;
     assert!(matches!(unknown.status, ToolExecutionStatus::Failed { .. }));
     let foreign = common::run_tool(
         &fixture,
         "execution",
-        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_1"}}),
+        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_00000000-0000-7000-8000-000000000001"}}),
     )
     .await;
     assert!(matches!(foreign.status, ToolExecutionStatus::Failed { .. }));
@@ -1206,7 +1220,7 @@ fn execution_is_never_background_dispatchable() {
         id: ToolCallId::new("call-x"),
         tool_id: ToolId::new("tool-execution"),
         name: "execution".to_owned(),
-        arguments: serde_json::json!({"execution_mode": "background", "action": "status", "target": {"kind": "tool", "id": "exec_1"}}),
+        arguments: serde_json::json!({"execution_mode": "background", "action": "status", "target": {"kind": "tool", "id": "exec_00000000-0000-7000-8000-000000000001"}}),
     };
     let outcome = fixture.registry.preflight(&call).expect("preflight");
     assert!(
@@ -1233,7 +1247,7 @@ fn agent_status_background_section_rendering() {
     };
     let background = vec![
         BackgroundExecutionSnapshot {
-            execution_id: ToolExecutionId::new("exec_1"),
+            execution_id: ToolExecutionId::new("exec_215a03ee-2332-70b6-8e2d-634da8066f98"),
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             state: BackgroundLifecycle::Starting,
@@ -1241,7 +1255,7 @@ fn agent_status_background_section_rendering() {
             result: None,
         },
         BackgroundExecutionSnapshot {
-            execution_id: ToolExecutionId::new("exec_2"),
+            execution_id: ToolExecutionId::new("exec_20eb7fc0-b69d-7476-8553-c156fdc879c3"),
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             state: BackgroundLifecycle::Running,
@@ -1253,7 +1267,7 @@ fn agent_status_background_section_rendering() {
             result: None,
         },
         BackgroundExecutionSnapshot {
-            execution_id: ToolExecutionId::new("exec_3"),
+            execution_id: ToolExecutionId::new("exec_478f38a9-b143-721b-8cd7-16660b763e95"),
             tool_id: ToolId::new("tool-grep"),
             tool_name: "grep".to_owned(),
             state: BackgroundLifecycle::Cancelling,
@@ -1304,9 +1318,15 @@ fn agent_status_background_section_rendering() {
     assert!(rendered.contains("Background executions:"));
     // Issue #162: the identity vocabulary is kind + id, the same handle the
     // model passes to the execution intrinsic.
-    assert!(rendered.contains("- tool exec_1 | bash | starting"));
-    assert!(rendered.contains("- tool exec_2 | bash | running | compiling workspace"));
-    assert!(rendered.contains("- tool exec_3 | grep | cancelling"));
+    assert!(
+        rendered.contains("- tool exec_215a03ee-2332-70b6-8e2d-634da8066f98 | bash | starting")
+    );
+    assert!(rendered.contains(
+        "- tool exec_20eb7fc0-b69d-7476-8553-c156fdc879c3 | bash | running | compiling workspace"
+    ));
+    assert!(
+        rendered.contains("- tool exec_478f38a9-b143-721b-8cd7-16660b763e95 | grep | cancelling")
+    );
     // Full output never appears: the rendered status carries identities and
     // states only.
     assert!(!rendered.contains("BackgroundExecutionSnapshot"));
@@ -1316,7 +1336,7 @@ fn agent_status_background_section_rendering() {
 /// Status, in execution-allocation order.
 #[tokio::test]
 async fn agent_status_active_snapshot_excludes_terminal_entries() {
-    let fixture = background_fixture("conv-bg");
+    let fixture = background_fixture("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
     let first = dispatch_to_terminal(&fixture).await;
     let _ = first;
     let (executor, mut started, _release) = ControlledExecutor::parking(success());
@@ -1351,7 +1371,7 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let tool_runtime = ConversationToolRuntime::new(
-        ConversationId::new("conv-1"),
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         &workspace_root,
         dir.path().join("artifacts"),
     )
@@ -1448,7 +1468,7 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
         release_b1.send_replace(true);
         wait_for_state(
             &controller_registry,
-            &ToolExecutionId::new("exec_1"),
+            &controller_registry.all_snapshots()[0].execution_id,
             BackgroundLifecycle::Succeeded,
         )
         .await;
@@ -1501,10 +1521,21 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
         })
         .expect("fresh terminal inbound carries Agent Status");
     assert!(
-        status.contains("exec_2"),
+        status.contains(
+            tool_runtime.background().all_snapshots()[1]
+                .execution_id
+                .as_str()
+        ),
         "the remaining active task appears"
     );
-    assert!(!status.contains("exec_1"), "the terminal task is excluded");
+    assert!(
+        !status.contains(
+            tool_runtime.background().all_snapshots()[0]
+                .execution_id
+                .as_str()
+        ),
+        "the terminal task is excluded"
+    );
     assert!(
         status.find("Current time:").expect("Time section")
             < status
@@ -1516,7 +1547,7 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
         requests[2]
             .messages
             .iter()
-            .any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if user.id.as_str() == "background-exec_1-terminal")),
+            .any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if user.id.as_str() == format!("background-{}-terminal", tool_runtime.background().all_snapshots()[0].execution_id))),
         "the terminal inbound waited for the next batch"
     );
     assert!(matches!(
@@ -1534,7 +1565,7 @@ async fn foreground_tool_continuation_has_no_agent_status() {
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let tool_runtime = ConversationToolRuntime::new(
-        ConversationId::new("conv-1"),
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         &workspace_root,
         dir.path().join("artifacts"),
     )
@@ -1629,7 +1660,9 @@ fn background_status_accounting() {
                 id: AgentStatusSectionId::new("background_execution"),
                 data: AgentStatusSectionData::BackgroundExecution {
                     executions: vec![BackgroundExecutionSnapshot {
-                        execution_id: ToolExecutionId::new("exec_1"),
+                        execution_id: ToolExecutionId::new(
+                            "exec_215a03ee-2332-70b6-8e2d-634da8066f98",
+                        ),
                         tool_id: ToolId::new("tool-bash"),
                         tool_name: "bash".to_owned(),
                         state: BackgroundLifecycle::Running,
@@ -1743,7 +1776,10 @@ async fn issue206_background_consumes_typed_settlement_without_completion() {
                 BackgroundLifecycle::OutcomeUnknown,
             ),
         ] {
-            let fixture = background_fixture_with_sink("conv-206-settlement", with_sink);
+            let fixture = background_fixture_with_sink(
+                "conv_1dd9f9ed-fd1d-725a-891a-4defef22e7c3",
+                with_sink,
+            );
             let (started, mut started_rx) = tokio::sync::watch::channel(false);
             let mut result = success();
             result.status = status;
@@ -1815,7 +1851,7 @@ impl ToolExecutor for PanickingBackgroundExecutor {
 
 #[tokio::test]
 async fn issue206_background_panic_keeps_registry_settlement_authority() {
-    let fixture = background_fixture("conv-206-panic");
+    let fixture = background_fixture("conv_0e9a0f41-2abd-7359-af86-d5779b62d671");
     let executor: Arc<dyn ToolExecutor> = Arc::new(PanickingBackgroundExecutor);
     let prepared = fixture
         .registry

@@ -107,8 +107,8 @@ async fn a_real_managed_fastmcp_task_completes_through_one_tool_result() {
     .expect("requirements");
 
     let workspace = Workspace::new(&workspace_root).expect("workspace");
-    let discovered =
-        crate::tools::python::discover_python_packages(&workspace).expect("package discovery");
+    let discovered = crate::boundary_suites::common::discover_python_packages(&workspace)
+        .expect("package discovery");
     let package = discovered
         .into_iter()
         .find(|entry| entry.server_id == crate::tools::python::python_server_id("tasks-tool"))
@@ -156,7 +156,7 @@ async fn a_real_managed_fastmcp_task_completes_through_one_tool_result() {
 
     let artifacts = tempfile::tempdir().expect("artifacts");
     let bundle = crate::tools::runtime::ConversationToolRuntime::new(
-        ConversationId::new("tasks-managed"),
+        ConversationId::new("conv_d762b500-9c11-7122-8fbe-4013a27488df"),
         &workspace_root,
         artifacts.path(),
     )

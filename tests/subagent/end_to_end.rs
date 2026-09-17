@@ -38,20 +38,21 @@ fn models_json(base_url: &str) -> String {
 base_url = "{base_url}"
 api_key = "$RUSTX_SUBAGENT_TEST_KEY"
 
-[[providers.fixture.models]]
+[models."fixture/subagent-model"]
+provider = "fixture"
 id = "subagent-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 request_params = {{ temperature = 0.11 }}
 
-[providers.fixture.models.capabilities]
+[models."fixture/subagent-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.fixture.models.compat]
+[models."fixture/subagent-model".compat]
 chat_reasoning_replay = "omit"
 "#
     )
@@ -113,6 +114,9 @@ model = "fixture/subagent-model"
 
 [agent.tools]
 builtin = ["read"]
+
+[agent.plugins.agent_status]
+enabled = true
 "#;
 
 /// The `explore` agent's instruction document, written into the workspace so
@@ -234,19 +238,16 @@ impl Process {
             EXPLORE_INSTRUCTIONS,
         )
         .expect("explore instructions");
-        std::fs::write(root.join("models.toml"), models).expect("models.toml");
         let mut document: serde_json::Value =
             rustx::toml_authoring::parse(session.as_bytes()).unwrap();
         crate::launch_fixture::write_roles(workspace, &mut document["subagents"]);
         std::fs::write(
             root.join("rustx.toml"),
-            toml::to_string_pretty(&document).unwrap(),
+            format!("{}\n{models}", toml::to_string_pretty(&document).unwrap()),
         )
         .expect("rustx.toml");
         let mut command = tokio::process::Command::new(binary());
         command
-            .arg("--models")
-            .arg(root.join("models.toml"))
             .arg("--config")
             .arg(root.join("rustx.toml"))
             .arg("--workspace")
@@ -254,7 +255,7 @@ impl Process {
             .arg("--runtime-root")
             .arg(root.join("private"))
             .env_clear()
-            .env("HOME", crate::launch_fixture::grant(root, workspace))
+            .env("HOME", root.join("host"))
             .env("PATH", std::env::var("PATH").unwrap_or_default())
             .env("RUSTX_SUBAGENT_TEST_KEY", key)
             .stdin(Stdio::piped())
@@ -1097,12 +1098,8 @@ async fn subagent_process_stack(alias_root: bool) {
         use rustx::runtime::local_storage::ProductRoot;
         let alias = root.path().join("private");
         let product = ProductRoot::existing(&alias).unwrap();
-        let session = SessionCatalog::open_existing(&alias)
-            .unwrap()
-            .unwrap()
-            .snapshot(&rustx::local_runtime::SessionId::new("session-1"))
-            .unwrap()
-            .id;
+        let catalog = SessionCatalog::open_existing(&alias).unwrap().unwrap();
+        let session = catalog.persisted_session_ids()[0].clone();
         let preflight = SessionDeletionPreflight::acquire(&alias, &session).unwrap();
         assert_eq!(preflight.conversations().len(), 2);
         assert_eq!(
@@ -1559,7 +1556,14 @@ async fn running_child_inspection_is_execution_independent() {
             .request_bodies()
             .into_iter()
             .find(|body| request_kind(body) == "parent-final")
-            .map(|body| normalized_parent_context(&body))
+            .map(|body| {
+                normalized_parent_context(&body)
+                    .replace(
+                        final_snapshot.conversation_id.as_str(),
+                        "parent-conversation",
+                    )
+                    .replace(child_conversation_id.as_str(), "child-conversation")
+            })
             .expect("the parent final request exists");
         let fingerprint = ExecutionFingerprint {
             provider_attempts: server.attempt_count(),
@@ -1827,7 +1831,7 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
         &models,
         SESSION_TOML,
         "subagent-secret",
-        &session_id,
+        session_id.as_str(),
     );
     let response = recovered
         .request(|id| RuntimeClientRequest::Initialize {
@@ -1915,7 +1919,7 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
         &models,
         SESSION_TOML,
         "subagent-secret",
-        &session_id,
+        session_id.as_str(),
     );
     let response = repeated
         .request(|id| RuntimeClientRequest::Initialize {

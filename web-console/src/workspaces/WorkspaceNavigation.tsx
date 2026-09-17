@@ -67,9 +67,7 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
     finally { setBusy(false); }
   };
   const rows = state.sessions.map((session, index) => ({ session, location: groups[index], group: groups[index]?.authorized ? groups[index].workspaceId ?? null : null }));
-  const trustView = selected && rows.some(row => row.session.id === selected && row.group === workspace) ? state.views[selected] : undefined;
-  const trust = connected && trustView?.attachment === 'attached' && trustView.attachmentIntent === 'wanted' ? trustView.projectTrusted : undefined;
-  const trustLabel = trust === true ? 'Trusted project source' : trust === false ? 'Untrusted project source · project resources inactive on cold resolution' : 'Project trust unknown · open a Session to read native status';
+
   const sessionRows = (group?: string | null) => rows.filter(row => group === undefined || row.group === group).map(({ session, location }) => <div className={css.sessionRow} key={session.id} data-selected={selected === session.id}>
     <StateDot state={connected && state.views[session.id]?.attachment === 'attached' && state.views[session.id]?.attachmentIntent === 'wanted' ? state.views[session.id]?.snapshot?.inbound.pending?.length ? 'warning' : activeAttempt(state.views[session.id]?.snapshot) ? 'ongoing' : 'idle' : 'idle'} />
     <button className={`session-open ${css.open}`} aria-label={`Open ${session.name ?? session.id}`} aria-current={selected === session.id ? 'page' : undefined} disabled={!connected} onClick={() => openSession(session.id)}>
@@ -90,8 +88,8 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
       {catalog?.picker.kind === 'configured' && <Button disabled={busy || !bound} onClick={() => setDialog({ kind: 'add', id: '', name: '' })}>Add Workspace</Button>}</div>
     {catalog?.picker.kind === 'unavailable' && <small className="muted">{catalog.picker.reason}</small>}
     {catalog && !bound && <p role="status">This Workspace Host belongs to {catalog.endpoint}. Connect to that process to use its registrations.</p>}
-    {workspace && <div className={css.trust}><small>Host authorization: registered</small><small>{trustLabel}</small>
-      <Button size="sm" disabled={trust !== true} onClick={openSettings}>Workspace settings</Button></div>}
+    {workspace && <div className={css.trust}><small>Host authorization: registered</small>
+      <Button size="sm" disabled={!connected} onClick={openSettings}>Workspace settings</Button></div>}
     <Input aria-label="Search Session metadata" placeholder="Search Session metadata" value={query} disabled={!connected} onChange={event => search(event.target.value)} />
     <div className="row"><Button size="sm" disabled={!connected} onClick={() => { setReload(value => value + 1); search(query, offset); }}>Refresh list</Button><small className="muted">32 summaries per page</small></div>
     {hostError && <p role="status">{hostError}</p>}
@@ -113,7 +111,7 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
     <div className="row"><Button size="sm" disabled={!connected || offset === 0} onClick={() => search(query, Math.max(0, offset - 32))}>Previous</Button><Button size="sm" disabled={!connected || state.nextOffset == null} onClick={() => search(query, state.nextOffset!)}>Next</Button></div>
     {dialog && <Dialog open title={dialog.kind === 'add' ? 'Add Workspace' : dialog.kind === 'remove' ? `Unregister ${dialog.name}?` : `Rename ${dialog.kind}`} onClose={() => setDialog(undefined)}>
       {dialog.kind === 'add' ? <><p>Choose a location authorized by this Product Host.</p>{catalog?.picker.kind === 'configured' && catalog.picker.locations.map(location => <Button key={location.id} disabled={busy} onClick={() => void mutate(() => host.adoptWorkspace(location.id))}>{location.displayName}</Button>)}</>
-          : dialog.kind === 'remove' ? <><p>Only the navigation registration is removed. Sessions, cwd, history, project trust, and running work remain untouched.</p><Button disabled={busy} onClick={() => void mutate(() => host.removeWorkspace(dialog.id), dialog.id)}>Unregister</Button></>
+          : dialog.kind === 'remove' ? <><p>Only the navigation registration is removed. Sessions, cwd, history, and running work remain untouched.</p><Button disabled={busy} onClick={() => void mutate(() => host.removeWorkspace(dialog.id), dialog.id)}>Unregister</Button></>
             : <form onSubmit={event => { event.preventDefault(); const current = navigation.capture(); void mutate(async () => {
               if (dialog.kind === 'workspace') await host.renameWorkspace(dialog.id, name);
               else { await client.request({ method: 'session/name', params: { session_id: dialog.id, name } }, 'session'); if (current()) await client.listSessions(offset, query, current); }

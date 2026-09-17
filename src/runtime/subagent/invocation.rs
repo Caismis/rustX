@@ -21,16 +21,16 @@
 //!
 //! There is no additive mode, no removal mode, no wildcard, and no recursive
 //! merge. `"tools": {"builtin": ["bash"]}` is the child's whole tool
-//! selection, not the role's selection plus Bash; `"extensions": {}` is the
+//! selection, not the role's selection plus Bash; `"plugins": {}` is the
 //! empty composition, not the role's composition with nothing changed.
 //! Replacement applies per dimension and independently: an override naming
-//! only `skills` leaves tools and extensions exactly as the role authored
+//! only `skills` leaves tools and Plugins exactly as the role authored
 //! them.
 //!
 //! # Why presence, not emptiness, is the signal
 //!
 //! The three dimensions all have a legitimate empty value — no tools, no
-//! Skills, no composed extension — so "empty means inherit" would make those
+//! Skills, no composed Plugin — so "empty means inherit" would make those
 //! three states unsayable. Each dimension is therefore an explicit `Option`
 //! whose `None` is produced only by an absent key. An explicit `null` is
 //! rejected rather than folded into absence, so one wire spelling never
@@ -92,7 +92,7 @@ pub struct SubagentInvocationOverride {
     // Absent or a complete value; never `null`. See the module contract.
     #[schemars(with = "Vec<String>")]
     pub skills: Option<Vec<String>>,
-    /// The complete replacement native Agent Extension composition, when this
+    /// The complete replacement Plugin composition, when this
     /// dimension is overridden. Absent uses the definition's composition.
     #[serde(
         default,
@@ -100,6 +100,7 @@ pub struct SubagentInvocationOverride {
         skip_serializing_if = "Option::is_none"
     )]
     // Absent or a complete value; never `null`. See the module contract.
+    #[serde(rename = "plugins")]
     #[schemars(with = "NativeAgentExtensionSelection")]
     pub extensions: Option<NativeAgentExtensionSelection>,
 }
@@ -123,10 +124,12 @@ impl SubagentInvocationOverride {
     ) -> crate::runtime::agent_profile::AgentProfile {
         let mut profile = definition.profile().clone();
         profile.tools = self.effective_tools(definition);
-        profile.skills = crate::runtime::agent_profile::AgentSkillSelection::Exact(
-            self.effective_skills(definition),
-        );
-        profile.extensions = self.effective_extensions(definition);
+        if let Some(selection) = &self.skills {
+            profile.skills = crate::runtime::agent_profile::AgentSkillSelection::Exact(
+                canonical_skills(selection.clone()),
+            );
+        }
+        profile.extensions = self.effective_plugins(definition);
         profile
     }
 
@@ -154,16 +157,16 @@ impl SubagentInvocationOverride {
         }
     }
 
-    /// The effective frozen native Agent Extension composition of this
+    /// The effective frozen Plugin composition of this
     /// invocation.
     ///
     /// A present dimension is resolved through
     /// [`NativeAgentExtensionSelection::resolve`], whose absent members
     /// compose nothing. The authored role/launch defaults deliberately do not
-    /// participate: `"extensions": {}` is the empty composition, never the
-    /// document default that composes Agent Status.
+    /// participate: `"plugins": {}` is the empty composition, never the
+    /// default-off Plugin configuration.
     #[must_use]
-    pub fn effective_extensions(&self, definition: &NamedAgentDefinition) -> NativeAgentExtensions {
+    pub fn effective_plugins(&self, definition: &NamedAgentDefinition) -> NativeAgentExtensions {
         match &self.extensions {
             None => definition.extensions().clone(),
             Some(selection) => selection.resolve(),
@@ -383,6 +386,29 @@ mod tests {
         )
     }
 
+    #[test]
+    fn replacing_tools_preserves_the_named_agents_all_skill_visibility() {
+        let original = role();
+        let mut profile = original.profile().clone();
+        profile.skills = crate::runtime::agent_profile::AgentSkillSelection::All;
+        let role = crate::runtime::subagent::NamedAgentDefinition::new(
+            original.name().clone(),
+            profile,
+            std::path::PathBuf::from("/w/reviewer.toml"),
+        )
+        .unwrap();
+        let replacement = parse(serde_json::json!({"tools":{"builtin":[]}})).unwrap();
+        assert_eq!(
+            replacement.effective_profile(&role).skills,
+            crate::runtime::agent_profile::AgentSkillSelection::All
+        );
+        let none = parse(serde_json::json!({"skills":[]})).unwrap();
+        assert_eq!(
+            none.effective_profile(&role).skills,
+            crate::runtime::agent_profile::AgentSkillSelection::Exact(Vec::new())
+        );
+    }
+
     /// The whole contract of the missing/present distinction, on one role.
     #[test]
     fn sub258_a_missing_dimension_inherits_and_a_present_dimension_replaces() {
@@ -391,7 +417,7 @@ mod tests {
         assert!(absent.is_empty());
         assert_eq!(absent.effective_tools(&role), role.tools());
         assert_eq!(absent.effective_skills(&role), role.skills());
-        assert_eq!(&absent.effective_extensions(&role), role.extensions());
+        assert_eq!(&absent.effective_plugins(&role), role.extensions());
 
         let empty_object = parse(serde_json::json!({})).expect("an empty override parses");
         assert_eq!(empty_object, absent, "an empty object overrides nothing");
@@ -412,11 +438,10 @@ mod tests {
             role.skills(),
             "the missing dimensions still resolve from the definition"
         );
-        assert_eq!(&tools_only.effective_extensions(&role), role.extensions());
+        assert_eq!(&tools_only.effective_plugins(&role), role.extensions());
     }
 
-    /// The extension-default trap: the authored document composes Agent
-    /// Status by default, and an explicit empty override must not.
+    /// Explicit empty replacement clears the role's explicitly enabled Plugins.
     #[test]
     fn sub258_an_empty_extension_override_composes_nothing() {
         let role = role();
@@ -424,9 +449,9 @@ mod tests {
             role.extensions().agent_status().is_some(),
             "the role default really does compose Agent Status"
         );
-        let cleared = parse(serde_json::json!({"extensions": {}})).expect("parses");
+        let cleared = parse(serde_json::json!({"plugins": {}})).expect("parses");
         assert_eq!(
-            cleared.effective_extensions(&role),
+            cleared.effective_plugins(&role),
             NativeAgentExtensions::none(),
             "an explicit empty extension selection composes no extension at all"
         );
@@ -455,8 +480,8 @@ mod tests {
         for value in [
             serde_json::json!({"tools": null}),
             serde_json::json!({"skills": null}),
-            serde_json::json!({"extensions": null}),
-            serde_json::json!({"extensions": {"agentStatus": null}}),
+            serde_json::json!({"plugins": null}),
+            serde_json::json!({"plugins": {"agentStatus": null}}),
         ] {
             assert!(parse(value.clone()).is_err(), "accepted {value}");
         }
@@ -471,10 +496,10 @@ mod tests {
             serde_json::json!({"worktree": {"enabled": true}}),
             serde_json::json!({"addTools": {"builtin": ["bash"]}}),
             serde_json::json!({"tools": {"builtin": ["read"], "future": []}}),
-            serde_json::json!({"extensions": {"futureGoal": {"enabled": true}}}),
-            serde_json::json!({"extensions": {"todo": {"future": true}}}),
-            serde_json::json!({"extensions": {"todo": null}}),
-            serde_json::json!({"extensions": {"agentStatus": {"future": true}}}),
+            serde_json::json!({"plugins": {"futureGoal": {"enabled": true}}}),
+            serde_json::json!({"plugins": {"todo": {"future": true}}}),
+            serde_json::json!({"plugins": {"todo": null}}),
+            serde_json::json!({"plugins": {"agentStatus": {"future": true}}}),
             serde_json::json!({"tools": ["read"]}),
             serde_json::json!({"skills": "code-review"}),
         ] {
@@ -554,6 +579,6 @@ mod tests {
         assert!(!restated.is_empty());
         assert_eq!(restated.effective_tools(&role), role.tools());
         assert_eq!(restated.effective_skills(&role), role.skills());
-        assert_eq!(&restated.effective_extensions(&role), role.extensions());
+        assert_eq!(&restated.effective_plugins(&role), role.extensions());
     }
 }

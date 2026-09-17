@@ -318,6 +318,7 @@ async fn run_child(
     // the existing bounded Diagnostic frame.
     let live_lease = match LiveConversationInspectionLease::acquire(
         &spec.product_root,
+        &spec.session_id,
         &spec.child_conversation_id,
     ) {
         Ok(lease) => Some(lease),
@@ -1231,6 +1232,7 @@ mod tests {
         let adapter: Arc<dyn ModelAdapter> = model;
         ConversationRuntime::with_probe(
             RuntimeConversationConfig {
+                explicit_model: true,
                 agent_id: AgentId::new("agent-child"),
                 model: scripted_session_model(adapter),
                 approval_mode: crate::runtime::ApprovalMode::Policy,
@@ -1290,7 +1292,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp root");
         let admission_gate = Arc::new(Gate::default());
         let model = Arc::new(FakeModel::new(Vec::new()));
-        let conversation_id = ConversationId::new("conv-child-cancel-before-admission");
+        let conversation_id = ConversationId::new("conv_ef886774-3d40-707f-8581-4dc1d1d5ad46");
         let runtime = child_test_runtime(
             &dir,
             None,
@@ -1429,7 +1431,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp root");
         let (pause, mut pre_start, _) = StartBoundaryPause::install(true, false);
         let model = Arc::new(FakeModel::new(Vec::new()));
-        let conversation_id = ConversationId::new("conv-child-cancel-pre-start");
+        let conversation_id = ConversationId::new("conv_4e88e6f4-6f20-7093-8e67-022aac299e55");
         let runtime =
             child_test_runtime(&dir, Some(pause), None, conversation_id, model.clone()).await;
         let observations = Arc::new(PendingObservations::new());
@@ -1545,7 +1547,7 @@ mod tests {
     async fn cancel_after_request_start_cancels_the_in_flight_request() {
         let dir = tempfile::tempdir().expect("temp root");
         let model = Arc::new(FakeModel::new(vec![vec![FakeStep::ParkUntilCancelled]]));
-        let conversation_id = ConversationId::new("conv-child-cancel-in-flight");
+        let conversation_id = ConversationId::new("conv_38e54f8b-1122-775c-882b-84b4d9eeea08");
         let runtime = child_test_runtime(&dir, None, None, conversation_id, model.clone()).await;
         let observations = Arc::new(PendingObservations::new());
         runtime
@@ -1632,13 +1634,23 @@ mod tests {
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let spec = SubagentChildSpec {
+            session_id: crate::runtime::identity::SessionId::new(
+                "ses_01900000-0000-7000-8000-000000000001",
+            ),
+
             protocol_version: SUBAGENT_IPC_VERSION,
             product_root: dir.path().to_path_buf(),
-            subagent_id: crate::runtime::identity::SubagentId::new("conv-issue145-race-subagent-1"),
-            child_conversation_id: ConversationId::new("conv-issue145-race-subagent-1"),
+            subagent_id: crate::runtime::identity::SubagentId::new(
+                "conv_4e7d4d77-5e91-762d-867c-f4b0134317e8",
+            ),
+            child_conversation_id: ConversationId::new("conv_4e7d4d77-5e91-762d-867c-f4b0134317e8"),
             child_agent_id: AgentId::new("agent-child"),
             parent_agent_id: AgentId::new("agent-parent"),
             resolved: crate::runtime::subagent::ResolvedSubagentSpec {
+                environment: Vec::new(),
+                generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
+                skill_roots: Vec::new(),
+
                 selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
                 agent: crate::runtime::subagent::SubagentName::parse("explore")
                     .expect("canonical name"),
@@ -1677,6 +1689,7 @@ mod tests {
             crate::runtime::local_storage::ProductRoot::existing(&spec.product_root).unwrap();
         let allocation = crate::runtime::subagent::child_conversation_store_path(
             product.root(),
+            &spec.session_id,
             &spec.child_conversation_id,
         )
         .parent()
@@ -1896,7 +1909,7 @@ mod tests {
             None,
             None,
             Some(seal_gate.clone()),
-            ConversationId::new("conv-child-seal-open"),
+            ConversationId::new("conv_cba5be45-4523-71a1-820a-ccdae9d8d33e"),
             model.clone(),
         )
         .await;
@@ -1995,7 +2008,7 @@ mod tests {
             None,
             None,
             Some(seal_gate.clone()),
-            ConversationId::new("conv-child-seal-closed"),
+            ConversationId::new("conv_bbd1ceff-5761-7ba2-8b72-38a9b275c058"),
             model.clone(),
         )
         .await;
@@ -2082,7 +2095,7 @@ mod tests {
             None,
             Some(admission_gate.clone()),
             Some(seal_gate.clone()),
-            ConversationId::new("conv-child-seal-unverifiable"),
+            ConversationId::new("conv_3891c656-015e-71df-8476-79495baeeecb"),
             model.clone(),
         )
         .await;
@@ -2222,7 +2235,7 @@ mod tests {
         let runtime = child_test_runtime_with_model_pause(
             &dir,
             model_pause,
-            ConversationId::new("conv-child-guidance-cancelled"),
+            ConversationId::new("conv_dfe9945f-baea-7bcf-878b-65b7efa3c297"),
             model.clone(),
         )
         .await;
@@ -2370,7 +2383,7 @@ mod tests {
             None,
             Some(Arc::clone(&latch)),
             None,
-            ConversationId::new("conv-child-workflow-isolated"),
+            ConversationId::new("conv_65454923-c390-7329-8410-7a51296c305b"),
             model.clone(),
         )
         .await;

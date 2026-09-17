@@ -65,7 +65,13 @@ impl RuntimeClientFixture {
             mcp_servers: std::collections::BTreeMap::new(),
             native_tools: false,
             extensions: rustx::extensions::NativeAgentExtensions::none(),
-            agent_activation: rustx::capabilities::AgentActivation::default(),
+            agent_activation: rustx::capabilities::AgentActivation {
+                profile: rustx::local_runtime::config::AgentProfileDocument {
+                    skills: Some(rustx::runtime::agent_profile::AgentSkillSelection::All),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             session_model: None,
             context_policy: SessionContextPolicy {
                 reserve_tokens: 0,
@@ -328,10 +334,21 @@ impl RuntimeClientFixtureBuilder {
         }
 
         let mut agent_activation = self.agent_activation;
-        agent_activation.profile.tools.sources.insert(
-            rustx::capabilities::ToolSourceId::ManagedPython("py-echo".into()),
-            rustx::capabilities::selection::SourceToolSelection::All,
-        );
+        agent_activation.profile.extensions =
+            crate::scripted_suites::common::plugin_document(&extensions);
+        let python = rustx::local_runtime::managed_python_resources::discover(
+            &workspace_root,
+            &workspace.path().join("user/.agents"),
+        )
+        .expect("inert Python catalog");
+        for source in python.packages().keys() {
+            agent_activation
+                .profile
+                .tools
+                .sources
+                .entry(source.clone())
+                .or_insert(rustx::capabilities::selection::SourceToolSelection::All);
+        }
         for definition in base_tools.definitions() {
             if let Some(source) = definition.origin.source() {
                 agent_activation
@@ -352,10 +369,11 @@ impl RuntimeClientFixtureBuilder {
         }
         let coordinator = rustx::capabilities::CapabilityCoordinator::with_backend(
             rustx::capabilities::CapabilityCoordinatorConfig {
-                source_demand: crate::scripted_suites::common::source_demand(
-                    tool_runtime.workspace().root(),
-                    std::iter::once("python:py-echo".to_owned())
-                        .chain(self.mcp_servers.keys().map(ToString::to_string)),
+                source_demand: rustx::capabilities::source::ToolSourceDemand::new(
+                    agent_activation.profile.tools.sources.iter()
+                        .filter(|(_, selection)| !matches!(selection, rustx::capabilities::selection::SourceToolSelection::Exact(names) if names.is_empty()))
+                        .map(|(source, _)| source.clone()),
+                    python,
                 ),
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
@@ -388,6 +406,7 @@ impl RuntimeClientFixtureBuilder {
         // The conversation runtime coordinator owns the semantic state; the
         // Runtime Client host is the projection/control adapter over it.
         let runtime = ConversationRuntime::new(RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: session_model,
             approval_mode: rustx::runtime::ApprovalMode::Policy,

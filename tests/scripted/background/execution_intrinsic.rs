@@ -35,7 +35,7 @@ use rustx::tools::types::ToolExecutionStatus;
 // ---------------------------------------------------------------------------
 
 /// A background tool dispatch returns a typed execution handle:
-/// `{ "execution": { "kind": "tool", "id": "exec_1" }, "state": "starting", ... }`.
+/// The creation result carries the UUID returned by the ownership commit.
 #[tokio::test]
 async fn background_dispatch_returns_a_typed_tool_execution_handle() {
     let fixture = common::native_fixture();
@@ -63,13 +63,17 @@ async fn background_dispatch_returns_a_typed_tool_execution_handle() {
         .background()
         .commit_dispatch(prepared, &CancellationSignal::new())
         .expect("dispatch commits");
-    let BackgroundDispatchOutcome::Accepted { result, .. } = outcome else {
+    let BackgroundDispatchOutcome::Accepted {
+        result,
+        execution_id,
+    } = outcome
+    else {
         panic!("accepted");
     };
     let accepted = json_content(&result);
     assert_eq!(
         accepted["execution"],
-        serde_json::json!({"kind": "tool", "id": "exec_1"}),
+        serde_json::json!({"kind": "tool", "id": execution_id}),
         "the creation result returns the typed execution handle"
     );
     assert_eq!(accepted["state"], "starting");
@@ -82,7 +86,7 @@ async fn background_dispatch_returns_a_typed_tool_execution_handle() {
         accepted["output_path"]
             .as_str()
             .expect("output path")
-            .ends_with("tasks/exec_1.output"),
+            .ends_with(&format!("tasks/{execution_id}.output")),
         "the output locator still accompanies the handle"
     );
 }
@@ -108,7 +112,7 @@ async fn execution_status_routes_tool_targets_to_the_background_registry() {
     let outcome = registry
         .commit_dispatch(prepared, &CancellationSignal::new())
         .expect("dispatch commits");
-    let BackgroundDispatchOutcome::Accepted { .. } = outcome else {
+    let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
     started
@@ -119,21 +123,18 @@ async fn execution_status_routes_tool_targets_to_the_background_registry() {
     let result = common::run_tool(
         &fixture,
         "execution",
-        serde_json::json!({"action": "status", "target": {"kind": "tool", "id": "exec_1"}}),
+        serde_json::json!({"action": "status", "target": {"kind": "tool", "id": execution_id}}),
     )
     .await;
     let snapshot = json_content(&result);
     assert_eq!(snapshot["kind"], "tool");
-    assert_eq!(snapshot["execution_id"], "exec_1");
+    assert_eq!(snapshot["execution_id"], execution_id.as_str());
     assert_eq!(snapshot["tool_name"], "bash");
     assert_eq!(snapshot["state"], "running");
     // The response is the authoritative registry snapshot, not a cached or
     // duplicate projection.
     assert_eq!(
-        registry
-            .snapshot(&ToolExecutionId::new("exec_1"))
-            .expect("snapshot")
-            .state,
+        registry.snapshot(&execution_id).expect("snapshot").state,
         BackgroundLifecycle::Running
     );
 }
@@ -156,7 +157,7 @@ async fn execution_cancel_routes_tool_targets_to_the_background_registry() {
     let outcome = registry
         .commit_dispatch(prepared, &CancellationSignal::new())
         .expect("dispatch commits");
-    let BackgroundDispatchOutcome::Accepted { .. } = outcome else {
+    let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
     started
@@ -167,16 +168,13 @@ async fn execution_cancel_routes_tool_targets_to_the_background_registry() {
     let cancelled = common::run_tool(
         &fixture,
         "execution",
-        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_1"}}),
+        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": execution_id}}),
     )
     .await;
     let snapshot = json_content(&cancelled);
     assert_eq!(snapshot["state"], "cancelling");
     assert_eq!(
-        registry
-            .snapshot(&ToolExecutionId::new("exec_1"))
-            .expect("snapshot")
-            .state,
+        registry.snapshot(&execution_id).expect("snapshot").state,
         BackgroundLifecycle::Cancelling,
         "the authoritative registry transitioned, not a shadow copy"
     );
@@ -185,11 +183,10 @@ async fn execution_cancel_routes_tool_targets_to_the_background_registry() {
     let again = common::run_tool(
         &fixture,
         "execution",
-        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_1"}}),
+        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": execution_id}}),
     )
     .await;
     assert_eq!(again.status, ToolExecutionStatus::Success);
-    let execution_id = ToolExecutionId::new("exec_1");
     // Deterministic settlement synchronization: the registry's own
     // state-version watch resolves when the absorbing terminal transition
     // commits. No scheduler-yield polling proves the transition.
@@ -214,15 +211,15 @@ async fn unknown_ids_fail_deterministically() {
     let plane = subagent_plane();
     let fixture = execution_fixture(Some(plane.registry.clone()));
     for arguments in [
-        serde_json::json!({"action": "status", "target": {"kind": "tool", "id": "exec_999"}}),
-        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_999"}}),
+        serde_json::json!({"action": "status", "target": {"kind": "tool", "id": "exec_00000000-0000-7000-8000-000000000999"}}),
+        serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_00000000-0000-7000-8000-000000000999"}}),
         serde_json::json!({
             "action": "status",
-            "target": {"kind": "subagent", "id": "conv-162-subagent-99"},
+            "target": {"kind": "subagent", "id": "conv_35227a88-2fb4-735f-ad8e-ec0b35ff2a42-subagent-99"},
         }),
         serde_json::json!({
             "action": "cancel",
-            "target": {"kind": "subagent", "id": "conv-162-subagent-99"},
+            "target": {"kind": "subagent", "id": "conv_35227a88-2fb4-735f-ad8e-ec0b35ff2a42-subagent-99"},
         }),
     ] {
         let result = run_execution(&fixture, arguments).await;
@@ -296,544 +293,279 @@ fn controlled_parking() -> (
     (tool, started, release)
 }
 
-// ---------------------------------------------------------------------------
-// Discovery (Issue #180)
-// ---------------------------------------------------------------------------
-
-/// `execution(list)` returns every conversation-owned execution within the
-/// bound, each carrying its explicit typed handle rather than a bare id.
-#[tokio::test]
-async fn list_returns_every_conversation_owned_execution_with_a_typed_handle() {
-    let fixture = execution_fixture(None);
-    let registry = fixture.runtime.background().clone();
-    let mut gates = Vec::new();
-    let settled = dispatch_settled(&registry, "exec_1").await;
-    gates.push(dispatch_parking(&registry).await);
-    gates.push(dispatch_parking(&registry).await);
-
-    let listing = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
-    assert_eq!(listing["matched"], 3);
-    assert_eq!(listing["returned"], 3);
-    assert_eq!(listing["truncated"], false);
-    assert_eq!(listing["limit"], MAX_LISTED_EXECUTIONS);
-    assert_eq!(
-        handles(&listing),
-        vec!["exec_3", "exec_2", "exec_1"],
-        "the most recently allocated execution comes first"
-    );
-    for entry in listing["executions"].as_array().expect("executions") {
-        assert_eq!(
-            entry["execution"]["kind"], "tool",
-            "the kind is explicit, never inferred from the id"
-        );
-        assert!(entry["execution"]["id"].is_string());
-        assert_eq!(entry["tool_name"], "bash");
-    }
-    assert_eq!(listing["executions"][0]["state"], "running");
-    assert_eq!(listing["executions"][2]["state"], "succeeded");
-    assert_eq!(settled, ToolExecutionId::new("exec_1"));
+// Listing is a read model over allocation order, never UUID lexical order.
+fn list(filter: serde_json::Value) -> serde_json::Value {
+    let mut request = serde_json::Map::new();
+    request.insert("action".into(), "list".into());
+    request.insert("filter".into(), filter);
+    request.into()
 }
-
-/// `active_only` deterministically excludes terminal records, and the
-/// default — an omitted filter — lists active and terminal alike.
-#[tokio::test]
-async fn list_active_only_excludes_terminal_executions() {
-    let fixture = execution_fixture(None);
-    let registry = fixture.runtime.background().clone();
-    dispatch_settled(&registry, "exec_1").await;
-    let _gate = dispatch_parking(&registry).await;
-    dispatch_settled(&registry, "exec_3").await;
-
-    let active = json_content(
-        &run_execution(&fixture, list(&serde_json::json!({"active_only": true}))).await,
-    );
-    assert_eq!(handles(&active), vec!["exec_2"]);
-    assert_eq!(active["matched"], 1, "the count follows the filter");
-    assert_eq!(active["returned"], 1);
-    assert_eq!(active["truncated"], false);
-
-    // The documented default: omitting the field, and stating it as false,
-    // are the same contract, and both list terminal records too.
-    for filter in [
-        serde_json::json!({}),
-        serde_json::json!({"active_only": false}),
-    ] {
-        let all = json_content(&run_execution(&fixture, list(&filter)).await);
-        assert_eq!(handles(&all), vec!["exec_3", "exec_2", "exec_1"]);
-        assert_eq!(all["matched"], 3);
-    }
+fn handles(value: &serde_json::Value) -> Vec<String> {
+    value["executions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["execution"]["id"].as_str().unwrap().to_owned())
+        .collect()
 }
-
-/// The `kind` filter selects one domain, and a runtime that owns no
-/// subagent registry has no subagents to list — never a fall-through into
-/// the background registry.
-#[tokio::test]
-async fn the_kind_filter_never_falls_through_into_the_other_domain() {
-    let fixture = execution_fixture(None);
-    let registry = fixture.runtime.background().clone();
-    let _gate = dispatch_parking(&registry).await;
-
-    let tools =
-        json_content(&run_execution(&fixture, list(&serde_json::json!({"kind": "tool"}))).await);
-    assert_eq!(handles(&tools), vec!["exec_1"]);
-    assert_eq!(tools["matched"], 1);
-
-    let subagents = json_content(
-        &run_execution(&fixture, list(&serde_json::json!({"kind": "subagent"}))).await,
-    );
-    assert_eq!(
-        subagents["executions"],
-        serde_json::json!([]),
-        "a tool execution is never reachable through the subagent kind"
-    );
-    assert_eq!(subagents["matched"], 0);
-    assert_eq!(subagents["returned"], 0);
-    assert_eq!(subagents["truncated"], false);
-}
-
-/// Repeating the same request against unchanged registries returns the same
-/// entries in the same order with the same metadata.
-#[tokio::test]
-async fn repeated_lists_of_unchanged_state_are_identical() {
-    let fixture = execution_fixture(None);
-    let registry = fixture.runtime.background().clone();
-    let _gates = [
-        dispatch_parking(&registry).await,
-        dispatch_parking(&registry).await,
-    ];
-    dispatch_settled(&registry, "exec_3").await;
-
-    let first = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
-    let second = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
-    assert_eq!(first, second, "an unchanged snapshot lists identically");
-}
-
-/// The bound is an explicit runtime constant: the response stops there,
-/// keeps the deterministic prefix of the order, and says so explicitly.
-#[tokio::test]
-async fn list_truncates_deterministically_at_the_configured_bound() {
-    let fixture = execution_fixture(None);
-    let registry = fixture.runtime.background().clone();
-    let overflow = MAX_LISTED_EXECUTIONS + 6;
-    for ordinal in 1..=overflow {
-        dispatch_settled(&registry, &format!("exec_{ordinal}")).await;
-    }
-
-    let listing = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
-    assert_eq!(listing["returned"], MAX_LISTED_EXECUTIONS);
-    assert_eq!(listing["matched"], overflow);
-    assert_eq!(listing["truncated"], true);
-    assert_eq!(listing["limit"], MAX_LISTED_EXECUTIONS);
-    let expected = (0..MAX_LISTED_EXECUTIONS)
-        .map(|offset| format!("exec_{}", overflow - offset))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        handles(&listing),
-        expected,
-        "truncation keeps the newest deterministic prefix, never a sample"
-    );
-
-    let again = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
-    assert_eq!(
-        listing, again,
-        "truncation chooses the same records and reports the same metadata"
-    );
-}
-
-/// Listing is observation only: it changes no lifecycle, no cancellation
-/// state, no settlement, and no tool invocation count.
-#[tokio::test]
-async fn listing_never_changes_execution_state_or_invocation_counts() {
-    let fixture = execution_fixture(None);
-    let registry = fixture.runtime.background().clone();
-    let (executor, mut started, release) = controlled_parking();
-    let calls = executor.calls();
+fn commit(
+    registry: &rustx::tools::background::ConversationBackgroundRegistry,
+    tool: support::fake::FakeTool,
+) -> ToolExecutionId {
     let prepared = registry
         .prepare_dispatch(
             &background_invocation("bash"),
-            &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            &(Arc::new(tool) as Arc<dyn rustx::tools::executor::ToolExecutor>),
             rustx::tools::environment::ToolEnvironment::new(),
         )
-        .expect("prepare");
-    registry
+        .unwrap();
+    match registry
         .commit_dispatch(prepared, &CancellationSignal::new())
-        .expect("dispatch commits");
-    support::fake::await_started(&mut started, "background execution").await;
-    dispatch_settled(&registry, "exec_2").await;
-
-    let before = registry.all_snapshots();
-    let calls_before = calls.borrow().len();
-    for filter in [
-        serde_json::json!({}),
-        serde_json::json!({"active_only": true}),
-        serde_json::json!({"kind": "tool"}),
-    ] {
-        let result = run_execution(&fixture, list(&filter)).await;
-        assert_eq!(result.status, ToolExecutionStatus::Success);
+        .unwrap()
+    {
+        BackgroundDispatchOutcome::Accepted { execution_id, .. } => execution_id,
+        BackgroundDispatchOutcome::RolledBack => panic!("unexpected rollback"),
     }
-    let after = registry.all_snapshots();
-    assert_eq!(
-        before, after,
-        "the authoritative registry read model is unchanged by listing"
+}
+async fn parking(
+    registry: &rustx::tools::background::ConversationBackgroundRegistry,
+) -> (ToolExecutionId, tokio::sync::watch::Sender<bool>) {
+    let (tool, mut started, release) = controlled_parking();
+    let id = commit(registry, tool);
+    support::fake::await_started(&mut started, "background starts").await;
+    (id, release)
+}
+async fn settled(
+    registry: &rustx::tools::background::ConversationBackgroundRegistry,
+    result: rustx::tools::types::ToolExecutionResult,
+) -> ToolExecutionId {
+    let tool = support::fake::FakeTool::new(
+        common::tool_policies(
+            "bash",
+            "tool-bash",
+            rustx::tools::types::ToolExecutionPolicy::ModelSelectable,
+            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
+        ),
+        result,
     );
-    assert_eq!(
-        calls.borrow().len(),
-        calls_before,
-        "listing invokes no tool"
-    );
-
-    // The listed execution still settles exactly as it would have, through
-    // its own registry-owned path.
-    release.send_replace(true);
-    let terminal = registry
-        .wait_until_terminal(&ToolExecutionId::new("exec_1"))
-        .await
-        .expect("the registry settles the execution");
-    assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+    let id = commit(registry, tool);
+    registry.wait_until_terminal(&id).await.unwrap();
+    id
 }
 
-/// A listed execution's cancellation is unaffected: cancelling after a list
-/// behaves exactly as it does without one, and the listing itself never
-/// requests cancellation.
 #[tokio::test]
-async fn listing_never_cancels_or_pre_empts_settlement() {
+async fn listing_uses_captured_admission_order_and_filters_lifecycle_without_output() {
     let fixture = execution_fixture(None);
-    let registry = fixture.runtime.background().clone();
-    let _gate = dispatch_parking(&registry).await;
-
-    let listing = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
-    assert_eq!(listing["executions"][0]["state"], "running");
-    let execution_id = ToolExecutionId::new("exec_1");
+    let registry = fixture.runtime.background();
+    let first = settled(
+        registry,
+        support::fake::success_result("detached-private-output"),
+    )
+    .await;
+    let (second, _second_gate) = parking(registry).await;
+    let (third, _third_gate) = parking(registry).await;
+    let before = registry.all_snapshots();
+    let all = json_content(&run_execution(&fixture, list(serde_json::json!({}))).await);
     assert_eq!(
-        registry.snapshot(&execution_id).expect("snapshot").state,
-        BackgroundLifecycle::Running,
-        "listing never moves an execution toward cancellation"
+        handles(&all),
+        [third.to_string(), second.to_string(), first.to_string()]
     );
-
-    let cancelled = json_content(
-        &run_execution(
-            &fixture,
-            serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_1"}}),
-        )
-        .await,
-    );
-    assert_eq!(cancelled["state"], "cancelling");
-    let terminal = registry
-        .wait_until_terminal(&execution_id)
-        .await
-        .expect("the registry settles the cancellation");
-    assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
-
-    // After settlement the listing reports the same terminal fact the
-    // registry owns — a projection, never a second lifecycle record.
-    let settled = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
-    assert_eq!(settled["executions"][0]["state"], "cancelled");
-    assert_eq!(
-        json_content(
-            &run_execution(&fixture, list(&serde_json::json!({"active_only": true}))).await
-        )["executions"],
-        serde_json::json!([]),
-        "a settled execution leaves the active listing"
-    );
-}
-
-/// `execution(status)` and `execution(list)` project the same lifecycle
-/// facts for the same execution, because both read the same authoritative
-/// registry snapshot.
-#[tokio::test]
-async fn list_and_status_report_consistent_lifecycle_facts() {
-    let fixture = execution_fixture(None);
-    let registry = fixture.runtime.background().clone();
-    let _gate = dispatch_parking(&registry).await;
-    dispatch_settled(&registry, "exec_2").await;
-
-    let listing = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
-    for entry in listing["executions"].as_array().expect("executions") {
-        let id = entry["execution"]["id"].as_str().expect("id");
+    assert_eq!(all["matched"], 3);
+    assert_eq!(all["returned"], 3);
+    assert_eq!(all["truncated"], false);
+    assert_eq!(all["limit"], MAX_LISTED_EXECUTIONS);
+    for entry in all["executions"].as_array().unwrap() {
+        assert_eq!(entry["execution"]["kind"], "tool");
+        assert_eq!(entry["tool_name"], "bash");
+        let id = &entry["execution"]["id"];
         let status = json_content(
             &run_execution(
                 &fixture,
                 serde_json::json!({
-                    "action": "status",
-                    "target": {"kind": "tool", "id": id},
+                    "action":"status", "target":{"kind":"tool", "id":id},
                 }),
             )
             .await,
         );
+        assert_eq!(entry["state"], status["state"]);
+        for withheld in ["result", "progress", "content", "exit_code"] {
+            assert!(entry.get(withheld).is_none());
+        }
+    }
+    assert!(!all.to_string().contains("detached-private-output"));
+    assert!(registry.snapshot(&first).unwrap().result.is_some());
+    for filter in [
+        serde_json::json!({}),
+        serde_json::json!({"active_only":false}),
+        serde_json::json!({"kind":"tool"}),
+    ] {
         assert_eq!(
-            entry["state"], status["state"],
-            "list and status agree about {id}"
-        );
-        assert_eq!(entry["tool_name"], status["tool_name"]);
-        assert_eq!(status["execution_id"], id);
-    }
-}
-
-/// The bounded summary is a discovery read model: a settled execution's
-/// output never rides the listing, so `list` can never become a second
-/// result channel for detached tool executions.
-#[tokio::test]
-async fn a_listing_never_carries_detached_execution_output() {
-    let fixture = execution_fixture(None);
-    let registry = fixture.runtime.background().clone();
-    dispatch_settled(&registry, "exec_1").await;
-
-    let listing = run_execution(&fixture, list(&serde_json::json!({}))).await;
-    let value = json_content(&listing);
-    assert_eq!(value["executions"][0]["state"], "succeeded");
-    let serialized = serde_json::to_string(&value).expect("string");
-    assert!(
-        !serialized.contains("issue180-detached-output"),
-        "the terminal result stays on its own domain channel: {serialized}"
-    );
-    for withheld in ["result", "progress", "content", "exit_code"] {
-        assert!(
-            !serialized.contains(withheld),
-            "a listing carries no {withheld}: {serialized}"
+            json_content(&run_execution(&fixture, list(filter)).await),
+            all
         );
     }
-    // The authoritative snapshot still carries it — the listing projects a
-    // narrower read model, it does not erase domain state.
-    assert!(
-        registry
-            .snapshot(&ToolExecutionId::new("exec_1"))
-            .expect("snapshot")
-            .result
-            .is_some(),
-        "the registry keeps the terminal result it owns"
+    let active =
+        json_content(&run_execution(&fixture, list(serde_json::json!({"active_only":true}))).await);
+    assert_eq!(handles(&active), [third.to_string(), second.to_string()]);
+    assert_eq!(active["matched"], 2);
+    let children =
+        json_content(&run_execution(&fixture, list(serde_json::json!({"kind":"subagent"}))).await);
+    assert!(handles(&children).is_empty());
+    assert_eq!(children["matched"], 0);
+    assert_eq!(
+        before,
+        registry.all_snapshots(),
+        "listing does not change ownership or lifecycle"
     );
 }
 
-/// Issue #202: `execution(status)` exposes the honest typed pair for a
-/// background execution whose external outcome is unknown — lifecycle
-/// `outcome_unknown` with the `outcome_unknown` result status — and never
-/// labels it `failed`.
 #[tokio::test]
-async fn execution_status_preserves_an_honest_outcome_unknown() {
+async fn listing_truncates_the_exact_admission_prefix_deterministically() {
     let fixture = execution_fixture(None);
-    let registry = fixture.runtime.background().clone();
-    dispatch_outcome_unknown(&registry, "exec_1").await;
+    let mut admitted = Vec::new();
+    for _ in 0..MAX_LISTED_EXECUTIONS + 6 {
+        admitted.push(
+            settled(
+                fixture.runtime.background(),
+                support::fake::success_result("done"),
+            )
+            .await,
+        );
+    }
+    let expected: Vec<_> = admitted
+        .iter()
+        .rev()
+        .take(MAX_LISTED_EXECUTIONS)
+        .map(ToString::to_string)
+        .collect();
+    let first = json_content(&run_execution(&fixture, list(serde_json::json!({}))).await);
+    assert_eq!(handles(&first), expected);
+    assert_eq!(first["matched"], admitted.len());
+    assert_eq!(first["returned"], MAX_LISTED_EXECUTIONS);
+    assert_eq!(first["truncated"], true);
+    assert_eq!(
+        json_content(&run_execution(&fixture, list(serde_json::json!({}))).await),
+        first
+    );
+}
 
+#[tokio::test]
+async fn listing_preserves_execution_count_and_later_cancellation() {
+    let fixture = execution_fixture(None);
+    let registry = fixture.runtime.background();
+    let (tool, mut started, _release) = controlled_parking();
+    let calls = tool.calls();
+    let id = commit(registry, tool);
+    support::fake::await_started(&mut started, "background starts").await;
+    let before = calls.borrow().len();
+    for _ in 0..3 {
+        run_execution(&fixture, list(serde_json::json!({}))).await;
+    }
+    assert_eq!(calls.borrow().len(), before);
+    assert_eq!(
+        registry.snapshot(&id).unwrap().state,
+        BackgroundLifecycle::Running
+    );
+    let cancel = run_execution(
+        &fixture,
+        serde_json::json!({"action":"cancel", "target":{"kind":"tool", "id":id}}),
+    )
+    .await;
+    assert_eq!(cancel.status, ToolExecutionStatus::Success);
+    assert_eq!(
+        registry.wait_until_terminal(&id).await.unwrap().state,
+        BackgroundLifecycle::Cancelled
+    );
+    let active =
+        json_content(&run_execution(&fixture, list(serde_json::json!({"active_only":true}))).await);
+    assert!(handles(&active).is_empty());
+}
+
+#[tokio::test]
+async fn status_and_listing_preserve_outcome_unknown() {
+    let fixture = execution_fixture(None);
+    let id = settled(
+        fixture.runtime.background(),
+        rustx::tools::types::ToolExecutionResult {
+            status: ToolExecutionStatus::OutcomeUnknown {
+                detail: "remote termination unconfirmed".into(),
+            },
+            ..support::fake::success_result("unreachable")
+        },
+    )
+    .await;
     let status = json_content(
         &run_execution(
             &fixture,
-            serde_json::json!({
-                "action": "status",
-                "target": {"kind": "tool", "id": "exec_1"},
-            }),
+            serde_json::json!({"action":"status", "target":{"kind":"tool", "id":id}}),
         )
         .await,
     );
-    assert_eq!(status["kind"], "tool");
-    assert_eq!(
-        status["state"], "outcome_unknown",
-        "the lifecycle is the truthful unknown, never failed: {status}"
-    );
-    assert_eq!(
-        status["result"]["status"]["type"], "outcome_unknown",
-        "the result status agrees with the lifecycle: {status}"
-    );
+    assert_eq!(status["state"], "outcome_unknown");
+    assert_eq!(status["result"]["status"]["type"], "outcome_unknown");
+    let all = json_content(&run_execution(&fixture, list(serde_json::json!({}))).await);
+    assert_eq!(handles(&all), [id.to_string()]);
+    assert_eq!(all["executions"][0]["state"], "outcome_unknown");
+    let active =
+        json_content(&run_execution(&fixture, list(serde_json::json!({"active_only":true}))).await);
+    assert!(handles(&active).is_empty());
 }
 
-/// Issue #202: `execution(list)` drops the result deliberately, so the
-/// lifecycle state is the only outcome signal left — it must be
-/// `outcome_unknown`, never `failed`, for an execution whose external
-/// outcome is unknown.
 #[tokio::test]
-async fn execution_list_never_hides_outcome_unknown_behind_failed() {
-    let fixture = execution_fixture(None);
-    let registry = fixture.runtime.background().clone();
-    dispatch_outcome_unknown(&registry, "exec_1").await;
-
-    let listing = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
-    let entry = &listing["executions"][0];
-    assert_eq!(entry["execution"]["id"], "exec_1");
-    assert_eq!(
-        entry["state"], "outcome_unknown",
-        "the result-less listing still reports the honest unknown: {entry}"
-    );
-    assert_ne!(
-        entry["state"], "failed",
-        "an unknown outcome is never listed as failed: {entry}"
-    );
-    // Terminal, not active: the unknown outcome is settled, not pending.
-    let active = json_content(
-        &run_execution(&fixture, list(&serde_json::json!({"active_only": true}))).await,
-    );
-    assert!(
-        active["executions"]
-            .as_array()
-            .expect("executions")
-            .is_empty(),
-        "an unknown outcome is terminal, not active: {active}"
-    );
-}
-
-/// Attaching an empty optional subsystem changes nothing: a runtime that
-/// owns an empty subagent registry lists exactly what a runtime without one
-/// lists, and the discovery machinery's mere existence alters no tool
-/// execution behavior.
-#[tokio::test]
-async fn an_empty_optional_subsystem_changes_no_listing_or_execution_behavior() {
-    let without = execution_fixture(None);
+async fn empty_optional_subsystem_changes_no_execution_semantics() {
     let plane = subagent_plane();
+    let without = execution_fixture(None);
     let with_empty = execution_fixture(Some(plane.registry.clone()));
-    assert!(
-        plane.registry.all_snapshots().is_empty(),
-        "the attached subsystem is empty"
-    );
-
+    let mut gates = Vec::new();
+    let mut ids = Vec::new();
     for fixture in [&without, &with_empty] {
-        let registry = fixture.runtime.background().clone();
-        dispatch_settled(&registry, "exec_1").await;
-        let _gate = dispatch_parking(&registry).await;
+        let first = settled(
+            fixture.runtime.background(),
+            support::fake::success_result("done"),
+        )
+        .await;
+        let (second, gate) = parking(fixture.runtime.background()).await;
+        ids.push((first, second));
+        gates.push(gate);
     }
-
     for filter in [
         serde_json::json!({}),
-        serde_json::json!({"active_only": true}),
-        serde_json::json!({"kind": "tool"}),
-        serde_json::json!({"kind": "subagent"}),
+        serde_json::json!({"active_only":true}),
+        serde_json::json!({"kind":"tool"}),
+        serde_json::json!({"kind":"subagent"}),
     ] {
-        let bare = json_content(&run_execution(&without, list(&filter)).await);
-        let attached = json_content(&run_execution(&with_empty, list(&filter)).await);
+        let mut projections = Vec::new();
+        for (index, fixture) in [&without, &with_empty].into_iter().enumerate() {
+            let mut view = json_content(&run_execution(fixture, list(filter.clone())).await);
+            for entry in view["executions"].as_array_mut().unwrap() {
+                let id = entry["execution"]["id"].as_str().unwrap();
+                entry["execution"]["id"] = serde_json::json!(if id == ids[index].0.as_str() {
+                    "first"
+                } else {
+                    assert_eq!(id, ids[index].1.as_str());
+                    "second"
+                });
+            }
+            projections.push(view);
+        }
         assert_eq!(
-            bare, attached,
-            "an empty optional subsystem is indistinguishable from none: {filter}"
+            projections[0], projections[1],
+            "only independently allocated identities differ"
         );
     }
-
-    // And the executions themselves settle identically on both sides.
-    for fixture in [&without, &with_empty] {
-        let registry = fixture.runtime.background().clone();
+    for (fixture, (first, second)) in [&without, &with_empty].into_iter().zip(ids) {
         assert_eq!(
-            registry
-                .snapshot(&ToolExecutionId::new("exec_1"))
-                .expect("snapshot")
-                .state,
+            fixture.runtime.background().snapshot(&first).unwrap().state,
             BackgroundLifecycle::Succeeded
         );
         assert_eq!(
-            registry
-                .snapshot(&ToolExecutionId::new("exec_2"))
-                .expect("snapshot")
+            fixture
+                .runtime
+                .background()
+                .snapshot(&second)
+                .unwrap()
                 .state,
             BackgroundLifecycle::Running
         );
     }
-}
-
-/// One `execution(list)` invocation.
-fn list(filter: &serde_json::Value) -> serde_json::Value {
-    if filter.as_object().is_some_and(serde_json::Map::is_empty) {
-        serde_json::json!({"action": "list"})
-    } else {
-        serde_json::json!({"action": "list", "filter": filter})
-    }
-}
-
-/// The handle ids of a listing, in response order.
-fn handles(listing: &serde_json::Value) -> Vec<String> {
-    listing["executions"]
-        .as_array()
-        .expect("executions")
-        .iter()
-        .map(|entry| {
-            entry["execution"]["id"]
-                .as_str()
-                .expect("handle id")
-                .to_owned()
-        })
-        .collect()
-}
-
-/// Dispatches one background execution that parks until the returned gate
-/// releases it, so the record stays deterministically active.
-async fn dispatch_parking(
-    registry: &rustx::tools::background::ConversationBackgroundRegistry,
-) -> tokio::sync::watch::Sender<bool> {
-    let (executor, mut started, release) = controlled_parking();
-    let prepared = registry
-        .prepare_dispatch(
-            &background_invocation("bash"),
-            &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
-            rustx::tools::environment::ToolEnvironment::new(),
-        )
-        .expect("prepare");
-    registry
-        .commit_dispatch(prepared, &CancellationSignal::new())
-        .expect("dispatch commits");
-    support::fake::await_started(&mut started, "parking background execution").await;
-    release
-}
-
-/// Dispatches one background execution whose executor reports
-/// `OutcomeUnknown`, and waits for the registry's own terminal settlement.
-async fn dispatch_outcome_unknown(
-    registry: &rustx::tools::background::ConversationBackgroundRegistry,
-    expected_id: &str,
-) -> ToolExecutionId {
-    let executor = support::fake::FakeTool::new(
-        common::tool_policies(
-            "bash",
-            "tool-bash",
-            rustx::tools::types::ToolExecutionPolicy::ModelSelectable,
-            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
-        ),
-        rustx::tools::types::ToolExecutionResult {
-            status: ToolExecutionStatus::OutcomeUnknown {
-                detail: "remote termination could not be confirmed".to_owned(),
-            },
-            ..support::fake::success_result("unreachable")
-        },
-    );
-    let prepared = registry
-        .prepare_dispatch(
-            &background_invocation("bash"),
-            &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
-            rustx::tools::environment::ToolEnvironment::new(),
-        )
-        .expect("prepare");
-    registry
-        .commit_dispatch(prepared, &CancellationSignal::new())
-        .expect("dispatch commits");
-    let execution_id = ToolExecutionId::new(expected_id);
-    registry
-        .wait_until_terminal(&execution_id)
-        .await
-        .expect("the registry settles the execution");
-    execution_id
-}
-
-/// Dispatches one background execution and waits for the registry's own
-/// terminal settlement, so the record is deterministically terminal.
-async fn dispatch_settled(
-    registry: &rustx::tools::background::ConversationBackgroundRegistry,
-    expected_id: &str,
-) -> ToolExecutionId {
-    let executor = support::fake::FakeTool::new(
-        common::tool_policies(
-            "bash",
-            "tool-bash",
-            rustx::tools::types::ToolExecutionPolicy::ModelSelectable,
-            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
-        ),
-        support::fake::success_result("issue180-detached-output"),
-    );
-    let prepared = registry
-        .prepare_dispatch(
-            &background_invocation("bash"),
-            &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
-            rustx::tools::environment::ToolEnvironment::new(),
-        )
-        .expect("prepare");
-    registry
-        .commit_dispatch(prepared, &CancellationSignal::new())
-        .expect("dispatch commits");
-    let execution_id = ToolExecutionId::new(expected_id);
-    registry
-        .wait_until_terminal(&execution_id)
-        .await
-        .expect("the registry settles the execution");
-    execution_id
 }

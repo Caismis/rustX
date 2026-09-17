@@ -34,8 +34,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 #[cfg(test)]
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -50,6 +51,10 @@ use crate::message::types::{
 };
 use crate::model::session::SessionModelConfig;
 use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
+
+#[cfg(test)]
+#[path = "session/tests/cfg3_identity.rs"]
+mod cfg3_identity_tests;
 
 /// The persisted native session-catalog schema.
 ///
@@ -81,7 +86,7 @@ use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 /// distinguished from user choices; older development schemas are refused.
 /// Version 7 co-locates live Sessions and pending-only frozen cleanup authority,
 /// with generation-checked publication. Older development schemas are rejected.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 9;
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 11;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;
@@ -96,45 +101,7 @@ pub const SESSION_LIST_PAGE_LIMIT: usize = 32;
 /// The largest page a native Session tree/history request may return.
 pub const SESSION_TREE_PAGE_LIMIT: usize = 32;
 
-macro_rules! session_id_type {
-    ($(#[$meta:meta])* $name:ident) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-        #[serde(transparent)]
-        #[derive(schemars::JsonSchema)]
-        pub struct $name(String);
-
-        impl $name {
-            /// Creates an identity from a non-empty product-owned string.
-            #[must_use]
-            pub fn new(value: impl Into<String>) -> Self {
-                Self(value.into())
-            }
-
-            /// Returns the serialized identity.
-            #[must_use]
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-        }
-
-        impl core::fmt::Display for $name {
-            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                f.write_str(&self.0)
-            }
-        }
-    };
-}
-
-session_id_type! {
-    /// Identifies one user-facing local Session.
-    SessionId
-}
-
-session_id_type! {
-    /// Identifies one linear lineage node inside a Session graph.
-    SessionNodeId
-}
+pub use crate::runtime::identity::{SessionId, SessionNodeId};
 
 /// Why one `SessionNode` was created.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,6 +135,8 @@ pub enum SessionNodeOrigin {
 /// One node in the native Session graph.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionNode {
+    /// Explicit durable publication order, never inferred from UUID bytes.
+    pub ordinal: u64,
     /// Node identity.
     pub id: SessionNodeId,
     /// Parent node within the same Session, when this is a tree branch.
@@ -211,7 +180,7 @@ pub struct SessionSnapshot {
 /// client focus do not determine catalog visibility.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionListPage {
-    /// Rows in deterministic Session-id order.
+    /// Rows in explicit Session publication-ordinal order.
     pub sessions: Vec<SessionSummary>,
     /// Offset for the next page, when more matching rows exist.
     pub next_offset: Option<usize>,
@@ -220,7 +189,7 @@ pub struct SessionListPage {
 /// A bounded page of nodes in one Session graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionNodePage {
-    /// Nodes in deterministic node-id order.
+    /// Nodes in explicit node publication-ordinal order.
     pub nodes: Vec<SessionNode>,
     /// Offset for the next page, when more nodes exist.
     pub next_offset: Option<usize>,
@@ -329,66 +298,43 @@ pub(crate) struct PreparedLineage {
     pub(crate) database_path: PathBuf,
 }
 
-/// Explicit Session context/selections, never materialized effective configuration.
-/// Cwd, explicit project document, model and narrowing Skill/Tool selections
-/// survive cold load. User bindings, source defaults/policy and live resources do
-/// not. `None` is deliberately distinct from `Some(vec![])` for exact Tools.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Deliberate Session-owned intent. Effective configuration is never persisted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
 pub struct SessionPersistentState {
     pub cwd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<SessionModelConfig>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub skill_paths: Vec<PathBuf>,
-    #[serde(default)]
-    pub no_automatic_skills: bool,
-    #[serde(default)]
-    pub no_builtin_tools: bool,
-    #[serde(default)]
-    pub no_direct_tools: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exclude_tools: Option<Vec<String>>,
 }
 impl SessionPersistentState {
     #[must_use]
     pub fn from_input(input: &super::configuration::SessionConfigInput) -> Self {
         Self {
             cwd: input.cwd.clone(),
-            config: input.config.clone(),
             model: input.model.clone(),
-            skill_paths: input.skill_paths.clone(),
-            no_automatic_skills: input.no_automatic_skills,
-            no_builtin_tools: input.no_builtin_tools,
-            no_direct_tools: input.no_direct_tools,
-            tools: input.tools.clone(),
-            exclude_tools: input.exclude_tools.clone(),
         }
     }
     #[must_use]
     pub fn input(&self) -> super::configuration::SessionConfigInput {
         super::configuration::SessionConfigInput {
             cwd: self.cwd.clone(),
-            config: self.config.clone(),
             model: self.model.clone(),
-            skill_paths: self.skill_paths.clone(),
-            no_automatic_skills: self.no_automatic_skills,
-            no_builtin_tools: self.no_builtin_tools,
-            no_direct_tools: self.no_direct_tools,
-            tools: self.tools.clone(),
-            exclude_tools: self.exclude_tools.clone(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetiredIdentities {
+    sessions: BTreeSet<SessionId>,
+    nodes: BTreeSet<SessionNodeId>,
+    conversations: BTreeSet<ConversationId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct CatalogDocument {
+    retired: RetiredIdentities,
     upload_preparations: BTreeMap<SessionId, Vec<PathBuf>>,
     generation: u64,
     deletions: BTreeMap<SessionId, deletion::DeletionRecord>,
@@ -401,6 +347,7 @@ struct CatalogDocument {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct PersistedSession {
+    ordinal: u64,
     uploads: uploads::UploadRegistry,
     id: SessionId,
     /// Absent until a user names this Session; see [`SessionSnapshot::name`].
@@ -493,6 +440,7 @@ pub mod uploads;
 /// The native durable `SessionCatalog` and graph authority.
 #[derive(Debug, Clone)]
 pub struct SessionCatalog {
+    identities: Arc<dyn crate::runtime::identity::UuidV7Generator>,
     product: crate::runtime::local_storage::ProductRoot,
     root: PathBuf,
     path: PathBuf,
@@ -529,10 +477,12 @@ impl SessionCatalog {
             detail: e.to_string(),
         })?;
         let mut catalog = Self {
+            identities: Arc::new(crate::runtime::identity::SystemUuidV7Generator),
             product: (**controller).clone(),
             path: root.join("catalog.json"),
             root,
             document: CatalogDocument {
+                retired: RetiredIdentities::default(),
                 generation: 0,
                 deletions: BTreeMap::new(),
                 upload_preparations: BTreeMap::new(),
@@ -666,6 +616,7 @@ impl SessionCatalog {
                         validate_id(child_conversation_id.as_str(), "child conversation")?;
                         let path = crate::runtime::subagent::child_conversation_store_path(
                             guard.root(),
+                            session_id,
                             &child_conversation_id,
                         );
                         pending.push((child_conversation_id, path));
@@ -739,7 +690,7 @@ impl SessionCatalog {
             .and_then(serde_json::Value::as_u64)
             != Some(u64::from(SESSION_CATALOG_SCHEMA_VERSION))
         {
-            return Err(SessionError::Catalog { detail: "unsupported session catalog schema; schema 9 requires Session-owned upload allocations; old development schemas are refused".into() });
+            return Err(SessionError::Catalog { detail: "unsupported session catalog schema; CFG3 requires UUIDv7 identities and Session-owned intent; old development schemas are refused".into() });
         }
         let document: CatalogDocument =
             serde_json::from_slice(&bytes).map_err(|error| SessionError::Catalog {
@@ -747,6 +698,7 @@ impl SessionCatalog {
             })?;
         validate_document(&document)?;
         Ok(Some(Self {
+            identities: Arc::new(crate::runtime::identity::SystemUuidV7Generator),
             product: guard.clone(),
             root,
             path,
@@ -786,7 +738,7 @@ impl SessionCatalog {
         state: &SessionPersistentState,
     ) -> Result<Self, SessionError> {
         let mut catalog = Self::create_unpublished(runtime_root, state)?;
-        let planned = catalog.plan_unchanged(&SessionId::new("session-1"));
+        let planned = catalog.plan_unchanged(&catalog.persisted_session_ids()[0]);
         catalog.commit_planned(planned)?;
         Ok(catalog)
     }
@@ -813,6 +765,18 @@ impl SessionCatalog {
     pub(crate) fn create_unpublished(
         runtime_root: &Path,
         state: &SessionPersistentState,
+    ) -> Result<Self, SessionError> {
+        Self::create_unpublished_with_identities(
+            runtime_root,
+            state,
+            Arc::new(crate::runtime::identity::SystemUuidV7Generator),
+        )
+    }
+
+    fn create_unpublished_with_identities(
+        runtime_root: &Path,
+        state: &SessionPersistentState,
+        identities: Arc<dyn crate::runtime::identity::UuidV7Generator>,
     ) -> Result<Self, SessionError> {
         #[cfg(test)]
         {
@@ -846,9 +810,15 @@ impl SessionCatalog {
             });
         }
 
-        let session_id = SessionId::new("session-1");
-        let node_id = SessionNodeId::new("node-1");
-        let conversation_id = ConversationId::new("conversation-1");
+        let session_id = SessionId::from_uuid(identities.next_uuid())
+            .map_err(|detail| SessionError::Catalog { detail })?;
+        let node_id = SessionNodeId::from_uuid(identities.next_uuid())
+            .map_err(|detail| SessionError::Catalog { detail })?;
+        let conversation_id = ConversationId::from_uuid(identities.next_uuid())
+            .map_err(|detail| SessionError::Catalog { detail })?;
+        fs::create_dir(root.join(session_id.as_str())).map_err(|error| SessionError::Catalog {
+            detail: format!("cannot reserve Session identity: {error}"),
+        })?;
         let database_path = conversation_database_path(&root, &session_id, &conversation_id);
         initialize_database(
             &product,
@@ -858,6 +828,7 @@ impl SessionCatalog {
         )?;
         let now = Utc::now();
         let node = SessionNode {
+            ordinal: 1,
             id: node_id.clone(),
             parent: None,
             conversation_id,
@@ -870,6 +841,7 @@ impl SessionCatalog {
             session_id.clone(),
             PersistedSession {
                 uploads: uploads::UploadRegistry::default(),
+                ordinal: 1,
                 id: session_id.clone(),
                 name: None,
                 created_at: now,
@@ -881,6 +853,7 @@ impl SessionCatalog {
             },
         );
         let document = CatalogDocument {
+            retired: RetiredIdentities::default(),
             upload_preparations: BTreeMap::new(),
             deletions: BTreeMap::new(),
             schema_version: SESSION_CATALOG_SCHEMA_VERSION,
@@ -890,6 +863,7 @@ impl SessionCatalog {
             sessions,
         };
         Ok(Self {
+            identities,
             product,
             root,
             path,
@@ -927,7 +901,7 @@ impl SessionCatalog {
     /// Returns one bounded, searchable page of all durable Sessions.
     /// Usage classification does not filter visibility or manufacture client focus.
     ///
-    /// Ordering is ascending Session identity. The offset is a domain-specific
+    /// Ordering is ascending Session publication ordinal. The offset is a domain-specific
     /// continuation: there is no global maximum number of Sessions, and
     /// callers can reach older matching rows by requesting the returned
     /// offset. Only the requested page is materialized for the projection.
@@ -947,7 +921,9 @@ impl SessionCatalog {
         let mut matching = 0_usize;
         let mut page = Vec::with_capacity(limit);
         let mut has_more = false;
-        for session in self.document.sessions.values() {
+        let mut ordered: Vec<_> = self.document.sessions.values().collect();
+        ordered.sort_by_key(|session| session.ordinal);
+        for session in ordered {
             // A row is searched by what it shows. An unnamed Session shows
             // its first user message, so matching only identity and name
             // would hide exactly the rows a user has to recognize by their
@@ -994,7 +970,14 @@ impl SessionCatalog {
     /// All persisted identities in deterministic order, including unused Sessions.
     #[must_use]
     pub fn persisted_session_ids(&self) -> Vec<SessionId> {
-        self.document.sessions.keys().cloned().collect()
+        {
+            let mut sessions: Vec<_> = self.document.sessions.values().collect();
+            sessions.sort_by_key(|session| session.ordinal);
+            sessions
+                .into_iter()
+                .map(|session| session.id.clone())
+                .collect()
+        }
     }
 
     /// Classifies usage by explicit identity; this never chooses a Session.
@@ -1123,9 +1106,10 @@ impl SessionCatalog {
                 .ok_or_else(|| SessionError::UnknownSession {
                     session_id: session_id.clone(),
                 })?;
-        let nodes = session
-            .nodes
-            .values()
+        let mut ordered: Vec<_> = session.nodes.values().collect();
+        ordered.sort_by_key(|node| node.ordinal);
+        let nodes = ordered
+            .into_iter()
             .skip(offset)
             .take(limit)
             .cloned()
@@ -1356,7 +1340,7 @@ impl SessionCatalog {
         template: &SessionPersistentState,
         seed: &[MessageBlock],
     ) -> Result<PreparedLineage, SessionError> {
-        let (session_id, node_id, conversation_id) = self.allocate_ids();
+        let (session_id, node_id, conversation_id) = self.allocate_ids()?;
         self.prepare_session_with_ids(
             template,
             session_id,
@@ -1381,7 +1365,7 @@ impl SessionCatalog {
         template: &SessionPersistentState,
         source: &HistoricalConversationSnapshot,
     ) -> Result<PreparedLineage, SessionError> {
-        let (session_id, node_id, conversation_id) = self.allocate_ids();
+        let (session_id, node_id, conversation_id) = self.allocate_ids()?;
         let seed = lineage_cut(&conversation_id, source, None)?;
         self.prepare_session_with_ids(template, session_id, node_id, conversation_id, &seed)
     }
@@ -1402,7 +1386,7 @@ impl SessionCatalog {
     > {
         let user = active_user_boundary(source, message_id)?;
         let editor_content = restorable_editor_content(user)?;
-        let (session_id, node_id, conversation_id) = self.allocate_ids();
+        let (session_id, node_id, conversation_id) = self.allocate_ids()?;
         let seed = lineage_cut(&conversation_id, source, Some(message_id))?;
         let prepared =
             self.prepare_session_with_ids(template, session_id, node_id, conversation_id, &seed)?;
@@ -1428,34 +1412,39 @@ impl SessionCatalog {
         self.snapshot(session_id)?;
         let user = active_user_boundary(source, message_id)?;
         let editor_content = restorable_editor_content(user)?;
-        let mut node_ordinal = self.document.next_node_ordinal.max(1);
-        let (node_id, conversation_id, database_path) = loop {
-            let node_id = SessionNodeId::new(format!("node-{node_ordinal}"));
-            let conversation_id = ConversationId::new(format!("conversation-node-{node_ordinal}"));
+        let mut chosen = None;
+        for _ in 0..16 {
+            let node_id = SessionNodeId::from_uuid(self.identities.next_uuid())
+                .map_err(|detail| SessionError::Catalog { detail })?;
+            let uuid = self.identities.next_uuid();
+            if !crate::runtime::identity::is_uuid_v7(uuid) {
+                return Err(SessionError::Catalog {
+                    detail: "expected UUIDv7".into(),
+                });
+            }
+            let conversation_id = ConversationId::from_uuid(uuid)
+                .map_err(|detail| SessionError::Catalog { detail })?;
             let database_path =
                 conversation_database_path(&self.root, session_id, &conversation_id);
-            let node_id_taken = self
-                .document
-                .sessions
-                .values()
-                .any(|session| session.nodes.contains_key(&node_id));
-            let conversation_taken = self
-                .document
-                .sessions
-                .values()
-                .flat_map(|session| session.nodes.values())
-                .any(|node| node.conversation_id == conversation_id);
             if self
-                .reject_pending_identity(session_id, &node_id, &conversation_id)
+                .validate_new_node_identity(&node_id, &conversation_id)
                 .is_ok()
-                && !node_id_taken
-                && !conversation_taken
-                && !database_path.exists()
+                && self
+                    .reject_pending_identity(session_id, &node_id, &conversation_id)
+                    .is_ok()
+                && !database_path
+                    .parent()
+                    .expect("conversation directory")
+                    .exists()
             {
-                break (node_id, conversation_id, database_path);
+                chosen = Some((node_id, conversation_id, database_path));
+                break;
             }
-            node_ordinal = node_ordinal.saturating_add(1);
-        };
+        }
+        let (node_id, conversation_id, database_path) =
+            chosen.ok_or_else(|| SessionError::Catalog {
+                detail: "identity reservation exhausted".into(),
+            })?;
         let seed = lineage_cut(&conversation_id, source, Some(message_id))?;
         initialize_database(&self.product, &database_path, &conversation_id, &seed)?;
         Ok((
@@ -1481,6 +1470,11 @@ impl SessionCatalog {
     ) -> Result<PreparedLineage, SessionError> {
         self.reject_pending_identity(&session_id, &node_id, &conversation_id)?;
         self.validate_new_session_identity(&session_id, &node_id, &conversation_id)?;
+        fs::create_dir(self.root.join(session_id.as_str())).map_err(|error| {
+            SessionError::Catalog {
+                detail: format!("cannot reserve Session identity: {error}"),
+            }
+        })?;
         let database_path = conversation_database_path(&self.root, &session_id, &conversation_id);
         initialize_database(&self.product, &database_path, &conversation_id, seed)?;
         Ok(PreparedLineage {
@@ -1537,58 +1531,122 @@ impl SessionCatalog {
         self.snapshot(session_id)
     }
 
+    fn validate_new_node_identity(
+        &self,
+        node: &SessionNodeId,
+        conversation: &ConversationId,
+    ) -> Result<(), SessionError> {
+        if self.document.retired.nodes.contains(node)
+            || self.document.retired.conversations.contains(conversation)
+            || self.document.sessions.values().any(|session| {
+                session.nodes.contains_key(node)
+                    || session
+                        .nodes
+                        .values()
+                        .any(|existing| &existing.conversation_id == conversation)
+            })
+        {
+            return Err(SessionError::Catalog {
+                detail: "node or conversation identity already exists".into(),
+            });
+        }
+        Ok(())
+    }
     fn validate_new_session_identity(
         &self,
         session: &SessionId,
         node: &SessionNodeId,
         conversation: &ConversationId,
     ) -> Result<(), SessionError> {
-        let valid = native_ordinal(session.as_str(), "session-").is_some_and(|n| {
-            n >= self.document.next_session_ordinal
-                && conversation.as_str() == format!("conversation-{n}")
-        }) && native_ordinal(node.as_str(), "node-")
-            .is_some_and(|n| n >= self.document.next_node_ordinal);
-        if !valid {
+        if self.document.retired.sessions.contains(session)
+            || self.document.sessions.contains_key(session)
+        {
             return Err(SessionError::Catalog {
-                detail: "identity precedes native allocation high-water mark or is not native"
-                    .into(),
+                detail: "Session identity already exists".into(),
             });
         }
-        Ok(())
+        self.validate_new_node_identity(node, conversation)
     }
-    fn allocate_ids(&self) -> (SessionId, SessionNodeId, ConversationId) {
-        let mut session_ordinal = self.document.next_session_ordinal.max(1);
-        let mut node_ordinal = self.document.next_node_ordinal.max(1);
-        loop {
-            let session_id = SessionId::new(format!("session-{session_ordinal}"));
-            let node_id = SessionNodeId::new(format!("node-{node_ordinal}"));
-            let conversation_id = ConversationId::new(format!("conversation-{session_ordinal}"));
-            let db = conversation_database_path(&self.root, &session_id, &conversation_id);
-            let node_taken = self
-                .document
-                .sessions
-                .values()
-                .any(|session| session.nodes.contains_key(&node_id));
-            let conversation_taken = self
-                .document
-                .sessions
-                .values()
-                .flat_map(|session| session.nodes.values())
-                .any(|node| node.conversation_id == conversation_id);
+    /// Inject allocation without making identity an ordering source.
+    #[must_use]
+    pub fn with_identity_generator(
+        mut self,
+        identities: Arc<dyn crate::runtime::identity::UuidV7Generator>,
+    ) -> Self {
+        self.identities = identities;
+        self
+    }
+
+    /// Reserve a globally unique Conversation directory under its owning
+    /// Session. The directory is the reservation: no second identity index
+    /// or probabilistic uniqueness assumption is needed. Retired identities
+    /// remain governed by the catalog even after their files are deleted.
+    pub(crate) fn reserve_conversation_directory(
+        product: &crate::runtime::local_storage::ProductRoot,
+        allocation: &Path,
+        conversation: &ConversationId,
+    ) -> std::io::Result<()> {
+        product.confined(allocation)?;
+        let _ownership = product.ownership_mutation()?;
+        let _allocation = product.conversation_allocation()?;
+        Self::check_allocation_live(product, allocation)?;
+        for entry in fs::read_dir(product.root().join("sessions"))? {
+            let entry = entry?;
+            if SessionId::parse(entry.file_name().to_string_lossy()).is_err() {
+                continue;
+            }
+            let path = entry
+                .path()
+                .join("conversations")
+                .join(conversation.as_str());
+            product.confined(&path)?;
+            match fs::symlink_metadata(&path) {
+                Ok(_) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        "Conversation identity is already reserved in this runtime root",
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        fs::create_dir_all(
+            allocation
+                .parent()
+                .ok_or_else(|| std::io::Error::other("Conversation directory has no parent"))?,
+        )?;
+        fs::create_dir(allocation)
+    }
+    fn allocate_ids(&self) -> Result<(SessionId, SessionNodeId, ConversationId), SessionError> {
+        for _ in 0..16 {
+            let session_id = SessionId::from_uuid(self.identities.next_uuid())
+                .map_err(|detail| SessionError::Catalog { detail })?;
+            let node_id = SessionNodeId::from_uuid(self.identities.next_uuid())
+                .map_err(|detail| SessionError::Catalog { detail })?;
+            let uuid = self.identities.next_uuid();
+            if !crate::runtime::identity::is_uuid_v7(uuid) {
+                return Err(SessionError::Catalog {
+                    detail: "expected UUIDv7".into(),
+                });
+            }
+            let conversation_id = ConversationId::from_uuid(uuid)
+                .map_err(|detail| SessionError::Catalog { detail })?;
             if self
                 .reject_pending_identity(&session_id, &node_id, &conversation_id)
                 .is_ok()
-                && !self.document.sessions.contains_key(&session_id)
+                && self
+                    .validate_new_session_identity(&session_id, &node_id, &conversation_id)
+                    .is_ok()
                 && !self.document.upload_preparations.contains_key(&session_id)
-                && !node_taken
-                && !conversation_taken
-                && !db.exists()
+                && !self.root.join(session_id.as_str()).exists()
             {
-                return (session_id, node_id, conversation_id);
+                return Ok((session_id, node_id, conversation_id));
             }
-            session_ordinal = session_ordinal.saturating_add(1);
-            node_ordinal = node_ordinal.saturating_add(1);
         }
+        Err(SessionError::Catalog {
+            detail: "identity reservation exhausted".into(),
+        })
     }
 
     /// A planned catalog transition that changes nothing.
@@ -1706,6 +1764,7 @@ impl SessionCatalog {
         }
         let now = Utc::now();
         let node = SessionNode {
+            ordinal: self.document.next_node_ordinal,
             id: prepared.node_id.clone(),
             parent: None,
             conversation_id: prepared.conversation_id.clone(),
@@ -1717,6 +1776,7 @@ impl SessionCatalog {
         next.sessions.insert(
             prepared.session_id.clone(),
             PersistedSession {
+                ordinal: self.document.next_session_ordinal,
                 uploads: prepared.uploads.clone(),
                 id: prepared.session_id.clone(),
                 // Every Session is published unnamed. A generated label —
@@ -1733,8 +1793,8 @@ impl SessionCatalog {
             },
         );
         next.upload_preparations.remove(&prepared.session_id);
-        next.next_session_ordinal = native_successor(prepared.session_id.as_str(), "session-")?;
-        next.next_node_ordinal = native_successor(prepared.node_id.as_str(), "node-")?;
+        next.next_session_ordinal = next_ordinal(self.document.next_session_ordinal)?;
+        next.next_node_ordinal = next_ordinal(self.document.next_node_ordinal)?;
         Ok(next)
     }
 
@@ -1745,14 +1805,7 @@ impl SessionCatalog {
         parent: SessionNodeId,
         origin: SessionNodeOrigin,
     ) -> Result<CatalogDocument, SessionError> {
-        if !native_ordinal(prepared.node_id.as_str(), "node-").is_some_and(|n| {
-            n >= self.document.next_node_ordinal
-                && prepared.conversation_id.as_str() == format!("conversation-node-{n}")
-        }) {
-            return Err(SessionError::Catalog {
-                detail: "prepared node precedes native allocation high-water mark".into(),
-            });
-        }
+        self.validate_new_node_identity(&prepared.node_id, &prepared.conversation_id)?;
         if prepared.session_id != *session_id {
             return Err(SessionError::Catalog {
                 detail: "prepared node belongs to another Session".to_owned(),
@@ -1777,6 +1830,7 @@ impl SessionCatalog {
             });
         }
         let node = SessionNode {
+            ordinal: self.document.next_node_ordinal,
             id: prepared.node_id.clone(),
             parent: Some(parent),
             conversation_id: prepared.conversation_id.clone(),
@@ -1785,7 +1839,7 @@ impl SessionCatalog {
         session.nodes.insert(prepared.node_id.clone(), node);
         session.active_node = prepared.node_id.clone();
         session.updated_at = Utc::now();
-        next.next_node_ordinal = native_successor(prepared.node_id.as_str(), "node-")?;
+        next.next_node_ordinal = next_ordinal(self.document.next_node_ordinal)?;
         Ok(next)
     }
 
@@ -1870,18 +1924,10 @@ impl SessionCatalog {
     }
 }
 
-fn native_ordinal(id: &str, prefix: &str) -> Option<u64> {
-    let suffix = id.strip_prefix(prefix)?;
-    let ordinal: u64 = suffix.parse().ok()?;
-    (ordinal.to_string() == suffix).then_some(ordinal)
-}
-
-fn native_successor(id: &str, prefix: &str) -> Result<u64, SessionError> {
-    native_ordinal(id, prefix)
-        .and_then(|n| n.checked_add(1))
-        .ok_or_else(|| SessionError::Catalog {
-            detail: "native allocation ordinal exhausted or invalid".into(),
-        })
+fn next_ordinal(current: u64) -> Result<u64, SessionError> {
+    current.checked_add(1).ok_or_else(|| SessionError::Catalog {
+        detail: "publication ordinal exhausted".into(),
+    })
 }
 
 /// The selected fork/tree boundary, resolved against what the source's
@@ -2223,6 +2269,7 @@ fn snapshot_of(session: &PersistedSession) -> Result<SessionSnapshot, SessionErr
     })
 }
 
+#[allow(clippy::too_many_lines)] // One ordered audit of all durable catalog invariants.
 fn validate_document(document: &CatalogDocument) -> Result<(), SessionError> {
     // An unexpected version is refused, never interpreted. See
     // `SESSION_CATALOG_SCHEMA_VERSION`: the fields of an older catalog decode
@@ -2239,21 +2286,25 @@ fn validate_document(document: &CatalogDocument) -> Result<(), SessionError> {
     deletion::validate_records(document)?;
     let mut conversation_ids = BTreeSet::new();
     let mut node_ids = BTreeSet::new();
+    let mut session_ordinals = BTreeSet::new();
+    let mut node_ordinals = BTreeSet::new();
     for (session_id, session) in &document.sessions {
+        if document.retired.sessions.contains(session_id)
+            || session.ordinal == 0
+            || session.ordinal >= document.next_session_ordinal
+            || !session_ordinals.insert(session.ordinal)
+        {
+            return Err(SessionError::Catalog {
+                detail: "invalid Session publication ordinal or retired identity".into(),
+            });
+        }
         session
             .uploads
             .validate()
             .map_err(|e| SessionError::Catalog {
                 detail: e.to_string(),
             })?;
-        if !session.state.cwd.is_absolute()
-            || session
-                .state
-                .config
-                .iter()
-                .chain(session.state.skill_paths.iter())
-                .any(|path| !path.is_absolute())
-        {
+        if !session.state.cwd.is_absolute() {
             return Err(SessionError::Catalog {
                 detail: "durable Session context paths must be absolute".into(),
             });
@@ -2271,6 +2322,19 @@ fn validate_document(document: &CatalogDocument) -> Result<(), SessionError> {
         }
         validate_active_node(session_id, session)?;
         for (node_id, node) in &session.nodes {
+            if document.retired.nodes.contains(node_id)
+                || document
+                    .retired
+                    .conversations
+                    .contains(&node.conversation_id)
+                || node.ordinal == 0
+                || node.ordinal >= document.next_node_ordinal
+                || !node_ordinals.insert(node.ordinal)
+            {
+                return Err(SessionError::Catalog {
+                    detail: "invalid node publication ordinal or retired identity".into(),
+                });
+            }
             validate_id(node_id.as_str(), "node")?;
             if node.id != *node_id {
                 return Err(SessionError::Catalog {
@@ -2432,14 +2496,12 @@ fn initialize_database(
             path: parent.to_path_buf(),
             detail: error.to_string(),
         })?;
-    SessionCatalog::check_allocation_live(product, parent).map_err(|error| SessionError::Io {
-        path: parent.to_path_buf(),
-        detail: error.to_string(),
-    })?;
-    fs::create_dir_all(parent).map_err(|error| SessionError::Io {
-        path: parent.to_path_buf(),
-        detail: error.to_string(),
-    })?;
+    SessionCatalog::reserve_conversation_directory(product, parent, conversation_id).map_err(
+        |error| SessionError::Io {
+            path: parent.to_path_buf(),
+            detail: error.to_string(),
+        },
+    )?;
     let access = crate::runtime::local_storage::ConversationAccess::existing(product, parent)
         .map_err(|error| SessionError::Io {
             path: parent.to_path_buf(),
@@ -2861,6 +2923,17 @@ model = "provider/model"
         ]
     }
 
+    fn first_session(catalog: &SessionCatalog) -> SessionId {
+        catalog
+            .document
+            .sessions
+            .values()
+            .min_by_key(|session| session.ordinal)
+            .expect("fixture has a Session")
+            .id
+            .clone()
+    }
+
     fn open_catalog() -> (TempDir, SessionCatalog, CurrentRuntimeConfig) {
         let directory = tempfile::tempdir().expect("temp directory");
         let config = config();
@@ -2882,16 +2955,10 @@ model = "provider/model"
         crate::local_runtime::SessionId,
         crate::local_runtime::SessionNodeId,
     ) {
-        let (session_id, node, _) = catalog
-            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-            .map(|(node, state)| {
-                (
-                    crate::local_runtime::SessionId::new("session-1"),
-                    node,
-                    state,
-                )
-            })
-            .expect("root lineage");
+        let session_id = catalog.list_page(None, 0, 1).unwrap().sessions[0]
+            .id
+            .clone();
+        let (node, _) = catalog.lineage(&session_id, None).expect("root lineage");
         let path = catalog.database_path(&session_id, &node.conversation_id);
         let store =
             SqliteConversationStore::open(node.conversation_id.clone(), &path).expect("root store");
@@ -2957,7 +3024,7 @@ model = "provider/model"
         };
         assert!(
             catalog
-                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .is_session_unused(&first_session(&catalog))
                 .expect("fresh catalog")
         );
         assert!(
@@ -2967,14 +3034,11 @@ model = "provider/model"
 
         // A Session-local model choice is metadata, not use.
         catalog
-            .persist_model(
-                &crate::local_runtime::SessionId::new("session-1"),
-                config().initial_model().clone(),
-            )
+            .persist_model(&first_session(&catalog), config().initial_model().clone())
             .expect("persist Session model");
         assert!(
             catalog
-                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .is_session_unused(&first_session(&catalog))
                 .expect("model choice only")
         );
         assert!(
@@ -2985,14 +3049,8 @@ model = "provider/model"
         // A message that was accepted durably but never adopted is already
         // this Session's work, however empty the canonical history still is.
         let (session_id, node, _) = catalog
-            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-            .map(|(node, state)| {
-                (
-                    crate::local_runtime::SessionId::new("session-1"),
-                    node,
-                    state,
-                )
-            })
+            .lineage(&first_session(&catalog), None)
+            .map(|(node, state)| (first_session(&catalog), node, state))
             .expect("root lineage");
         let pending_store = store_for(&catalog, &session_id, &node.conversation_id);
         pending_store
@@ -3007,7 +3065,7 @@ model = "provider/model"
             .expect("accept pending inbound");
         assert!(
             !catalog
-                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .is_session_unused(&first_session(&catalog))
                 .expect("pending inbound")
         );
         assert_eq!(
@@ -3023,7 +3081,7 @@ model = "provider/model"
         let reopened = reopen_catalog(directory.path());
         assert!(
             !reopened
-                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .is_session_unused(&first_session(&catalog))
                 .expect("reopened pending inbound")
         );
         assert_eq!(visible(&reopened), vec![session_id.clone()]);
@@ -3033,7 +3091,7 @@ model = "provider/model"
         let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
         assert!(
             !catalog
-                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .is_session_unused(&first_session(&catalog))
                 .expect("used root")
         );
 
@@ -3060,7 +3118,7 @@ model = "provider/model"
             .expect("publish branch node");
         assert!(
             !catalog
-                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .is_session_unused(&first_session(&catalog))
                 .expect("branched session")
         );
 
@@ -3114,14 +3172,8 @@ model = "provider/model"
     fn adoption_racing_classification_cannot_hide_accepted_work() {
         let (directory, mut catalog, _config) = open_catalog();
         let (session_id, node, _) = catalog
-            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-            .map(|(node, state)| {
-                (
-                    crate::local_runtime::SessionId::new("session-1"),
-                    node,
-                    state,
-                )
-            })
+            .lineage(&first_session(&catalog), None)
+            .map(|(node, state)| (first_session(&catalog), node, state))
             .expect("root lineage");
         let store = store_for(&catalog, &session_id, &node.conversation_id);
 
@@ -3148,9 +3200,7 @@ model = "provider/model"
         let gate = catalog.arm_classification_gate();
         let classifying = {
             let catalog = catalog.clone();
-            std::thread::spawn(move || {
-                catalog.is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
-            })
+            std::thread::spawn(move || catalog.is_session_unused(&first_session(&catalog)))
         };
         gate.wait_entered();
 
@@ -3182,13 +3232,13 @@ model = "provider/model"
         // restart.
         assert!(
             !catalog
-                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .is_session_unused(&first_session(&catalog))
                 .expect("post-adoption")
         );
         let reopened = reopen_catalog(directory.path());
         assert!(
             !reopened
-                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .is_session_unused(&first_session(&catalog))
                 .expect("reopened")
         );
     }
@@ -3211,14 +3261,8 @@ model = "provider/model"
         // Clone the still-unused root lineage: an empty copy of an empty
         // conversation, but an explicit user lineage operation.
         let (root_session, root_node, _) = catalog
-            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-            .map(|(node, state)| {
-                (
-                    crate::local_runtime::SessionId::new("session-1"),
-                    node,
-                    state,
-                )
-            })
+            .lineage(&first_session(&catalog), None)
+            .map(|(node, state)| (first_session(&catalog), node, state))
             .expect("root lineage");
         let root_store = store_for(&catalog, &root_session, &root_node.conversation_id);
         let root_revision = root_store.load_head().expect("root head").revision;
@@ -3301,7 +3345,7 @@ model = "provider/model"
             .collect::<Vec<_>>();
         assert_eq!(
             ids,
-            vec![SessionId::new("session-1"), clone_id, fork_id],
+            vec![first_session(&catalog), clone_id, fork_id],
             "empty clone and empty fork are both resume-visible; the root shell is not"
         );
     }
@@ -3437,7 +3481,7 @@ model = "provider/model"
         );
 
         let session_id = catalog
-            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+            .snapshot(&first_session(&catalog))
             .expect("active snapshot")
             .id;
         catalog
@@ -3508,6 +3552,7 @@ model = "provider/model"
     #[test]
     fn session_list_projection_is_bounded_searchable_and_continuable() {
         let (_directory, mut catalog, _config) = open_catalog();
+        let mut allocated = vec![first_session(&catalog)];
         // Alternate used and untouched Sessions: session-1/3/5 own durable
         // user work; session-2/4 are internal shells that stay hidden.
         for index in 0..5 {
@@ -3518,9 +3563,10 @@ model = "provider/model"
                 catalog
                     .publish_session(&prepared, SessionNodeOrigin::New)
                     .expect("publish paged session");
+                allocated.push(prepared.session_id.clone());
             }
             if index % 2 == 0 {
-                let id = SessionId::new(format!("session-{}", index + 1));
+                let id = allocated[index].clone();
                 let (node, _) = catalog.lineage(&id, None).unwrap();
                 store_for(&catalog, &id, &node.conversation_id)
                     .append_canonical(&user(
@@ -3534,7 +3580,7 @@ model = "provider/model"
             }
         }
         catalog
-            .rename(&SessionId::new("session-2"), "hidden shell")
+            .rename(&allocated[1].clone(), "hidden shell")
             .expect("name a hidden shell");
         assert_eq!(catalog.persisted_session_ids().len(), 5);
 
@@ -3559,14 +3605,7 @@ model = "provider/model"
             .map(|summary| summary.id)
             .collect::<Vec<_>>();
         assert_eq!(
-            ids,
-            vec![
-                SessionId::new("session-1"),
-                SessionId::new("session-2"),
-                SessionId::new("session-3"),
-                SessionId::new("session-4"),
-                SessionId::new("session-5")
-            ],
+            ids, allocated,
             "offsets and next_offset describe the visible set: no holes, no duplicates"
         );
 
@@ -3682,22 +3721,13 @@ model = "provider/model"
         model.model = serde_json::from_value(serde_json::json!("provider/next-model"))
             .expect("model reference");
         catalog
-            .persist_model(
-                &crate::local_runtime::SessionId::new("session-1"),
-                model.clone(),
-            )
+            .persist_model(&first_session(&catalog), model.clone())
             .expect("persist model metadata");
 
         let reopened = reopen_catalog(directory.path());
         let (_, _, reopened_state) = reopened
-            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-            .map(|(node, state)| {
-                (
-                    crate::local_runtime::SessionId::new("session-1"),
-                    node,
-                    state,
-                )
-            })
+            .lineage(&first_session(&catalog), None)
+            .map(|(node, state)| (first_session(&catalog), node, state))
             .expect("active lineage");
         assert_eq!(reopened_state.model, Some(model));
     }
@@ -3724,21 +3754,12 @@ model = "provider/model"
         )
         .expect("catalog");
         catalog
-            .persist_model(
-                &crate::local_runtime::SessionId::new("session-1"),
-                explicit.clone(),
-            )
+            .persist_model(&first_session(&catalog), explicit.clone())
             .expect("persist explicit Session model");
         let reopened = reopen_catalog(directory.path());
         let (_, _, resumed) = reopened
-            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-            .map(|(node, state)| {
-                (
-                    crate::local_runtime::SessionId::new("session-1"),
-                    node,
-                    state,
-                )
-            })
+            .lineage(&first_session(&catalog), None)
+            .map(|(node, state)| (first_session(&catalog), node, state))
             .expect("resumed lineage");
         assert_eq!(resumed.model, Some(explicit));
 
@@ -3754,14 +3775,8 @@ model = "provider/model"
         )
         .expect("new catalog");
         let (_, _, fresh_state) = fresh
-            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-            .map(|(node, state)| {
-                (
-                    crate::local_runtime::SessionId::new("session-1"),
-                    node,
-                    state,
-                )
-            })
+            .lineage(&first_session(&fresh), None)
+            .map(|(node, state)| (first_session(&fresh), node, state))
             .expect("fresh lineage");
         assert_eq!(fresh_state.model, Some(current));
     }
@@ -3862,14 +3877,8 @@ model = "provider/model"
         let catalog = SessionCatalog::create(directory.path(), &state).expect("catalog");
 
         let (_, _, persisted) = catalog
-            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-            .map(|(node, state)| {
-                (
-                    crate::local_runtime::SessionId::new("session-1"),
-                    node,
-                    state,
-                )
-            })
+            .lineage(&first_session(&catalog), None)
+            .map(|(node, state)| (first_session(&catalog), node, state))
             .expect("active lineage");
         assert_eq!(persisted, state);
     }
@@ -3878,7 +3887,7 @@ model = "provider/model"
     fn catalog_fault_before_rename_keeps_memory_and_file_on_old_document() {
         let (directory, mut catalog, _config) = open_catalog();
         let before = catalog
-            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+            .snapshot(&first_session(&catalog))
             .expect("initial snapshot");
 
         catalog.arm_write_fault_before_rename();
@@ -3893,7 +3902,7 @@ model = "provider/model"
         ));
         assert_eq!(
             catalog
-                .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+                .snapshot(&first_session(&catalog))
                 .expect("in-memory snapshot"),
             before,
             "a pre-commit failure leaves the in-process document unchanged"
@@ -3901,7 +3910,7 @@ model = "provider/model"
         let reopened = reopen_catalog(directory.path());
         assert_eq!(
             reopened
-                .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+                .snapshot(&first_session(&catalog))
                 .expect("reopened snapshot"),
             before
         );
@@ -3918,7 +3927,7 @@ model = "provider/model"
     fn catalog_fault_after_rename_keeps_memory_coherent_and_reports_uncertain_durability() {
         let (directory, mut catalog, _config) = open_catalog();
         let before = catalog
-            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+            .snapshot(&first_session(&catalog))
             .expect("initial snapshot");
 
         catalog.arm_write_fault_after_rename();
@@ -3932,13 +3941,13 @@ model = "provider/model"
             }
         ));
         let in_memory = catalog
-            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+            .snapshot(&first_session(&catalog))
             .expect("committed in-memory snapshot");
         assert_eq!(in_memory.name.as_deref(), Some("visible but uncertain"));
         let reopened = reopen_catalog(directory.path());
         assert_eq!(
             reopened
-                .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+                .snapshot(&first_session(&catalog))
                 .expect("reopened snapshot")
                 .name
                 .as_deref(),
@@ -4178,7 +4187,7 @@ model = "provider/model"
         ));
         assert_eq!(
             catalog
-                .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+                .snapshot(&first_session(&catalog))
                 .expect("source remains active")
                 .node_count,
             1,
@@ -4772,14 +4781,8 @@ model = "provider/model"
             compacted_source_and_its_clone(&catalog);
 
         let (source_session, _, _) = catalog
-            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-            .map(|(node, state)| {
-                (
-                    crate::local_runtime::SessionId::new("session-1"),
-                    node,
-                    state,
-                )
-            })
+            .lineage(&first_session(&catalog), None)
+            .map(|(node, state)| (first_session(&catalog), node, state))
             .expect("source lineage");
         catalog
             .publish_session(&clone, SessionNodeOrigin::New)

@@ -54,7 +54,7 @@ use rustx::runtime::{InteractionRef, InteractionResponse, RuntimeResourceRevisio
 use rustx::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientResult};
 use rustx::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
-const CONVERSATION: &str = "conv-fnd05";
+const CONVERSATION: &str = "conv_d3f0725b-99d3-7819-91cf-1c74fdc6ef33";
 
 fn fixed_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 24, 12, 0, 0)
@@ -135,7 +135,9 @@ fn tool_result(message_id: &str, call_id: &str, body: &str) -> MessageBlock {
             truncation: None,
             workflow: None,
             managed_output: Some(rustx::tools::types::ManagedOutputContinuation::Complete {
-                locator: "/private/tool-output/results/result_1.txt".into(),
+                locator:
+                    "/private/tool-output/results/result_01900000-0000-7000-8000-000000000001.txt"
+                        .into(),
             }),
         },
     })
@@ -538,19 +540,20 @@ const MODELS_TOML: &str = r#"[providers.local]
 base_url = "https://local.issue110.invalid/v1"
 api_key = "$RUSTX_ISSUE110_KEY"
 
-[[providers.local.models]]
+[models."local/issue110-model"]
+provider = "local"
 id = "issue110-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 
-[providers.local.models.capabilities]
+[models."local/issue110-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/issue110-model".compat]
 chat_reasoning_replay = "omit"
 "#;
 
@@ -569,21 +572,12 @@ model = "local/issue110-model"
 fn startup(root: &Path) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    let models = root.join("models.toml");
     let config = root.join("rustx.toml");
-    std::fs::write(&models, MODELS_TOML).expect("models.toml");
-    std::fs::write(&config, RUNTIME_CONFIG_TOML).expect("rustx.toml");
+    std::fs::write(&config, format!("{RUNTIME_CONFIG_TOML}\n{MODELS_TOML}")).expect("rustx.toml");
     LaunchFixture {
-        models,
         config,
-        skill_paths: Vec::new(),
-        no_automatic_skills: false,
-        no_builtin_tools: false,
-        no_direct_tools: false,
         startup_session: rustx::local_runtime::StartupSession::Empty,
         session_name: None,
-        tools: None,
-        exclude_tools: Vec::new(),
         workspace,
         runtime_root: root.join("private"),
     }
@@ -599,15 +593,55 @@ fn dependencies() -> LocalRuntimeDependencies {
     }
 }
 
-fn seed_composed_store(paths: &LaunchFixture, messages: &[MessageBlock]) {
-    let artifacts = paths.artifacts_root();
-    std::fs::create_dir_all(&artifacts).expect("artifact root");
-    let store = SqliteConversationStore::open(
-        ConversationId::new("conversation-standalone"),
-        &artifacts.join("conversation.sqlite"),
+async fn seed_composed_store(paths: &mut LaunchFixture, messages: &[MessageBlock]) {
+    let runtime = LocalConversationRuntime::compose(&paths.resolve(), &dependencies())
+        .await
+        .unwrap();
+    runtime.runtime().shutdown().await.unwrap();
+    let database = runtime
+        .tool_runtime()
+        .tool_output()
+        .root()
+        .parent()
+        .unwrap()
+        .join("conversation.sqlite");
+    let store =
+        SqliteConversationStore::open(runtime.runtime().conversation_id().clone(), &database)
+            .unwrap();
+    for message in messages {
+        store.append_canonical(message).unwrap();
+    }
+    let catalog = rustx::local_runtime::session::SessionCatalog::open_existing(&paths.runtime_root)
+        .unwrap()
+        .unwrap();
+    paths.startup_session = rustx::local_runtime::StartupSession::Select {
+        session: catalog.persisted_session_ids()[0].clone(),
+        node: None,
+    };
+}
+fn composed_store(paths: &LaunchFixture) -> SqliteConversationStore {
+    let catalog = rustx::local_runtime::session::SessionCatalog::open_existing(&paths.runtime_root)
+        .unwrap()
+        .unwrap();
+    let session = catalog.persisted_session_ids()[0].clone();
+    let id = catalog.lineage(&session, None).unwrap().0.conversation_id;
+    SqliteConversationStore::open(
+        id.clone(),
+        &paths
+            .runtime_root
+            .join("sessions")
+            .join(session.as_str())
+            .join("conversations")
+            .join(id.as_str())
+            .join("conversation.sqlite"),
     )
-    .expect("seed store");
-    store.initialize(messages).expect("seed history");
+    .unwrap()
+}
+fn selected_dependencies(paths: &LaunchFixture) -> LocalRuntimeDependencies {
+    LocalRuntimeDependencies {
+        startup_session: paths.startup_session.clone(),
+        ..dependencies()
+    }
 }
 
 fn initialized_snapshot(
@@ -624,11 +658,12 @@ fn initialized_snapshot(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn requirement_05_detach_and_reattach_reads_the_same_durable_transcript() {
     let root = tempfile::tempdir().expect("root");
-    let paths = startup(root.path());
-    seed_composed_store(&paths, &[user_message("seed-user", "persisted")]);
-    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
-        .await
-        .expect("interactive composition");
+    let mut paths = startup(root.path());
+    seed_composed_store(&mut paths, &[user_message("seed-user", "persisted")]).await;
+    let runtime =
+        LocalConversationRuntime::compose(&(paths).resolve(), &selected_dependencies(&paths))
+            .await
+            .expect("interactive composition");
 
     let (first, first_result) = runtime
         .host()
@@ -658,12 +693,15 @@ async fn requirement_05_detach_and_reattach_reads_the_same_durable_transcript() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn requirement_06_headless_history_is_available_to_a_later_client() {
     let root = tempfile::tempdir().expect("root");
-    let paths = startup(root.path());
-    seed_composed_store(&paths, &[]);
+    let mut paths = startup(root.path());
+    seed_composed_store(&mut paths, &[]).await;
     {
-        let headless = HeadlessConversationRuntime::compose(&(paths).resolve(), &dependencies())
-            .await
-            .expect("headless composition");
+        let headless = HeadlessConversationRuntime::compose(
+            &(paths).resolve(),
+            &selected_dependencies(&paths),
+        )
+        .await
+        .expect("headless composition");
         assert!(!headless.tool_runtime().is_runtime_client_bound());
         let accepted = headless
             .runtime()
@@ -683,16 +721,20 @@ async fn requirement_06_headless_history_is_available_to_a_later_client() {
             .expect("release the native owner before reopening");
     }
 
-    let interactive = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
-        .await
-        .expect("interactive reopen");
+    let interactive =
+        LocalConversationRuntime::compose(&(paths).resolve(), &selected_dependencies(&paths))
+            .await
+            .expect("interactive reopen");
     let (_, result) = interactive
         .host()
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("later attach");
     assert_eq!(
         client_page_message_ids(&initialized_snapshot(result).transcript),
-        vec!["conversation-standalone-inbound-1"]
+        vec![format!(
+            "{}-inbound-1",
+            interactive.runtime().conversation_id()
+        )]
     );
 }
 
@@ -876,30 +918,27 @@ fn requirement_10_audited_tool_proposal_is_unaccepted_and_unexecuted() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
     let root = tempfile::tempdir().expect("root");
-    let paths = startup(root.path());
-    seed_composed_store(&paths, &[]);
-    let store = SqliteConversationStore::open(
-        ConversationId::new("conversation-standalone"),
-        &paths.artifacts_root().join("conversation.sqlite"),
-    )
-    .expect("reopen seeded store");
+    let mut paths = startup(root.path());
+    seed_composed_store(&mut paths, &[]).await;
+    let store = composed_store(&paths);
     let interaction_id = InteractionId::for_attempt(&attempt(), 1);
     let mut requested = requested_interaction(&interaction_id);
-    requested.conversation_id = ConversationId::new("conversation-standalone");
+    requested.conversation_id = store.conversation_id().clone();
     store
         .append_interaction_audit(requested)
         .expect("requested audit");
     let mut settled = settled_interaction(&interaction_id);
-    settled.conversation_id = ConversationId::new("conversation-standalone");
+    settled.conversation_id = store.conversation_id().clone();
     store
         .append_interaction_audit(settled)
         .expect("settled audit");
 
     drop(store);
 
-    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
-        .await
-        .expect("cold reopen");
+    let runtime =
+        LocalConversationRuntime::compose(&(paths).resolve(), &selected_dependencies(&paths))
+            .await
+            .expect("cold reopen");
     let (attachment, result) = runtime
         .host()
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -924,7 +963,7 @@ async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
             .host()
             .respond_interaction(
                 &InteractionRef::new(
-                    ConversationId::new("conversation-standalone"),
+                    ConversationId::new("conv_9add3a87-aac5-73c8-8191-ffa50f4b3d32"),
                     interaction_id,
                 ),
                 InteractionResponse::Questionnaire {
@@ -1052,18 +1091,20 @@ fn interaction_audit_transition_is_the_only_cursor_returning_interaction_path() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn requirement_12_transcript_paging_preserves_runtime_client_cursor_invariants() {
     let root = tempfile::tempdir().expect("root");
-    let paths = startup(root.path());
+    let mut paths = startup(root.path());
     seed_composed_store(
-        &paths,
+        &mut paths,
         &[
             user_message("cursor-1", "one"),
             user_message("cursor-2", "two"),
             user_message("cursor-3", "three"),
         ],
-    );
-    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
-        .await
-        .expect("interactive composition");
+    )
+    .await;
+    let runtime =
+        LocalConversationRuntime::compose(&(paths).resolve(), &selected_dependencies(&paths))
+            .await
+            .expect("interactive composition");
     let (attachment, _result) = runtime
         .host()
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -1197,18 +1238,19 @@ fn transcript_reference_identity_is_typed_and_collision_free() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn requirement_13_resource_reload_has_no_transcript_item_or_diff() {
     let root = tempfile::tempdir().expect("root");
-    let paths = startup(root.path());
-    seed_composed_store(&paths, &[user_message("reload-user", "history")]);
-    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
-        .await
-        .expect("interactive composition");
+    let mut paths = startup(root.path());
+    seed_composed_store(&mut paths, &[user_message("reload-user", "history")]).await;
+    let runtime =
+        LocalConversationRuntime::compose(&(paths).resolve(), &selected_dependencies(&paths))
+            .await
+            .expect("interactive composition");
     let before = runtime
         .host()
         .transcript_page(None, 64)
         .expect("before page");
     runtime
         .host()
-        .reload_resources()
+        .reload_configuration()
         .await
         .expect("reload resources");
     let after = runtime
@@ -1223,7 +1265,7 @@ async fn requirement_13_resource_reload_has_no_transcript_item_or_diff() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn requirement_14_cold_reopen_keeps_history_and_refreshes_resources() {
     let root = tempfile::tempdir().expect("root");
-    let paths = startup(root.path());
+    let mut paths = startup(root.path());
     let skill = paths.workspace.join(".agents/skills/reopened");
     std::fs::create_dir_all(&skill).expect("skill directory");
     std::fs::write(
@@ -1231,10 +1273,11 @@ async fn requirement_14_cold_reopen_keeps_history_and_refreshes_resources() {
         "---\nname: reopened\ndescription: first\n---\nfirst\n",
     )
     .expect("first skill");
-    seed_composed_store(&paths, &[user_message("cold-user", "history")]);
-    let first = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
-        .await
-        .expect("first composition");
+    seed_composed_store(&mut paths, &[user_message("cold-user", "history")]).await;
+    let first =
+        LocalConversationRuntime::compose(&(paths).resolve(), &selected_dependencies(&paths))
+            .await
+            .expect("first composition");
     let first_page = first.host().transcript_page(None, 64).expect("first page");
     drop(first);
 
@@ -1243,9 +1286,10 @@ async fn requirement_14_cold_reopen_keeps_history_and_refreshes_resources() {
         "---\nname: reopened\ndescription: second\n---\nsecond\n",
     )
     .expect("updated skill");
-    let second = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
-        .await
-        .expect("cold reopen");
+    let second =
+        LocalConversationRuntime::compose(&(paths).resolve(), &selected_dependencies(&paths))
+            .await
+            .expect("cold reopen");
     let second_page = second
         .host()
         .transcript_page(None, 64)
