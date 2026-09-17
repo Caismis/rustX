@@ -105,5 +105,12 @@ path. The borrow was removed; the test-only gate now canonicalizes its key. A
 symlink-alias regression uses the actual gate and channel handshake, with a timeout
 only as a liveness bound. Runtime reload semantics were not changed.
 
+The first cleanup-head macOS run passed both reload tests and then exposed two
+Python capability fixture failures: the fixture passed an uncanonicalized
+temporary Workspace into discovery. The fixture now binds its canonical Workspace
+before writes and discovery, matching production. A deterministic parent-symlink
+regression checks the same fixture helper and verifies Python identity discovery
+without materialization. This changes test setup, not runtime path policy.
+
 Full local validation and exact pushed-head GitHub Actions results are reported
 with the PR update. Local success is not evidence of GitHub CI success.

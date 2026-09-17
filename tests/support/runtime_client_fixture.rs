@@ -283,8 +283,7 @@ impl RuntimeClientFixtureBuilder {
     /// means the fixture itself is wrong.
     pub async fn build(self) -> RuntimeClientFixture {
         let workspace = tempfile::tempdir().expect("fixture workspace");
-        let workspace_root = workspace.path().join("workspace");
-        std::fs::create_dir_all(&workspace_root).expect("workspace root");
+        let workspace_root = fixture_workspace_root(workspace.path());
         for write in self.workspace_fixtures {
             write(&workspace_root);
         }
@@ -450,6 +449,40 @@ impl RuntimeClientFixtureBuilder {
             workspace,
         }
     }
+}
+
+fn fixture_workspace_root(parent: &Path) -> std::path::PathBuf {
+    let workspace = parent.join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace root");
+    // Production discovery receives the canonical Workspace binding. Use that
+    // same authority for fixture writes and discovery, including macOS /var aliases.
+    workspace
+        .canonicalize()
+        .expect("canonical fixture Workspace")
+}
+
+#[cfg(unix)]
+#[test]
+fn fixture_workspace_root_canonicalizes_parent_alias() {
+    let parent = tempfile::tempdir().unwrap();
+    let canonical = parent.path().canonicalize().unwrap();
+    let alias = canonical.join("alias");
+    std::os::unix::fs::symlink(&canonical, &alias).unwrap();
+    let workspace = fixture_workspace_root(&alias);
+    assert_eq!(workspace, canonical.join("workspace"));
+    std::fs::create_dir_all(workspace.join(".agents/tools/example")).unwrap();
+    let catalog = rustx::local_runtime::managed_python_resources::discover(
+        &workspace,
+        &canonical.join("user/.agents"),
+    )
+    .unwrap();
+    assert!(
+        catalog
+            .packages()
+            .contains_key(&rustx::capabilities::ToolSourceId::ManagedPython(
+                "example".into()
+            ))
+    );
 }
 
 /// Writes one valid Skill package into a workspace.
