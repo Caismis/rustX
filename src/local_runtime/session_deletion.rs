@@ -19,6 +19,44 @@ use crate::runtime::workspace::{
     WorkspaceDisposalSettlement, WorkspaceSettlementDisposition, WorkspaceSnapshot,
 };
 
+/// Resolve inspection through durable ownership, never by finding an orphan file.
+pub(crate) fn conversation_owner(
+    root: &Path,
+    target: &ConversationId,
+) -> std::io::Result<SessionId> {
+    let authority = ProductRoot::existing(root)?;
+    let catalog = SessionCatalog::read_under_guard(&authority)
+        .map_err(invalid)?
+        .ok_or_else(|| invalid("unknown Session catalog"))?;
+    let mut pending = Vec::new();
+    for (owner, nodes) in catalog.deletion_nodes() {
+        for node in nodes {
+            pending.push((owner.clone(), node.conversation_id));
+        }
+    }
+    let mut seen = BTreeSet::new();
+    let mut found = None;
+    while let Some((owner, id)) = pending.pop() {
+        if !seen.insert(id.clone()) {
+            return Err(invalid("duplicate or cyclic Conversation ownership"));
+        }
+        if id == *target && found.replace(owner.clone()).is_some() {
+            return Err(invalid("ambiguous Conversation ownership"));
+        }
+        let database = authority.confined(&catalog.database_path(&owner, &id))?;
+        let store = SqliteConversationStore::open_existing(id, &database).map_err(invalid)?;
+        for child in read_facts(&store)?.children {
+            pending.push((owner.clone(), child));
+        }
+    }
+    found.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Conversation has no durable Session owner",
+        )
+    })
+}
+
 /// A lineage and its exclusive private allocation, never a workspace allocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnedConversation {
@@ -128,8 +166,11 @@ impl SessionDeletionPreflight {
             let facts = read_facts(&store)?;
             for child in facts.children {
                 safe_identity(&child)?;
-                let database =
-                    authority.confined(&child_conversation_store_path(authority.root(), &child))?;
+                let database = authority.confined(&child_conversation_store_path(
+                    authority.root(),
+                    &owner,
+                    &child,
+                ))?;
                 pending.push((owner.clone(), child, Some(id.clone()), database));
             }
             if owner == *session_id {

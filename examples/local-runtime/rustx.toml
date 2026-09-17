@@ -1,4 +1,4 @@
-schema_version = 8
+schema_version = 9
 agent_id = "default-agent"
 
 [context]
@@ -13,7 +13,6 @@ tokens = 1024
 response_start_timeout_ms = 30000
 stream_idle_timeout_ms = 15000
 
-[mcp_servers]
 
 # Runtime child capacity; Workflow static admission remains separate.
 [subagents]
@@ -22,20 +21,9 @@ max_concurrent = 4
 [environment]
 RUSTX_EXAMPLE_MODE = "local-runtime"
 
-# Where Skill packages may be discovered. This is the default, spelled out:
-# "global" is ~/.agents/skills and "workspace" is <workspace>/.agents/skills.
-# Array order is not precedence; workspace always shadows global.
-[skills]
-sources = ["global", "workspace"]
-
-# One Agent Profile selects from admitted resources. It does not create them.
-# The root Agent needs no positive Skill list: it automatically sees every
-# eligible Skill in the effective catalog. `disabled_skills` would subtract
-# one from root visibility only, leaving it available to named Agents.
-# Authoring `skills` here is an error even as `skills = []`: the root is
-# rejected on presence, because an empty list would state the opposite of
-# what root selection does.
+# Resource existence grants no Root capability. Each selection is explicit.
 [agent]
+skills = "all"
 agents = ["navigator"]
 workflows = ["parallel_review", "implement_and_review"]
 
@@ -56,21 +44,78 @@ tokens = 2048
 [agent.model.summary_model]
 mode = "session"
 
-# This table replaces the complete extension composition. Empty means none.
-[agent.extensions]
-[agent.extensions.agent_status]
+# Each Plugin is one atomic overlay unit. Omitted Plugins are off.
+[agent.plugins]
+[agent.plugins.agent_status]
 enabled = true
 
-[agent.extensions.agent_status.time]
+[agent.plugins.agent_status.time]
 enabled = true
 timezone = "Asia/Tokyo"
 
-[agent.extensions.agent_status.background]
+[agent.plugins.agent_status.background]
 enabled = true
 
-[agent.extensions.todo]
+[agent.plugins.todo]
 enabled = true
 
 # Ordinary Tool exposure does not change execution or approval policy.
 [agent.tools]
-builtin = ["execution", "ask_user", "read", "write", "edit", "glob", "grep", "bash"]
+builtin = ["read", "write", "edit", "glob", "grep", "bash"]
+
+# Explicit provider/model declarations. Provider request overlays are structured TOML tables.
+# TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
+
+[providers.example]
+base_url = "https://api.example.invalid/v1"
+api_key = "$RUSTX_EXAMPLE_API_KEY"
+
+[models."example/demo-model"]
+provider = "example"
+id = "demo-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 4096
+[models."example/demo-model".request_params]
+temperature = 0.2
+
+[models."example/demo-model".capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = true
+
+[models."example/demo-model".reasoning]
+default_profile = "off"
+
+[models."example/demo-model".reasoning.profiles.off]
+enabled = false
+request_params = {}
+
+[models."example/demo-model".reasoning.profiles.on]
+enabled = true
+request_params = { reasoning_effort = "low" }
+
+[models."example/demo-model".compat]
+chat_max_tokens_field = "max_completion_tokens"
+chat_reasoning_replay = "reasoning"
+chat_stream_usage = "supported"
+chat_tool_protocol = "native"
+
+# These global policies apply to every admitted Agent's native invocation.
+[native_tools.read]
+execution = "foreground_only"
+concurrency = "parallel"
+approval = "never"
+[native_tools.grep]
+execution = "foreground_only"
+concurrency = "parallel"
+approval = "never"
+[native_tools.edit]
+execution = "foreground_only"
+concurrency = "sequential"
+approval = "always"
+[native_tools.bash]
+execution = "model_selectable"
+concurrency = "sequential"
+approval = "always"

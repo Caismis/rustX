@@ -100,7 +100,7 @@
 //! *attachments* remain fully dynamic after activation.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
@@ -122,7 +122,7 @@ use crate::runtime::identity::ConversationId;
 use crate::runtime::interaction::InteractionRoute;
 use crate::runtime::resources::{
     PreparedRuntimeResources, RuntimeResourceLoadError, RuntimeResourceLoader,
-    RuntimeResourceSnapshot, load_project_context_files,
+    RuntimeResourceSnapshot,
 };
 use crate::runtime::subagent::{
     ResolvedSubagentTool, SubagentResolver, child_conversation_inspection_liveness_path,
@@ -223,24 +223,21 @@ struct LocalRuntimeResourceLoader {
     paths: AdmittedSessionConfig,
     native_resources: NativeToolResources,
     workflow_runtime: WorkflowRuntime,
-    /// The Session-composition model authority. Reload re-reads pinned settings but
-    /// not `models.toml`, so an agent's explicit model reference is
-    /// validated against exactly the catalog captured for this Session composition.
-    models: ModelBindingRegistry,
+    credentials: Arc<dyn CredentialEnvironment>,
 }
 
 impl LocalRuntimeResourceLoader {
     fn new(
         paths: AdmittedSessionConfig,
         native_resources: NativeToolResources,
-        models: ModelBindingRegistry,
+        credentials: Arc<dyn CredentialEnvironment>,
         workflow_runtime: WorkflowRuntime,
     ) -> Self {
         Self {
             paths,
             native_resources,
             workflow_runtime,
-            models,
+            credentials,
         }
     }
 }
@@ -252,40 +249,27 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
         capability: &'a CapabilityCoordinator,
     ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
         Box::pin(async move {
-            let (config, provenance) = self
+            let capture = self
                 .paths
-                .reload_resource_config()
+                .reload_configuration()
                 .map_err(RuntimeResourceLoadError::new)?;
+            let config = capture.config.as_ref();
+            let models = ModelBindingRegistry::new(
+                capture
+                    .models
+                    .resolve(self.credentials.as_ref())
+                    .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?,
+            )
+            .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
             let base_environment = config
                 .tool_environment()
                 .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
-            let workspace = capability.current_snapshot().workspace_root().to_path_buf();
-            let project_context_files = if self.paths.trusted {
-                load_project_context_files(&workspace)?
-            } else {
-                Vec::new()
-            };
-            let managed_python = if self.paths.trusted {
-                super::managed_python_resources::discover(&workspace)?
-            } else {
-                crate::runtime::resources::ManagedPythonCatalog::default()
-            };
-            // The catalog is built before the base registry, because the
-            // `subagent` intrinsic's model-facing description is generated
-            // from exactly the catalog this candidate generation admits.
-            let subagents = super::agent_resources::load_authorized(
-                &workspace,
-                &self.paths.agent_root,
-                self.paths.trusted,
-            )?
-            .0;
+            let project_context_files = capture.project_context_files.clone();
+            let managed_python = capture.managed_python.clone();
+            let subagents = capture.subagents.clone();
             let main_admission = config.agent.agents.iter().cloned().collect::<BTreeSet<_>>();
             let main_catalog = subagents.selected_definitions(&main_admission);
-            let mut workflows = if self.paths.trusted {
-                super::workflow_resources::load(&workspace)?
-            } else {
-                WorkflowCatalog::empty()
-            };
+            let mut workflows = capture.workflows.as_ref().clone();
             let mut registry = ToolRegistry::new();
             register_native_tools(
                 &mut registry,
@@ -310,49 +294,33 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                     "cannot register reload-time Workflow Tools: {error}"
                 ))
             })?;
-            // Reload rescans the launch-frozen source authorities; it never
-            // rereads the source policy itself, so a running composition
-            // cannot gain or lose a source mid-session.
             let skill_discovery = SkillDiscoveryConfig {
-                automatic: if self.paths.no_automatic_skills {
-                    Vec::new()
-                } else {
-                    self.paths.skill_sources.clone()
-                },
-                explicit_paths: self.paths.skill_paths.clone(),
+                automatic: capture.skill_sources.clone(),
             };
-            let mcp_servers = mcp_bindings_with_authority(
-                &config,
-                &workspace,
-                &provenance,
-                &self.paths.credentials,
-            )
-            .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
+            let mcp_servers = captured_mcp_bindings(config, &self.paths.credentials)
+                .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
             let mut candidate = capability
-                .prepare_candidate_with_inputs(CapabilityResourceInputs {
-                    source_demand: admitted_source_demand(
-                        &config,
-                        &subagents,
-                        &workflows,
-                        managed_python.clone(),
-                    ),
-                    base_tool_registry: Arc::new(registry),
-                    agent_activation: AgentActivation {
-                        profile: config.agent.clone(),
-                        admitted_agents: subagents.names().into_iter().cloned().collect(),
-                        admitted_workflows: workflows.enabled_ids().clone(),
-                        project_files: super::agent_resources::load_profile_files(
-                            &config.agent.agents_md.files,
-                        )?,
-                        no_builtin_tools: self.paths.no_builtin_tools,
-                        no_direct_tools: self.paths.no_direct_tools,
-                        tools: self.paths.tools.clone(),
-                        exclude_tools: self.paths.exclude_tools.clone(),
+                .prepare_reload_capture(
+                    CapabilityResourceInputs {
+                        source_demand: admitted_source_demand(
+                            config,
+                            &subagents,
+                            &workflows,
+                            managed_python.clone(),
+                        ),
+                        base_tool_registry: Arc::new(registry),
+                        agent_activation: AgentActivation {
+                            profile: config.agent.clone(),
+                            admitted_agents: subagents.names().into_iter().cloned().collect(),
+                            admitted_workflows: workflows.entries().keys().cloned().collect(),
+                            project_files: capture.root_agent_project_files.clone(),
+                        },
+                        skill_discovery,
+                        mcp_servers,
+                        base_environment,
                     },
-                    skill_discovery,
-                    mcp_servers,
-                    base_environment,
-                })
+                    capture.skill_discovery.clone(),
+                )
                 .await
                 .map_err(|error| {
                     RuntimeResourceLoadError::new(format!(
@@ -379,9 +347,22 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             // capability state, project instructions, Skills, model
             // selection, or the active generation — has been published yet,
             // so the previous complete generation stays authoritative.
-            validate_subagent_catalog(&prepared, &self.models)?;
+            validate_subagent_catalog(&prepared, &models)?;
+            let prepared =
+                prepared.with_configuration(crate::runtime::resources::RuntimeConfiguration {
+                    resource_definitions: capture.inspection.definitions.clone(),
+                    resource_diagnostics: capture.inspection.resource_diagnostics.clone(),
+                    source_revisions: capture.source_revisions.clone(),
+                    effective: capture.effective.clone().map_providers(Into::into),
+                    config: capture.config.clone(),
+                    models,
+                    provenance: capture.provenance.clone(),
+                });
             #[cfg(test)]
-            super::agent_resources::test_support::before_publication(&workspace).await;
+            super::agent_resources::test_support::before_publication(
+                capability.current_snapshot().workspace_root(),
+            )
+            .await;
             Ok(prepared)
         })
     }
@@ -738,8 +719,20 @@ fn materialize_frozen_skills(
         })?
         .join("skills");
     let mut entries = Vec::with_capacity(spec.resolved.skills.len());
+    let roots = [
+        crate::skills::SkillSource::User,
+        crate::skills::SkillSource::Workspace,
+    ]
+    .into_iter()
+    .map(|source| crate::skills::AutomaticSkillRoot {
+        source,
+        root: root.join(source.as_str()),
+    })
+    .collect();
     for skill in &spec.resolved.skills {
-        let destination = root.join(skill.binding.skill_id.as_str());
+        let destination = root
+            .join(skill.provenance.source.as_str())
+            .join(skill.binding.skill_id.as_str());
         let location = crate::skills::materialization::materialize_skill(
             &skill.binding,
             &skill.source_root,
@@ -760,7 +753,7 @@ fn materialize_frozen_skills(
             provenance,
         ));
     }
-    Ok(crate::skills::SkillSnapshot::from_frozen(entries))
+    Ok(crate::skills::SkillSnapshot::from_frozen(entries, roots))
 }
 
 /// Projects the frozen specification into the child's selected-only
@@ -848,8 +841,9 @@ impl RuntimeResourceLoader for FrozenSubagentResourceLoader {
     }
 }
 
-/// Collect finite demand from the admitted main Agent, profiles and Workflows.
-fn admitted_source_demand(
+/// Root sources and explicitly admitted Workflow programs create startup demand.
+/// Named Agent profiles are inert until child admission.
+pub(super) fn admitted_source_demand(
     config: &CurrentRuntimeConfig,
     agents: &crate::runtime::subagent::AgentCatalog,
     workflows: &WorkflowCatalog,
@@ -865,17 +859,10 @@ fn admitted_source_demand(
                 .filter_map(|selector| selector.source().cloned()),
         );
     }
-    for agent in agents.definitions() {
-        if config.agent.agents.contains(agent.name()) {
-            sources.extend(
-                agent
-                    .tools()
-                    .iter()
-                    .filter_map(|selector| selector.source().cloned()),
-            );
+    for (id, entry) in workflows.entries() {
+        if !config.agent.workflows.contains(id) {
+            continue;
         }
-    }
-    for entry in workflows.entries().values() {
         let program = &entry.source;
         sources.extend(
             program
@@ -903,21 +890,13 @@ fn admitted_source_demand(
     crate::capabilities::source::ToolSourceDemand::new(sources, python)
 }
 
-pub(crate) fn mcp_bindings_with_authority(
+pub(crate) fn captured_mcp_bindings(
     config: &CurrentRuntimeConfig,
-    workspace: &Path,
-    provenance: &std::collections::BTreeMap<String, super::configuration::Origin>,
     credentials: &crate::credentials::CredentialSnapshot,
 ) -> Result<crate::tools::mcp::McpServerBindings, CurrentRuntimeConfigError> {
     let mut bindings = config.mcp_bindings()?;
-    for (name, binding) in &mut bindings {
+    for binding in bindings.values_mut() {
         binding.credentials.capture(credentials.clone());
-        if matches!(
-            provenance.get(&format!("mcp_servers.{name}")),
-            Some(super::configuration::Origin::Project { .. })
-        ) {
-            binding.resource_workspace = Some(workspace.into());
-        }
     }
     Ok(bindings)
 }
@@ -930,8 +909,13 @@ fn validate_subagent_catalog(
 ) -> Result<(), RuntimeResourceLoadError> {
     let candidate = prepared.capability_candidate();
     let skills = crate::skills::SkillSnapshot::new(candidate.skill_packages().to_vec());
+    let selected = candidate
+        .resolved_profile()
+        .map(|profile| profile.agents.clone())
+        .unwrap_or_default();
+    let admitted = prepared.subagent_catalog().selected_definitions(&selected);
     SubagentResolver::validate_catalog(
-        prepared.subagent_catalog(),
+        &admitted,
         candidate.available_tools(),
         candidate.availability(),
         &skills,
@@ -980,8 +964,6 @@ fn validate_workflow_tool_name_collisions(
 /// bounded parent-observation subscriber), and the headless runtime (which
 /// activates without any Runtime Client host).
 pub struct LocalConversationCore {
-    launch_settings: Option<crate::runtime_client::settings::LaunchSettings>,
-    defaults: Option<Arc<dyn crate::runtime_client::settings::DefaultSettingsStore>>,
     runtime: ConversationRuntime,
     tool_runtime: ConversationToolRuntime,
     capability: CapabilityCoordinator,
@@ -1012,32 +994,75 @@ impl LocalConversationCore {
     ///
     /// Returns the first composition failure. Every failure happens before
     /// any protocol output exists.
+    /// # Panics
+    /// Panics only if a generated Conversation database path has no parent.
     pub async fn compose(
         paths: &AdmittedSessionConfig,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
-        // This low-level path has no SessionCatalog control surface. It uses
-        // one deterministic standalone lineage so repeated composition over
-        // the same runtime root still recovers the same durable conversation.
-        let runtime_config = paths.config.as_ref().clone();
-        let registry = load_model_registry(paths, dependencies)?;
         let lifecycle = Arc::new(
             crate::runtime::local_storage::ProductController::acquire(&paths.runtime_root)
-                .map_err(|e| LocalRuntimeError::ToolRuntime {
-                    detail: e.to_string(),
+                .map_err(|error| LocalRuntimeError::ToolRuntime {
+                    detail: error.to_string(),
                 })?,
         );
-        Self::compose_from_config(
-            paths,
+        let state = SessionPersistentState::from_input(&paths.input);
+        let mut catalog = match SessionCatalog::open_existing(lifecycle.root())? {
+            Some(catalog) => catalog,
+            None => SessionCatalog::create_unpublished(lifecycle.root(), &state)?,
+        };
+        catalog.retain_lifecycle(lifecycle.clone());
+        let planned = match &dependencies.startup_session {
+            StartupSession::Empty if !catalog.is_published() => {
+                catalog.plan_unchanged(&catalog.persisted_session_ids()[0])
+            }
+            StartupSession::Empty => {
+                let prepared = catalog.prepare_session(&state, &[])?;
+                catalog.plan_session(&prepared, SessionNodeOrigin::New)?
+            }
+            StartupSession::Select { session, node } => {
+                catalog.plan_attachment(session, node.as_ref())?
+            }
+            StartupSession::InspectConversation { .. } => {
+                return Err(LocalRuntimeError::ToolRuntime {
+                    detail: "conversation inspection requires the inspection entry point".into(),
+                });
+            }
+        };
+        let planned = match &dependencies.session_name {
+            Some(name) => planned.with_name(name)?,
+            None => planned,
+        };
+        let (session_id, node, intent) = planned.destination_lineage()?;
+        let manager = super::configuration::UserConfigManager::new(paths.sources.clone())
+            .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+        let current = manager
+            .resolve_session(&intent.input())
+            .map_err(|error| LocalRuntimeError::SessionConfiguration {
+                session_id: session_id.clone(),
+                diagnostic: error.diagnostic,
+            })?
+            .admit(|| paths.credentials.clone())
+            .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+        let registry = load_model_registry(&current, dependencies)?;
+        let database = catalog.database_path(&session_id, &node.conversation_id);
+        let allocation = database
+            .parent()
+            .expect("Conversation database has an allocation")
+            .to_path_buf();
+        let core = Self::compose_from_config(
+            &current,
             dependencies,
             registry,
-            runtime_config.clone(),
-            SessionPersistentState::from_input(&paths.input),
-            ConversationId::new("conversation-standalone"),
-            lifecycle.root().join("artifacts"),
+            current.config.as_ref().clone(),
+            intent,
+            node.conversation_id,
+            allocation,
             lifecycle,
         )
-        .await
+        .await?;
+        catalog.commit_planned(planned)?;
+        Ok(core)
     }
 
     /// Composes one selected native `SessionNode`'s linear conversation from
@@ -1106,27 +1131,17 @@ impl LocalConversationCore {
                     .unwrap_or_else(|| runtime_config.initial_model().clone()),
             )?;
 
-            // The root Agent's native Agent Extension composition freeze point
-            // (Issues #256, #259). It is resolved once, here, from this launch's
-            // already-resolved configuration document. Nothing downstream reads
-            // `runtime_config.agent.extensions` again, and resource reload publishes a
-            // new `RuntimeResourceSnapshot` that deliberately cannot reach this
-            // value: a running ConversationRuntime executes against the
-            // composition frozen for its launch.
-            //
-            // It is resolved before the tool runtime because it decides one of
-            // the tool runtime's owned resources: the conversation's task list
-            // exists exactly when this composition includes the Todo extension.
-            //
-            // It is deliberately *not* handed to the subagent spawn plan: root
-            // and named-role extension sets are independently authored, and a
-            // child's set is frozen by the resolver from its own definition.
+            // Initial Root Plugin selection comes from the resolved CFG3 profile.
+            // Later safe-boundary reload publishes a new profile; admitted work
+            // retains its generation. Conversation Todo/Goal state owners remain
+            // stable independently of whether a generation exposes their Tools.
+            // Named Agents resolve their own independent Plugin profiles.
             let extensions = runtime_config.extension_composition();
 
             // 5-6. The conversation identity authority and the one conversation
             // tool runtime (workspace, runtime-private artifact root, canonical
             // mailbox, background registry, base authorized environment, and the
-            // Todo extension owner when composed).
+            // Todo/Goal domain owners).
             let base_environment = runtime_config.tool_environment()?;
             let mut tool_runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
                 &paths.workspace,
@@ -1188,6 +1203,21 @@ impl LocalConversationCore {
                     clock: Arc::new(crate::runtime::types::SystemClock),
                     monotonic_clock: Arc::new(crate::runtime::SystemMonotonicClock::new()),
                     spawn: crate::runtime::subagent::SubagentSpawnPlan {
+                        session_id: crate::runtime::identity::SessionId::parse(
+                            artifacts_root
+                                .parent()
+                                .and_then(std::path::Path::parent)
+                                .and_then(std::path::Path::file_name)
+                                .and_then(std::ffi::OsStr::to_str)
+                                .ok_or_else(|| LocalRuntimeError::ToolRuntime {
+                                    detail: "Conversation has no Session allocation".into(),
+                                })?,
+                        )
+                        .map_err(|error| {
+                            LocalRuntimeError::ToolRuntime {
+                                detail: error.clone(),
+                            }
+                        })?,
                         program: match dependencies.child_program.clone() {
                             Some(program) => program,
                             None => {
@@ -1214,8 +1244,8 @@ impl LocalConversationCore {
                         tool_runtime.workspace().root(),
                         conversation_access,
                     ),
-                    // Launch-scoped: capacity belongs to the live registry, and
-                    // resource reload deliberately never resizes it.
+                    // Generation-owned capacity belongs to the live registry;
+                    // safe-boundary publication replaces capacity when no child owns it.
                     max_active: runtime_config.subagents.max_concurrent,
                 },
             );
@@ -1247,22 +1277,15 @@ impl LocalConversationCore {
                 detail: format!("{error:?}"),
             })?;
 
-            // Launch resolution already resolved the automatic source roots
-            // from the session `[skills].sources` policy, and rebased the
-            // explicit launch paths according to authority. Package discovery
-            // retains its own canonical identity validation.
+            // Launch resolution froze the fixed User and Workspace Skill roots.
+            // Package discovery reserves Workspace shadows before validation;
+            // Agent profiles independently select prompt visibility.
             let skill_discovery = SkillDiscoveryConfig {
-                automatic: if paths.no_automatic_skills {
-                    Vec::new()
-                } else {
-                    paths.skill_sources.clone()
-                },
-                explicit_paths: paths.skill_paths.clone(),
+                automatic: paths.skill_sources.clone(),
             };
 
-            // 9. The resolver supplied launch controls and layered settings. The
-            // coordinator receives the activation policy
-            // and applies it to the available capability registrations.
+            // 9. The resolver supplied the complete CFG3 profile and policies.
+            // The existing coordinator prepares only finite admitted source demand.
             let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
                 source_demand: admitted_source_demand(
                     &runtime_config,
@@ -1273,28 +1296,18 @@ impl LocalConversationCore {
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(base_registry),
-                // The extension Tool surfaces the tool runtime above actually
-                // materialized. The coordinator composes them once, outside its
-                // reloadable inputs (Issue #259); it is handed no second
-                // composition decision of its own.
+                // Stable owner-backed Plugin registrations. Each generation's
+                // authored profile selects enabled Plugins independently of
+                // ordinary Tool availability; Todo/Goal state remains domain-owned.
                 extension_tools: tool_runtime.extension_tool_plane(),
                 agent_activation: AgentActivation {
                     profile: runtime_config.agent.clone(),
                     admitted_agents: subagent_catalog.names().into_iter().cloned().collect(),
-                    admitted_workflows: workflows.enabled_ids().clone(),
+                    admitted_workflows: workflows.entries().keys().cloned().collect(),
                     project_files: paths.root_agent_project_files.clone(),
-                    no_builtin_tools: paths.no_builtin_tools,
-                    no_direct_tools: paths.no_direct_tools,
-                    tools: paths.tools.clone(),
-                    exclude_tools: paths.exclude_tools.clone(),
                 },
                 skill_discovery,
-                mcp_servers: mcp_bindings_with_authority(
-                    &runtime_config,
-                    &paths.workspace,
-                    &paths.provenance,
-                    &paths.credentials,
-                )?,
+                mcp_servers: captured_mcp_bindings(&runtime_config, &paths.credentials)?,
                 base_environment,
                 environment_store_root: product_root
                     .join("environments")
@@ -1334,7 +1347,16 @@ impl LocalConversationCore {
             )
             .with_subagent_catalog(subagent_catalog)
             .with_workflow_catalog(workflows)
-            .with_managed_python_catalog(paths.managed_python.clone());
+            .with_managed_python_catalog(paths.managed_python.clone())
+            .with_configuration(crate::runtime::resources::RuntimeConfiguration {
+                resource_definitions: paths.inspection.definitions.clone(),
+                resource_diagnostics: paths.inspection.resource_diagnostics.clone(),
+                source_revisions: paths.source_revisions.clone(),
+                effective: paths.effective.clone().map_providers(Into::into),
+                config: Arc::new(runtime_config.clone()),
+                models: registry.clone(),
+                provenance: paths.provenance.clone(),
+            });
             validate_subagent_catalog(&prepared, &registry).map_err(|error| {
                 LocalRuntimeError::Capability {
                     detail: error.to_string(),
@@ -1360,7 +1382,10 @@ impl LocalConversationCore {
                 Arc::new(LocalRuntimeResourceLoader::new(
                     paths.clone(),
                     native_resources,
-                    registry,
+                    dependencies
+                        .credentials
+                        .clone()
+                        .unwrap_or_else(|| Arc::new(paths.credentials.clone())),
                     workflow_runtime,
                 ));
 
@@ -1380,6 +1405,7 @@ impl LocalConversationCore {
             // **inactive**: the final composition path activates it after the
             // optional Runtime Client host binds.
             let runtime = ConversationRuntime::new(RuntimeConversationConfig {
+                explicit_model: session_state.model.is_some(),
                 agent_id: runtime_config.agent_id.clone(),
                 model,
                 approval_mode: runtime_config.approval_mode,
@@ -1406,8 +1432,6 @@ impl LocalConversationCore {
             })?;
 
             Ok(Self {
-                launch_settings: Some(paths.settings_view()),
-                defaults: Some(Arc::new(super::settings::UserDefaults::new(paths))),
                 runtime,
                 tool_runtime,
                 capability,
@@ -1478,9 +1502,13 @@ impl LocalConversationCore {
                     .and_then(|root| {
                         crate::runtime::local_storage::ConversationAccess::existing(
                             &root,
-                            child_conversation_store_path(root.root(), &spec.child_conversation_id)
-                                .parent()
-                                .unwrap(),
+                            child_conversation_store_path(
+                                root.root(),
+                                &spec.session_id,
+                                &spec.child_conversation_id,
+                            )
+                            .parent()
+                            .unwrap(),
                         )
                     })
                     .map_err(|e| LocalRuntimeError::ToolRuntime {
@@ -1494,7 +1522,7 @@ impl LocalConversationCore {
                 })?;
             // 1-4. The child's model authority, materialized from the
             // parent-frozen resolved invocation. There is deliberately no model
-            // catalog step here: `models.toml` is mutable, and reopening it
+            // catalog step here: `rustx.toml` is mutable, and reopening it
             // would let a catalog edit between the parent's freeze and this
             // composition silently change the child's provider binding,
             // protocol, context window, output budget, reasoning semantics,
@@ -1517,12 +1545,19 @@ impl LocalConversationCore {
             // deliberately one level above that physical root: execution
             // artifacts can be discarded after settlement while the conversation
             // identity remains inspectable.
-            let base_environment = ToolEnvironment::from_authorized(std::iter::empty())
-                .map_err(CurrentRuntimeConfigError::Environment)
-                .map_err(LocalRuntimeError::RuntimeConfig)?;
+            let base_environment =
+                ToolEnvironment::from_authorized(spec.resolved.environment.clone())
+                    .map_err(CurrentRuntimeConfigError::Environment)
+                    .map_err(LocalRuntimeError::RuntimeConfig)?;
             let mut runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
                 &spec.workspace_snapshot.logical_workspace,
-                runtime_root.join("artifacts"),
+                child_conversation_store_path(
+                    lifecycle.root(),
+                    &spec.session_id,
+                    &spec.child_conversation_id,
+                )
+                .parent()
+                .expect("child Conversation directory"),
             )
             // The child's frozen composition, handed to its materialization
             // owner, from exactly the extension set its invoking generation froze
@@ -1534,6 +1569,7 @@ impl LocalConversationCore {
             let durable_store_path = lifecycle
                 .confined(&child_conversation_store_path(
                     lifecycle.root(),
+                    &spec.session_id,
                     &spec.child_conversation_id,
                 ))
                 .map_err(|e| LocalRuntimeError::ToolRuntime {
@@ -1602,7 +1638,7 @@ impl LocalConversationCore {
                 // its own tool runtime materialized above. The child never
                 // rereads a role file or a configuration document to reinterpret
                 // which extensions it owns.
-                extension_tools: tool_runtime.extension_tool_plane(),
+                extension_tools: tool_runtime.extension_tool_plane_for(&spec.resolved.extensions),
                 agent_activation: AgentActivation::default(),
                 skill_discovery: SkillDiscoveryConfig::default(),
                 mcp_servers,
@@ -1684,7 +1720,7 @@ impl LocalConversationCore {
             // runtime-owned terminal-mode-aware final-report rule (Issue #192).
             let resources = Arc::new(
                 RuntimeResourceSnapshot::new(
-                    RuntimeResourceRevision::new(1),
+                    spec.resolved.generation,
                     spec.resolved.project_instructions.clone(),
                     Some(crate::runtime::subagent::compose_child_agent_profile(
                         &spec.resolved.instructions,
@@ -1716,6 +1752,7 @@ impl LocalConversationCore {
             // instructions enter the request-time AgentProfile System section,
             // never canonical history.
             let runtime = ConversationRuntime::new(RuntimeConversationConfig {
+                explicit_model: true,
                 agent_id: spec.child_agent_id.clone(),
                 model,
                 approval_mode: spec.approval_mode,
@@ -1746,8 +1783,6 @@ impl LocalConversationCore {
             })?;
 
             Ok(Self {
-                launch_settings: None,
-                defaults: None,
                 runtime,
                 tool_runtime,
                 capability,
@@ -1850,14 +1885,12 @@ impl LocalConversationCore {
         // (Issue #61): the runtime is still inert here, so the host's
         // initial snapshot is the runtime's real state at the activation
         // cut and no bootstrap fact can fabricate a live client event.
-        let host = RuntimeClientHost::new_with_settings(
+        let host = RuntimeClientHost::new_with_control(
             RuntimeClientHostConfig {
                 runtime: self.runtime.clone(),
                 replay_limit: None,
             },
             control,
-            self.launch_settings.clone(),
-            self.defaults.clone(),
         )?;
 
         Ok(LocalConversationRuntime { core: self, host })
@@ -2020,7 +2053,7 @@ impl LocalSessionClient {
                     let prepared = catalog.prepare_session(&state, &[])?;
                     catalog.plan_session(&prepared, SessionNodeOrigin::New)?
                 } else {
-                    catalog.plan_unchanged(&SessionId::new("session-1"))
+                    catalog.plan_unchanged(&catalog.persisted_session_ids()[0])
                 }
             }
             StartupSession::Select { session, node } => {
@@ -2260,16 +2293,22 @@ impl LocalConversationInspection {
     /// still live but its optional endpoint is unavailable, or
     /// [`LocalRuntimeError::DurableConversation`] when that store cannot be
     /// opened.
+    #[allow(clippy::too_many_lines)] // Resolve the durable owner and live inspection route together.
     pub async fn compose(
         paths: &SessionLocations,
         conversation_id: &ConversationId,
     ) -> Result<Self, LocalRuntimeError> {
+        let session_id =
+            super::session_deletion::conversation_owner(&paths.runtime_root, conversation_id)
+                .map_err(|error| LocalRuntimeError::ToolRuntime {
+                    detail: error.to_string(),
+                })?;
         let lifecycle = Arc::new(
             crate::runtime::local_storage::ProductRoot::existing(&paths.runtime_root)
                 .and_then(|root| {
                     crate::runtime::local_storage::ConversationAccess::existing(
                         &root,
-                        child_conversation_store_path(root.root(), conversation_id)
+                        child_conversation_store_path(root.root(), &session_id, conversation_id)
                             .parent()
                             .ok_or_else(|| std::io::Error::other("missing child allocation"))?,
                     )
@@ -2281,7 +2320,11 @@ impl LocalConversationInspection {
         if !is_safe_child_conversation_component(conversation_id) {
             return Err(LocalRuntimeError::ConversationNotFound {
                 conversation_id: conversation_id.clone(),
-                path: child_conversation_store_path(&paths.runtime_root, conversation_id),
+                path: child_conversation_store_path(
+                    &paths.runtime_root,
+                    &session_id,
+                    conversation_id,
+                ),
             });
         }
         let socket_path = lifecycle
@@ -2303,6 +2346,7 @@ impl LocalConversationInspection {
         let liveness_path = lifecycle
             .confined(&child_conversation_inspection_liveness_path(
                 lifecycle.root(),
+                &session_id,
                 conversation_id,
             ))
             .map_err(|e| LocalRuntimeError::ToolRuntime {
@@ -2334,6 +2378,7 @@ impl LocalConversationInspection {
         let database_path = lifecycle
             .confined(&child_conversation_store_path(
                 lifecycle.root(),
+                &session_id,
                 conversation_id,
             ))
             .map_err(|e| LocalRuntimeError::ToolRuntime {
@@ -2706,19 +2751,20 @@ mod subagent_child_tests {
 base_url = "http://127.0.0.1:9/v1"
 api_key = "$RUSTX_CHILD_KEY"
 
-[[providers.local.models]]
+[models."local/model-a"]
+provider = "local"
 id = "model-a"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
-[providers.local.models.capabilities]
+[models."local/model-a".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/model-a".compat]
 chat_reasoning_replay = "omit"
 "#;
 
@@ -2774,16 +2820,23 @@ chat_reasoning_replay = "omit"
         skills: Vec<crate::runtime::subagent::ResolvedSubagentSkill>,
         extensions: crate::extensions::NativeAgentExtensions,
     ) -> SubagentChildSpec {
-        std::fs::create_dir_all(root.join("subagents/conv-parent-subagent-1/incarnation-test"))
-            .unwrap();
+        std::fs::create_dir_all(root.join("sessions/ses_01900000-0000-7000-8000-000000000001/conversations/conv_c89c766b-0004-76cb-8baf-0d5b1a677c1e/incarnation-test")).unwrap();
         SubagentChildSpec {
+            session_id: crate::runtime::identity::SessionId::new(
+                "ses_01900000-0000-7000-8000-000000000001",
+            ),
+
             protocol_version: SUBAGENT_IPC_VERSION,
             product_root: root.to_path_buf(),
-            subagent_id: SubagentId::new("conv-parent-subagent-1"),
-            child_conversation_id: ConversationId::new("conv-parent-subagent-1"),
+            subagent_id: SubagentId::new("conv_c89c766b-0004-76cb-8baf-0d5b1a677c1e"),
+            child_conversation_id: ConversationId::new("conv_c89c766b-0004-76cb-8baf-0d5b1a677c1e"),
             child_agent_id: AgentId::new("agent-child"),
             parent_agent_id: AgentId::new("agent-parent"),
             resolved: ResolvedSubagentSpec {
+                environment: Vec::new(),
+                generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
+                skill_roots: Vec::new(),
+
                 selection: crate::runtime::agent_profile::FrozenAgentSelection {
                     tools: tools
                         .iter()
@@ -2857,7 +2910,7 @@ chat_reasoning_replay = "omit"
         // The parent conversation's own list, composed exactly as a root
         // launch composes it.
         let parent = crate::tools::runtime::ConversationToolRuntime::from_config(
-            ConversationId::new("conv-parent"),
+            ConversationId::new("conv_8248c2d2-79e3-70b0-8093-f6299e1fc8be"),
             crate::tools::runtime::ConversationRuntimeConfig::new(
                 parent_dir.path().join("workspace"),
                 parent_dir.path().join("artifacts"),
@@ -2881,14 +2934,18 @@ chat_reasoning_replay = "omit"
             // root, and with it the child's durable conversation store, is
             // *derived* from that identity, so two children can no more share
             // a Ledger than they can share an id.
-            let id = ConversationId::new(format!("conv-parent-subagent-{index}"));
-            child_spec.subagent_id = SubagentId::new(id.as_str());
+            let id = ConversationId::generate();
+            child_spec.subagent_id = SubagentId::new(format!("child-{index}"));
             child_spec.child_conversation_id = id.clone();
             std::fs::create_dir_all(
-                dir.path()
-                    .join("subagents")
-                    .join(id.as_str())
-                    .join(&child_spec.incarnation),
+                crate::runtime::subagent::child_conversation_store_path(
+                    dir.path(),
+                    &child_spec.session_id,
+                    &id,
+                )
+                .parent()
+                .unwrap()
+                .join(&child_spec.incarnation),
             )
             .expect("child incarnation allocation");
             children.push(
@@ -3009,7 +3066,7 @@ chat_reasoning_replay = "omit"
         let dir = tempfile::tempdir().expect("lab");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(workspace.join(".agents/skills/ambient")).expect("skills");
-        std::fs::write(dir.path().join("models.toml"), MODELS).expect("models.toml");
+        std::fs::write(dir.path().join("rustx.toml"), MODELS).expect("rustx.toml");
         std::fs::write(
             workspace.join("AGENTS.md"),
             "ambient workspace instructions\n",
@@ -3028,13 +3085,13 @@ chat_reasoning_replay = "omit"
     /// inspection connects to.
     fn child_projection(
         child: &super::LocalConversationRuntime,
-    ) -> Option<crate::runtime_client::settings::EffectiveNativeAgentExtensions> {
+    ) -> Option<crate::runtime_client::settings::EffectivePlugins> {
         child
             .host()
             .snapshot()
             .expect("the child host projects its snapshot")
             .0
-            .effective_extensions
+            .effective_plugins
     }
 
     /// Issue #256 regressions 6, 7 and 8: a child's Runtime Client
@@ -3062,8 +3119,8 @@ chat_reasoning_replay = "omit"
     #[allow(clippy::too_many_lines)]
     async fn ext256_a_child_projects_only_its_frozen_extension_composition() {
         use crate::runtime_client::settings::{
-            EffectiveAgentStatusExtension, EffectiveBackgroundStatus,
-            EffectiveNativeAgentExtensions, EffectiveTimeStatus, SettingsBoundary,
+            EffectiveAgentStatusExtension, EffectiveBackgroundStatus, EffectivePlugins,
+            EffectiveTimeStatus,
         };
 
         let dir = lab();
@@ -3071,7 +3128,7 @@ chat_reasoning_replay = "omit"
         // enables the extension and configures it differently.
         std::fs::write(
             dir.path().join("workspace/rustx.toml"),
-            r#"schema_version = 8
+            r#"schema_version = 9
 agent_id = "agent-host"
 
 [context]
@@ -3084,16 +3141,16 @@ keep_recent_tokens = 0
 model = "local/model-a"
 
 
-[agent.extensions]
-[agent.extensions.agent_status]
+[agent.plugins]
+[agent.plugins.agent_status]
 enabled = true
 
-[agent.extensions.agent_status.time]
+[agent.plugins.agent_status.time]
 enabled = true
 timezone = "America/New_York"
 
 
-[agent.extensions.agent_status.background]
+[agent.plugins.agent_status.background]
 enabled = true
 "#,
         )
@@ -3108,7 +3165,7 @@ enabled = true
         )
         .expect("the role extension document parses")
         .resolve();
-        let expected_r1 = EffectiveNativeAgentExtensions {
+        let expected_r1 = EffectivePlugins {
             goal: None,
             agent_status: Some(EffectiveAgentStatusExtension {
                 time: EffectiveTimeStatus {
@@ -3141,21 +3198,21 @@ enabled = true
         .expect("the child binds its own Runtime Client host");
         let (snapshot, _) = child.host().snapshot().expect("child snapshot");
         assert_eq!(
-            snapshot.effective_extensions,
+            snapshot.effective_plugins,
             Some(expected_r1.clone()),
             "the child projects the composition its invoking generation froze"
         );
         // One source of truth on the child side too.
         assert_eq!(
-            snapshot.effective_extensions,
-            Some(EffectiveNativeAgentExtensions::project(
+            snapshot.effective_plugins,
+            Some(EffectivePlugins::project(
                 &child.runtime().native_extensions()
             ))
         );
         // Root configuration cannot leak in: neither the enabled Background
         // nor the America/New_York timezone beside the child appears.
         let projected = snapshot
-            .effective_extensions
+            .effective_plugins
             .clone()
             .expect("a composed child always projects one");
         let status = projected.agent_status.expect("Agent Status is composed");
@@ -3167,11 +3224,6 @@ enabled = true
             snapshot.settings_evidence,
             crate::runtime_client::settings::SettingsEvidence::FrozenChild
         );
-        assert_eq!(
-            snapshot.settings_lifetimes.extensions,
-            SettingsBoundary::FrozenAdmission
-        );
-        assert_eq!(snapshot.launch_settings, None);
 
         // A child frozen with no extension is not widened by the enabled
         // document beside it.
@@ -3192,7 +3244,7 @@ enabled = true
         .expect("the child binds its own Runtime Client host");
         assert_eq!(
             child_projection(&bare),
-            Some(EffectiveNativeAgentExtensions {
+            Some(EffectivePlugins {
                 goal: None,
                 agent_status: None,
                 todo: None,
@@ -3238,7 +3290,7 @@ enabled = true
         let dir = lab();
         std::fs::write(
             dir.path().join("workspace/rustx.toml"),
-            r#"schema_version = 8
+            r#"schema_version = 9
 agent_id = "agent-host"
 
 [context]
@@ -3251,16 +3303,16 @@ keep_recent_tokens = 0
 model = "local/model-a"
 
 
-[agent.extensions]
-[agent.extensions.agent_status]
+[agent.plugins]
+[agent.plugins.agent_status]
 enabled = true
 
-[agent.extensions.agent_status.time]
+[agent.plugins.agent_status.time]
 enabled = true
 timezone = "America/New_York"
 
 
-[agent.extensions.agent_status.background]
+[agent.plugins.agent_status.background]
 enabled = true
 "#,
         )
@@ -3286,7 +3338,7 @@ enabled = true
         );
 
         let frozen = serde_json::from_value::<crate::extensions::NativeAgentExtensionsDocument>(
-            serde_json::json!({"agent_status": {"time": {"timezone": "Asia/Shanghai"}}}),
+            serde_json::json!({"agent_status": {"enabled": true, "time": {"timezone": "Asia/Shanghai"}}}),
         )
         .expect("role extension document")
         .resolve();
@@ -3373,7 +3425,7 @@ enabled = true
             core.capability().current_snapshot().tool_registry().names(),
             // The frozen ordinary selection is `read`; `todo` is the second
             // contribution — the child's frozen Todo extension (Issue #259).
-            vec!["read", "todo"],
+            vec!["read"],
             "the child's active set is exactly its authorized ordinary selection plus its \
              frozen extension Tools"
         );
@@ -3559,13 +3611,20 @@ enabled = true
         let materialized = child_spec
             .runtime_root()
             .unwrap()
-            .join("skills/selected/SKILL.md")
+            .join("skills/workspace/selected/SKILL.md")
             .display()
             .to_string();
         assert!(catalog.contains("selected"));
         assert!(
-            catalog.contains(&materialized),
-            "the model-visible location is remapped onto the child's own copy: {catalog}"
+            catalog.contains(
+                &child_spec
+                    .runtime_root()
+                    .unwrap()
+                    .join("skills/workspace")
+                    .display()
+                    .to_string()
+            ),
+            "the model-visible root is remapped onto the child's own copy: {catalog}"
         );
         assert!(
             std::path::Path::new(&materialized).is_file(),
@@ -3579,16 +3638,16 @@ enabled = true
             !catalog.contains("secret body"),
             "only catalog metadata crosses the boundary: {catalog}"
         );
-        // The same independently frozen Skill admission cannot advertise
-        // lazy reads in a child whose own Tool authority omits native Read.
+        // Skill visibility is independent of a child's Native Tool selection.
+        let incarnation_parent = child_spec
+            .runtime_root()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
         let mut without_read = child_spec;
         without_read.incarnation = "incarnation-without-read".to_owned();
-        std::fs::create_dir_all(
-            dir.path()
-                .join("subagents/conv-parent-subagent-1")
-                .join(&without_read.incarnation),
-        )
-        .unwrap();
+        std::fs::create_dir_all(incarnation_parent.join(&without_read.incarnation)).unwrap();
         without_read.resolved.tools = vec![builtin("grep")];
         let core_without_read = LocalConversationCore::compose_subagent_child(
             &without_read,
@@ -3602,7 +3661,7 @@ enabled = true
                 .runtime()
                 .runtime_resources()
                 .skill_catalog()
-                .is_none()
+                .is_some()
         );
         assert_eq!(
             core_without_read
@@ -3610,13 +3669,13 @@ enabled = true
                 .current_snapshot()
                 .tool_registry()
                 .names(),
-            ["grep", "todo"]
+            ["grep"]
         );
         assert!(
             without_read
                 .runtime_root()
                 .unwrap()
-                .join("skills/selected/SKILL.md")
+                .join("skills/workspace/selected/SKILL.md")
                 .is_file()
         );
     }
@@ -3687,11 +3746,11 @@ enabled = true
     /// The proof is structural rather than a timing argument: the catalog
     /// file is deleted before composition, and the child still composes with
     /// exactly the frozen semantics. There is no code path left that could
-    /// observe a `models.toml` at all.
+    /// observe a `rustx.toml` at all.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_child_composes_with_no_model_catalog_on_disk() {
         let dir = lab();
-        std::fs::remove_file(dir.path().join("models.toml")).expect("remove the catalog");
+        std::fs::remove_file(dir.path().join("rustx.toml")).expect("remove the catalog");
         let spec = spec(dir.path(), vec![builtin("read")], Vec::new(), Vec::new());
         let core = LocalConversationCore::compose_subagent_child(
             &spec,
@@ -3893,8 +3952,6 @@ enabled = true
     fn fixture_binding(test_name: &str, prefix: &str) -> crate::tools::mcp::McpServerBinding {
         crate::tools::mcp::McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
-            activation: crate::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -4016,7 +4073,7 @@ enabled = true
             // second, independent contribution to the model Tool set
             // (Issue #259). It is deliberately *not* part of the frozen
             // ordinary selection: no `tools.builtin` entry names it.
-            vec!["alpha_echo", "read", "todo"],
+            vec!["alpha_echo", "read"],
             "the child Tool Plane is exactly the frozen ordinary selection plus its \
              frozen extension Tools: the fixture also publishes alpha_mutate and \
              alpha_slow, and neither is materialized"
@@ -4190,8 +4247,6 @@ enabled = true
             crate::capabilities::ToolSourceId::Mcp(server_id),
             crate::tools::mcp::McpServerBinding {
                 credentials: crate::credentials::SourceCredentials::default(),
-                activation: crate::capabilities::activation::SourceActivation::Enabled,
-                resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: "rustx-no-such-mcp-server".to_owned(),
                     args: Vec::new(),
@@ -4270,19 +4325,60 @@ mod conversation_inspection_tests {
     use crate::runtime::identity::{ConversationId, MessageId};
     use crate::runtime_client::types::{RuntimeClientRequest, RuntimeClientResult};
 
+    fn owned_child(
+        root: &std::path::Path,
+        workspace: &std::path::Path,
+    ) -> (
+        crate::local_runtime::SessionId,
+        ConversationId,
+        std::path::PathBuf,
+    ) {
+        let catalog = crate::local_runtime::session::SessionCatalog::create(
+            root,
+            &crate::local_runtime::session::SessionPersistentState {
+                cwd: workspace.into(),
+                model: None,
+            },
+        )
+        .unwrap();
+        let session = catalog.list_page(None, 0, 1).unwrap().sessions[0]
+            .id
+            .clone();
+        let (parent, _) = catalog.lineage(&session, None).unwrap();
+        let store = SqliteConversationStore::open(
+            parent.conversation_id.clone(),
+            &catalog.database_path(&session, &parent.conversation_id),
+        )
+        .unwrap();
+        let child = ConversationId::generate();
+        store
+            .append_event(crate::runtime::subagent::ownership_event(
+                &parent.conversation_id,
+                &crate::runtime::identity::SubagentId::for_conversation(&parent.conversation_id, 1),
+                &crate::runtime::identity::AgentId::new("child"),
+                &child,
+                &crate::runtime::identity::ToolCallId::new("delegation"),
+                &crate::runtime::subagent::SubagentName::parse("worker").unwrap(),
+                &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
+                &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
+                    .unwrap(),
+                crate::events::types::SubagentOwnershipKind::Normal,
+                &crate::runtime::workspace::WorkspaceSnapshot::shared(workspace.to_path_buf()),
+                chrono::Utc::now(),
+            ))
+            .unwrap();
+        let database = catalog.database_path(&session, &child);
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        (session, child, database)
+    }
+
     #[tokio::test]
     async fn resolves_the_known_child_identity_to_the_ordinary_attachment() {
         let root = tempfile::tempdir().expect("runtime root");
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let conversation_id = ConversationId::new("conversation-parent-subagent-1");
-        let database_path = root
-            .path()
-            .join("runtime/subagents")
-            .join(conversation_id.as_str())
-            .join("conversation.sqlite");
-        std::fs::create_dir_all(database_path.parent().expect("child store parent"))
-            .expect("child store directory");
+        let (_session, conversation_id, database_path) =
+            owned_child(&root.path().join("runtime"), &workspace);
         let store = SqliteConversationStore::open(conversation_id.clone(), &database_path)
             .expect("child store");
         store
@@ -4298,12 +4394,6 @@ mod conversation_inspection_tests {
             .expect("child history");
 
         let paths = SessionLocations {
-            skill_paths: Vec::new(),
-            no_automatic_skills: true,
-            no_builtin_tools: false,
-            no_direct_tools: false,
-            tools: None,
-            exclude_tools: Vec::new(),
             workspace,
             runtime_root: root.path().join("runtime"),
         };
@@ -4347,25 +4437,14 @@ mod conversation_inspection_tests {
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let runtime_root = root.path().join("runtime");
-        let conversation_id = ConversationId::new("conversation-parent-subagent-live-gap");
-        let database_path = crate::runtime::subagent::child_conversation_store_path(
-            &runtime_root,
-            &conversation_id,
-        );
-        std::fs::create_dir_all(database_path.parent().expect("child store parent"))
-            .expect("child store directory");
+        let (session, conversation_id, database_path) = owned_child(&runtime_root, &workspace);
         let store = SqliteConversationStore::open(conversation_id.clone(), &database_path)
             .expect("child store");
         store.initialize(&[]).expect("child history");
-        let lease = LiveConversationInspectionLease::acquire(&runtime_root, &conversation_id)
-            .expect("the running child owns its transient liveness lease");
+        let lease =
+            LiveConversationInspectionLease::acquire(&runtime_root, &session, &conversation_id)
+                .expect("the running child owns its transient liveness lease");
         let paths = SessionLocations {
-            skill_paths: Vec::new(),
-            no_automatic_skills: true,
-            no_builtin_tools: false,
-            no_direct_tools: false,
-            tools: None,
-            exclude_tools: Vec::new(),
             workspace,
             runtime_root,
         };
@@ -4403,7 +4482,7 @@ mod composition_tests {
     use crate::model::event::ModelEvent;
     use crate::model::finish::ModelFinishReason;
     use crate::model::types::{ModelProtocol, ModelRequest};
-    use crate::runtime::identity::{ConversationId, McpServerId, ToolCallId, ToolId};
+    use crate::runtime::identity::{McpServerId, ToolCallId, ToolId};
     use crate::scripted_suites::support::fake::{FakeModel, FakeStep, fake_model};
     use crate::scripted_suites::support::model::{
         FixtureModel, ScriptedAdapterFactory, fixture_registry,
@@ -4428,16 +4507,9 @@ mod composition_tests {
 
     fn paths(root: &std::path::Path, workspace: std::path::PathBuf) -> LaunchFixture {
         LaunchFixture {
-            models: root.join("models.toml"),
             config: root.join("rustx.toml"),
-            skill_paths: Vec::new(),
-            no_automatic_skills: true,
-            no_builtin_tools: false,
-            no_direct_tools: false,
             startup_session: super::StartupSession::Empty,
             session_name: None,
-            tools: None,
-            exclude_tools: Vec::new(),
             workspace,
             runtime_root: root.join("runtime"),
         }
@@ -4507,25 +4579,24 @@ mod composition_tests {
             FixtureModel::text("scripted/scripted", ModelProtocol::OpenAiChatCompletions);
         let factory = ScriptedAdapterFactory::new(adapter);
         let registry = fixture_registry(std::slice::from_ref(&fixture_model), &factory);
-        std::fs::write(root.path().join("models.toml"), r#"
+        let catalog_document = r#"
 [providers.scripted]
 base_url = "https://scripted.fixture.invalid/v1"
 api_key = "test-only-secret"
-[[providers.scripted.models]]
+[models."scripted/scripted"]
+provider = "scripted"
 id = "scripted"
 protocol = "openai_chat_completions"
 context_window = 1000000
 max_output_tokens = 4096
 capabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }
 compat = { chat_reasoning_replay = "omit" }
-"#).unwrap();
+"#;
 
         let echo_call_count_file = root.path().join("echo-call-count");
         let executable = std::env::current_exe().expect("test executable");
-        let config_document = serde_json::json!({"schema_version": 8, "agent_id": "agent-parent", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
+        let mut config_document = serde_json::json!({"schema_version": 9, "agent_id": "agent-parent", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
                 SERVER_NAME: {
-                    "enabled": true,
-                    "type": "stdio",
                     "command": executable,
                     "args": fixture_spawn_args(test_name),
                     "env": {
@@ -4541,10 +4612,23 @@ compat = { chat_reasoning_replay = "omit" }
                         "tools": {"builtin": ["read"]},
                     },
                 }}, "agent": {"model": {"model": "scripted/scripted"}, "tools": {"builtin": ["read"], "sources": {SERVER_NAME: [TOOL_NAME]}}, "agents": [TEST_AGENT]}});
-        crate::launch_fixture::write_documents(
+        crate::launch_fixture::write_roles(&workspace, &mut config_document["subagents"]);
+        let mcp = config_document
+            .as_object_mut()
+            .unwrap()
+            .remove("mcp_servers")
+            .unwrap();
+        std::fs::write(
+            workspace.join(".agents/mcp.toml"),
+            toml::to_string_pretty(&serde_json::json!({"mcp_servers": mcp})).unwrap(),
+        )
+        .unwrap();
+        crate::launch_fixture::write_document(
             &root.path().join("rustx.toml"),
-            &toml::to_string_pretty(&config_document).unwrap(),
-            &["mcp_servers"],
+            &format!(
+                "{}\n{catalog_document}",
+                toml::to_string_pretty(&config_document).unwrap()
+            ),
         );
         let launch = paths(root.path(), workspace).resolve();
         let runtime_config = launch.config.as_ref().clone();
@@ -4552,14 +4636,26 @@ compat = { chat_reasoning_replay = "omit" }
             crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
                 .unwrap(),
         );
+        let catalog = crate::local_runtime::session::SessionCatalog::create(
+            &launch.runtime_root,
+            &crate::local_runtime::session::SessionPersistentState::from_input(&launch.input),
+        )
+        .unwrap();
+        let session_id = catalog.persisted_session_ids().remove(0);
+        let session = catalog.snapshot(&session_id).unwrap();
+        let output_root = catalog
+            .database_path(&session.id, &session.active_conversation_id)
+            .parent()
+            .unwrap()
+            .to_path_buf();
         let runtime = LocalConversationCore::compose_from_config(
             &launch,
             &LocalRuntimeDependencies::default(),
             registry,
             runtime_config.clone(),
             super::super::session::SessionPersistentState::from_input(&launch.input),
-            ConversationId::new("conv-163-composition"),
-            controller.root().join("artifacts"),
+            session.active_conversation_id,
+            output_root,
             controller,
         )
         .await
@@ -4894,7 +4990,7 @@ mod source_demand_tests {
     }
 
     #[test]
-    fn admitted_agents_share_one_source_demand_and_discovery_does_not_select() {
+    fn allowlisting_named_agents_does_not_materialize_their_sources() {
         let shared = ToolSourceId::ManagedPython("shared".into());
         let unused = ToolSourceId::ManagedPython("unused".into());
         let make = |name: &str, source: ToolSourceId| {
@@ -4943,8 +5039,16 @@ mod source_demand_tests {
         let first = admitted_source_demand(&config, &agents, &WorkflowCatalog::empty(), empty());
         config.agent.agents.reverse();
         let second = admitted_source_demand(&config, &agents, &WorkflowCatalog::empty(), empty());
-        assert_eq!(first.sources, [shared].into());
+        assert!(first.sources.is_empty());
         assert_eq!(first.sources, second.sources);
+        config.agent.tools.sources.insert(
+            shared.clone(),
+            crate::capabilities::selection::SourceToolSelection::All,
+        );
+        assert_eq!(
+            admitted_source_demand(&config, &agents, &WorkflowCatalog::empty(), empty()).sources,
+            [shared].into()
+        );
     }
 }
 

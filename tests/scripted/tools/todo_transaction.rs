@@ -317,11 +317,13 @@ async fn a_fresh_attach_carries_the_list_even_when_the_result_is_off_the_page() 
     history
         .extend((0..70).map(|index| assistant(&format!("message-after-{index}"), "kept working")));
 
-    let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder("conv-todo-page")
-        .todo_extension()
-        .durable_history(history)
-        .build()
-        .await;
+    let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder(
+        "conv_14444bbf-1743-747e-a1b6-7291a1dc2c27",
+    )
+    .todo_extension()
+    .durable_history(history)
+    .build()
+    .await;
     let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
 
     assert!(
@@ -344,10 +346,12 @@ async fn a_fresh_attach_carries_the_list_even_when_the_result_is_off_the_page() 
 /// fact, not an absence.
 #[tokio::test]
 async fn a_conversation_without_a_list_attaches_to_the_empty_one() {
-    let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder("conv-todo-none")
-        .todo_extension()
-        .build()
-        .await;
+    let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder(
+        "conv_cd18ecea-715a-722c-892f-bc4e61b938aa",
+    )
+    .todo_extension()
+    .build()
+    .await;
     let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
     assert_eq!(snapshot.todos, Some(TodoSnapshot::empty()));
 }
@@ -355,12 +359,14 @@ async fn a_conversation_without_a_list_attaches_to_the_empty_one() {
 /// While the client is live, the list follows the committed result.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_projection_follows_a_committed_todo_result() {
-    let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder("conv-todo-live")
-        .todo_extension()
-        .native_tools()
-        .scripts(turn(&[create("call-todo-live", "Write the parser")]))
-        .build()
-        .await;
+    let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder(
+        "conv_87189567-c384-70e5-8639-32a413339834",
+    )
+    .todo_extension()
+    .native_tools()
+    .scripts(turn(&[create("call-todo-live", "Write the parser")]))
+    .build()
+    .await;
     let (attachment, _) = fixture
         .host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -693,7 +699,7 @@ async fn every_committed_list_survives_the_restart_that_reads_it_back() {
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     std::fs::create_dir_all(dir.path().join("artifacts")).expect("artifacts");
-    let conversation_id = ConversationId::new("conv-todo-restart");
+    let conversation_id = ConversationId::new("conv_8d770ed6-0408-7452-8720-8efef25d2d37");
     let store = std::sync::Arc::new(
         rustx::durable::SqliteConversationStore::open(
             conversation_id.clone(),

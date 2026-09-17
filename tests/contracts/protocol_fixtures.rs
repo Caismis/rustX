@@ -240,7 +240,10 @@ fn attempt_started_envelope_round_trip() {
     assert_eq!(envelope.schema_version, 1);
     assert_eq!(envelope.sequence, 1);
     assert_eq!(envelope.event_id, EventId::new("evt-1"));
-    assert_eq!(envelope.conversation_id.as_str(), "conv-1");
+    assert_eq!(
+        envelope.conversation_id.as_str(),
+        "conv_36524fd8-f674-7fc2-8125-06d01fee0e18"
+    );
     assert_eq!(
         envelope
             .attempt_id
@@ -386,7 +389,7 @@ fn additional_event_variants_round_trip() {
         schema_version: 1,
         event_id: EventId::new("evt-6"),
         sequence: 6,
-        conversation_id: ConversationId::new("conv-1"),
+        conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         attempt_id: Some(AttemptId::new("attempt-1")),
         turn_id: None,
         timestamp: chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:05Z")

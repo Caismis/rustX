@@ -41,53 +41,54 @@ async fn capability_projection_covers_native_python_and_skills() {
         eprintln!("uv unavailable; capability Python origin not exercised");
         return;
     }
-    let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder("conv-37-cap")
-        .tools({
-            let mut base = rustx::tools::executor::ToolRegistry::new();
-            let definition = ToolDefinition {
-                id: ToolId::new("tool-ls"),
-                name: "ls".to_owned(),
-                description: "list files".to_owned(),
-                input_schema: serde_json::json!({"type": "object"}),
-                execution_policy: ToolExecutionPolicy::ForegroundOnly,
-                concurrency_policy: ToolConcurrencyPolicy::Sequential,
-                approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
-                replay_policy: ToolReplayPolicy::Never,
-                origin: ToolOrigin::Builtin,
-            };
-            base.register(
-                definition.clone(),
-                Arc::new(support::fake::FakeTool::new(
-                    definition,
-                    support::fake::success_result("listed"),
-                )),
-            )
-            .expect("register base tool");
-            base
-        })
-        .native_tools()
-        .agent_activation(rustx::capabilities::AgentActivation {
-            tools: Some(vec![
-                "ls".to_owned(),
-                "py_echo".to_owned(),
-                "read".to_owned(),
-            ]),
-            ..rustx::capabilities::AgentActivation::default()
-        })
-        .workspace_fixture(|workspace| {
-            support::runtime_client_fixture::write_python_package(
-                workspace,
-                "py-echo",
-                "Echoes arguments",
-            );
-            support::runtime_client_fixture::write_skill(
-                workspace,
-                "skill-readme",
-                "Reads the README",
-            );
-        })
-        .build()
-        .await;
+    let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder(
+        "conv_47c7c667-7657-7a48-aa3b-c9f889124fae",
+    )
+    .tools({
+        let mut base = rustx::tools::executor::ToolRegistry::new();
+        let definition = ToolDefinition {
+            id: ToolId::new("tool-ls"),
+            name: "ls".to_owned(),
+            description: "list files".to_owned(),
+            input_schema: serde_json::json!({"type": "object"}),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::Sequential,
+            approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Builtin,
+        };
+        base.register(
+            definition.clone(),
+            Arc::new(support::fake::FakeTool::new(
+                definition,
+                support::fake::success_result("listed"),
+            )),
+        )
+        .expect("register base tool");
+        base
+    })
+    .native_tools()
+    .agent_activation(rustx::capabilities::AgentActivation {
+        profile: {
+            let mut profile = rustx::capabilities::AgentActivation::default().profile;
+            profile.tools.builtin = vec!["ls".to_owned(), "read".to_owned()];
+            profile.skills = Some(rustx::runtime::agent_profile::AgentSkillSelection::Exact(
+                vec!["skill-readme".into()],
+            ));
+            profile
+        },
+        ..rustx::capabilities::AgentActivation::default()
+    })
+    .workspace_fixture(|workspace| {
+        support::runtime_client_fixture::write_python_package(
+            workspace,
+            "py-echo",
+            "Echoes arguments",
+        );
+        support::runtime_client_fixture::write_skill(workspace, "skill-readme", "Reads the README");
+    })
+    .build()
+    .await;
     let host = fixture.host.clone();
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -110,7 +111,7 @@ async fn capability_projection_covers_native_python_and_skills() {
         .iter()
         .map(|tool| tool.name.as_str())
         .collect();
-    assert_eq!(names, vec!["ls", "py_echo", "read"]);
+    assert_eq!(names, vec!["ls", "read", "py_echo"]);
     let second = attachment.handle_request(RuntimeClientRequest::CapabilityGet {
         id: rustx::runtime_client::RequestId::new(2),
     });
@@ -126,7 +127,7 @@ async fn capability_projection_covers_native_python_and_skills() {
     // surfaces with its canonical Managed Python package provenance.
     assert_eq!(capabilities.tools[0].origin, ToolOrigin::Builtin);
     assert!(matches!(
-        &capabilities.tools[1].origin,
+        &capabilities.tools.iter().find(|tool| tool.name == "py_echo").unwrap().origin,
         ToolOrigin::ManagedPython { package } if package == "py-echo"
     ));
 

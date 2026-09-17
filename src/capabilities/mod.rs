@@ -71,7 +71,6 @@ pub use coordinator::{
 pub use error::{CapabilityCommitError, CapabilityPreparationError};
 pub use selected::{SelectedCapabilityPlan, SelectedMaterializationError, SelectedSourceTool};
 pub use snapshot::CapabilitySnapshot;
-pub(crate) use tools::validate_names as validate_tool_names;
 pub use tools::{AgentActivation, AvailableTool, AvailableToolCatalog, extension_provided_tool};
 
 /// The commit-boundary synchronization hook, used by the Runtime Client
@@ -80,4 +79,3 @@ pub use tools::{AgentActivation, AvailableTool, AvailableToolCatalog, extension_
 pub(crate) use coordinator::test_sync;
 
 pub(crate) use coordinator::RuntimeCapabilityPublication;
-pub mod activation;

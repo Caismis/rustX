@@ -26,7 +26,7 @@ async fn production_uv_materializes_a_managed_package_environment() {
     std::fs::write(package_root.join("requirements.txt"), "# none\n").expect("requirements");
 
     let workspace = rustx::tools::Workspace::new(directory.path()).expect("workspace");
-    let discovered = rustx::tools::python::discover_python_packages(&workspace).expect("discover");
+    let discovered = crate::common::discover_python_packages(&workspace).expect("discover");
     assert_eq!(discovered.len(), 1);
     assert_eq!(discovered[0].server_id.as_str(), "python:local-tool");
     let package = discovered[0]

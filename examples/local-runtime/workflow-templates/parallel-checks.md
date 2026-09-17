@@ -1,7 +1,7 @@
 # Fixed keyed parallel checks
 
 Copy `.agents/workflows/parallel_checks.yaml` and
-`.agents/agents/reviewer.toml` into your trusted workspace. Select your model as
+`.agents/agents/reviewer.toml` into your Workspace. Select your model as
 described in [the setup guide](README.md).
 
 Minimum project configuration:

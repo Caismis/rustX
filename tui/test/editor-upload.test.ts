@@ -51,7 +51,7 @@ it('TUI refuses an ambiguous restored edit without turn/start and retains the dr
   const draft = interleavedDraft(2);
   const original = structuredClone(draft);
   const turns: UserInputBlock[][] = [];
-  const target = { session_id: 'destination', conversation_id: 'conv-test', runtime_incarnation: '1', attachment_id: 'attachment' };
+  const target = { session_id: 'destination', conversation_id: "conv_01900000-0000-7000-8000-000000000002", runtime_incarnation: '1', attachment_id: 'attachment' };
   const client = {
     closed: undefined,
     onClose: () => () => {},

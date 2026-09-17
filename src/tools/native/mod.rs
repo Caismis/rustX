@@ -17,13 +17,10 @@
 //!
 //! The `todo` Tool is **not** an ordinary native capability and is
 //! deliberately absent from every composition below. It is contributed by the
-//! Todo Native Agent Extension
-//! ([`ExtensionToolPlane`](crate::extensions::ExtensionToolPlane)),
-//! which is why it cannot be named in `agent.tools.builtin`, `--tools`,
-//! `--exclude-tools`, a role's `tools.builtin`, or a Workflow capability
-//! selection — and why `--no-direct-tools` does not remove it. Its module lives here
-//! because this is where native Tool implementations live; ownership of its
-//! *activation* does not.
+//! closed Todo Plugin ([`ExtensionToolPlane`](crate::extensions::ExtensionToolPlane)).
+//! Ordinary Tool whitelists cannot enable or disable that Plugin; its profile
+//! must explicitly enable it. Root and named Plugins default off. The Tool's
+//! implementation lives here, while composition belongs to the Plugin owner.
 //!
 //! Read/Glob/Grep default to foreground, parallel, approval-never.
 //! Write/Edit default to foreground, sequential, approval-always.
@@ -62,7 +59,6 @@ pub(crate) use goal::registrations as goal_tool_registrations;
 mod grep;
 mod input;
 mod read;
-pub(crate) use read::TOOL_ID as READ_TOOL_ID;
 mod registration;
 // The private native-search substrate shared by Glob and Grep. It is not a
 // tool: it is never registered, never reaches the model, and exists only
@@ -747,7 +743,9 @@ mod tests {
         // And the extension plane does register it — from a *materialized*
         // Todo state owner, which is the one seam that can (Issue #259).
         let list = crate::tools::todo::ConversationTodoList::new(
-            crate::runtime::identity::ConversationId::new("conv-todo-plane"),
+            crate::runtime::identity::ConversationId::new(
+                "conv_76a81bf7-d858-7c44-81f8-d4f3684a63ef",
+            ),
         );
         let mut composed = ToolRegistry::new();
         crate::extensions::ExtensionToolPlane::of_materialized_owners(Some(&list), None)

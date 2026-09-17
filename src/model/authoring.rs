@@ -16,6 +16,7 @@ pub struct Catalog {
     #[serde(default = "version")]
     pub schema_version: u32,
     pub providers: BTreeMap<String, Provider>,
+    pub models: BTreeMap<String, Model>,
 }
 fn version() -> u32 {
     MODEL_CATALOG_SCHEMA_VERSION
@@ -26,11 +27,11 @@ pub struct Provider {
     pub base_url: String,
     /// A literal credential or an explicit $`ENV_VAR` reference. Never inferred.
     pub api_key: CredentialSource,
-    pub models: Vec<Model>,
 }
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
+    pub provider: String,
     pub id: String,
     pub protocol: ModelProtocol,
     pub context_window: u64,
@@ -91,10 +92,14 @@ impl From<Catalog> for ModelCatalogDocument {
                         ProviderDocument {
                             base_url: p.base_url,
                             api_key: p.api_key,
-                            models: p.models.into_iter().map(Into::into).collect(),
                         },
                     )
                 })
+                .collect(),
+            models: value
+                .models
+                .into_iter()
+                .map(|(name, model)| (name, model.into()))
                 .collect(),
         }
     }
@@ -102,6 +107,7 @@ impl From<Catalog> for ModelCatalogDocument {
 impl From<Model> for ModelDocument {
     fn from(value: Model) -> Self {
         Self {
+            provider: value.provider,
             id: value.id,
             protocol: value.protocol,
             context_window: value.context_window,
@@ -143,22 +149,23 @@ schema_version = 1
 [providers.p]
 base_url = "https://example.invalid/v1"
 api_key = "$NOT_CAPTURED"
-[[providers.p.models]]
+[models."p/m"]
+provider = "p"
 id = "m"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 request_params = { future = { nested = [1, "text", { new = true }] }, temperature = 0.1 }
-[providers.p.models.capabilities]
+[models."p/m".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = true
-[providers.p.models.compat]
+[models."p/m".compat]
 chat_reasoning_replay = "omit"
-[providers.p.models.reasoning]
+[models."p/m".reasoning]
 default_profile = "off"
-[providers.p.models.reasoning.profiles.off]
+[models."p/m".reasoning.profiles.off]
 enabled = false
 request_params = { vendor_reasoning = [false, { enabled = false }] }
 "#;
@@ -217,11 +224,11 @@ request_params = { vendor_reasoning = [false, { enabled = false }] }
         for (original, path) in [
             (
                 r#"{ future = { nested = [1, "text", { new = true }] }, temperature = 0.1 }"#,
-                "providers.p.models[0].request_params.items[1].when",
+                "models.p/m.request_params.items[1].when",
             ),
             (
                 "{ vendor_reasoning = [false, { enabled = false }] }",
-                "providers.p.models[0].reasoning.profiles.off.request_params.items[1].when",
+                "models.p/m.reasoning.profiles.off.request_params.items[1].when",
             ),
         ] {
             for value in [

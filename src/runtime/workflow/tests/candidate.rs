@@ -462,15 +462,10 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
         },
     )
     .unwrap();
+    let source_session = catalog.persisted_session_ids()[0].clone();
     let (session, node, _) = catalog
-        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-        .map(|(node, state)| {
-            (
-                crate::local_runtime::SessionId::new("session-1"),
-                node,
-                state,
-            )
-        })
+        .lineage(&source_session, None)
+        .map(|(node, state)| (source_session.clone(), node, state))
         .unwrap();
     let store = Arc::new(
         crate::durable::SqliteConversationStore::open(
@@ -491,7 +486,7 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
     let resources = context.resources().clone();
     let frozen_skills = resources.skill_catalog().map(str::to_owned);
     let frozen_instructions = resources.project_instructions().map(str::to_owned);
-    let invocation = serde_json::from_value(json!({"extensions": {}})).unwrap();
+    let invocation = serde_json::from_value(json!({"plugins": {}})).unwrap();
     let frozen_definition = resources.subagents().get(&profile("reviewer")).unwrap();
     let resolved = resources.resolved_agent(&profile("reviewer")).unwrap();
     let frozen = context
@@ -623,8 +618,11 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
     assert_eq!(ownership.3, &settled.workspace);
     // The staged test child owns a process but does not compose its SQLite
     // store; seed that child's normal durable allocation before preflight.
-    let child_database =
-        crate::runtime::subagent::child_conversation_store_path(&plane.runtime_root, ownership.2);
+    let child_database = crate::runtime::subagent::child_conversation_store_path(
+        &plane.runtime_root,
+        &session,
+        ownership.2,
+    );
     std::fs::create_dir_all(child_database.parent().unwrap()).unwrap();
     crate::durable::SqliteConversationStore::open(ownership.2.clone(), &child_database)
         .unwrap()

@@ -30,24 +30,31 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace B' }); await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.locator('.session-toolbar small')).toHaveText(`${fixture.workspaceB} · attached`);
     const idB = await page.locator('.session-toolbar strong').innerText();
-    await expect(page.getByRole('tab', { name: /^session-/ })).toHaveCount(2);
-    await page.getByRole('tab', { name: idA.slice(0, 16), exact: true }).click();
+    await expect(page.getByRole('tab', { name: /^ses_/ })).toHaveCount(2);
+    await page.getByRole('tab', { name: idA, exact: true }).click();
     await send('Long action in A'); await fixture.gate('finish-a');
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     // Configuration source commits cannot rewrite a running admitted attempt.
     await page.getByRole('tab', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
-    await settings.getByLabel('Workspace model', { exact: true }).selectOption('fixture/second-model');
-    await settings.getByRole('button', { name: 'Save Workspace', exact: true }).click();
-    await expect(settings.getByRole('region', { name: 'Prospective effective request', exact: true })).toContainText('fixture/second-model');
-    await expect(settings.getByRole('region', { name: 'Runtime effective request', exact: true })).toContainText('fixture/console-model');
-    await expect(settings.getByRole('region', { name: 'Frozen request', exact: true })).toContainText('fixture/console-model');
-    await settings.getByRole('button', { name: 'Reset Workspace', exact: true }).click();
-    await settings.getByRole('button', { name: 'Save Workspace', exact: true }).click();
-    await expect(settings.getByRole('region', { name: 'Prospective effective request', exact: true })).toContainText('fixture/console-model');
+    await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
+    await settings.getByRole('button', { name: 'Model', exact: true }).click();
+    await settings.getByRole('combobox', { name: 'Model', exact: true }).selectOption('fixture/second-model');
+    await settings.getByRole('button', { name: 'Save Root model', exact: true }).click();
+    await expect(settings.getByText(/Pending reload/)).toBeVisible();
+    await settings.getByRole('button', { name: 'Reload', exact: true }).click();
+    await expect(settings.getByRole('alert')).toContainText('Reload busy');
+    await expect(settings.getByRole('alert')).toContainText('remains authoritative');
+    await settings.getByRole('tab', { name: 'Effective', exact: true }).click();
+    await settings.getByRole('button', { name: 'Overview', exact: true }).click();
+    await expect(settings.getByRole('region', { name: 'Effective configuration', exact: true })).toContainText('fixture/console-model');
+    await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
+    await settings.getByRole('button', { name: 'Model', exact: true }).click();
+    await settings.getByRole('button', { name: 'Remove Root model', exact: true }).click();
+    await expect(settings.getByText(/Source saved. The loaded runtime/)).toBeVisible();
     await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 
-    await page.getByRole('tab', { name: idB.slice(0, 16), exact: true }).click(); await send('Use B while A runs');
+    await page.getByRole('tab', { name: idB, exact: true }).click(); await send('Use B while A runs');
     await expect(page.getByText('B stayed responsive.', { exact: true })).toBeVisible();
     // The actual TUI client joins the browser's server. Handoff is explicit;
     // neither client needs a private API or a second writable controller.
@@ -64,7 +71,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.locator('.session-toolbar small')).toContainText('attached');
     await remote.shutdown(); remote = undefined;
 
-    await page.getByRole('tab', { name: idA.slice(0, 16), exact: true }).click();
+    await page.getByRole('tab', { name: idA, exact: true }).click();
     await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
     await expect(page.locator('.status strong')).toHaveText('disconnected');
     await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
@@ -141,16 +148,16 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(fixture.token);
     expect(await page.locator('body').innerText()).not.toContain('fake-provider-only');
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.getByRole('tab', { name: idB.slice(0, 16), exact: true }).click();
+    await page.getByRole('tab', { name: idB, exact: true }).click();
     await page.getByRole('button', { name: 'Unload runtime', exact: true }).click();
     await expect(page.locator('.session-toolbar small')).toContainText('unloaded');
-    await page.getByLabel('Actions session-2', { exact: true }).click();
-    await page.getByRole('button', { name: 'Delete session-2', exact: true }).click();
+    await page.getByLabel(`Actions ${idB}`, { exact: true }).click();
+    await page.getByRole('button', { name: `Delete ${idB}`, exact: true }).click();
     await expect(page.getByRole('region', { name: 'Confirm Session deletion' })).toBeVisible();
     await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('"status": "deleted"');
-    await expect(page.getByRole('button', { name: 'Open session-2', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('tab', { name: /^session-/ })).toHaveCount(1);
+    await expect(page.getByRole('button', { name: `Open ${idB}`, exact: true })).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: /^ses_/ })).toHaveCount(1);
     await expect(page.locator('.session-toolbar strong')).toHaveText(idA);
     expect(readFileSync(`${fixture.workspaceA}/console-effect`, 'utf8')).toBe('x');
     expect((await fixture.control('requests')).requests).toHaveLength(8);

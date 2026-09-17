@@ -60,7 +60,7 @@ fn fixture() -> IssueFixture {
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let runtime = ConversationToolRuntime::new(
-        ConversationId::new("conv-issue86"),
+        ConversationId::new("conv_f2710279-97d1-7bb2-8e2f-9486d337458e"),
         &workspace_root,
         dir.path().join("artifacts"),
     )
@@ -139,7 +139,10 @@ async fn dispatch_big_background_bash(
         other => panic!("the accepted result is JSON: {other:?}"),
     };
     assert!(std::path::Path::new(&advertised).is_absolute());
-    assert!(advertised.ends_with("tasks/exec_1.output"), "{advertised}");
+    assert!(
+        advertised.ends_with(&format!("tasks/{execution_id}.output")),
+        "{advertised}"
+    );
     assert!(
         std::path::Path::new(&advertised).exists(),
         "the advertised path exists from the dispatch commit point on"
@@ -563,8 +566,10 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
         .expect("the accepted result advertises the live-output locator")
         .to_owned();
     assert!(std::path::Path::new(&output_path).is_absolute());
+    let execution_id: rustx::runtime::identity::ToolExecutionId =
+        serde_json::from_value(accepted["execution"]["id"].clone()).unwrap();
     assert!(
-        output_path.ends_with("tasks/exec_1.output"),
+        output_path.ends_with(&format!("tasks/{execution_id}.output")),
         "{output_path}"
     );
     assert!(
@@ -591,7 +596,6 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
         second_request.contains("Read or Grep"),
         "the provider request carries the continuation guidance"
     );
-    let execution_id = rustx::runtime::identity::ToolExecutionId::new("exec_1");
     let running = fixture
         .runtime
         .background()

@@ -33,10 +33,10 @@ pub struct InitializationResult {
     pub reason: Option<String>,
 }
 
-/// Build the two minimal documents from explicit declarations.
+/// Build the minimal CFG3 document from explicit declarations.
 /// No model capability is inferred from identity or endpoint.
 #[allow(clippy::too_many_lines)] // finite explicit template declarations, not an extensible wizard
-pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 2], String> {
+pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 1], String> {
     let mut options = BTreeMap::new();
     let mut arguments = arguments.iter();
     while let Some(flag) = arguments.next() {
@@ -119,6 +119,7 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 2], String> {
             Compat::default()
         };
         Model {
+            provider: provider.into(),
             id: required("--model-id")?.into(),
             protocol,
             context_window: number("--context-window")?,
@@ -139,6 +140,7 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 2], String> {
         .map_err(|_| "invalid model reference")?;
     let catalog = Catalog {
         schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
+        models: BTreeMap::from([(selected.to_string(), model)]),
         providers: BTreeMap::from([(
             provider.into(),
             Provider {
@@ -148,7 +150,6 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 2], String> {
                     &crate::model::catalog::ProviderId::new(provider),
                 )
                 .map_err(|_| "invalid credential reference")?,
-                models: vec![model],
             },
         )]),
     };
@@ -157,6 +158,8 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 2], String> {
         .into_bytes();
     let parsed = ModelCatalog::from_toml_slice(&bytes).map_err(|_| "invalid model declaration; check protocol, limits, capabilities, and compatibility fields")?;
     let settings = super::authoring::RuntimeLayer {
+        providers: Some(catalog.providers),
+        models: Some(catalog.models),
         agent: Some(super::authoring::AgentProfileLayer {
             model: Some(super::authoring::ModelLayer {
                 model: Some(selected),
@@ -186,18 +189,54 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 2], String> {
             (view.context_window, view.max_output_tokens),
         )
         .map_err(|_| "declared model limits cannot fit native context budgets")?;
-    Ok([bytes, settings_bytes])
+    Ok([settings_bytes])
 }
 
-pub(super) fn initialize(host: &HostEnvironment, documents: &[Vec<u8>; 2]) -> InitializationResult {
-    publish(&host.config_directory, documents, |_, _| Ok(()))
+pub(super) fn initialize(host: &HostEnvironment, documents: &[Vec<u8>; 1]) -> InitializationResult {
+    let mut result = publish(&host.config_directory, documents, |_, _| Ok(()));
+    if result.failed.is_some() || !result.conflicts.is_empty() {
+        return result;
+    }
+    let agents = host.home_directory.join("rustx/.agents");
+    for name in ["skills", "tools", "agents", "workflows"] {
+        let path = agents.join(name);
+        if let Err(error) = std::fs::create_dir_all(&path) {
+            result.failed = Some(path);
+            result.reason = Some(error.to_string());
+            return result;
+        }
+    }
+    let mcp = agents.join("mcp.toml");
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&mcp)
+    {
+        Ok(mut file) => {
+            if let Err(error) = file
+                .write_all(b"[mcp_servers]\n")
+                .and_then(|()| file.sync_all())
+            {
+                result.failed = Some(mcp);
+                result.reason = Some(error.to_string());
+            } else {
+                result.written.push(mcp);
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            result.failed = Some(mcp);
+            result.reason = Some(error.to_string());
+        }
+    }
+    result
 }
 
 /// The hook runs after complete preflight and before each publication. Tests
 /// control races/failures here with channels rather than timing assumptions.
 fn publish(
     directory: &Path,
-    documents: &[Vec<u8>; 2],
+    documents: &[Vec<u8>; 1],
     before_publish: impl FnMut(usize, &Path) -> std::io::Result<()>,
 ) -> InitializationResult {
     publish_with_writer(directory, documents, before_publish, |_, writer, bytes| {
@@ -208,14 +247,11 @@ fn publish(
 
 fn publish_with_writer(
     directory: &Path,
-    documents: &[Vec<u8>; 2],
+    documents: &[Vec<u8>; 1],
     mut before_publish: impl FnMut(usize, &Path) -> std::io::Result<()>,
     mut write_staged: impl FnMut(usize, &mut std::fs::File, &[u8]) -> std::io::Result<()>,
 ) -> InitializationResult {
-    let targets = [
-        directory.join("models.toml"),
-        directory.join("settings.toml"),
-    ];
+    let targets = [directory.join("rustx.toml")];
     let mut result = InitializationResult {
         written: Vec::new(),
         conflicts: Vec::new(),
@@ -278,25 +314,21 @@ mod tests {
         std::fs::write(&existing, b"existing user content").unwrap();
         let result = publish_with_writer(
             root.path(),
-            &[b"models".to_vec(), b"settings".to_vec()],
+            &[b"configuration".to_vec()],
             |_, _| Ok(()),
             |index, file, bytes| {
-                if index == 1 {
+                if index == 0 {
                     file.write_all(&bytes[..2])?;
                     return Err(std::io::Error::other("injected disk write failure"));
                 }
                 file.write_all(bytes)
             },
         );
-        assert_eq!(result.written, [root.path().join("models.toml")]);
-        assert_eq!(result.failed, Some(root.path().join("settings.toml")));
-        assert!(!root.path().join("settings.toml").exists());
+        assert!(result.written.is_empty());
+        assert_eq!(result.failed, Some(root.path().join("rustx.toml")));
+        assert!(!root.path().join("rustx.toml").exists());
         assert_eq!(std::fs::read(existing).unwrap(), b"existing user content");
-        assert_eq!(
-            std::fs::read(root.path().join("models.toml")).unwrap(),
-            b"models"
-        );
-        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 4); // two persistent writer locks
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2); // unrelated content and persistent writer lock
     }
 
     #[tokio::test]
@@ -304,17 +336,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("workspace");
         std::fs::create_dir(&workspace).unwrap();
-        let host =
-            HostEnvironment::from_paths(workspace, root.path().join("home"), None, None).unwrap();
+        let host = HostEnvironment::from_paths(workspace, root.path().join("home")).unwrap();
         let documents = documents(&declarations()).unwrap();
         assert_eq!(initialize(&host, &documents).written.len(), 2);
         let request = super::super::launch::LaunchRequest::default();
-        super::super::launch::change_trust(
-            &request,
-            &host,
-            super::super::launch::TrustAction::Grant,
-        )
-        .unwrap();
         let launch = super::super::launch::analyze(&request, &host)
             .unwrap()
             .admit(|| {
@@ -353,7 +378,10 @@ mod tests {
             }
             let first = documents(&flags).unwrap();
             assert_eq!(first, documents(&flags).unwrap());
-            assert!(ModelCatalog::from_toml_slice(&first[0]).is_ok());
+            assert!(
+                crate::toml_authoring::parse::<super::super::authoring::RuntimeLayer>(&first[0])
+                    .is_ok()
+            );
             let output = String::from_utf8(first[0].clone()).unwrap();
             assert!(output.contains("$RUSTX_TEST_KEY"));
             assert!(!output.contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
@@ -399,16 +427,21 @@ mod tests {
         let workspace = root.path().join("workspace");
         std::fs::create_dir(&workspace).unwrap();
         let host =
-            HostEnvironment::from_paths(workspace.clone(), root.path().join("home"), None, None)
-                .unwrap();
+            HostEnvironment::from_paths(workspace.clone(), root.path().join("home")).unwrap();
         let documents = documents(&declarations()).unwrap();
         let catalog = std::str::from_utf8(&documents[0]).unwrap();
         assert!(catalog.contains("request_params"));
         assert!(!catalog.contains("request_params_json"));
-        let authored: crate::model::authoring::Catalog =
+        let authored: super::super::authoring::RuntimeLayer =
             crate::toml_authoring::parse(&documents[0]).unwrap();
         assert!(
-            authored.providers.values().next().unwrap().models[0]
+            authored
+                .models
+                .as_ref()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()
                 .request_params
                 .0
                 .is_empty()
@@ -418,15 +451,14 @@ mod tests {
         assert_eq!(
             result.written,
             [
-                host.config_directory.join("models.toml"),
-                host.config_directory.join("settings.toml")
+                host.config_directory.join("rustx.toml"),
+                host.home_directory.join("rustx/.agents/mcp.toml")
             ]
         );
         assert!(result.failed.is_none());
         let launch =
             super::super::launch::analyze(&super::super::launch::LaunchRequest::default(), &host)
                 .unwrap();
-        assert!(!launch.trusted);
         assert!(launch.config.mcp_servers.is_empty());
         assert!(launch.managed_python.packages().is_empty());
         assert_eq!(
@@ -437,7 +469,10 @@ mod tests {
         assert!(!host.state_directory.exists());
         let repeated = initialize(&host, &documents);
         assert!(repeated.written.is_empty());
-        assert_eq!(repeated.conflicts, result.written);
+        assert_eq!(
+            repeated.conflicts,
+            [host.config_directory.join("rustx.toml")]
+        );
         for (path, expected) in result.written.iter().zip(documents) {
             assert_eq!(
                 std::fs::read(path).unwrap(),
@@ -449,14 +484,14 @@ mod tests {
     #[test]
     fn cfg235_preflight_conflict_writes_nothing_and_never_enters_publication() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("settings.toml"), "existing").unwrap();
-        let result = publish(root.path(), &[b"one".to_vec(), b"two".to_vec()], |_, _| {
+        std::fs::write(root.path().join("rustx.toml"), "existing").unwrap();
+        let result = publish(root.path(), &[b"configuration".to_vec()], |_, _| {
             panic!("preflight must stop publication")
         });
         assert!(result.written.is_empty());
         assert!(!root.path().join("models.toml").exists());
         assert_eq!(
-            std::fs::read_to_string(root.path().join("settings.toml")).unwrap(),
+            std::fs::read_to_string(root.path().join("rustx.toml")).unwrap(),
             "existing"
         );
     }
@@ -469,17 +504,13 @@ mod tests {
         std::thread::scope(|scope| {
             let directory = root.path();
             let writer = scope.spawn(move || {
-                publish(
-                    directory,
-                    &[b"models".to_vec(), b"settings".to_vec()],
-                    |index, path| {
-                        if index == 1 {
-                            entered.send(path.to_path_buf()).unwrap();
-                            resume.recv().unwrap();
-                        }
-                        Ok(())
-                    },
-                )
+                publish(directory, &[b"configuration".to_vec()], |index, path| {
+                    if index == 0 {
+                        entered.send(path.to_path_buf()).unwrap();
+                        resume.recv().unwrap();
+                    }
+                    Ok(())
+                })
             });
             let target = reached.recv().unwrap();
             std::fs::OpenOptions::new()
@@ -491,7 +522,7 @@ mod tests {
                 .unwrap();
             release.send(()).unwrap();
             let result = writer.join().unwrap();
-            assert_eq!(result.written, [directory.join("models.toml")]);
+            assert!(result.written.is_empty());
             assert_eq!(result.failed, Some(target.clone()));
             assert_eq!(result.conflicts.as_slice(), std::slice::from_ref(&target));
             assert_eq!(std::fs::read(target).unwrap(), b"racing creator");
@@ -501,24 +532,16 @@ mod tests {
     #[test]
     fn cfg235_failed_publication_preserves_prior_content_and_staged_bytes_are_not_published() {
         let root = tempfile::tempdir().unwrap();
-        let result = publish(
-            root.path(),
-            &[b"models".to_vec(), b"settings".to_vec()],
-            |index, _| {
-                if index == 1 {
-                    Err(std::io::Error::other("injected publication failure"))
-                } else {
-                    Ok(())
-                }
-            },
-        );
-        assert_eq!(result.written, [root.path().join("models.toml")]);
-        assert_eq!(
-            std::fs::read(root.path().join("models.toml")).unwrap(),
-            b"models\n"
-        );
-        assert!(!root.path().join("settings.toml").exists());
+        let result = publish(root.path(), &[b"configuration".to_vec()], |index, _| {
+            if index == 0 {
+                Err(std::io::Error::other("injected publication failure"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(result.written.is_empty());
+        assert!(!root.path().join("rustx.toml").exists());
         assert!(result.failed.is_some());
-        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 3);
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
     }
 }

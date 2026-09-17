@@ -139,10 +139,20 @@ fn draft(text: &str) -> InboundDraft {
 fn claim_mutation_race(mutation: Operation, claim_first: bool, retain_another: bool) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("pending.db");
-    let first =
-        Arc::new(SqliteConversationStore::open(ConversationId::new("race"), &path).unwrap());
-    let second =
-        Arc::new(SqliteConversationStore::open(ConversationId::new("race"), &path).unwrap());
+    let first = Arc::new(
+        SqliteConversationStore::open(
+            ConversationId::new("conv_129ce50d-d90b-7244-8587-63d3f10932a9"),
+            &path,
+        )
+        .unwrap(),
+    );
+    let second = Arc::new(
+        SqliteConversationStore::open(
+            ConversationId::new("conv_129ce50d-d90b-7244-8587-63d3f10932a9"),
+            &path,
+        )
+        .unwrap(),
+    );
     let accepted = first.accept_inbound(draft("original")).unwrap();
     if retain_another {
         first.accept_inbound(draft("retained")).unwrap();
@@ -253,7 +263,11 @@ fn assert_claim_read_models(
     }
     // Reopen to assert only committed facts survived; stale remove did not
     // delete canonical transcript state, successful remove left no phantom row.
-    let reopened = SqliteConversationStore::open(ConversationId::new("race"), path).unwrap();
+    let reopened = SqliteConversationStore::open(
+        ConversationId::new("conv_129ce50d-d90b-7244-8587-63d3f10932a9"),
+        path,
+    )
+    .unwrap();
     assert_eq!(reopened.load_canonical().unwrap(), canonical);
     assert_eq!(reopened.load_transcript_page(None, 64).unwrap(), transcript);
     assert!(reopened.load_pending().unwrap().is_empty());

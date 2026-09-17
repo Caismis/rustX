@@ -746,6 +746,10 @@ mod tests {
         tokio::task::spawn_blocking(move || gate.wait_entered())
             .await
             .unwrap();
+        let reserved: Vec<_> = std::fs::read_dir(root.path().join("sessions"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
         create.abort();
         assert!(create.await.unwrap_err().is_cancelled());
         assert!(controller.preparation.try_lock().is_err());
@@ -765,7 +769,7 @@ mod tests {
             .unwrap()
             .session;
         // The cancelled preparation's private storage cannot be reused or published.
-        assert_eq!(created.id.as_str(), "session-2");
+        assert!(!reserved.iter().any(|name| name == created.id.as_str()));
         assert_eq!(
             controller
                 .list_sessions(None, 0, 32)
@@ -808,11 +812,14 @@ mod tests {
                 catalog.list_page(None, 0, 32).unwrap(),
             )
         });
-        assert_eq!(effects, [0; 13]);
+        assert_eq!(effects, [0; 12]);
         assert_eq!(reads.1.sessions.len(), 2);
         let bytes = std::fs::read(root.path().join("sessions/catalog.json")).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["schema_version"], 9);
+        assert_eq!(
+            json["schema_version"],
+            crate::local_runtime::session::SESSION_CATALOG_SCHEMA_VERSION
+        );
         assert!(json.get("active_session").is_none());
         assert!(
             serde_json::to_value(&reads.1.sessions)
@@ -872,18 +879,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_empty_disabled_and_omitted_selections_round_trip() {
+    async fn explicit_session_model_and_omitted_default_round_trip() {
         let root = tempfile::tempdir().unwrap();
         let controller = SessionController::open(root.path()).unwrap();
         let omitted = settings(root.path());
         let mut explicit = omitted.clone();
-        explicit.tools = Some(vec![]);
-        explicit.exclude_tools = Some(vec![]);
-        explicit.no_automatic_skills = true;
-        explicit.no_builtin_tools = true;
-        explicit.no_direct_tools = true;
-        explicit.config = Some(root.path().join("project.toml"));
-        explicit.skill_paths = vec![root.path().join("skill")];
+        explicit.model = Some(crate::model::session::SessionModelConfig::of(
+            crate::model::catalog::ModelRef::parse("chosen").unwrap(),
+        ));
         let a = controller
             .create_session(omitted.clone())
             .await
@@ -987,7 +990,9 @@ mod tests {
             .unwrap()
             .session;
         let mut candidate = initial.clone();
-        candidate.tools = Some(vec![]);
+        candidate.model = Some(crate::model::session::SessionModelConfig::of(
+            crate::model::catalog::ModelRef::parse("chosen").unwrap(),
+        ));
         let (one, two) = tokio::join!(
             controller.replace_settings(&a.id, 0, candidate.clone()),
             controller.replace_settings(&a.id, 0, initial)

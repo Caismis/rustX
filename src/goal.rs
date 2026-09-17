@@ -539,8 +539,12 @@ mod tests {
     use crate::runtime::identity::ConversationId;
 
     fn fixture() -> (Arc<SqliteConversationStore>, GoalDomain) {
-        let store =
-            Arc::new(SqliteConversationStore::in_memory(ConversationId::new("goal-test")).unwrap());
+        let store = Arc::new(
+            SqliteConversationStore::in_memory(ConversationId::new(
+                "conv_d49a7973-f760-78bf-880e-0af69c0eddca",
+            ))
+            .unwrap(),
+        );
         let domain = GoalDomain::new(store.clone(), Arc::new(tokio::sync::Notify::new()));
         (store, domain)
     }
@@ -778,11 +782,11 @@ mod tests {
                     ..AgentActivation::default()
                 },
                 AgentActivation {
-                    tools: Some(vec![name.into()]),
-                    ..AgentActivation::default()
-                },
-                AgentActivation {
-                    exclude_tools: vec![name.into()],
+                    profile: {
+                        let mut profile = AgentActivation::default().profile;
+                        profile.tools.builtin = vec![name.into()];
+                        profile
+                    },
                     ..AgentActivation::default()
                 },
             ] {
@@ -790,7 +794,7 @@ mod tests {
                     policy
                         .validate()
                         .unwrap_err()
-                        .contains("extensions.goal.enabled")
+                        .contains("plugins.goal.enabled")
                 );
             }
         }
@@ -1041,7 +1045,7 @@ mod tests {
     fn goal84_file_reopen_uses_domain_even_when_goal_journal_is_removed() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("conversation.sqlite");
-        let id = ConversationId::new("persist-goal");
+        let id = ConversationId::new("conv_79ab74f6-cf62-7a14-81c8-c0ed4b54ea9d");
         let original = {
             let store = Arc::new(SqliteConversationStore::open(id.clone(), &path).unwrap());
             let domain = GoalDomain::new(store.clone(), Arc::new(tokio::sync::Notify::new()));

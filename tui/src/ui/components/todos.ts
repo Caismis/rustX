@@ -102,11 +102,11 @@ export function renderTodoInspection(
   snapshot: TodoSnapshot | undefined,
   composed = true,
 ): string {
-  // A runtime that composes no Todo extension has no task list and no `todo`
+  // A runtime that composes no Todo Plugin has no task list and no `todo`
   // tool, so "no tasks yet" would describe the wrong thing entirely: nothing
   // the agent could do would ever create one (Issue #259).
   if (!composed) {
-    return "The Todo extension is not composed for this runtime, so there is no task list and no todo tool. Enable it with extensions.todo in the launch configuration and restart.";
+    return "The Todo Plugin is off for this generation. Enable agent.plugins.todo in rustx.toml, then reload.";
   }
   if (snapshot === undefined || visibleTasks(snapshot).length === 0) {
     return "No tasks yet. The agent creates them with the todo tool as it plans multi-step work.";

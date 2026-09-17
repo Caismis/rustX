@@ -32,11 +32,13 @@ fn request_id(value: u64) -> rustx::runtime_client::RequestId {
 ///
 /// Construction is the shared Runtime Client fixture.
 async fn host() -> RuntimeClientHost {
-    support::runtime_client_fixture::RuntimeClientFixture::builder("conv-37-protocol")
-        .build()
-        .await
-        .into_parts()
-        .1
+    support::runtime_client_fixture::RuntimeClientFixture::builder(
+        "conv_ab537f72-9ee5-7ccf-989d-90fbe352ca87",
+    )
+    .build()
+    .await
+    .into_parts()
+    .1
 }
 
 /// Every envelope kind serializes deterministically and round-trips
@@ -115,7 +117,9 @@ fn protocol_errors_round_trip_with_stable_categories() {
         },
         RuntimeClientError::NoCurrentAttempt,
         RuntimeClientError::UnknownBackgroundExecution {
-            execution_id: rustx::runtime::identity::ToolExecutionId::new("exec_1"),
+            execution_id: rustx::runtime::identity::ToolExecutionId::new(
+                "exec_215a03ee-2332-70b6-8e2d-634da8066f98",
+            ),
         },
         RuntimeClientError::ResyncRequired {
             after_cursor: RuntimeClientCursor::new(1),
@@ -179,7 +183,7 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let interaction_id = InteractionId::new("interaction-questionnaire-v3");
     let request = InteractionRequest {
         id: interaction_id.clone(),
-        conversation_id: ConversationId::new("conv-questionnaire-v3"),
+        conversation_id: ConversationId::new("conv_6261dea0-82cb-7ad5-8559-9b2de4dcbfe6"),
         attempt_id: AttemptId::new("attempt-questionnaire-v3"),
         turn: 1,
         kind: InteractionKind::Questionnaire {
@@ -199,7 +203,7 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let submitted_request = RuntimeClientRequest::InteractionRespond {
         id: request_id(20),
         interaction: InteractionRef::new(
-            ConversationId::new("conv-questionnaire-v3"),
+            ConversationId::new("conv_6261dea0-82cb-7ad5-8559-9b2de4dcbfe6"),
             interaction_id.clone(),
         ),
         response: InteractionResponse::Questionnaire {
@@ -209,7 +213,7 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let declined_request = RuntimeClientRequest::InteractionRespond {
         id: request_id(21),
         interaction: InteractionRef::new(
-            ConversationId::new("conv-questionnaire-v3"),
+            ConversationId::new("conv_6261dea0-82cb-7ad5-8559-9b2de4dcbfe6"),
             interaction_id.clone(),
         ),
         response: InteractionResponse::Questionnaire {
@@ -233,7 +237,7 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
         cursor: RuntimeClientCursor::new(21),
         event: RuntimeClientEvent::InteractionSettled {
             interaction: InteractionRef::new(
-                ConversationId::new("conv-questionnaire-v3"),
+                ConversationId::new("conv_6261dea0-82cb-7ad5-8559-9b2de4dcbfe6"),
                 interaction_id.clone(),
             ),
             outcome: InteractionOutcome::Responded {
@@ -247,7 +251,7 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
         cursor: RuntimeClientCursor::new(22),
         event: RuntimeClientEvent::InteractionSettled {
             interaction: InteractionRef::new(
-                ConversationId::new("conv-questionnaire-v3"),
+                ConversationId::new("conv_6261dea0-82cb-7ad5-8559-9b2de4dcbfe6"),
                 interaction_id,
             ),
             outcome: InteractionOutcome::Responded {
@@ -352,7 +356,10 @@ async fn snapshot_dto_round_trips() {
         panic!("snapshot result");
     };
     assert_eq!(cursor, RuntimeClientCursor::new(0));
-    assert_eq!(snapshot.conversation_id().as_str(), "conv-37-protocol");
+    assert_eq!(
+        snapshot.conversation_id().as_str(),
+        "conv_ab537f72-9ee5-7ccf-989d-90fbe352ca87"
+    );
     let _ = attachment;
 }
 
@@ -373,7 +380,10 @@ async fn attachment_request_correlation_and_version_negotiation() {
     else {
         panic!("initialized");
     };
-    assert_eq!(conversation_id.as_str(), "conv-37-protocol");
+    assert_eq!(
+        conversation_id.as_str(),
+        "conv_ab537f72-9ee5-7ccf-989d-90fbe352ca87"
+    );
     assert_eq!(agent_id.as_str(), "agent-a");
     assert!(!attachment_id.as_str().is_empty());
 
@@ -394,7 +404,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
         matches!(
             host.attach(16),
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 37,
+                supported: 38,
                 requested: 16,
             })
         ),
@@ -403,7 +413,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         host.attach(24),
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 37,
+            supported: 38,
             requested: 24,
         })
     ));
@@ -411,8 +421,8 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 37,
-            requested: 38,
+            supported: 38,
+            requested: 39,
         })
     ));
     // v28 is the immediately previous contract (Issue #255's crash-safe
@@ -426,7 +436,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_todo_extension,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 37,
+            supported: 38,
             requested: 28,
         })
     ));
@@ -435,7 +445,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_session_deletion,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 37,
+            supported: 38,
             requested: 27,
         })
     ));
@@ -447,7 +457,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_profile_digest,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 37,
+            supported: 38,
             requested: 26,
         })
     ));
@@ -458,7 +468,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_effective_extensions,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 37,
+            supported: 38,
             requested: 25,
         })
     ));
@@ -466,7 +476,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 37,
+            supported: 38,
             requested: 7,
         })
     ));
@@ -480,7 +490,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         interrupted_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 37,
+            supported: 38,
             requested: 15,
         })
     ));
@@ -493,7 +503,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_disposal,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 37,
+            supported: 38,
             requested: 14,
         })
     ));
@@ -506,7 +516,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         latest_only_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 37,
+            supported: 38,
             requested: 13,
         })
     ));
@@ -516,7 +526,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 37,
+            supported: 38,
             requested: 6,
         })
     ));
@@ -528,7 +538,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_workspace_boundary,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 37,
+            supported: 38,
             requested: 12,
         })
     ));
@@ -793,7 +803,7 @@ fn number_question_at_two_pow_63() -> InteractionRequest {
     let bound = FiniteNumber::try_new(9_223_372_036_854_775_808.0).expect("2^63 is finite");
     InteractionRequest {
         id: InteractionId::new("interaction-number-v24"),
-        conversation_id: ConversationId::new("conv-number-v24"),
+        conversation_id: ConversationId::new("conv_cbeb5dbf-dec8-7a50-840e-8eadce597bba"),
         attempt_id: AttemptId::new("attempt-number-v24"),
         turn: 1,
         kind: InteractionKind::Questionnaire {

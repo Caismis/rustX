@@ -909,7 +909,7 @@ mod tests {
 
     #[tokio::test]
     async fn approval_mode_changes_only_the_effective_approval_decision() {
-        let conversation_id = ConversationId::new("approval-policy-conversation");
+        let conversation_id = ConversationId::new("conv_6ae353db-f482-746d-8f8d-b42ad2fef7a7");
         let attempt_id = AttemptId::new("approval-policy-attempt");
         let call_id = crate::tools::types::ToolInvocationId::Agent {
             call_id: ToolCallId::new("approval-policy-call"),

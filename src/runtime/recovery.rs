@@ -74,7 +74,7 @@
 //! [`ConversationStore`] evidence. The store exposes semantic durable facts
 //! and semantic transactions; it never decides whether an ambiguous request is
 //! safe to replay. Nothing here reads a Runtime Client snapshot, a TUI cache,
-//! an attachment state, current Skill discovery, current `models.toml`, or a
+//! an attachment state, current Skill discovery, current `rustx.toml`, or a
 //! regenerated dynamic context: current configuration configures **future**
 //! work and may never fill a hole in **historical** work. The evidence fold
 //! itself never reads the current filesystem; the explicit isolated-workspace
@@ -329,6 +329,8 @@ struct ToolRepairEvidence {
 /// terminal publication is not committed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackgroundEvidence {
+    /// Durable event sequence is the semantic acceptance order.
+    pub sequence: u64,
     /// The detached execution identity.
     pub execution_id: ToolExecutionId,
     /// The model-issued tool call it belongs to.
@@ -515,7 +517,6 @@ pub struct RecoveryEvidence {
     highest_attempt_ordinal: Option<u64>,
     /// The highest background execution ordinal that entered durable
     /// authority, published or not.
-    highest_background_ordinal: u64,
     /// The highest subagent ordinal that entered durable authority,
     /// published or not.
     highest_subagent_ordinal: u64,
@@ -582,7 +583,6 @@ impl RecoveryEvidence {
             assistant_attempts: BTreeMap::new(),
             active_ids: std::collections::BTreeSet::new(),
             highest_attempt_ordinal: None,
-            highest_background_ordinal: 0,
             highest_subagent_ordinal: 0,
             saw_any_attempt: false,
             unanswered_adopted_turn: None,
@@ -628,6 +628,9 @@ impl RecoveryEvidence {
             }
         }
         evidence.unsettled_background = background.into_values().collect();
+        evidence
+            .unsettled_background
+            .sort_by_key(|entry| entry.sequence);
         evidence.unsettled_subagents = subagents.into_values().collect();
         evidence.settled_subagent_handoffs = settled_subagent_handoffs.into_values().collect();
         evidence.settled_subagent_disposals = settled_subagent_disposals.into_values().collect();
@@ -919,12 +922,10 @@ impl RecoveryEvidence {
                 tool_id,
                 tool_name,
             } => {
-                if let Some(ordinal) = execution_id.background_ordinal() {
-                    self.highest_background_ordinal = self.highest_background_ordinal.max(ordinal);
-                }
                 background.insert(
                     execution_id.clone(),
                     BackgroundEvidence {
+                        sequence: envelope.sequence,
                         execution_id: execution_id.clone(),
                         tool_call_id: tool_call_id.clone(),
                         tool_id: tool_id.clone(),
@@ -933,9 +934,6 @@ impl RecoveryEvidence {
                 );
             }
             RuntimeEvent::BackgroundTerminalPublished { execution_id, .. } => {
-                if let Some(ordinal) = execution_id.background_ordinal() {
-                    self.highest_background_ordinal = self.highest_background_ordinal.max(ordinal);
-                }
                 // The terminal publication is absorbing.
                 background.remove(execution_id);
             }
@@ -1279,12 +1277,6 @@ impl RecoveryEvidence {
         self.highest_attempt_ordinal
             .map_or(0, |seen| seen.saturating_add(1))
     }
-
-    /// The highest background execution ordinal in durable authority.
-    #[must_use]
-    pub fn highest_background_ordinal(&self) -> u64 {
-        self.highest_background_ordinal
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1464,7 +1456,6 @@ pub struct RecoveryPlan {
     tool_repairs: Vec<ToolTurnRepair>,
     resume: ResumeDisposition,
     next_attempt_ordinal: u64,
-    highest_background_ordinal: u64,
     highest_subagent_ordinal: u64,
     pending_inbound: usize,
     /// Every durably non-terminal attempt the fold observed.
@@ -1596,7 +1587,6 @@ impl RecoveryPlan {
             tool_repairs,
             resume,
             next_attempt_ordinal: evidence.next_attempt_ordinal(),
-            highest_background_ordinal: evidence.highest_background_ordinal,
             highest_subagent_ordinal: evidence.highest_subagent_ordinal,
             pending_inbound: evidence.pending.len(),
             unsettled_attempts: evidence.unsettled_attempts.keys().cloned().collect(),
@@ -1942,7 +1932,6 @@ impl RecoveryPlan {
             resume: self.resume,
             reconciliation: committed,
             next_attempt_ordinal: self.next_attempt_ordinal,
-            highest_background_ordinal: self.highest_background_ordinal,
             highest_subagent_ordinal: self.highest_subagent_ordinal,
             pending_inbound: self.pending_inbound,
         })
@@ -2432,7 +2421,6 @@ pub struct RecoveryReport {
     resume: ResumeDisposition,
     reconciliation: RecoveryReconciliation,
     next_attempt_ordinal: u64,
-    highest_background_ordinal: u64,
     highest_subagent_ordinal: u64,
     pending_inbound: usize,
 }
@@ -2498,12 +2486,6 @@ impl RecoveryReport {
     #[must_use]
     pub fn next_attempt_ordinal(&self) -> u64 {
         self.next_attempt_ordinal
-    }
-
-    /// The highest background execution ordinal already in durable authority.
-    #[must_use]
-    pub fn highest_background_ordinal(&self) -> u64 {
-        self.highest_background_ordinal
     }
 
     /// The highest subagent ordinal already in durable authority (Issue #60).
@@ -2589,7 +2571,7 @@ mod tests {
     };
 
     fn conversation() -> ConversationId {
-        ConversationId::new("conv-fold")
+        ConversationId::new("conv_b4bf36b3-fe89-7282-83a6-4765bd5a7016")
     }
 
     fn attempt(ordinal: u64) -> AttemptId {
@@ -2626,7 +2608,6 @@ mod tests {
             assistant_attempts: BTreeMap::new(),
             active_ids: std::collections::BTreeSet::new(),
             highest_attempt_ordinal: None,
-            highest_background_ordinal: 0,
             highest_subagent_ordinal: 0,
             saw_any_attempt: false,
             unanswered_adopted_turn: None,
@@ -2651,6 +2632,9 @@ mod tests {
             );
         }
         evidence.unsettled_background = background.into_values().collect();
+        evidence
+            .unsettled_background
+            .sort_by_key(|entry| entry.sequence);
         evidence.unsettled_subagents = subagents.into_values().collect();
         evidence.settled_subagent_handoffs = settled_subagent_handoffs.into_values().collect();
         evidence.settled_subagent_disposals = settled_subagent_disposals.into_values().collect();
@@ -2689,7 +2673,10 @@ mod tests {
             RuntimeEvent::SubagentOwnershipCommitted {
                 subagent_id: subagent_id.clone(),
                 child_agent_id: child_agent_id.clone(),
-                child_conversation_id: ConversationId::new(subagent_id.as_str()),
+                child_conversation_id:
+                    crate::scripted_suites::common::identity::child_conversation_id(
+                        subagent_id.as_str(),
+                    ),
                 tool_call_id: ToolCallId::new("call-child"),
                 agent: "worker".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
@@ -2846,7 +2833,10 @@ mod tests {
             RuntimeEvent::SubagentOwnershipCommitted {
                 subagent_id: subagent_id.clone(),
                 child_agent_id: child_agent_id.clone(),
-                child_conversation_id: ConversationId::new(subagent_id.as_str()),
+                child_conversation_id:
+                    crate::scripted_suites::common::identity::child_conversation_id(
+                        subagent_id.as_str(),
+                    ),
                 tool_call_id: ToolCallId::new("call-child"),
                 agent: "worker".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
@@ -2922,7 +2912,10 @@ mod tests {
             RuntimeEvent::SubagentOwnershipCommitted {
                 subagent_id: subagent_id.clone(),
                 child_agent_id: child_agent_id.clone(),
-                child_conversation_id: ConversationId::new(subagent_id.as_str()),
+                child_conversation_id:
+                    crate::scripted_suites::common::identity::child_conversation_id(
+                        subagent_id.as_str(),
+                    ),
                 tool_call_id: ToolCallId::new("call-child"),
                 agent: "worker".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),

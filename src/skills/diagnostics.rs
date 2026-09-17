@@ -20,8 +20,8 @@
 //! Shadowed               a higher-precedence source won the same identity
 //! ```
 //!
-//! Severity is deliberately separate from cause: a missing `~/.agents/skills`
-//! and an intentional workspace-over-global shadow are ordinary
+//! Severity is deliberately separate from cause: a missing `~/rustx/.agents/skills`
+//! and an intentional Workspace-over-User shadow are ordinary
 //! [`SkillDiagnosticSeverity::Fact`]s, while an excluded package is a
 //! [`SkillDiagnosticSeverity::Warning`]. Nothing here is a launch failure.
 
@@ -49,17 +49,18 @@ pub enum SkillDiagnosticSeverity {
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum SkillDiagnostic {
-    /// A configured automatic source root does not exist. This is the normal
-    /// state of a machine without global Skills and is never a failure.
+    /// A fixed User or Workspace source root does not exist. This is the normal
+    /// state of a machine without User Skills and is never a failure.
     SourceRootMissing {
         /// The source whose root is absent.
         source: SkillSource,
         /// The resolved root path.
         root: String,
     },
-    /// A configured automatic source root exists but cannot be used as a
-    /// Skill collection directory. The source contributes no packages; every
-    /// other source is unaffected.
+    /// A fixed User or Workspace source root exists but cannot be used as a
+    /// Skill collection directory. It contributes no packages. An unreadable
+    /// Workspace collection also withholds lower User candidates because their
+    /// shadow status cannot be established.
     SourceRootInvalid {
         /// The source whose root is unusable.
         source: SkillSource,
@@ -69,19 +70,14 @@ pub enum SkillDiagnostic {
         #[serde(skip)]
         detail: String,
     },
-    /// One source offered more candidate packages than its cumulative budget
-    /// allows, so it contributes nothing.
-    ///
-    /// The budget belongs to the logical *source*, not to any single root (see
-    /// [`MAX_SOURCE_SKILL_PACKAGES`](crate::skills::package::MAX_SOURCE_SKILL_PACKAGES)),
-    /// so the count is the source's total and the exclusion applies to the
-    /// whole source. Every other source is unaffected. Enumeration is separated
-    /// from validation upstream, so this decision is a function of the source
-    /// alone and never of the order its roots were configured in.
+    /// One fixed User or Workspace collection exceeded its candidate budget.
+    /// Enumeration is bounded before package validation. The collection contributes
+    /// nothing; an over-budget Workspace collection also withholds lower candidates
+    /// whose shadow status cannot be established.
     SourceBudgetExceeded {
         /// The source whose cumulative budget was exhausted.
         source: SkillSource,
-        /// Every root configured for that source, in canonical order.
+        /// The fixed collection root, represented in canonical order.
         roots: Vec<String>,
         /// The source's total candidate count.
         candidates: usize,

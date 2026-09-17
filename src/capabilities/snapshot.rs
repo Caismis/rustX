@@ -227,13 +227,14 @@ impl CapabilitySnapshot {
     #[must_use]
     pub fn skill_catalog(&self) -> Option<String> {
         let entries = self.model_skill_entries();
-        (!entries.is_empty()).then(|| crate::skills::render_skill_catalog(entries))
+        (!entries.is_empty())
+            .then(|| crate::skills::render_skill_catalog(entries, self.skills.roots()))
     }
 
-    /// Lazy Skill metadata usable under this domain's frozen Tool authority.
+    /// Exact profile-selected Skill metadata, independent of Tool selection.
     #[must_use]
     pub fn model_skill_entries(&self) -> &[crate::skills::SkillCatalogEntry] {
-        crate::skills::admitted_skill_entries(&self.selected_skill_entries, &self.tool_registry)
+        &self.selected_skill_entries
     }
 
     /// The deterministic `CapabilitiesManifest` data of this snapshot.

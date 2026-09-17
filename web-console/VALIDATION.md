@@ -1,3 +1,11 @@
+# Historical Web validation records (before CFG3)
+
+This file preserves dated evidence from earlier Web issues. Its configuration,
+trust, protocol and UI ownership statements describe those historical commits,
+not the current product. CFG3 supersedes them. For current contracts and validation,
+use [configuration](../docs/configuration.md), [Web Settings](../docs/web-settings.md),
+[conformance](CONFORMANCE.md) and [CFG3 validation](../docs/cfg3-validation.md).
+
 # WEB-10 / #313 final Full Web acceptance — 2026-09-16
 
 See [CONFORMANCE.md](CONFORMANCE.md) for the contract-to-test map and
@@ -977,7 +985,7 @@ when the replaceable snapshot has not projected an Attempt yet.
 5. `SessionController::copy_lineage` reads the exact immutable Surface cut and
    retains allocation access. Source appends do not alter that cut. Independent
    Fork neither unloads nor replaces the source and remains allowed.
-6. `compact_context` rejects current Attempt, manual compaction, resource reload,
+6. `compact_context` rejects current Attempt, manual compaction, configuration reload,
    lifecycle/durability conflicts, but intentionally does not reject pending inbox
    entries. It owns the Conversation while maintenance runs. `/compact` therefore
    has `no-attempt` availability, not the stronger lineage-switch condition.

@@ -166,14 +166,11 @@ struct CoordinatorInner {
     /// The mutex is held only across the synchronous store construction
     /// (a bounded `create_dir_all` sequence) — never across `.await`.
     python_store: Mutex<Option<PythonToolStore>>,
-    /// The extension-provided Tool registrations of the frozen composition
-    /// (Issue #259).
-    ///
-    /// Composed once at construction and never replaced: this is the whole
-    /// reason a resource reload cannot hot-install or hot-remove a
-    /// Tool-providing extension. Every candidate — full preparation,
-    /// base-only, and selected-only — composes exactly this set on top of its
-    /// own ordinary selection.
+    /// Closed Plugin Tool registrations backed by this conversation's domain owners.
+    /// The owner-backed registration set is stable. Each candidate's resolved
+    /// profile independently selects explicitly enabled Plugins from that set;
+    /// configuration reload can change that selection at the safe publication
+    /// boundary without replacing Todo/Goal current state.
     extension_tools: crate::extensions::ExtensionToolPlane,
     environment_store: EnvironmentStore,
     state: Mutex<CoordinatorState>,
@@ -296,7 +293,7 @@ pub struct CapabilityCoordinator {
 }
 
 /// The unforgeable capability-publication authority held by a live
-/// `ConversationRuntime`. A runtime resource reload must present this token
+/// `ConversationRuntime`. A runtime configuration reload must present this token
 /// to advance the capability generation; ordinary callers only retain the
 /// standalone coordinator commit API.
 pub(crate) struct RuntimeCapabilityPublication {
@@ -339,7 +336,7 @@ pub struct CapabilityResourceInputs {
 ///
 /// **Exception.** A commit made by the claiming `ConversationRuntime`
 /// (see [`CapabilityCoordinator::commit_runtime`]) fires no callback at
-/// all. That commit is one half of a runtime resource reload, and the
+/// all. That commit is one half of a runtime configuration reload, and the
 /// runtime publishes the whole generation — capability, availability, and
 /// resources — as a single observation. Firing here as well would let a
 /// consumer fold the capability half on its own and briefly present a
@@ -388,21 +385,6 @@ pub struct PreparedCapabilityCandidate {
     /// the candidate until `commit` transfers them into the coordinator's
     /// published generation state.
     mcp_runtimes: Vec<McpRuntimeGeneration>,
-    /// The MCP servers whose **last-known-good capability generation** this
-    /// candidate carries forward unchanged because the refresh that would
-    /// have replaced it did not produce a complete validated generation
-    /// (Issue #205).
-    ///
-    /// Capability knowledge and transport availability are different facts.
-    /// A refresh that cannot reach a server proves the transport is
-    /// currently unavailable; it proves nothing about the catalog the server
-    /// published when it was last validated. The candidate therefore reuses
-    /// exactly the registrations the authoritative snapshot already carries
-    /// for these servers — never a partial or re-derived subset — and commit
-    /// retains their published physical generation instead of retiring it.
-    /// A carried-forward server contributes no epoch to `mcp_epochs`: its
-    /// knowledge is deliberately not being revalidated by this candidate.
-    mcp_carried_forward: std::collections::BTreeSet<McpServerId>,
     /// The effective MCP server set of this candidate: the configured
     /// bindings plus the synthesized managed-Python-package bindings (Issue
     /// #174). The committed snapshot freezes this set for the subagent
@@ -411,13 +393,39 @@ pub struct PreparedCapabilityCandidate {
     /// publishes back as the coordinator's authoritative reload state.
     effective_mcp_servers: crate::tools::mcp::McpServerBindings,
     resource_inputs: CapabilityResourceInputs,
-    /// Explicit runtime-resource reload must publish the candidate registry
+    /// Explicit runtime-configuration reload must publish the candidate registry
     /// even when model-facing definitions are byte-identical: executor
     /// configuration is not represented by those definitions.
     force_publish: bool,
 }
 
 impl PreparedCapabilityCandidate {
+    /// An admission-local view; the caller retains this candidate until the
+    /// child has frozen its materialization or the Workflow has settled.
+    pub(crate) fn admitted_snapshot(
+        &self,
+        invoking: &CapabilitySnapshot,
+    ) -> Arc<CapabilitySnapshot> {
+        Arc::new(
+            CapabilitySnapshot::new(
+                invoking.conversation_id().clone(),
+                invoking.workspace_root().to_path_buf(),
+                invoking.revision(),
+                Arc::clone(&self.candidate_registry),
+                Arc::clone(&self.available_tools),
+                Arc::clone(&self.skills),
+                self.python.clone(),
+                self.node.clone(),
+                self.effective_environment.clone(),
+                Arc::new(McpRuntimeLeaseAuthority::from_generations(
+                    &self.mcp_runtimes,
+                )),
+                Arc::new(self.effective_mcp_servers.clone()),
+            )
+            .with_resolved_profile(invoking.resolved_profile().cloned().map(Arc::new)),
+        )
+    }
+
     /// Attach the same frozen child semantics whose exact definitions the
     /// selected-only materializer realized. No activation/discovery runs here.
     pub(crate) fn with_frozen_child(
@@ -649,11 +657,11 @@ impl CapabilityCoordinator {
         }
         let mcp_servers = config.mcp_servers;
         let initial_availability = mcp_servers
-            .iter()
-            .map(|(id, binding)| {
+            .keys()
+            .map(|id| {
                 (
                     ToolSourceId::Mcp(id.clone()),
-                    CapabilitySourceState::before_preparation(binding.activation),
+                    CapabilitySourceState::Unprepared,
                 )
             })
             .chain(
@@ -921,11 +929,12 @@ impl CapabilityCoordinator {
         if let Some(pause) = pause {
             pause.park().await;
         }
-        self.prepare_candidate_from_inputs(inputs, false, base_revision, discovered)
+        self.prepare_candidate_from_inputs(inputs, false, base_revision, discovered, None)
             .await
     }
 
     /// Prepares a complete candidate from explicit reload-time inputs.
+    #[cfg(test)]
     pub(crate) async fn prepare_candidate_with_inputs(
         &self,
         inputs: CapabilityResourceInputs,
@@ -936,8 +945,85 @@ impl CapabilityCoordinator {
             .lock()
             .expect("capability state lock poisoned")
             .revision;
-        self.prepare_candidate_from_inputs(inputs, true, base_revision, None)
+        self.prepare_candidate_from_inputs(inputs, true, base_revision, None, None)
             .await
+    }
+
+    /// Reload uses the single source capture made by the configuration owner.
+    pub(crate) async fn prepare_reload_capture(
+        &self,
+        inputs: CapabilityResourceInputs,
+        discovered: crate::skills::SkillDiscoveryOutcome,
+    ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
+        let revision = self.current_snapshot().revision();
+        self.prepare_candidate_from_inputs(inputs, true, revision, Some(discovered), None)
+            .await
+    }
+
+    /// Materializes finite child/Workflow demand from an admitted generation.
+    /// This candidate never publishes to the Root runtime and never rereads files.
+    pub(crate) async fn prepare_admitted_sources(
+        &self,
+        resources: &crate::runtime::resources::RuntimeResourceSnapshot,
+        sources: std::collections::BTreeSet<ToolSourceId>,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
+    ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
+        let capability = resources.capability();
+        let skills = capability.skills();
+        let base = ToolRegistry::from_registrations(
+            capability
+                .available_tools()
+                .registrations()
+                .iter()
+                .filter(|entry| entry.definition.origin.source().is_none())
+                .cloned(),
+        )
+        .map_err(|error| CapabilityPreparationError::ToolActivation(error.to_string()))?;
+        let python = resources.managed_python_catalog().clone();
+        let python_ids: std::collections::BTreeSet<_> = python
+            .packages()
+            .keys()
+            .map(crate::tools::mcp::source_server_id)
+            .collect();
+        let inputs = CapabilityResourceInputs {
+            source_demand: super::source::ToolSourceDemand::new(sources, python),
+            base_tool_registry: Arc::new(base),
+            agent_activation: AgentActivation::default(),
+            skill_discovery: SkillDiscoveryConfig::default(),
+            mcp_servers: capability
+                .mcp_servers()
+                .iter()
+                .filter(|(id, _)| !python_ids.contains(*id))
+                .map(|(id, binding)| (id.clone(), binding.clone()))
+                .collect(),
+            base_environment: crate::tools::environment::ToolEnvironment::from_authorized(
+                capability
+                    .effective_environment()
+                    .authorized_entries()
+                    .iter()
+                    .cloned(),
+            )
+            .expect("published Tool environment was validated"),
+        };
+        let discovered = crate::skills::SkillDiscoveryOutcome {
+            invalid: Vec::new(),
+            roots: skills.roots().to_vec(),
+            packages: skills
+                .packages()
+                .iter()
+                .map(|package| (**package).clone())
+                .collect(),
+            provenance: skills.provenance().to_vec(),
+            diagnostics: skills.diagnostics().to_vec(),
+        };
+        self.prepare_candidate_from_inputs(
+            inputs,
+            false,
+            capability.revision(),
+            Some(discovered),
+            Some(cancellation),
+        )
+        .await
     }
 
     #[allow(clippy::too_many_lines)]
@@ -947,6 +1033,7 @@ impl CapabilityCoordinator {
         force_publish: bool,
         base_revision: CapabilityRevision,
         discovered: Option<crate::skills::SkillDiscoveryOutcome>,
+        cancellation: Option<&crate::runtime::cancellation::CancellationSignal>,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
         // Shared EnvironmentStore work is not cancelled by one conversation,
         // but a claimed conversation still counts the preparation owner
@@ -978,7 +1065,7 @@ impl CapabilityCoordinator {
             Some(discovered) => discovered,
             None => {
                 SkillDiscovery::with_config(&self.inner.workspace, inputs.skill_discovery.clone())
-                    .discover()?
+                    .discover()
             }
         };
         let merged = merge_dependency_manifests(&discovered.packages)?;
@@ -1021,7 +1108,7 @@ impl CapabilityCoordinator {
         let mut effective_mcp_servers = inputs.mcp_servers.clone();
         let mut rejected_sources: Vec<(McpServerId, String)> = Vec::new();
         for (server_id, outcome) in self
-            .prepare_python_packages(&inputs.source_demand, &mut availability)
+            .prepare_python_packages(&inputs.source_demand, &mut availability, cancellation)
             .await?
         {
             match outcome {
@@ -1053,27 +1140,20 @@ impl CapabilityCoordinator {
         let mut mcp_tools = Vec::new();
         let mut mcp_epochs = BTreeMap::new();
         let mut mcp_runtimes = Vec::new();
-        let mut mcp_carried_forward = std::collections::BTreeSet::new();
         // `BTreeMap` iteration is the deterministic identity order.
         for (server_id, binding) in &effective_mcp_servers {
             let source_id = python_source_bindings
                 .get(server_id)
                 .cloned()
                 .unwrap_or_else(|| ToolSourceId::Mcp(server_id.clone()));
-            if binding.activation.admit().is_err() {
-                availability.insert(
-                    source_id.clone(),
-                    CapabilitySourceState::Inactive {
-                        activation: binding.activation,
-                    },
-                );
-                continue;
-            }
             if !inputs.source_demand.sources.contains(&source_id) {
                 availability.insert(source_id, CapabilitySourceState::Unprepared);
                 continue;
             }
-            match self.prepare_mcp_server(server_id, binding, None).await {
+            match self
+                .prepare_mcp_server(server_id, binding, cancellation)
+                .await
+            {
                 Ok((epoch, generation, tools)) => {
                     mcp_epochs.insert(server_id.clone(), epoch);
                     mcp_tools.extend(crate::tools::mcp::definitions_owned_for_source(
@@ -1087,16 +1167,6 @@ impl CapabilityCoordinator {
                     availability.insert(source_id.clone(), CapabilitySourceState::Ready);
                 }
                 Err(reason) => {
-                    // Publish-on-success (Issue #205): a refresh that did not
-                    // produce a complete validated generation never replaces
-                    // the authoritative one. When this server already has a
-                    // published last-known-good generation **for exactly this
-                    // binding**, the candidate reuses it verbatim; otherwise
-                    // the source contributes nothing at all.
-                    if let Some(carried) = self.published_mcp_registrations(server_id, binding) {
-                        mcp_carried_forward.insert(server_id.clone());
-                        discovered_tools.extend(carried);
-                    }
                     availability.insert(
                         source_id.clone(),
                         CapabilitySourceState::unavailable(reason),
@@ -1139,7 +1209,6 @@ impl CapabilityCoordinator {
             mcp_epochs,
             availability,
             mcp_runtimes,
-            mcp_carried_forward,
             effective_mcp_servers,
             resource_inputs: inputs,
             force_publish,
@@ -1162,6 +1231,7 @@ impl CapabilityCoordinator {
         &self,
         demand: &super::source::ToolSourceDemand,
         availability: &mut CapabilityAvailability,
+        cancellation: Option<&crate::runtime::cancellation::CancellationSignal>,
     ) -> Result<
         Vec<(
             McpServerId,
@@ -1187,25 +1257,26 @@ impl CapabilityCoordinator {
                 },
             );
         }
-        let selected: std::collections::BTreeSet<_> = packages
+        let discovered: Vec<_> = demand
+            .managed_python
+            .packages()
             .iter()
-            .filter(|(_, source)| demand.sources.contains(source))
-            .map(|(id, _)| id.clone())
+            .filter(|(source, _)| demand.sources.contains(*source))
+            .map(
+                |(source, outcome)| crate::tools::python::DiscoveredPythonPackage {
+                    server_id: crate::tools::mcp::source_server_id(source),
+                    outcome: outcome.clone(),
+                },
+            )
             .collect();
-        if selected.is_empty() {
-            return Ok(Vec::new());
-        }
-        let discovered =
-            crate::tools::python::discover_admitted_python_packages(&self.inner.workspace, |id| {
-                selected.contains(id)
-            })
-            .map_err(|error| {
-                CapabilityPreparationError::Mcp(format!(
-                    "Python tool package discovery failed: {error}"
-                ))
-            })?;
         if discovered.is_empty() {
             return Ok(Vec::new());
+        }
+        if discovered.iter().all(|entry| entry.outcome.is_err()) {
+            return Ok(discovered
+                .into_iter()
+                .map(|entry| (entry.server_id, Err(entry.outcome.unwrap_err().to_string())))
+                .collect());
         }
         let store = match self.python_store() {
             Ok(store) => store,
@@ -1231,7 +1302,12 @@ impl CapabilityCoordinator {
             let outcome = match entry.outcome {
                 Err(error) => Err(error.to_string()),
                 Ok(package) => match store
-                    .ensure_prepared(&package, &self.inner.preparation_cancellation.child())
+                    .ensure_prepared(
+                        &package,
+                        &cancellation
+                            .unwrap_or(&self.inner.preparation_cancellation)
+                            .child(),
+                    )
                     .await
                 {
                     Ok(prepared) => Ok(prepared.server_binding()),
@@ -1298,10 +1374,6 @@ impl CapabilityCoordinator {
     > {
         #[cfg(test)]
         self.inner.mcp_preparations.fetch_add(1, Ordering::Relaxed);
-        binding
-            .activation
-            .admit()
-            .map_err(|reason| format!("source {server_id}: {reason}"))?;
         let generation = self
             .connect_conversation_owned(server_id, binding, preparation_cancellation)
             .await
@@ -1415,7 +1487,6 @@ impl CapabilityCoordinator {
             mcp_runtimes: Vec::new(),
             // A base-only candidate has no MCP source at all, so there is
             // nothing to carry forward.
-            mcp_carried_forward: std::collections::BTreeSet::new(),
             // The base-only candidate connects nothing; its effective server
             // set is the configured one, exactly as before.
             effective_mcp_servers: inputs.mcp_servers.clone(),
@@ -1590,92 +1661,12 @@ impl CapabilityCoordinator {
             // A child composition has no prior authoritative generation to
             // carry forward: its frozen selected set is required, so a
             // failure is a preparation error rather than a degraded catalog.
-            mcp_carried_forward: std::collections::BTreeSet::new(),
             // The frozen selected set IS the effective set: the child's
             // composition never learns about any other server.
             effective_mcp_servers: inputs.mcp_servers.clone(),
             resource_inputs: inputs,
             force_publish: false,
         })
-    }
-
-    /// The authoritative snapshot's registrations for one MCP server, when
-    /// that server currently has a published last-known-good capability
-    /// generation **that was validated under exactly the binding this
-    /// candidate is preparing** (Issue #205).
-    ///
-    /// # Carry-forward requires binding identity
-    ///
-    /// A server identity is *not* sufficient identity for this fallback. The
-    /// registrations reused here carry their executors, and those executors
-    /// dispatch through the connection the published generation established
-    /// — a connection negotiated from the *published* binding. Reusing them
-    /// under a different binding would publish a snapshot whose authoritative
-    /// metadata says `S -> B2` while every executor of `S` still talks to
-    /// `B1`: a split-brain authority in which endpoint, executable,
-    /// environment, headers, credentials, cwd, and every policy field of the
-    /// published binding disagree with the transport that actually runs the
-    /// call.
-    ///
-    /// ```text
-    /// published S/B1/G1, candidate S/B1, refresh fails => G1 carried forward
-    /// published S/B1/G1, candidate S/B2, refresh fails => nothing carried
-    /// ```
-    ///
-    /// The comparison is the domain equality of
-    /// [`crate::tools::mcp::McpServerBinding`] against
-    /// the authoritative frozen binding set of the published snapshot, so it
-    /// covers every execution-relevant field the type represents — never a
-    /// digest, a tool definition, or a `tools/list` result standing in for
-    /// one.
-    ///
-    /// When the binding is unchanged the registrations are reused
-    /// **verbatim**, executors included: those executors are bound to the
-    /// server's stable connection owner, so the carried-forward generation
-    /// keeps working the moment a replacement transport can be established,
-    /// without any capability republication. Nothing here re-derives,
-    /// filters, or partially reconstructs a catalog: a carried-forward
-    /// generation is exactly the one that was validated when it was
-    /// published.
-    fn published_mcp_registrations(
-        &self,
-        server_id: &McpServerId,
-        binding: &crate::tools::mcp::McpServerBinding,
-    ) -> Option<Vec<ToolRegistration>> {
-        let snapshot = self
-            .inner
-            .state
-            .lock()
-            .expect("capability state lock poisoned")
-            .snapshot
-            .clone();
-        // The publication linearization point: the snapshot carries the
-        // frozen binding set its generation was validated under, so the
-        // binding compared here is the one the published executors actually
-        // negotiated — never the currently configured desired state.
-        if snapshot.mcp_servers().get(server_id) != Some(binding) {
-            return None;
-        }
-        let carried: Vec<ToolRegistration> = snapshot
-            .available_tools()
-            .registrations()
-            .iter()
-            .filter(|&registration| {
-                registration
-                    .definition
-                    .origin
-                    .source()
-                    .is_some_and(|source| {
-                        crate::tools::mcp::source_server_id(&source) == *server_id
-                    })
-            })
-            .cloned()
-            .collect();
-        if carried.is_empty() {
-            None
-        } else {
-            Some(carried)
-        }
     }
 
     /// Connects one conversation-owned MCP server through an owner whose
@@ -2139,25 +2130,12 @@ impl CapabilityCoordinator {
                 )
                 .with_resolved_profile(candidate.resolved_profile),
             );
-            // The published physical generation of a carried-forward server
-            // is *retained*, not retired: its catalog is still the
-            // authoritative last-known-good knowledge and its stable
-            // connection owner is what a later dispatch reconnects through.
-            // Every other previously published generation is replaced by
-            // this commit and retires.
             let previous_mcp_runtimes = std::mem::replace(
                 &mut state.mcp_runtimes,
                 std::mem::take(&mut candidate.mcp_runtimes),
             );
             for generation in previous_mcp_runtimes {
-                if candidate
-                    .mcp_carried_forward
-                    .contains(generation.server_id())
-                {
-                    state.mcp_runtimes.push(generation);
-                } else {
-                    generation.retire();
-                }
+                generation.retire();
             }
             state.revision = revision;
             state.snapshot = snapshot.clone();
@@ -2676,7 +2654,9 @@ body
         let workspace = Workspace::new(&workspace_root).expect("workspace");
         let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
             source_demand: crate::capabilities::source::ToolSourceDemand::default(),
-            conversation_id: crate::runtime::identity::ConversationId::new("conv-test"),
+            conversation_id: crate::runtime::identity::ConversationId::new(
+                "conv_5d71cacf-35af-790f-8022-fe16cd1b9fe0",
+            ),
             workspace: workspace.clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: crate::extensions::ExtensionToolPlane::none(),
@@ -2705,7 +2685,7 @@ body
             .commit(prepare(&coordinator).await)
             .expect("first commit");
         let root_a = dir.path().join("workspace/.agents/skills");
-        let root_b = dir.path().join("relocated-skills");
+        let root_b = dir.path().join("workspace/relocated-skills");
         std::fs::create_dir_all(&root_b).expect("root B");
         std::fs::rename(root_a.join("pdf"), root_b.join("pdf")).expect("relocate Skill");
 
@@ -2932,12 +2912,14 @@ body
                 crate::runtime::resources::ManagedPythonCatalog::new(
                     [(
                         ToolSourceId::ManagedPython("demo".into()),
-                        package_root.clone(),
+                        crate::tools::python::discover_package(&package_root, "demo"),
                     )]
                     .into(),
                 ),
             ),
-            conversation_id: crate::runtime::identity::ConversationId::new("conv-lazy-store"),
+            conversation_id: crate::runtime::identity::ConversationId::new(
+                "conv_e8035503-6d85-7f80-8509-5a09e61495bd",
+            ),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: crate::extensions::ExtensionToolPlane::none(),
@@ -2967,47 +2949,27 @@ body
             "a failed initialization must not poison the lazy slot"
         );
 
-        // Phase 2: the filesystem is repaired; the next preparation retries
-        // and publishes the one stable store identity. The package is made
-        // invalid first so the retry never starts an environment build.
-        std::fs::remove_file(&conflict).expect("repair the filesystem");
-        std::fs::remove_file(package_root.join("requirements.txt"))
-            .expect("invalidate the package");
+        // A new candidate may carry a different frozen catalog. Discovery
+        // failures do not initialize storage or borrow bytes from the old package.
+        std::fs::remove_file(&conflict).unwrap();
+        std::fs::remove_file(package_root.join("requirements.txt")).unwrap();
+        let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
+        inputs.source_demand.managed_python = crate::runtime::resources::ManagedPythonCatalog::new(
+            [(
+                source_id.clone(),
+                crate::tools::python::discover_package(&package_root, "demo"),
+            )]
+            .into(),
+        );
         let candidate = coordinator
-            .prepare_candidate()
+            .prepare_candidate_with_inputs(inputs)
             .await
-            .expect("retry prepare");
-        assert!(
-            matches!(
-                candidate.availability().get(&source_id),
-                Some(CapabilitySourceState::Unavailable { .. })
-            ),
-            "the invalid package stays unavailable: {:?}",
-            candidate.availability()
-        );
-        let first = coordinator
-            .python_store_identity_token()
-            .expect("the store is initialized after the successful retry");
-
-        // Phase 3: a later preparation reuses the same coordination
-        // identity rather than constructing a fresh store.
-        let candidate = coordinator
-            .prepare_candidate()
-            .await
-            .expect("third prepare");
-        assert!(
-            matches!(
-                candidate.availability().get(&source_id),
-                Some(CapabilitySourceState::Unavailable { .. })
-            ),
-            "the invalid package stays unavailable: {:?}",
-            candidate.availability()
-        );
-        assert_eq!(
-            coordinator.python_store_identity_token(),
-            Some(first),
-            "the coordinator retains one stable PythonToolStore identity"
-        );
+            .unwrap();
+        assert!(matches!(
+            candidate.availability().get(&source_id),
+            Some(CapabilitySourceState::Unavailable { .. })
+        ));
+        assert_eq!(coordinator.python_store_identity_token(), None);
     }
 
     /// The lease RAII release makes the next commit legal immediately; no
@@ -3257,8 +3219,11 @@ mod mcp_race_tests {
         let worker = tokio::spawn(async move { preparing.prepare_candidate().await });
         pause.wait_entered().await;
         let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
-        inputs.mcp_servers.get_mut(&id).unwrap().activation =
-            crate::capabilities::activation::SourceActivation::Disabled;
+        inputs
+            .source_demand
+            .sources
+            .remove(&crate::capabilities::ToolSourceId::Mcp(id.clone()));
+        inputs.agent_activation.profile.tools.sources.clear();
         let disabled = coordinator
             .prepare_candidate_with_inputs(inputs)
             .await
@@ -3350,76 +3315,49 @@ mod mcp_race_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn cfg233_exposure_and_domain_references_never_grant_source_activation() {
+    async fn cfg332_definition_is_inert_until_finite_admitted_demand() {
         if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
             return;
         }
-        for enabled in [true, false] {
-            let dir = tempfile::tempdir().unwrap();
-            let (coordinator, id) = coordinator_with_fixture(
-                &dir,
-                "fixture",
-                "capabilities::coordinator::mcp_race_tests::cfg233_exposure_and_domain_references_never_grant_source_activation",
-            );
-            let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
-            inputs.agent_activation.no_direct_tools = true;
-            if !enabled {
-                inputs.mcp_servers.get_mut(&id).unwrap().activation =
-                    crate::capabilities::activation::SourceActivation::Disabled;
-            }
-            let candidate = coordinator
-                .prepare_candidate_with_inputs(inputs)
-                .await
-                .unwrap();
-            assert_eq!(
-                candidate.mcp_runtimes.len(),
-                usize::from(enabled),
-                "--no-direct-tools does not suppress authorized preparation"
-            );
-            let snapshot = coordinator.commit(candidate).unwrap();
-            assert!(snapshot.tool_registry().definitions().is_empty());
-            let selector = crate::capabilities::selection::ExactToolSelector::Source {
-                source_id: crate::capabilities::ToolSourceId::Mcp(id.clone()),
-                name: "echo".into(),
-            };
-            // Both Subagent and Workflow admission use this exact shared selector.
-            assert_eq!(
-                crate::capabilities::selection::resolve_selector(
-                    &selector,
-                    snapshot.available_tools(),
-                    &coordinator.availability()
-                )
-                .is_ok(),
-                enabled
-            );
-            if !enabled {
-                let plan = crate::capabilities::selected::SelectedCapabilityPlan {
-                    source_tools: vec![crate::capabilities::selected::SelectedSourceTool {
-                        source_id: crate::capabilities::ToolSourceId::Mcp(id),
-                        name: "echo".into(),
-                        identity: crate::runtime::identity::SourceToolIdentity::new("irrelevant"),
-                    }],
-                };
-                assert!(
-                    coordinator
-                        .prepare_selected_candidate(
-                            &plan,
-                            &crate::runtime::cancellation::CancellationSignal::new()
-                        )
-                        .await
-                        .unwrap_err()
-                        .to_string()
-                        .contains("disabled")
-                );
-            }
-            coordinator.drain_conversation_owned().await.unwrap();
-        }
+        let dir = tempfile::tempdir().unwrap();
+        let (coordinator, _id) = coordinator_with_fixture(
+            &dir,
+            "fixture",
+            "capabilities::coordinator::mcp_race_tests::cfg332_definition_is_inert_until_finite_admitted_demand",
+        );
+        let demanded = coordinator.inner.resource_inputs.lock().unwrap().clone();
+        let mut inert = demanded.clone();
+        inert.source_demand.sources.clear();
+        inert.agent_activation.profile.tools.sources.clear();
+        let candidate = coordinator
+            .prepare_candidate_with_inputs(inert)
+            .await
+            .unwrap();
+        assert!(candidate.mcp_runtimes.is_empty());
+        assert!(
+            coordinator
+                .commit(candidate)
+                .unwrap()
+                .tool_registry()
+                .definitions()
+                .is_empty()
+        );
+        let candidate = coordinator
+            .prepare_candidate_with_inputs(demanded)
+            .await
+            .unwrap();
+        assert_eq!(candidate.mcp_runtimes.len(), 1);
+        assert!(
+            !coordinator
+                .commit(candidate)
+                .unwrap()
+                .tool_registry()
+                .definitions()
+                .is_empty()
+        );
+        coordinator.drain_conversation_owned().await.unwrap();
     }
 
-    /// Retirement's `SeqCst` store and reconnect's `SeqCst` admission load are
-    /// the linearization points. The notify-backed hook forces both orders.
-    /// A pre-retirement admission may finish; a stale post-retirement worker
-    /// establishes exactly zero replacement processes. Old leases own draining.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn cfg233_disable_publication_races_reconnect_at_one_admission_frontier() {
         if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
@@ -3445,8 +3383,11 @@ mod mcp_race_tests {
             let worker = tokio::spawn(async move { reconnecting.acquire().await });
             pause.wait_entered().await;
             let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
-            inputs.mcp_servers.get_mut(&id).unwrap().activation =
-                crate::capabilities::activation::SourceActivation::Disabled;
+            inputs
+                .source_demand
+                .sources
+                .remove(&crate::capabilities::ToolSourceId::Mcp(id.clone()));
+            inputs.agent_activation.profile.tools.sources.clear();
             let disabled = coordinator
                 .prepare_candidate_with_inputs(inputs)
                 .await
@@ -3490,7 +3431,7 @@ mod mcp_race_tests {
                 [crate::capabilities::ToolSourceId::Mcp(server_id.clone())],
                 crate::runtime::resources::ManagedPythonCatalog::default(),
             ),
-            conversation_id: ConversationId::new("mcp-race"),
+            conversation_id: ConversationId::new("conv_021d548e-9b03-751b-80f9-68be31c19199"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: crate::extensions::ExtensionToolPlane::none(),
@@ -3515,8 +3456,6 @@ mod mcp_race_tests {
                 server_id.clone(),
                 crate::tools::mcp::McpServerBinding {
                     credentials: crate::credentials::SourceCredentials::default(),
-                    activation: crate::capabilities::activation::SourceActivation::Enabled,
-                    resource_workspace: None,
                     transport: McpTransportConfig::Stdio {
                         program: std::env::current_exe()
                             .expect("test executable")
@@ -3563,8 +3502,6 @@ mod mcp_race_tests {
                     id.clone(),
                     crate::tools::mcp::McpServerBinding {
                         credentials: crate::credentials::SourceCredentials::default(),
-                        activation: crate::capabilities::activation::SourceActivation::Enabled,
-                        resource_workspace: None,
                         transport: McpTransportConfig::Stdio {
                             program: std::env::current_exe()
                                 .expect("test executable")
@@ -3590,7 +3527,7 @@ mod mcp_race_tests {
                     .map(crate::capabilities::ToolSourceId::Mcp),
                 crate::runtime::resources::ManagedPythonCatalog::default(),
             ),
-            conversation_id: ConversationId::new("mcp-drain"),
+            conversation_id: ConversationId::new("conv_14dafca7-8c38-7c20-8ac1-caa3300d9cab"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: crate::extensions::ExtensionToolPlane::none(),
@@ -3985,7 +3922,7 @@ mod mcp_race_tests {
         let executor = definitions[mutate_index].1.clone();
         let artifacts_dir = dir.path().join("mcp-race-artifacts");
         let runtime_bundle = crate::tools::runtime::ConversationToolRuntime::new(
-            ConversationId::new("mcp-race"),
+            ConversationId::new("conv_021d548e-9b03-751b-80f9-68be31c19199"),
             dir.path().join("workspace"),
             &artifacts_dir,
         )

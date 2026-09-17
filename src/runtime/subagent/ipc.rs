@@ -100,7 +100,7 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// inspection describes the same composition that execution materializes.
 /// Version 25 carries explicit response/cancel controls to the originating
 /// interaction coordinator. It is independent of App Server protocol v3.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 25;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 26;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -157,7 +157,7 @@ const KIND_ACTIVITY: u8 = 107;
 /// `ToolDefinition`s, the exact Skill version identities with their
 /// model-visible metadata, and the exact project instruction chain. The
 /// child therefore never reads `rustx.toml` to look up the agent, never
-/// reopens `models.toml` to re-resolve a model, never rediscovers project
+/// reopens `rustx.toml` to re-resolve a model, never rediscovers project
 /// instructions or Skills, and never widens or substitutes Tool identity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -201,6 +201,8 @@ pub(crate) struct SubagentChildSpec {
     pub incarnation: String,
     /// Canonical product lifecycle domain, independent of child execution allocation.
     pub product_root: PathBuf,
+    /// Durable Session owner, independent of the physical spawn incarnation.
+    pub session_id: crate::runtime::identity::SessionId,
     /// The child terminal protocol. Workflow-owned children receive a
     /// frozen `workflow_output` schema; ordinary named subagents use the
     /// normal parent-inbound answer protocol.
@@ -213,7 +215,6 @@ impl SubagentChildSpec {
     pub(crate) fn runtime_root(&self) -> std::io::Result<PathBuf> {
         let root = crate::runtime::local_storage::ProductRoot::existing(&self.product_root)?;
         if !super::is_safe_child_conversation_component(&self.child_conversation_id)
-            || self.subagent_id.as_str() != self.child_conversation_id.as_str()
             || !self.incarnation.starts_with("incarnation-")
             || self.incarnation.len() <= "incarnation-".len()
             || !self
@@ -223,11 +224,14 @@ impl SubagentChildSpec {
         {
             return Err(std::io::Error::other("invalid child allocation identity"));
         }
-        let allocation =
-            super::child_conversation_store_path(root.root(), &self.child_conversation_id)
-                .parent()
-                .unwrap()
-                .join(&self.incarnation);
+        let allocation = super::child_conversation_store_path(
+            root.root(),
+            &self.session_id,
+            &self.child_conversation_id,
+        )
+        .parent()
+        .unwrap()
+        .join(&self.incarnation);
         let path = root.confined(&allocation)?;
         if !path.is_dir() {
             return Err(std::io::Error::new(
@@ -914,8 +918,13 @@ mod tests {
     /// contract is proven to preserve exact source identity. Managed Python
     /// packages ride the MCP origin under their synthesized server identity
     /// (Issue #174).
+    #[allow(clippy::too_many_lines)]
     fn resolved_spec() -> ResolvedSubagentSpec {
         ResolvedSubagentSpec {
+            environment: Vec::new(),
+            generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
+            skill_roots: Vec::new(),
+
             selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
             agent: SubagentName::parse("explore").expect("name"),
             definition_digest: serde_json::from_value(serde_json::json!("sha256:abc"))
@@ -997,8 +1006,6 @@ mod tests {
                     crate::capabilities::ToolSourceId::Mcp(McpServerId::new("github")),
                     crate::tools::mcp::McpServerBinding {
                         credentials: crate::credentials::SourceCredentials::default(),
-                        activation: crate::capabilities::activation::SourceActivation::Enabled,
-                        resource_workspace: None,
                         transport: crate::tools::mcp::McpTransportConfig::Stdio {
                             program: "github-mcp".to_owned(),
                             args: vec!["--stdio".to_owned()],
@@ -1106,7 +1113,7 @@ mod tests {
         write_child_frame(
             &mut child,
             &ChildFrame::Ready(ReadyFrame {
-                subagent_id: SubagentId::new("conv-1-subagent-1"),
+                subagent_id: SubagentId::new("conv_57d68983-5497-771e-8aaa-5f1356061697"),
             }),
         )
         .await
@@ -1119,9 +1126,13 @@ mod tests {
 
     fn allocation_spec() -> SubagentChildSpec {
         SubagentChildSpec {
+            session_id: crate::runtime::identity::SessionId::new(
+                "ses_01900000-0000-7000-8000-000000000001",
+            ),
+
             protocol_version: SUBAGENT_IPC_VERSION,
-            subagent_id: SubagentId::new("conv-1-subagent-1"),
-            child_conversation_id: ConversationId::new("conv-1-subagent-1"),
+            subagent_id: SubagentId::new("conv_57d68983-5497-771e-8aaa-5f1356061697"),
+            child_conversation_id: ConversationId::new("conv_57d68983-5497-771e-8aaa-5f1356061697"),
             child_agent_id: AgentId::new("agent-subagent-1"),
             parent_agent_id: AgentId::new("agent-parent"),
             resolved: resolved_spec(),
@@ -1149,9 +1160,14 @@ mod tests {
         std::os::unix::fs::symlink(&real, &alias).unwrap();
         let mut spec = allocation_spec();
         spec.product_root = alias;
-        let expected = root
-            .root()
-            .join("subagents/conv-1-subagent-1/incarnation-test");
+        let expected = crate::runtime::subagent::child_conversation_store_path(
+            root.root(),
+            &spec.session_id,
+            &spec.child_conversation_id,
+        )
+        .parent()
+        .unwrap()
+        .join("incarnation-test");
         assert!(
             spec.runtime_root().is_err(),
             "missing incarnations grant no authority"
@@ -1171,7 +1187,8 @@ mod tests {
         .unwrap();
         assert!(spec.runtime_root().is_err());
         spec.incarnation = "incarnation-test".to_owned();
-        spec.child_conversation_id = ConversationId::new("foreign-child");
+        spec.child_conversation_id =
+            ConversationId::new("conv_e5eaf8e6-9a78-71b2-8ff7-9bb18a6f54f6");
         assert!(
             spec.runtime_root().is_err(),
             "the delegated identity cannot be substituted"
@@ -1267,7 +1284,7 @@ mod tests {
 
         let routed_request = InteractionRequest {
             id: InteractionId::new("interaction-questionnaire"),
-            conversation_id: ConversationId::new("child-conversation"),
+            conversation_id: ConversationId::new("conv_b520d0ec-730a-7133-8d51-7de417e31c5a"),
             attempt_id: crate::runtime::identity::AttemptId::new("attempt-1"),
             turn: 3,
             kind: InteractionKind::Questionnaire {

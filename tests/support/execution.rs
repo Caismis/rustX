@@ -37,7 +37,7 @@ pub(crate) struct SubagentPlane {
 }
 
 pub(crate) fn subagent_plane() -> SubagentPlane {
-    subagent_plane_for("conv-162")
+    subagent_plane_for("conv_35227a88-2fb4-735f-ad8e-ec0b35ff2a42")
 }
 
 /// The same plane under an explicit conversation identity, for the
@@ -61,6 +61,10 @@ pub(crate) fn subagent_plane_for(conversation: &str) -> SubagentPlane {
         clock: Arc::new(SystemClock),
         monotonic_clock: Arc::new(rustx::runtime::ManualMonotonicClock::new()),
         spawn: SubagentSpawnPlan {
+            session_id: crate::runtime::identity::SessionId::new(
+                "ses_01900000-0000-7000-8000-000000000001",
+            ),
+
             program: std::path::PathBuf::from("/nonexistent/rustx"),
             product_root: crate::runtime::local_storage::ProductRoot::create(&runtime_root.clone())
                 .expect("product root"),
@@ -119,7 +123,7 @@ pub(crate) fn execution_fixture(subagents: Option<SubagentRegistry>) -> Executio
     std::fs::create_dir_all(&workspace_root).expect("workspace directory");
     let artifacts = dir.path().join("artifacts");
     std::fs::create_dir_all(&artifacts).expect("artifact directory");
-    let conversation_id = ConversationId::new("conv-162-execution");
+    let conversation_id = ConversationId::new("conv_b4665e81-457a-78cf-8164-039c3f2e1a63");
     let store = Arc::new(
         rustx::durable::SqliteConversationStore::open(
             conversation_id.clone(),

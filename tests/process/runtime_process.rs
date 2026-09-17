@@ -27,32 +27,9 @@ fn binary() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_rustx"))
 }
 
-pub(super) fn grant(root: &std::path::Path, workspace: &std::path::Path) -> std::path::PathBuf {
+pub(super) fn fixture_home(root: &std::path::Path) -> std::path::PathBuf {
     let home = root.join("host");
-    let host = rustx::local_runtime::HostEnvironment::from_paths(
-        workspace.into(),
-        home.clone(),
-        None,
-        None,
-    )
-    .unwrap();
-    if root.join("settings.toml").exists() {
-        std::fs::create_dir_all(&host.config_directory).unwrap();
-        std::fs::copy(
-            root.join("settings.toml"),
-            host.config_directory.join("settings.toml"),
-        )
-        .unwrap();
-    }
-    rustx::local_runtime::launch::change_trust(
-        &rustx::local_runtime::LaunchRequest {
-            workspace: Some(workspace.into()),
-            ..Default::default()
-        },
-        &host,
-        rustx::local_runtime::TrustAction::Grant,
-    )
-    .unwrap();
+    std::fs::create_dir_all(&home).unwrap();
     home
 }
 
@@ -61,20 +38,12 @@ fn minimal_start_uses_host_defaults_without_python_mcp_or_path_flags() {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");
     std::fs::create_dir(&workspace).unwrap();
-    let home = grant(root.path(), &workspace);
-    let config = home.join(".config/rustx");
+    let home = fixture_home(root.path());
+    let config = home.join("rustx");
     std::fs::create_dir_all(&config).unwrap();
     std::fs::write(
-        config.join("models.toml"),
-        models_json("http://127.0.0.1:9/v1"),
-    )
-    .unwrap();
-    std::fs::write(
-        config.join("settings.toml"),
-        r#"[agent]
-[agent.model]
-model = "fixture/process-model"
-"#,
+        config.join("rustx.toml"),
+        format!("{SESSION_TOML}\n{}", models_json("http://127.0.0.1:9/v1")),
     )
     .unwrap();
     let output = std::process::Command::new(binary())
@@ -95,7 +64,7 @@ model = "fixture/process-model"
 }
 
 #[test]
-fn untrusted_real_process_uses_user_defaults_without_project_activation() {
+fn defined_workspace_mcp_is_inert_without_agent_selection() {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");
     std::fs::create_dir(&workspace).unwrap();
@@ -103,27 +72,20 @@ fn untrusted_real_process_uses_user_defaults_without_project_activation() {
     let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     server.set_nonblocking(true).unwrap();
     let home = root.path().join("home");
-    let config = home.join(".config/rustx");
+    let config = home.join("rustx");
     std::fs::create_dir_all(&config).unwrap();
     std::fs::write(
-        config.join("models.toml"),
-        models_json(&format!("http://{}/v1", server.local_addr().unwrap())),
+        config.join("rustx.toml"),
+        format!(
+            "{SESSION_TOML}\n{}",
+            models_json(&format!("http://{}/v1", server.local_addr().unwrap()))
+        ),
     )
     .unwrap();
-    std::fs::write(
-        config.join("settings.toml"),
-        r#"[agent]
-[agent.model]
-model = "fixture/process-model"
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        workspace.join("rustx.toml"),
-        toml::to_string_pretty(&serde_json::json!({"mcp_servers": {"project":{"command":"touch","args":[sentinel]}}, "subagents": {}, "agent": {"agents": ["child"], "workflows": ["must_not_load"]}}))
-        .unwrap(),
-    )
-    .unwrap();
+    std::fs::create_dir_all(workspace.join(".agents")).unwrap();
+    std::fs::write(workspace.join("rustx.toml"), "[agent]\nskills = []\n").unwrap();
+    std::fs::write(workspace.join(".agents/mcp.toml"),
+        toml::to_string_pretty(&serde_json::json!({"mcp_servers": {"project": {"command": "touch", "args": [sentinel]}}})).unwrap()).unwrap();
     let output = std::process::Command::new(binary())
         .current_dir(&workspace)
         .env_clear()
@@ -139,10 +101,6 @@ model = "fixture/process-model"
     );
     assert!(output.stdout.is_empty());
     assert!(!sentinel.exists(), "zero external starts");
-    assert!(
-        !home.join(".local/state/rustx/trust").exists(),
-        "cwd use cannot grant native trust"
-    );
     assert_eq!(
         server.accept().unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock,
@@ -157,20 +115,21 @@ fn models_json(base_url: &str) -> String {
 base_url = "{base_url}"
 api_key = "$RUSTX_PROCESS_TEST_KEY"
 
-[[providers.fixture.models]]
+[models."fixture/process-model"]
+provider = "fixture"
 id = "process-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 request_params = {{ temperature = 0.11 }}
 
-[providers.fixture.models.capabilities]
+[models."fixture/process-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.fixture.models.compat]
+[models."fixture/process-model".compat]
 chat_reasoning_replay = "omit"
 "#
     )
@@ -184,6 +143,8 @@ keep_recent_tokens = 8192
 
 
 [agent]
+[agent.tools]
+builtin = ["read", "write", "edit", "glob", "grep", "bash", "execution"]
 [agent.model]
 model = "fixture/process-model"
 "#;
@@ -201,13 +162,11 @@ impl Process {
     fn spawn(root: &std::path::Path, models: &str, session: &str, key: Option<&str>) -> Self {
         let workspace = root.join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        std::fs::write(root.join("models.toml"), models).expect("models.toml");
-        std::fs::write(root.join("rustx.toml"), session).expect("rustx.toml");
+        std::fs::write(root.join("rustx.toml"), format!("{session}\n{models}"))
+            .expect("rustx.toml");
         let mut command = tokio::process::Command::new(binary());
-        let home = grant(root, &workspace);
+        let home = fixture_home(root);
         command
-            .arg("--models")
-            .arg(root.join("models.toml"))
             .arg("--config")
             .arg(root.join("rustx.toml"))
             .arg("--workspace")
@@ -324,7 +283,7 @@ async fn the_process_serves_a_real_conversation_runtime() {
     else {
         panic!("initialize must succeed: {response:?}");
     };
-    assert_eq!(conversation_id.as_str(), "conversation-1");
+    assert!(conversation_id.as_str().starts_with("conv_"));
     assert_eq!(agent_id.as_str(), "agent-process");
 
     // inspect session model / effective capabilities
@@ -383,7 +342,7 @@ async fn the_process_serves_a_real_conversation_runtime() {
         );
     }
 
-    // the selectable-model query: the client never reads models.toml
+    // the selectable-model query: the client never reads rustx.toml
     let response = process
         .request(|id| RuntimeClientRequest::ModelCatalogGet {
             id: rustx::runtime_client::RequestId::new(id),
@@ -529,13 +488,14 @@ async fn invalid_startup_configuration_never_writes_to_stdout() {
         let root = tempfile::tempdir().expect("temp root");
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        std::fs::write(root.path().join("models.toml"), &models).expect("models.toml");
-        std::fs::write(root.path().join("rustx.toml"), &session).expect("rustx.toml");
+        std::fs::write(
+            root.path().join("rustx.toml"),
+            format!("{session}\n{models}"),
+        )
+        .expect("rustx.toml");
         let mut command = std::process::Command::new(binary());
-        let home = grant(root.path(), &workspace);
+        let home = fixture_home(root.path());
         command
-            .arg("--models")
-            .arg(root.path().join("models.toml"))
             .arg("--config")
             .arg(root.path().join("rustx.toml"))
             .arg("--workspace")
@@ -606,15 +566,12 @@ async fn a_started_process_writes_no_banner() {
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     std::fs::write(
-        root.path().join("models.toml"),
-        models_json(&server.url("/v1")),
+        root.path().join("rustx.toml"),
+        format!("{SESSION_TOML}\n{}", models_json(&server.url("/v1"))),
     )
-    .expect("models.toml");
-    std::fs::write(root.path().join("rustx.toml"), SESSION_TOML).expect("rustx.toml");
+    .expect("rustx.toml");
 
     let mut child = std::process::Command::new(binary())
-        .arg("--models")
-        .arg(root.path().join("models.toml"))
         .arg("--config")
         .arg(root.path().join("rustx.toml"))
         .arg("--workspace")
@@ -622,7 +579,7 @@ async fn a_started_process_writes_no_banner() {
         .arg("--runtime-root")
         .arg(root.path().join("private"))
         .env_clear()
-        .env("HOME", grant(root.path(), &workspace))
+        .env("HOME", fixture_home(root.path()))
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("RUSTX_PROCESS_TEST_KEY", "process-secret")
         .stdin(Stdio::piped())

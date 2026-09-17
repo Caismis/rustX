@@ -22,20 +22,21 @@ const MODELS_TOML: &str = r#"[providers.local]
 base_url = "https://local.fixture.invalid/v1"
 api_key = "$RUSTX_TEST_MODEL_KEY"
 
-[[providers.local.models]]
+[models."local/composed-model"]
+provider = "local"
 id = "composed-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 request_params = { temperature = 0.3 }
 
-[providers.local.models.capabilities]
+[models."local/composed-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/composed-model".compat]
 chat_reasoning_replay = "omit"
 "#;
 
@@ -57,6 +58,8 @@ RUSTX_FIXTURE = "1"
 
 
 [agent]
+[agent.tools]
+builtin = ["read", "write", "edit", "glob", "grep", "bash", "execution"]
 [agent.model]
 model = "local/composed-model"
 "#;
@@ -66,21 +69,12 @@ model = "local/composed-model"
 fn startup(root: &std::path::Path, models: &str, config: &str) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    let models_path = root.join("models.toml");
     let config_path = root.join("rustx.toml");
-    std::fs::write(&models_path, models).expect("models.toml");
-    crate::launch_fixture::write_documents(&config_path, config, &["native_tools"]);
+    crate::launch_fixture::write_document(&config_path, &format!("{config}\n{models}"));
     LaunchFixture {
-        models: models_path,
         config: config_path,
-        skill_paths: Vec::new(),
-        no_automatic_skills: false,
-        no_builtin_tools: false,
-        no_direct_tools: false,
         startup_session: rustx::local_runtime::StartupSession::Empty,
         session_name: None,
-        tools: None,
-        exclude_tools: Vec::new(),
         workspace,
         runtime_root: root.join("private"),
     }
@@ -113,7 +107,7 @@ async fn composition_owns_one_conversation_domain() {
     // One conversation identity, shared by the tool runtime, the capability
     // coordinator, and the host.
     let conversation = runtime.tool_runtime().conversation_id().clone();
-    assert_eq!(conversation.as_str(), "conversation-standalone");
+    assert!(conversation.as_str().starts_with("conv_"));
     assert_eq!(runtime.host().conversation_id(), &conversation);
     let capability = runtime.capability().current_snapshot();
     assert_eq!(capability.conversation_id(), &conversation);
@@ -238,7 +232,8 @@ async fn runtime_private_roots_stay_disjoint_from_the_workspace() {
         .await
         .expect("composition succeeds");
     let workspace_root = runtime.tool_runtime().workspace().root().to_path_buf();
-    let artifacts = std::fs::canonicalize(paths.artifacts_root()).expect("artifact root exists");
+    let artifacts = std::fs::canonicalize(runtime.tool_runtime().artifacts().root())
+        .expect("artifact root exists");
     assert!(
         !artifacts.starts_with(&workspace_root),
         "the artifact root must never live inside the model-visible workspace"
@@ -260,11 +255,9 @@ async fn startup_configuration_failures_are_explicit() {
 
     // A missing catalog file.
     let paths = startup(root.path(), MODELS_TOML, RUNTIME_CONFIG_TOML);
-    let missing = LaunchFixture {
-        models: root.path().join("absent.json"),
-        ..paths.clone()
-    };
-    assert!(missing.try_resolve().unwrap_err().contains("cannot read"));
+    let missing = LaunchFixture { ..paths.clone() };
+    std::fs::remove_file(&missing.config).unwrap();
+    assert!(missing.try_resolve().is_err());
 
     // A catalog without an explicit base URL.
     let no_base = MODELS_TOML.replace("base_url = \"https://local.fixture.invalid/v1\"", "");
@@ -328,7 +321,7 @@ async fn the_endpoint_speaks_for_the_one_composed_host() {
     else {
         panic!("the endpoint initializes: {response:?}");
     };
-    assert_eq!(conversation_id.as_str(), "conversation-standalone");
+    assert!(conversation_id.as_str().starts_with("conv_"));
     assert_eq!(agent_id.as_str(), "agent-composed");
 
     // The Runtime Client protocol admits at most one attachment: a second
@@ -348,7 +341,7 @@ async fn the_endpoint_speaks_for_the_one_composed_host() {
     );
 
     // The model catalog is reachable through the protocol, so a client never
-    // reads models.toml itself.
+    // reads rustx.toml itself.
     let response = endpoint.handle_request(RuntimeClientRequest::ModelCatalogGet {
         id: RequestId::new(2),
     });

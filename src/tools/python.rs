@@ -75,6 +75,7 @@ use crate::skills::environments::{ENVIRONMENT_COMMAND_TIMEOUT, RUNTIME_PROBE_TIM
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::mcp::{McpServerBinding, McpTransportConfig};
 use crate::tools::types::ToolInvocationPolicy;
+#[cfg(test)]
 use crate::tools::workspace::Workspace;
 
 /// The exact `FastMCP` build every managed Python package is prepared with.
@@ -189,59 +190,6 @@ pub fn python_server_id(folder_name: &str) -> McpServerId {
     McpServerId::new(format!("{MANAGED_MCP_NAMESPACE}{folder_name}"))
 }
 
-/// Discovers every Python tool package of the Workspace, in deterministic
-/// folder-name order.
-///
-/// Per-folder failures are returned in place (`DiscoveredPythonPackage`):
-/// one malformed package never suppresses its siblings. Only walking the
-/// container itself can fail the whole call (the same layering the Skill
-/// discovery already has).
-///
-/// # Errors
-///
-/// Returns [`PythonToolError::Storage`] when `.agents/tools/` exists but
-/// cannot be walked.
-pub fn discover_python_packages(
-    workspace: &Workspace,
-) -> Result<Vec<DiscoveredPythonPackage>, PythonToolError> {
-    discover_admitted_python_packages(workspace, |_| true)
-}
-
-/// Bounded inert directory discovery. Package bytes are read only after admission.
-pub(crate) fn discover_admitted_python_packages(
-    workspace: &Workspace,
-    mut admitted: impl FnMut(&McpServerId) -> bool,
-) -> Result<Vec<DiscoveredPythonPackage>, PythonToolError> {
-    let tools_root = workspace.root().join(TOOLS_DIRECTORY).join(TOOLS_ROOT);
-    if !tools_root.exists() {
-        return Ok(Vec::new());
-    }
-    let mut entries = std::fs::read_dir(&tools_root)
-        .map_err(io_error)?
-        .take(1025)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(io_error)?;
-    if entries.len() > 1024 {
-        return Err(PythonToolError::Storage(
-            "managed Python discovery exceeds 1024 entries".into(),
-        ));
-    }
-    entries.sort_by_key(std::fs::DirEntry::file_name);
-    let mut discovered = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let folder_name = entry.file_name().to_string_lossy().into_owned();
-        let server_id = python_server_id(&folder_name);
-        if !admitted(&server_id) {
-            continue;
-        }
-        discovered.push(DiscoveredPythonPackage {
-            server_id,
-            outcome: discover_package(&entry.path(), &folder_name),
-        });
-    }
-    Ok(discovered)
-}
-
 #[cfg(test)]
 thread_local! {
     // The package parser is synchronous. This owner-local hook counts entry,
@@ -249,7 +197,10 @@ thread_local! {
     pub(crate) static PACKAGE_PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn discover_package(root: &Path, name: &str) -> Result<PythonToolPackage, PythonToolError> {
+pub(crate) fn discover_package(
+    root: &Path,
+    name: &str,
+) -> Result<PythonToolPackage, PythonToolError> {
     #[cfg(test)]
     PACKAGE_PARSE_COUNT.with(|count| count.set(count.get() + 1));
     let invalid = |message: String| {
@@ -894,8 +845,6 @@ impl PreparedPythonPackage {
         environment.insert("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned());
         McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
-            activation: crate::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: program.display().to_string(),
                 args: vec![
@@ -1322,6 +1271,26 @@ mod tests {
     use crate::runtime::CancellationSignal;
     use crate::runtime::process_runner::CapturedProcessResult;
 
+    fn discover_python_packages(
+        workspace: &Workspace,
+    ) -> Result<Vec<DiscoveredPythonPackage>, PythonToolError> {
+        crate::local_runtime::managed_python_resources::discover(
+            workspace.root(),
+            &workspace.root().join("absent-user/.agents"),
+        )
+        .map(|catalog| {
+            catalog
+                .packages()
+                .iter()
+                .map(|(source, outcome)| DiscoveredPythonPackage {
+                    server_id: McpServerId::new(source.to_string()),
+                    outcome: outcome.clone(),
+                })
+                .collect()
+        })
+        .map_err(|error| PythonToolError::Storage(error.to_string()))
+    }
+
     type PackageFiles = (&'static str, &'static [u8]);
 
     fn workspace_with(packages: &[(&str, &[PackageFiles])]) -> (tempfile::TempDir, Workspace) {
@@ -1400,18 +1369,14 @@ mod tests {
     }
 
     #[test]
-    fn discovery_rejects_invalid_folder_names() {
+    fn package_parser_rejects_invalid_folder_names() {
         for name in ["Bad", "under_score", "-lead", "trail-", "double--dash"] {
             let (_directory, workspace) = workspace_with(&[(name, &valid_package_files())]);
-            let discovered = discover_python_packages(&workspace).expect("discover");
+            let result = discover_package(&workspace.root().join(".agents/tools").join(name), name);
             assert!(
-                matches!(
-                    &discovered[0].outcome,
-                    Err(PythonToolError::InvalidPackage(message))
-                        if message.contains("invalid package name")
-                ),
-                "{name:?} is rejected: {:?}",
-                discovered[0].outcome
+                matches!(result, Err(PythonToolError::InvalidPackage(message))
+                if message.contains("invalid package name")),
+                "{name:?}"
             );
         }
     }

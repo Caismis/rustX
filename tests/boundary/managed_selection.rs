@@ -22,33 +22,24 @@ use support::fake::{FakeStep, ScriptedCall, fake_model, tool_call_events};
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fastmcp4_availability_selection_request_and_invocation_share_one_authority() {
     // CI's boundary jobs provide uv; absence must not make this acceptance green.
-    for (mut selection, admitted) in [
-        (AgentActivation::default(), true),
+    for (source_selection, admitted) in [
         (
-            AgentActivation {
-                tools: Some(vec!["ping".into()]),
-                ..Default::default()
-            },
+            rustx::capabilities::selection::SourceToolSelection::All,
             true,
         ),
         (
-            AgentActivation {
-                no_direct_tools: true,
-                ..Default::default()
-            },
-            false,
+            rustx::capabilities::selection::SourceToolSelection::Exact(vec!["ping".into()]),
+            true,
         ),
         (
-            AgentActivation {
-                exclude_tools: vec!["ping".into()],
-                ..Default::default()
-            },
+            rustx::capabilities::selection::SourceToolSelection::Exact(vec![]),
             false,
         ),
     ] {
+        let mut selection = AgentActivation::default();
         selection.profile.tools.sources.insert(
             ToolSourceId::ManagedPython("healthy".into()),
-            rustx::capabilities::selection::SourceToolSelection::All,
+            source_selection,
         );
         let fixture = common::native_fixture_without_extensions();
         let root = fixture.runtime.workspace().root();
@@ -121,11 +112,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
                 .protocol_version(),
             &rmcp::model::ProtocolVersion::V_2026_07_28
         );
-        let mut expected = if selection.no_direct_tools || selection.tools.is_some() {
-            vec![]
-        } else {
-            fixture.registry.model_definitions()
-        };
+        let mut expected = vec![];
         if admitted {
             let definition = available.iter().find(|tool| tool.name == "ping").unwrap();
             expected.push(rustx::tools::compile_model_definition(definition).unwrap());
@@ -266,7 +253,11 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
         // A failed source cannot fabricate an exact-selected identity or
         // publish a fallback over the last successfully admitted registry.
         inputs.agent_activation = AgentActivation {
-            tools: Some(vec!["failed_identity".into()]),
+            profile: {
+                let mut profile = rustx::local_runtime::config::AgentProfileDocument::default();
+                profile.tools.builtin = vec!["failed_identity".into()];
+                profile
+            },
             ..Default::default()
         };
         assert!(matches!(

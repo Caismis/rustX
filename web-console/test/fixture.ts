@@ -1,5 +1,5 @@
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v5';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v6';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
 
@@ -10,10 +10,7 @@ if (!rustHello || !('result' in rustHello) || rustHello.result?.type !== 'initia
 export const capabilities: ServerCapabilities = rustHello.result.capabilities;
 export function snapshot(id = 'A'): RuntimeClientSnapshot {
   return {
-    settings_evidence: 'live_session', settings_lifetimes: {
-      launch: 'launch_capture', model: 'next_admission', approval: 'safe_boundary', resources: 'resource_publication',
-      attempt: 'frozen_admission', presentation: 'client_local', saved_defaults: 'next_launch', extensions: 'launch_capture',
-    },
+    settings_evidence: 'live_session',
     conversation_id: `conversation-${id}`, shutting_down: false, effective_approval_mode: 'policy',
     workflows: { revision: '0', runs: [], omitted_runs: 0 }, messages: [], transcript: { entries: [] }, trace_updates: [], trace: { entries: [] },
     inbound: {}, capabilities: { revision: '0' }, pending_interactions: [],
@@ -70,10 +67,10 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 5;
+  version = 6;
   capabilities = capabilities;
   client = new AppServerClient((_url, protocols) => {
-    if (protocols[0] !== 'rustx.app-server.v5' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    if (protocols[0] !== 'rustx.app-server.v6' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   });

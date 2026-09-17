@@ -45,9 +45,7 @@ export const DEFAULT_TERMINATION_GRACE_MS = 5_000;
  */
 export interface AppServerLaunchOptions {
   /** Fixes `UserConfigSources.settings` for this process and its Sessions. */
-  userSettings?: string | undefined;
-  /** Overrides the model catalog source binding. */
-  models?: string | undefined;
+  config?: string | undefined;
   /** Overrides the durable runtime root binding. */
   runtimeRoot?: string | undefined;
 }
@@ -80,11 +78,8 @@ export interface ChildExit {
 /** Builds the exact argument vector for a stdio App Server child. */
 export function appServerArguments(launch: AppServerLaunchOptions): string[] {
   const argv = ["app-server"];
-  if (launch.userSettings !== undefined) {
-    argv.push("--user-settings", launch.userSettings);
-  }
-  if (launch.models !== undefined) {
-    argv.push("--models", launch.models);
+  if (launch.config !== undefined) {
+    argv.push("--config", launch.config);
   }
   if (launch.runtimeRoot !== undefined) {
     argv.push("--runtime-root", launch.runtimeRoot);

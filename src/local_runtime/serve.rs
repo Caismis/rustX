@@ -46,8 +46,6 @@ use super::composition::{
 pub enum ProcessOutcome {
     /// The transport closed cleanly; the process exits with code 0.
     TransportClosed(StdioSessionEnd),
-    /// A host-owned trust operation completed without runtime composition.
-    TrustChanged,
     /// Startup configuration failed; nothing was ever written to stdout.
     StartupFailed(String),
     /// The transport terminated abnormally after serving began.
@@ -59,7 +57,7 @@ impl ProcessOutcome {
     #[must_use]
     pub const fn exit_code(&self) -> i32 {
         match self {
-            Self::TransportClosed(_) | Self::TrustChanged => 0,
+            Self::TransportClosed(_) => 0,
             Self::StartupFailed(_) => 2,
             Self::TransportFailed(_) => 1,
         }
@@ -69,7 +67,7 @@ impl ProcessOutcome {
     #[must_use]
     pub fn diagnostic(&self) -> Option<&str> {
         match self {
-            Self::TransportClosed(_) | Self::TrustChanged => None,
+            Self::TransportClosed(_) => None,
             Self::StartupFailed(detail) | Self::TransportFailed(detail) => Some(detail),
         }
     }
@@ -98,12 +96,6 @@ async fn serve_request(request: super::launch::LaunchRequest) -> ProcessOutcome 
         Ok(host) => host,
         Err(error) => return ProcessOutcome::StartupFailed(error),
     };
-    if let Some(action) = request.trust {
-        return match super::launch::change_trust(&request, &host, action) {
-            Ok(()) => ProcessOutcome::TrustChanged,
-            Err(error) => ProcessOutcome::StartupFailed(error),
-        };
-    }
     // Composition completes — including the initial capability commit —
     // before the transport exists, so a startup failure can never leave a
     // partially initialized protocol server.

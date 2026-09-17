@@ -143,7 +143,7 @@ describe("Agent Status placement", () => {
           turn: 2,
           opportunities: { post_tool_batch: { transcript_anchor: transcriptCursor(3) } },
           sections: [todoSection({ active_count: 2 }), backgroundSection([
-            backgroundExecution("exec-1", "running"),
+            backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running"),
           ])],
         }),
       ],
@@ -367,7 +367,7 @@ describe("Agent Status projection convergence", () => {
     status_message_id: "status-2",
     turn: 2,
     opportunities: { post_tool_batch: { transcript_anchor: transcriptCursor(2) } },
-    sections: [backgroundSection([backgroundExecution("exec-1", "running")])],
+    sections: [backgroundSection([backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running")])],
   });
   const messages = [userMessage("m1", "hello"), assistantMessage("m2", "answer")];
 
@@ -626,8 +626,8 @@ describe("typed Agent Status sections", () => {
       sections: [
         backgroundSection(
           [
-            backgroundExecution("exec-1", "running"),
-            backgroundExecution("exec-2", "running", { tool_name: "explore" }),
+            backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running"),
+            backgroundExecution("exec_5d3d6a95-5f18-7b68-afa6-8d669cc7692d", "running", { tool_name: "explore" }),
           ],
           3,
         ),
@@ -667,7 +667,7 @@ describe("typed Agent Status sections", () => {
           active_count: 1,
         }),
         backgroundSection([
-          backgroundExecution("exec-1", "running", { tool_name: long }),
+          backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running", { tool_name: long }),
         ]),
       ],
     });

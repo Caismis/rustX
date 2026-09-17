@@ -1,3 +1,29 @@
+schema_version = 9
 # One Agent Profile selects from admitted resources. It does not create them.
 [agent]
 workflows = ["read_file"]
+
+[agent.model]
+model = "example/demo-model"
+
+# Explicit provider/model declarations. Provider request overlays are structured TOML tables.
+# TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
+[providers.example]
+base_url = "https://api.example.invalid/v1"
+api_key = "$RUSTX_EXAMPLE_API_KEY"
+
+[models."example/demo-model"]
+provider = "example"
+id = "demo-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 4096
+
+[models."example/demo-model".capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[models."example/demo-model".compat]
+chat_reasoning_replay = "omit"

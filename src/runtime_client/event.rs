@@ -36,7 +36,6 @@ use crate::publication::PublicationAudit;
 use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolExecutionId, ToolId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::{InteractionOutcome, InteractionRef, RoutedInteraction};
-use crate::runtime::types::ApprovalMode;
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProgress};
 
@@ -137,16 +136,6 @@ pub enum RuntimeClientEvent {
         audit: Box<RuntimeClientTranscriptInteractionSettled>,
         /// The durable transcript position of this audit.
         transcript_cursor: RuntimeClientTranscriptCursor,
-    },
-    /// The authoritative runtime `ApprovalMode` control state changed.
-    ApprovalModeChanged {
-        /// The mode effective for the current/next attempt boundary.
-        effective_approval_mode: ApprovalMode,
-        /// The latest desired mode when it is pending reconciliation.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pending_approval_mode: Option<ApprovalMode>,
-        /// The monotonic control-plane revision.
-        revision: u64,
     },
     /// A context compaction operation began.
     ContextCompactionStarted {
@@ -466,6 +455,9 @@ pub enum RuntimeClientEvent {
     /// commit that is *not* a resource generation — an availability
     /// transition or an activation committed on its own authority.
     ResourceGenerationUpdated {
+        plugins: Option<super::settings::EffectivePlugins>,
+        model: Box<crate::model::session::SessionModelView>,
+        approval_mode: crate::runtime::ApprovalMode,
         /// The active capability projection this generation was composed
         /// against.
         capabilities: CapabilityView,

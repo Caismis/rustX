@@ -18,9 +18,9 @@ test('real executable failure preserves native stdout, stderr, exact argv and ex
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const binary = join(directory, 'native binary with spaces');
   writeFileSync(binary, '#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2))); console.error("native configuration failure: original detail"); process.exitCode = 23;\n', { mode: 0o700 });
-  const result = spawnSync(process.execPath, [join(root, 'dev/src/main.ts'), 'app-server', '--', '--binary', binary, '--user-settings', '/a b', '--runtime-root', '/c d', '--listen', 'ws://127.0.0.1:8080'], { encoding: 'utf8', timeout: 15_000 });
+  const result = spawnSync(process.execPath, [join(root, 'dev/src/main.ts'), 'app-server', '--', '--binary', binary, '--config', '/a b', '--runtime-root', '/c d', '--listen', 'ws://127.0.0.1:8080'], { encoding: 'utf8', timeout: 15_000 });
   assert.equal(result.status, 23, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), ['app-server', '--user-settings', '/a b', '--runtime-root', '/c d', '--listen', 'ws://127.0.0.1:8080']);
+  assert.deepEqual(JSON.parse(result.stdout), ['app-server', '--config', '/a b', '--runtime-root', '/c d', '--listen', 'ws://127.0.0.1:8080']);
   assert.match(result.stderr, /\[app-server\] native configuration failure: original detail/);
 });
 

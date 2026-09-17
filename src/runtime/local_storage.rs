@@ -47,6 +47,16 @@ impl ProductRoot {
             _lock: lock(directory(&self.root)?, FlockArg::LockSharedNonblock)?,
         })
     }
+    /// Serialize Conversation identity reservations across every Session and
+    /// child allocator in this runtime root. This lock protects allocation,
+    /// not semantic execution order or ordinary Conversation activity.
+    pub(crate) fn conversation_allocation(&self) -> io::Result<ConversationAllocation> {
+        let sessions = self.confined(&self.root.join("sessions"))?;
+        std::fs::create_dir_all(&sessions)?;
+        Ok(ConversationAllocation {
+            _lock: lock(directory(&sessions)?, FlockArg::LockExclusive)?,
+        })
+    }
     /// Validates an identity-derived allocation, including missing leaves.
     /// No symlink below the canonical product root is a storage identity.
     ///
@@ -172,6 +182,9 @@ impl ConversationAccess {
 /// Exclusive access acquired in sorted authoritative `ConversationId` order.
 #[derive(Debug)]
 pub(crate) struct ConversationExclusion {
+    _lock: Flock<File>,
+}
+pub(crate) struct ConversationAllocation {
     _lock: Flock<File>,
 }
 impl ConversationExclusion {
@@ -353,8 +366,11 @@ mod tests {
                 ConversationRuntimeConfig::new(&external, allocation.join("artifacts"));
             config.lifecycle = Some(access);
             assert!(
-                ConversationToolRuntime::from_config(ConversationId::new("conversation"), config)
-                    .is_err()
+                ConversationToolRuntime::from_config(
+                    ConversationId::new("conv_8b34dbc2-c05e-74d7-825d-48efeace8245"),
+                    config
+                )
+                .is_err()
             );
             assert_eq!(std::fs::read_dir(&external).unwrap().count(), 0);
         }

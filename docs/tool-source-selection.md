@@ -26,11 +26,11 @@ root's delegation and Workflow capabilities.
 `All` selects every eligible ordinary Tool published by that
 exact source in the admitted resource generation. `Exact` selects only the source-qualified names in the array. Arrays reject malformed and
 duplicate names. There are no wildcard, exclusion, inheritance, or alternate
-Python selectors. Native Tools remain an explicit list. Extension-provided Tools
-belong solely to native Agent Extension composition. Extension ownership is
+Python selectors. Native Tools remain an explicit list. Plugin-provided Tools
+belong solely to closed native Plugin composition. Plugin ownership is
 provenance, not a globally reserved Tool-name namespace. `builtin = ["todo"]`
-cannot select the Todo extension, but a source-owned Tool named `todo` is an
-ordinary source Tool: both All and Exact can select it. If an enabled extension
+cannot select the Todo Plugin, but a source-owned Tool named `todo` is an
+ordinary source Tool: both All and Exact can select it. If an enabled Plugin
 and a selected source Tool have the same model-facing name, final ToolRegistry
 composition rejects that collision explicitly; selection neither hides nor
 renames either Tool.
@@ -58,30 +58,30 @@ schema can represent source-wide `All` at these exact executable locations.
 
 ## Demand and ownership
 
-Source definition/discovery is distinct from enabled/trusted eligibility,
-materialization, Agent exposure, frozen admission, and invocation approval.
-Selecting a source cannot define it, enable a disabled MCP server, grant host
-trust, or bypass approval policy.
+Source definition/discovery is distinct from selection, materialization, frozen
+admission, and invocation approval. Selecting a source cannot define it or bypass
+global invocation policy. There is no MCP activation switch or Workspace trust gate.
 
-The composition owner collects finite demand from main selection, admitted
-named Agent profiles, and admitted Workflow references. A sorted set coalesces
+Root composition collects finite demand from Root selection and its admitted
+Workflow references. Named-Agent-only demand begins at child admission. A sorted set coalesces
 multiple references to one semantic source. The existing capability coordinator
 prepares one off-side candidate:
 
-- Enabled/trusted MCP definitions are connected only when demanded, by the
+- Selected MCP definitions are connected only when demanded, by the
   existing MCP connection and generation owner.
 - `.agents/tools/<package>` discovery records inert identities and paths.
   Only demanded discovered packages enter the existing `PythonToolStore`
   preparation owner. Unreferenced package code and dependencies are not parsed;
   no environment, uv operation, credentials, import, or process is requested.
+  Discovery captures bounded inert bytes for generation freezing.
 - Python's prepared execution binding may use MCP internally. Its published
   ordinary Tool provenance remains Managed Python. This does not create a
   generic plugin runtime or a second connection manager.
 
 Materialization alone does not expose Tools to main. Each Agent/Workflow resolves
 its own source selection against the committed available catalog. Same-name
-Tools from different sources never substitute for each other. Source-local
-failures remain bounded and isolated from unrelated sources.
+Tools from different sources never substitute for each other. Unused invalid sources produce bounded diagnostics. Failure preparing a required
+source rejects the complete candidate and preserves the published generation.
 
 ## Frozen generations and children
 
@@ -99,10 +99,9 @@ fail preparation; a later same-name Tool cannot replace a parent-authorized one.
 
 ## Resolution facts and policy
 
-`resolve_source` returns typed facts: undefined source; inactive source with its
-actual disabled/untrusted decision; unprepared source; materialization unavailable
+`resolve_source` returns typed facts: undefined source; unprepared source; materialization unavailable
 with a bounded reason; or a ready source with selected definitions and missing
 Exact names. Offline checks retain unprepared facts and never invent online Tool
-metadata. The shared Agent Profile resolver records these facts as typed diagnostics and
-suppresses unavailable selections. Workflow whole-program disable remains a
-separate static admission concern.
+metadata. The shared Agent Profile resolver records typed diagnostics. Selected invalid
+requirements fail admission instead of producing a silently narrowed executable.
+Workflow whole-program validation remains a separate static admission concern.

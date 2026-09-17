@@ -4,14 +4,14 @@
     "revision": 7,
     "omitted_runs": 0,
     "runs": [{
-      "id": {"conversation_id":"conv-test","attempt_id":"attempt","invocation":1},
+      "id": {"conversation_id":"conv_5d71cacf-35af-790f-8022-fe16cd1b9fe0","attempt_id":"attempt","invocation":1},
       "workflow_id":"review",
       "program_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "resource_revision":1,
       "tool_call_id":"outer",
       "state":{"type":"draining"},
       "instances":[{
-        "block":{"run":{"conversation_id":"conv-test","attempt_id":"attempt","invocation":1},"definition":{"workflow_id":"review","blocks":["repair","body"]},"invocations":[0,2]},
+        "block":{"run":{"conversation_id":"conv_5d71cacf-35af-790f-8022-fe16cd1b9fe0","attempt_id":"attempt","invocation":1},"definition":{"workflow_id":"review","blocks":["repair","body"]},"invocations":[0,2]},
         "node":"check",
         "visit":0,
         "kind":"tool",
@@ -23,7 +23,7 @@
         "iteration":null,
         "iterations_max":null,
         "loop_exit":null,
-        "candidate":{"run":{"conversation_id":"conv-test","attempt_id":"attempt","invocation":1},"version":2,"content":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+        "candidate":{"run":{"conversation_id":"conv_5d71cacf-35af-790f-8022-fe16cd1b9fe0","attempt_id":"attempt","invocation":1},"version":2,"content":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
         "checks_passed":false,
         "review_accepted":null
       }],

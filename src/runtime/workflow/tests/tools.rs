@@ -200,13 +200,12 @@ fn context_with_workspace_policy(
         )
         .with_subagent_catalog(agents.resources().subagents().clone()),
     );
-    let mut context = crate::runtime::subagent::AttemptSubagentContext::new(
+    let mut context = crate::runtime::subagent::AttemptSubagentContext::test_context(
         crate::runtime::identity::AttemptId::new("workflow-test-attempt"),
         resources,
         SessionModelConfig::of(model),
         models,
         ApprovalMode::Policy,
-        crate::extensions::NativeAgentExtensions::none(),
     );
     context.native = Some(Arc::new(NativeInvocationServices {
         lifecycle,

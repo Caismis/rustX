@@ -56,19 +56,18 @@ role already has or what its own frozen admitted profile holds. See
 [Canonical named Subagent resources](../../../docs/subagent-resources.md#invocation-scoped-overrides).
 
 Nothing else is overridable. Model, instructions, timeout, workspace policy,
-`AGENTS.md` policy, approval policy, credentials, and source enablement belong
+`AGENTS.md` policy, global invocation policy, credentials, and source materialization belong
 to the role definition alone.
 
 ## Running the checks
 
 ```sh
-rustx --workspace examples/local-runtime/workflow-templates --trust grant
 rustx workflow check specialized_agent \
   --workspace examples/local-runtime/workflow-templates \
-  --models examples/local-runtime/minimal/models.toml --model example/demo-model --json
+  --config "$(pwd)/examples/local-runtime/rustx.toml" --model example/demo-model --json
 rustx workflow explain specialized_agent \
   --workspace examples/local-runtime/workflow-templates \
-  --models examples/local-runtime/minimal/models.toml --model example/demo-model --json
+  --config "$(pwd)/examples/local-runtime/rustx.toml" --model example/demo-model --json
 ```
 
 `explain` projects each node's override as identities only — capability

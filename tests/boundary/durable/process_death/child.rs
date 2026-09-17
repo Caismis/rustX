@@ -288,16 +288,9 @@ fn terminal_count(seen: &[Seen]) -> usize {
 /// The explicit startup paths of one child, derived from the parent's lab.
 fn lab_paths(root: &Path) -> LaunchFixture {
     LaunchFixture {
-        models: root.join("models.toml"),
         config: root.join("rustx.toml"),
-        skill_paths: Vec::new(),
-        no_automatic_skills: false,
-        no_builtin_tools: false,
-        no_direct_tools: false,
         startup_session: rustx::local_runtime::StartupSession::Empty,
         session_name: None,
-        tools: None,
-        exclude_tools: Vec::new(),
         workspace: root.join("workspace"),
         runtime_root: root.join("private"),
     }
@@ -365,7 +358,7 @@ impl Child {
         let (conversation_id, artifacts_root) = lineage.unwrap_or_else(|| {
             (
                 ConversationId::new(CONVERSATION),
-                controller.root().join("artifacts"),
+                controller.root().join("sessions/ses_0199c989-03a0-7000-8000-000000000001/conversations/conv_0199c989-03a0-7000-8000-000000000001"),
             )
         });
         let core = LocalConversationCore::compose_from_config(
@@ -450,7 +443,7 @@ impl Child {
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("the staged subagent child process");
-        let runtime_root = root.join("private/artifacts/subagents/staged");
+        let runtime_root = root.join("private/sessions/ses_0199c989-03a0-7000-8000-000000000001/conversations/conv_0199c989-03a0-7000-8000-000000000001/incarnations/staged");
         std::fs::create_dir_all(&runtime_root).expect("staged child runtime root");
         self.runtime()
             .subagents()
@@ -528,7 +521,7 @@ fn spawn_observer(
 /// re-implementation of them.
 async fn compose_session_child(
     root: &Path,
-    session: &str,
+    session_ordinal: usize,
     scripts: Vec<Vec<FakeStep>>,
 ) -> (Child, Arc<LocalSessionAttachment>) {
     let paths = lab_paths(root);
@@ -548,9 +541,10 @@ async fn compose_session_child(
         None => SessionCatalog::create(&paths.runtime_root, &template)
             .expect("publish the first native Session"),
     };
+    let session_id = catalog.persisted_session_ids()[session_ordinal].clone();
     let (session_id, node, session_state) = catalog
-        .lineage(&crate::local_runtime::SessionId::new(session), None)
-        .map(|(node, state)| (crate::local_runtime::SessionId::new(session), node, state))
+        .lineage(&session_id, None)
+        .map(|(node, state)| (session_id, node, state))
         .expect("an active Session lineage");
     let database_path = catalog.database_path(&session_id, &node.conversation_id);
     let artifacts_root = database_path
@@ -1074,6 +1068,15 @@ async fn scenario_body(root: &Path, scenario: &str) {
             note("settled");
         }
         RELOAD => {
+            let server = crate::boundary_suites::common::FixtureServer::start(|_, _| {
+                crate::boundary_suites::common::sse_fixture("openai_chat", "plain_text.sse")
+            })
+            .await;
+            let path = root.join("rustx.toml");
+            let source = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("https://fixture.invalid", &server.url(""));
+            std::fs::write(&path, source).unwrap();
             let child = Child::require(
                 root,
                 vec![
@@ -1091,7 +1094,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
             child.submit("go");
             child.log.wait_settled(1).await;
             rendezvous("settled");
-            let reloaded = child.runtime().reload_resources().await;
+            let reloaded = child.runtime().reload_configuration().await;
             note(&format!("reload:{}", describe(&reloaded)));
             // Whether the reload published R2 or kept R1, the next admitted
             // attempt records which generation it actually used.
@@ -1115,7 +1118,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
             .await;
             child.submit("go");
             child.wait_model_parked().await;
-            let reloaded = child.runtime().reload_resources().await;
+            let reloaded = child.runtime().reload_configuration().await;
             note(&format!("reload:{}", describe(&reloaded)));
             release.send_replace(true);
             child.log.wait_settled(1).await;
@@ -1145,7 +1148,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
             let runtime = child.runtime().clone();
             let compaction = tokio::spawn(async move { runtime.compact_context().await });
             child.wait_model_parked().await;
-            let reloaded = child.runtime().reload_resources().await;
+            let reloaded = child.runtime().reload_configuration().await;
             note(&format!("reload:{}", describe(&reloaded)));
             release.send_replace(true);
             let outcome = compaction.await.expect("the compaction task joins");
@@ -1174,7 +1177,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                         .any(|entry| matches!(entry, Seen::InteractionPending))
                 })
                 .await;
-            let reloaded = child.runtime().reload_resources().await;
+            let reloaded = child.runtime().reload_configuration().await;
             note(&format!("reload:{}", describe(&reloaded)));
             park_owning(child).await;
         }
@@ -1227,7 +1230,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
                     .unwrap(),
             );
-            let artifacts_root = controller.root().join("artifacts");
+            let artifacts_root = controller.root().join("sessions/ses_0199c989-03a0-7000-8000-000000000001/conversations/conv_0199c989-03a0-7000-8000-000000000001");
             let core = LocalConversationCore::compose_from_config(
                 &launch,
                 &LocalRuntimeDependencies::default(),
@@ -1354,7 +1357,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                     })
                 })
                 .await;
-            let reloaded = child.runtime().reload_resources().await;
+            let reloaded = child.runtime().reload_configuration().await;
             note(&format!("reload:{}", describe(&reloaded)));
             park_owning(child).await;
         }
@@ -1442,7 +1445,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
             };
             let (child, supervisor) = compose_session_child(
                 root,
-                "session-1",
+                0,
                 vec![
                     calling_turn(&bash),
                     vec![
@@ -1520,7 +1523,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
             // all while answering normally.
             let (child, supervisor) = compose_session_child(
                 root,
-                "session-2",
+                1,
                 vec![vec![
                     started(),
                     text("resumed on the cut lineage"),

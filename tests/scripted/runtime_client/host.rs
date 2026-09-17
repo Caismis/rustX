@@ -132,7 +132,7 @@ fn text(text: &str) -> Vec<UserContentBlock> {
 async fn submit_idle_admits_and_settles_asynchronously() {
     let model = FakeModel::new(vec![one_turn_stop()]);
     let (model_handle, host) = host(
-        "conv-37-idle",
+        "conv_bfd10f7c-94f1-79fb-b603-f255362a348f",
         model,
         ToolRegistry::new(),
         status_engine(),
@@ -158,7 +158,10 @@ async fn submit_idle_admits_and_settles_asynchronously() {
         panic!("accepted result");
     };
     assert_eq!(inbound_sequence.get(), 1);
-    assert_eq!(message_id.as_str(), "conv-37-idle-inbound-1");
+    assert_eq!(
+        message_id.as_str(),
+        "conv_bfd10f7c-94f1-79fb-b603-f255362a348f-inbound-1"
+    );
 
     let events = receive_until(&subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
@@ -222,7 +225,7 @@ async fn submit_while_busy_queues_for_the_next_drain() {
         one_turn_stop(),
     ]);
     let (model_handle, host) = host(
-        "conv-37-busy",
+        "conv_b67c70ed-de32-7189-bcda-1e2b1a2aaaf4",
         model,
         ToolRegistry::new(),
         status_engine(),
@@ -295,7 +298,7 @@ async fn cancel_current_attempt_is_acceptance_not_settlement() {
         FakeStep::ParkUntilCancelled,
     ]]);
     let (_, host) = host(
-        "conv-37-cancel",
+        "conv_d3869a8b-ec8b-7963-9dff-416141b66ebe",
         model,
         ToolRegistry::new(),
         status_engine(),
@@ -393,7 +396,14 @@ async fn foreground_tools_project_with_stable_identities() {
     let mut tools = ToolRegistry::new();
     tool_a.register(&mut tools);
     tool_b.register(&mut tools);
-    let (_, host) = host("conv-37-tools", model, tools, status_engine(), None).await;
+    let (_, host) = host(
+        "conv_aeac2a03-8889-74cb-b0a2-ba01d29bc2a8",
+        model,
+        tools,
+        status_engine(),
+        None,
+    )
+    .await;
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
@@ -479,7 +489,7 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
         }),
     ]]);
     let (_, host) = host(
-        "conv-37-repair",
+        "conv_8c71da20-3b8d-7d28-9932-365936b4ca5c",
         model,
         ToolRegistry::new(),
         status_engine(),
@@ -586,7 +596,7 @@ async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
         }),
     ]]);
     let (model_handle, host) = host(
-        "conv-37-replay",
+        "conv_c775d7be-9b7e-787b-8097-da98d4a2c0bc",
         model,
         ToolRegistry::new(),
         status_engine(),
@@ -723,7 +733,7 @@ async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
 async fn agent_status_shares_one_composition() {
     let model = FakeModel::new(vec![one_turn_stop()]);
     let (model_handle, host) = host(
-        "conv-37-status",
+        "conv_e20d97cc-98d3-7a99-9bf6-2964ebac2016",
         model,
         ToolRegistry::new(),
         status_engine(),
@@ -952,7 +962,7 @@ async fn disabled_time_and_background_with_no_actionable_todos_emit_no_status() 
     let engine = AgentStatusEngine::new(config, Arc::new(FixedStatusClock));
     let model = FakeModel::new(vec![one_turn_stop()]);
     let (model_handle, host) = host(
-        "conv-37-status-disabled",
+        "conv_6b0a12de-fb32-7981-b2ef-92162bdb2d08",
         model,
         ToolRegistry::new(),
         engine,
@@ -1034,8 +1044,14 @@ async fn agent_status_is_composed_exactly_once_per_request() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
 
-    let (model_handle, host) =
-        host("conv-37-compose-once", model, tools, status_engine, None).await;
+    let (model_handle, host) = host(
+        "conv_c8f649d4-192e-7df1-ba51-e3f6c8475191",
+        model,
+        tools,
+        status_engine,
+        None,
+    )
+    .await;
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
@@ -1167,7 +1183,14 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
         )
         .expect("register");
     let model = FakeModel::new(Vec::new());
-    let (_, host) = host("conv-37-cap", model, tools, status_engine(), None).await;
+    let (_, host) = host(
+        "conv_47c7c667-7657-7a48-aa3b-c9f889124fae",
+        model,
+        tools,
+        status_engine(),
+        None,
+    )
+    .await;
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");

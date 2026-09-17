@@ -18,9 +18,24 @@ fn read_example(name: &str) -> Vec<u8> {
     std::fs::read(examples_root().join(name)).expect("committed example file")
 }
 
+fn example_catalog() -> ModelCatalog {
+    let document: rustx::local_runtime::authoring::RuntimeLayer =
+        toml::from_str(&String::from_utf8(read_example("rustx.toml")).unwrap()).unwrap();
+    ModelCatalog::from_document(
+        rustx::model::authoring::Catalog {
+            schema_version: rustx::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
+            providers: document.providers.unwrap(),
+            models: document.models.unwrap(),
+        }
+        .into(),
+    )
+    .unwrap()
+}
+
 #[test]
 fn committed_configuration_examples_are_commented_toml() {
-    for name in ["models.toml", "rustx.toml"] {
+    {
+        let name = "rustx.toml";
         let bytes = read_example(name);
         let text = String::from_utf8(bytes.clone()).expect("committed example is UTF-8");
         assert!(
@@ -36,8 +51,7 @@ fn committed_configuration_examples_are_commented_toml() {
 
 #[test]
 fn committed_model_example_uses_the_production_catalog_contract() {
-    let catalog = ModelCatalog::from_toml_slice(&read_example("models.toml"))
-        .expect("models.toml must parse through ModelCatalog");
+    let catalog = example_catalog();
     let model_ref = ModelRef::parse("example/demo-model").expect("canonical model reference");
     let model = catalog.model(&model_ref).expect("example model exists");
     assert_eq!(model.protocol, ModelProtocol::OpenAiChatCompletions);
@@ -83,8 +97,7 @@ fn committed_model_example_uses_the_production_catalog_contract() {
 
 #[test]
 fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_policy() {
-    let catalog = ModelCatalog::from_toml_slice(&read_example("models.toml"))
-        .expect("models.toml must parse through ModelCatalog");
+    let catalog = example_catalog();
     let config = CurrentRuntimeConfig::from_toml_slice(&read_example("rustx.toml"))
         .expect("rustx.toml must parse through CurrentRuntimeConfig");
 
@@ -133,7 +146,7 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
             .any(|name| name.as_str() == "navigator")
     );
     assert_eq!(
-        std::fs::read_dir(examples_root().join("workspace/.agents/agents"))
+        std::fs::read_dir(examples_root().join(".agents/agents"))
             .unwrap()
             .filter(|entry| entry
                 .as_ref()
@@ -163,8 +176,7 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
         vec!["parallel_review", "implement_and_review"]
     );
 
-    let host = CurrentRuntimeConfig::from_toml_slice(&read_example("settings.toml")).unwrap();
-    let policies = host.native_tools.to_policies();
+    let policies = config.native_tools.to_policies();
     assert_eq!(policies.read.execution, ToolExecutionPolicy::ForegroundOnly);
     assert_eq!(policies.read.concurrency, ToolConcurrencyPolicy::Parallel);
     assert_eq!(
@@ -179,17 +191,17 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
 
 #[test]
 fn committed_echo_package_is_discovered_by_production_python_discovery() {
-    let workspace_path = examples_root().join("workspace");
+    let workspace_path = examples_root();
     let workspace = Workspace::new(&workspace_path).expect("example workspace");
-    let discovered = rustx::tools::python::discover_python_packages(&workspace)
-        .expect("example tool packages must be discoverable");
-    assert_eq!(discovered.len(), 1);
-    let echo = &discovered[0];
-    assert_eq!(echo.server_id.as_str(), "python:echo");
-    let package = echo
-        .outcome
+    let user = tempfile::tempdir().unwrap();
+    let catalog =
+        rustx::local_runtime::managed_python_resources::discover(workspace.root(), user.path())
+            .unwrap();
+    assert_eq!(catalog.packages().len(), 1);
+    let package = catalog.packages()
+        [&rustx::capabilities::ToolSourceId::ManagedPython("echo".into())]
         .as_ref()
-        .expect("the committed echo package must be valid");
+        .expect("committed echo package must be valid");
     assert_eq!(package.name, "echo");
     let file_names: Vec<&str> = package
         .files
@@ -204,14 +216,13 @@ fn committed_echo_package_is_discovered_by_production_python_discovery() {
 
 #[test]
 fn committed_example_skill_is_found_by_project_agents_discovery() {
-    let workspace_path = examples_root().join("workspace");
+    let workspace_path = examples_root();
     let workspace = Workspace::new(&workspace_path).expect("example workspace");
     let outcome = SkillDiscovery::with_config(
         &workspace,
         SkillDiscoveryConfig::workspace_root(workspace_path.join(".agents/skills")),
     )
-    .discover()
-    .expect("example Skill must be discoverable");
+    .discover();
     assert_eq!(
         outcome
             .packages
@@ -227,7 +238,7 @@ fn committed_example_skill_is_found_by_project_agents_discovery() {
 #[test]
 fn every_shipped_workflow_is_discovered_and_compiles() {
     use rustx::runtime::workflow::{WorkflowDefinition, WorkflowProgram};
-    let directory = examples_root().join("workspace/.agents/workflows");
+    let directory = examples_root().join(".agents/workflows");
     let mut paths = std::fs::read_dir(&directory)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -250,10 +261,9 @@ fn every_shipped_workflow_is_discovered_and_compiles() {
 #[test]
 fn reference_authoring_errors_fail_before_execution() {
     use rustx::runtime::workflow::{WorkflowDefinition, WorkflowId, WorkflowProgram};
-    let source: serde_json::Value = serde_yaml::from_slice(&read_example(
-        "workspace/.agents/workflows/implement_and_review.yaml",
-    ))
-    .unwrap();
+    let source: serde_json::Value =
+        serde_yaml::from_slice(&read_example(".agents/workflows/implement_and_review.yaml"))
+            .unwrap();
     let cases = [
         (
             "/block/nodes/plan/input/brief/path",
@@ -307,7 +317,7 @@ fn reference_authoring_errors_fail_before_execution() {
 }
 
 #[test]
-fn cfg275_current_product_surfaces_cannot_reintroduce_obsolete_authoring() {
+fn current_product_surfaces_cannot_reintroduce_obsolete_authoring() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let obsolete = [
         "settings.jsonc",
@@ -331,12 +341,8 @@ fn cfg275_current_product_surfaces_cannot_reintroduce_obsolete_authoring() {
         "tui/README.md",
         "src/local_runtime/cli.rs",
         "tui/src/cli.ts",
-        "schemas/settings.schema.json",
         "schemas/rustx.schema.json",
-        "schemas/models.schema.json",
         "schemas/agent.schema.json",
-        "examples/cfg2/rustx.toml",
-        "examples/cfg2/README.md",
     ] {
         let text = std::fs::read_to_string(root.join(path)).unwrap();
         // CLI unit tests deliberately exercise rejected historical spellings.

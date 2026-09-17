@@ -412,6 +412,7 @@ pub struct ModelInvocationConfig {
 pub struct ResolvedModelInvocation {
     provider: ProviderId,
     model_ref: ModelRef,
+    wire_model: String,
     adapter: Arc<dyn ModelAdapter>,
     protocol: ModelProtocol,
     context_window: u64,
@@ -429,6 +430,7 @@ impl fmt::Debug for ResolvedModelInvocation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ResolvedModelInvocation")
             .field("model", &self.model_ref)
+            .field("wire_model", &self.wire_model)
             .field("protocol", &self.protocol)
             .field("context_window", &self.context_window)
             .field("effective_output_tokens", &self.effective_output_tokens)
@@ -450,6 +452,7 @@ impl PartialEq for ResolvedModelInvocation {
     /// and they share the same adapter binding.
     fn eq(&self, other: &Self) -> bool {
         self.model_ref == other.model_ref
+            && self.wire_model == other.wire_model
             && self.protocol == other.protocol
             && self.context_window == other.context_window
             && self.effective_output_tokens == other.effective_output_tokens
@@ -557,7 +560,7 @@ impl ResolvedModelInvocation {
     #[must_use]
     pub fn invocation_config(&self) -> ModelInvocationConfig {
         ModelInvocationConfig {
-            model: self.model_ref.model().as_str().to_owned(),
+            model: self.wire_model.clone(),
             protocol: self.protocol,
             max_output_tokens: self.effective_output_tokens,
             request_params: self.request_params.clone(),
@@ -592,6 +595,7 @@ impl ResolvedModelInvocation {
         Self {
             provider: frozen.binding.provider.clone(),
             model_ref: frozen.model.clone(),
+            wire_model: frozen.wire_model.clone(),
             adapter,
             protocol: frozen.protocol,
             context_window: frozen.context_window,
@@ -1021,6 +1025,7 @@ impl ModelBindingRegistry {
         Ok(ResolvedModelInvocation {
             provider: provider.id().clone(),
             model_ref: analyzed.model,
+            wire_model: model.id.as_str().to_owned(),
             adapter,
             protocol,
             context_window: analyzed.context_window,
@@ -1073,6 +1078,7 @@ impl ModelBindingRegistry {
                 credential: provider.credential_declaration().clone(),
             },
             model: resolved.model_ref.clone(),
+            wire_model: resolved.wire_model.clone(),
             protocol: resolved.protocol,
             context_window: resolved.context_window,
             model_max_output_tokens: resolved.model_max_output_tokens,

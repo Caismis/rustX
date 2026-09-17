@@ -53,7 +53,7 @@ use super::{CHILD_TEST, ROOT_ENV, SCENARIO_ENV};
 pub(crate) const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
 
 /// The conversation lineage every child of this suite composes.
-pub(crate) const CONVERSATION: &str = "conversation-fnd06";
+pub(crate) const CONVERSATION: &str = "conv_0199c989-03a0-7000-8000-000000000001";
 
 /// The one fixture model reference of this suite.
 pub(crate) const MODEL: &str = "fixture/fnd06";
@@ -70,34 +70,6 @@ impl RuntimeClock for FixedClock {
     }
 }
 
-/// The model catalog a child inherits. The bindings a child actually uses are
-/// resolved from the in-process fixture registry; this file exists because the
-/// composition contract requires an explicit catalog path.
-fn models_json() -> String {
-    toml::to_string_pretty(&serde_json::json!({
-        "providers": {
-            "fixture": {
-                "base_url": "https://fixture.invalid/v1",
-                "api_key": "fixture-key-fixture",
-                "models": [{
-                    "id": "fnd06",
-                    "protocol": "openai_chat_completions",
-                    "context_window": 1_000_000,
-                    "max_output_tokens": 4096,
-                    "capabilities": {
-                        "input_modalities": ["text"],
-                        "output_modalities": ["text"],
-                        "tool_calls": true,
-                        "reasoning": false
-                    },
-                    "compat": {"chat_reasoning_replay": "omit"},
-                    "request_params": serde_json::json!({})}]
-            }
-        }
-    }))
-    .unwrap()
-}
-
 /// The runtime configuration a child composes from.
 fn runtime_json(read_approval: &str, include_todo: bool) -> String {
     // Issue #259: Todo is composed through the closed extension surface, not
@@ -106,9 +78,11 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
     // no Todo extension unless a case asks for one.
     let builtin_tools = vec!["read", "bash", "execution"];
     toml::to_string_pretty(&serde_json::json!({
-        "schema_version": 8,
+        "schema_version": 9,
         "agent_id": "agent-fnd06",
-        "agent": {"model": {"model": MODEL}, "tools": {"builtin": builtin_tools}, "extensions": {"agent_status": {"enabled": true}, "todo": {"enabled": include_todo}}, "agents": ["explore"]},
+        "providers": {"fixture": {"base_url": "https://fixture.invalid/v1", "api_key": "fixture-key-fixture"}},
+        "models": {MODEL: {"provider": "fixture", "id": "fnd06", "protocol": "openai_chat_completions", "context_window": 1_000_000, "max_output_tokens": 4096, "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"], "tool_calls": true, "reasoning": false}, "compat": {"chat_reasoning_replay": "omit"}}},
+        "agent": {"model": {"model": MODEL}, "tools": {"builtin": builtin_tools}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": include_todo}}, "agents": ["explore"], "skills": "all"},
         "approval_mode": "policy",
         "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
         "native_tools": {
@@ -116,19 +90,7 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
             // Process-death tests own execution gates, not approval interaction.
             "bash": {"execution": "model_selectable", "approval": "never"}
         },
-        // One named subagent definition (Issue #144). The instruction
-        // document is a workspace resource the parent generation freezes;
-        // the child never reads this configuration.
-        "subagents": {
-            "max_concurrent": 4,
-            "roles": {
-                "explore": {
-                    "description": "Read-only exploration of the shared workspace.",
-
-                    "tools": {"builtin": ["read"]}
-                }
-            }
-        }
+        "subagents": {"max_concurrent": 4}
     }))
     .unwrap()
 }
@@ -137,21 +99,16 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
 /// composed. Only the Issue #130 process-death scenarios need it; the rest of
 /// FND-06 retains its original bounded catalog.
 pub(crate) fn write_runtime_config_with_todo(root: &Path) {
-    crate::launch_fixture::write_documents(
-        &root.join("rustx.toml"),
-        &runtime_json("never", true),
-        &["approval_mode", "native_tools"],
-    );
+    crate::launch_fixture::write_document(&root.join("rustx.toml"), &runtime_json("never", true));
 }
 
 pub(crate) fn write_runtime_config_with_goal(root: &Path) {
     let mut document: serde_json::Value =
         rustx::toml_authoring::parse(runtime_json("never", false).as_bytes()).unwrap();
-    document["agent"]["extensions"]["goal"] = serde_json::json!({"enabled": true});
-    crate::launch_fixture::write_documents(
+    document["agent"]["plugins"]["goal"] = serde_json::json!({"enabled": true});
+    crate::launch_fixture::write_document(
         &root.join("rustx.toml"),
         &toml::to_string_pretty(&document).unwrap(),
-        &["approval_mode", "native_tools"],
     );
 }
 
@@ -172,12 +129,10 @@ impl Lab {
             .expect("subagent resources");
         std::fs::write(
             lab.workspace().join(".agents/agents/explore.toml"),
-            "You are a read-only exploration subagent. Answer the delegated task with the \
-             capabilities your definition authorized.\n",
+            "description = 'Read-only exploration'\ninstructions = 'Answer the delegated task with your own capabilities.'\n[tools]\nbuiltin = ['read']\n",
         )
         .expect("explore instructions");
         std::fs::create_dir_all(lab.root().join("private")).expect("runtime-private root");
-        std::fs::write(lab.root().join("models.toml"), models_json()).expect("models.toml");
         lab.write_runtime_config("never");
         lab.write_project_instructions("R1 project instructions.");
         lab.write_skill_frontmatter("alpha", "R1 alpha summary");
@@ -195,14 +150,13 @@ impl Lab {
 
     /// The durable conversation database of every child of this lab.
     pub(crate) fn database(&self) -> PathBuf {
-        self.root().join("private/artifacts/conversation.sqlite")
+        self.root().join("private/sessions/ses_0199c989-03a0-7000-8000-000000000001/conversations/conv_0199c989-03a0-7000-8000-000000000001/conversation.sqlite")
     }
 
     pub(crate) fn write_runtime_config(&self, read_approval: &str) {
-        crate::launch_fixture::write_documents(
+        crate::launch_fixture::write_document(
             &self.root().join("rustx.toml"),
             &runtime_json(read_approval, false),
-            &["approval_mode", "native_tools"],
         );
     }
 
@@ -315,6 +269,42 @@ impl Lab {
         SessionCatalog::open_existing(&self.root().join("private"))
             .expect("read the native Session catalog")
             .expect("a native Session catalog was published")
+    }
+
+    pub(crate) fn source_lineage(&self) -> (SessionId, ConversationId) {
+        let catalog = self.catalog();
+        let session = catalog.persisted_session_ids()[0].clone();
+        let conversation = catalog.node_page(&session, 0, 1).unwrap().nodes[0]
+            .conversation_id
+            .clone();
+        (session, conversation)
+    }
+
+    /// Identify the unpublished seed by its durable contents, never UUID order.
+    pub(crate) fn seeded_cut(&self) -> (SessionId, ConversationId) {
+        let mut seeds = Vec::new();
+        for session in std::fs::read_dir(self.root().join("private/sessions"))
+            .unwrap()
+            .flatten()
+        {
+            let conversations = session.path().join("conversations");
+            let Ok(entries) = std::fs::read_dir(conversations) else {
+                continue;
+            };
+            for conversation in entries.flatten() {
+                let database = conversation.path().join("conversation.sqlite");
+                if !database.is_file() {
+                    continue;
+                }
+                let id = ConversationId::new(conversation.file_name().to_str().unwrap());
+                let durable = Self::durable_at(&id, &database);
+                if durable.canonical().len() == 13 && durable.journal().is_empty() {
+                    seeds.push((SessionId::new(session.file_name().to_str().unwrap()), id));
+                }
+            }
+        }
+        assert_eq!(seeds.len(), 1, "exactly one complete unpublished cut seed");
+        seeds.pop().unwrap()
     }
 
     /// The durable authority of one catalog lineage.

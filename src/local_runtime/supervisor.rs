@@ -198,7 +198,7 @@ impl LocalSessionAttachment {
         Ok(route_view(SessionRoute { session, node }))
     }
     fn requires_reattach(&self, target: &SessionView) -> bool {
-        self.session_id.as_str() != target.id
+        self.session_id != target.id
             || self
                 .runtime
                 .get()
@@ -350,7 +350,7 @@ impl RuntimeClientSessionControl for LocalSessionAttachment {
                 RuntimeClientSessionRequest::DeletePreview { session_id } => {
                     RuntimeClientResult::SessionDeletion {
                         result: project_session_deletion(
-                            supervisor.delete_preview(&SessionId::new(session_id)).await,
+                            supervisor.delete_preview(&session_id).await,
                         ),
                     }
                 }
@@ -360,7 +360,7 @@ impl RuntimeClientSessionControl for LocalSessionAttachment {
                 } => RuntimeClientResult::SessionDeletion {
                     result: project_session_deletion(
                         supervisor
-                            .delete_session(&SessionId::new(session_id), &expected_target_revision)
+                            .delete_session(&session_id, &expected_target_revision)
                             .await
                             .map_err(|_| RuntimeClientError::SessionFailure {
                                 message: "Session deletion failed before logical commit.".into(),
@@ -370,9 +370,7 @@ impl RuntimeClientSessionControl for LocalSessionAttachment {
                 RuntimeClientSessionRequest::DeleteRecover { session_id } => {
                     RuntimeClientResult::SessionDeletion {
                         result: project_session_deletion(
-                            supervisor
-                                .recover_deletion(&SessionId::new(session_id))
-                                .await,
+                            supervisor.recover_deletion(&session_id).await,
                         ),
                     }
                 }
@@ -456,7 +454,7 @@ impl RuntimeClientSessionControl for LocalSessionAttachment {
                     node_id,
                 } => {
                     let route = supervisor
-                        .select(SessionId::new(session_id), node_id.map(SessionNodeId::new))
+                        .select(session_id, node_id)
                         .await
                         .map_err(|error| session_error(&error))?;
                     RuntimeClientResult::SessionChanged {
@@ -569,28 +567,28 @@ fn changed_view(change: SessionTransitionResult) -> RuntimeClientResult {
 
 fn session_summary_view(summary: SessionSummary) -> SessionSummaryView {
     SessionSummaryView {
-        id: summary.id.as_str().to_owned(),
+        id: summary.id,
         name: summary.name,
         preview: summary.preview,
         updated_at: summary.updated_at,
-        active_node: summary.active_node.as_str().to_owned(),
+        active_node: summary.active_node,
     }
 }
 
 fn route_view(route: SessionRoute) -> SessionView {
     let mut view = session_view(route.session);
-    route.node.id.as_str().clone_into(&mut view.active_node);
+    view.active_node = route.node.id;
     view.active_conversation_id = route.node.conversation_id;
     view
 }
 
 fn session_view(snapshot: SessionSnapshot) -> SessionView {
     SessionView {
-        id: snapshot.id.as_str().to_owned(),
+        id: snapshot.id,
         name: snapshot.name,
         created_at: snapshot.created_at,
         updated_at: snapshot.updated_at,
-        active_node: snapshot.active_node.as_str().to_owned(),
+        active_node: snapshot.active_node,
         active_conversation_id: snapshot.active_conversation_id,
         node_count: snapshot.node_count,
     }
@@ -598,8 +596,8 @@ fn session_view(snapshot: SessionSnapshot) -> SessionView {
 
 fn session_node_view(node: super::session::SessionNode) -> SessionNodeView {
     SessionNodeView {
-        id: node.id.as_str().to_owned(),
-        parent: node.parent.map(|parent| parent.as_str().to_owned()),
+        id: node.id,
+        parent: node.parent,
         conversation_id: node.conversation_id,
         origin: match node.origin {
             super::session::SessionNodeOrigin::New => SessionNodeOriginView::New,
@@ -608,8 +606,8 @@ fn session_node_view(node: super::session::SessionNode) -> SessionNodeView {
                 source_node,
                 source_surface_revision,
             } => SessionNodeOriginView::Clone {
-                source_session: source_session.as_str().to_owned(),
-                source_node: source_node.as_str().to_owned(),
+                source_session,
+                source_node,
                 source_surface_revision,
             },
             super::session::SessionNodeOrigin::Fork {
@@ -618,8 +616,8 @@ fn session_node_view(node: super::session::SessionNode) -> SessionNodeView {
                 source_surface_revision,
                 source_user_message,
             } => SessionNodeOriginView::Fork {
-                source_session: source_session.as_str().to_owned(),
-                source_node: source_node.as_str().to_owned(),
+                source_session,
+                source_node,
                 source_surface_revision,
                 source_user_message,
             },
@@ -678,7 +676,7 @@ pub(crate) fn project_session_deletion(
             let total = preview.scopes.len() as u64;
             Wire::Preview {
                 preview: RuntimeClientSessionDeletePreview {
-                    session_id: preview.session_id.to_string(),
+                    session_id: preview.session_id,
                     name: preview.name.map(|name| name.chars().take(256).collect()),
                     target_revision: preview.target_revision,
                     owned_node_count: nodes,
@@ -687,18 +685,12 @@ pub(crate) fn project_session_deletion(
                 },
             }
         }
-        Native::Deleted { session_id } => Wire::Deleted {
-            session_id: session_id.to_string(),
-        },
-        Native::NotFound { session_id } => Wire::NotFound {
-            session_id: session_id.to_string(),
-        },
+        Native::Deleted { session_id } => Wire::Deleted { session_id },
+        Native::NotFound { session_id } => Wire::NotFound { session_id },
         // A stale execution invalidates confirmation, never mints its replacement.
-        Native::Stale { session_id, .. } => Wire::Stale {
-            session_id: session_id.to_string(),
-        },
+        Native::Stale { session_id, .. } => Wire::Stale { session_id },
         Native::Blocked { session_id, reason } => Wire::Blocked {
-            session_id: session_id.to_string(),
+            session_id,
             reason: match reason {
                 Blocker::InUse => Reason::InUse,
                 Blocker::Workspace { resources } => Reason::Workspace {
@@ -708,12 +700,10 @@ pub(crate) fn project_session_deletion(
             },
         },
         Native::CommittedCleanupPending { record, .. } => Wire::CommittedCleanupPending {
-            session_id: record.session_id.to_string(),
+            session_id: record.session_id,
         },
         Native::CommittedDurabilityUncertain { session_id, .. } => {
-            Wire::CommittedDurabilityUncertain {
-                session_id: session_id.to_string(),
-            }
+            Wire::CommittedDurabilityUncertain { session_id }
         }
     }
 }

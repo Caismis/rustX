@@ -52,9 +52,68 @@ macro_rules! id_type {
     };
 }
 
-id_type! {
-    /// Identifies a durable conversation.
-    ConversationId
+/// Typed `UUIDv7` domains serialize as canonical prefixed strings. Parsing is
+/// strict; UUID sort order is never a semantic ordering contract.
+macro_rules! uuid_id_type {
+    ($(#[$doc:meta])* $name:ident, $prefix:literal) => {
+        $(#[$doc])*
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+        #[serde(try_from = "String", into = "String")]
+        pub struct $name(String);
+        impl $name {
+            /// # Errors
+            /// Rejects UUIDs outside the version-7 RFC variant.
+            pub fn from_uuid(value: uuid::Uuid) -> Result<Self, String> {
+                Self::parse(format!("{}{value}", $prefix))
+            }
+            pub fn generate() -> Self { Self::from_uuid(uuid::Uuid::now_v7()).expect("UUIDv7 generator") }
+            /// # Errors
+            /// Rejects a wrong prefix, UUID version, variant, or noncanonical spelling.
+            pub fn parse(value: impl Into<String>) -> Result<Self, String> {
+                let value = value.into();
+                let raw = value.strip_prefix($prefix).ok_or_else(|| format!("expected {} UUIDv7 identity", $prefix))?;
+                let uuid = uuid::Uuid::parse_str(raw).map_err(|_| "invalid UUID".to_owned())?;
+                if !$crate::runtime::identity::is_uuid_v7(uuid) || raw != uuid.to_string() {
+                    return Err("expected canonical UUIDv7 identity".into());
+                }
+                Ok(Self(value))
+            }
+            pub fn new(value: impl Into<String>) -> Self {
+                Self::parse(value).expect("internal identity must be canonical UUIDv7")
+            }
+            pub fn as_str(&self) -> &str { &self.0 }
+            pub fn into_string(self) -> String { self.0 }
+        }
+        impl schemars::JsonSchema for $name {
+            fn schema_name() -> std::borrow::Cow<'static, str> { stringify!($name).into() }
+            fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+                schemars::json_schema!({ "type": "string", "pattern": concat!("^", $prefix,
+                    "[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$") })
+            }
+        }
+        impl TryFrom<String> for $name {
+            type Error = String;
+            fn try_from(value: String) -> Result<Self, Self::Error> { Self::parse(value) }
+        }
+        impl From<$name> for String { fn from(value: $name) -> Self { value.0 } }
+        impl AsRef<str> for $name { fn as_ref(&self) -> &str { &self.0 } }
+        impl core::fmt::Display for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result { f.write_str(&self.0) }
+        }
+    };
+}
+uuid_id_type! {
+    /// A durable user-facing Session identity.
+    SessionId, "ses_"
+}
+uuid_id_type! {
+    /// A durable Session graph node identity, independent of graph order.
+    SessionNodeId, "node_"
+}
+
+uuid_id_type! {
+    /// Identifies a durable Conversation independently of semantic order.
+    ConversationId, "conv_"
 }
 
 id_type! {
@@ -154,17 +213,16 @@ id_type! {
     ToolCallId
 }
 
-id_type! {
+uuid_id_type! {
     /// Identifies one detached runtime execution instance of a background
     /// tool.
     ///
     /// `ToolExecutionId` is distinct from `ToolCallId`: a `ToolCallId`
     /// identifies the logical model-issued call, while a `ToolExecutionId`
     /// identifies the runtime execution instance and may outlive the
-    /// attempt that created it. Allocation is conversation-owned and
-    /// monotonic (`exec_1`, `exec_2`, ...); cross-conversation uniqueness is
-    /// not required because the background registry is conversation-scoped.
-    ToolExecutionId
+    /// attempt that created it. Allocation is Conversation-owned `UUIDv7`;
+    /// execution ordering is independent durable metadata.
+    ToolExecutionId, "exec_"
 }
 
 id_type! {
@@ -251,35 +309,6 @@ impl InteractionId {
     #[must_use]
     pub fn for_attempt(attempt: &AttemptId, ordinal: u64) -> Self {
         Self::new(format!("{attempt}{}{ordinal}", Self::INTERACTION_INFIX))
-    }
-}
-
-/// The conversation-scoped detached-execution identity domain (Issue #12,
-/// M9a).
-///
-/// The background registry allocates `exec_1`, `exec_2`, ... from a
-/// process-local counter. That counter is a durable-identity ordinal exactly
-/// like the attempt ordinal: startup recovery reseeds it from the durable
-/// `BackgroundExecutionCommitted` facts so a restart cannot mint `exec_1`
-/// twice for two different detached executions.
-impl ToolExecutionId {
-    /// The prefix of the conversation-scoped background execution domain.
-    const BACKGROUND_PREFIX: &'static str = "exec_";
-
-    /// Allocates the background execution identity of `ordinal`.
-    #[must_use]
-    pub fn background(ordinal: u64) -> Self {
-        Self::new(format!("{}{ordinal}", Self::BACKGROUND_PREFIX))
-    }
-
-    /// The conversation-scoped ordinal of this identity, when it belongs to
-    /// the background execution domain.
-    #[must_use]
-    pub fn background_ordinal(&self) -> Option<u64> {
-        self.as_str()
-            .strip_prefix(Self::BACKGROUND_PREFIX)?
-            .parse()
-            .ok()
     }
 }
 
@@ -582,9 +611,9 @@ mod tests {
     /// Strong identifiers serialize as plain strings, not as structs.
     #[test]
     fn strong_ids_serialize_as_plain_strings() {
-        let id = ConversationId::new("conv-1");
+        let id = ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let json = serde_json::to_string(&id).expect("serialize conversation id");
-        assert_eq!(json, "\"conv-1\"");
+        assert_eq!(json, "\"conv_36524fd8-f674-7fc2-8125-06d01fee0e18\"");
     }
 
     /// Every strong identifier type round-trips against its own type; IDs
@@ -601,7 +630,9 @@ mod tests {
             decoded
         }
 
-        let _ = round_trip(&ConversationId::new("conv-1"));
+        let _ = round_trip(&ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ));
         let _ = round_trip(&MessageId::new("msg-1"));
         let _ = round_trip(&AgentId::new("agent-a"));
         let _ = round_trip(&AgentVersionId::new("agent-v1"));
@@ -611,7 +642,9 @@ mod tests {
         let _ = round_trip(&EventId::new("evt-1"));
         let _ = round_trip(&ToolId::new("tool-bash"));
         let _ = round_trip(&ToolCallId::new("call_01"));
-        let _ = round_trip(&ToolExecutionId::new("exec_1"));
+        let _ = round_trip(&ToolExecutionId::new(
+            "exec_215a03ee-2332-70b6-8e2d-634da8066f98",
+        ));
         let _ = round_trip(&McpServerId::new("mcp-fs"));
         let _ = round_trip(&SkillId::new("skill-readme"));
         let _ = round_trip(&SkillVersionId::new(
@@ -630,10 +663,13 @@ mod tests {
     /// A typed id remains distinct from a raw string representation.
     #[test]
     fn id_accessors_expose_the_string_value() {
-        let id = ConversationId::new("conv-1");
-        assert_eq!(id.as_str(), "conv-1");
-        assert_eq!(id.to_string(), "conv-1");
-        assert_eq!(id.into_string(), "conv-1");
+        let id = ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+        assert_eq!(id.as_str(), "conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+        assert_eq!(id.to_string(), "conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+        assert_eq!(
+            id.into_string(),
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18"
+        );
     }
 
     /// Capability revisions round-trip as plain JSON numbers, not strings.
@@ -653,4 +689,24 @@ mod tests {
     fn capability_revision_default_is_zero() {
         assert_eq!(CapabilityRevision::default().get(), 0);
     }
+}
+
+/// UUID generation is independent of semantic ordering and storage ownership.
+/// Storage owners must reserve the resulting identity with no-overwrite semantics.
+pub trait UuidV7Generator: core::fmt::Debug + Send + Sync {
+    fn next_uuid(&self) -> uuid::Uuid;
+}
+
+#[derive(Debug, Default)]
+pub struct SystemUuidV7Generator;
+impl UuidV7Generator for SystemUuidV7Generator {
+    fn next_uuid(&self) -> uuid::Uuid {
+        uuid::Uuid::now_v7()
+    }
+}
+
+/// Validate injected and parsed identities before they can become path components.
+#[must_use]
+pub fn is_uuid_v7(value: uuid::Uuid) -> bool {
+    value.get_version_num() == 7 && value.get_variant() == uuid::Variant::RFC4122
 }

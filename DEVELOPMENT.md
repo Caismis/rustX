@@ -13,12 +13,13 @@ pnpm --dir web-console install --frozen-lockfile
 
 Configure rustX through its native configuration commands and
 [launch contract](docs/launch-configuration.md). The launcher never reads user
-settings or provider/MCP credentials, grants project trust, or merges configuration.
+configuration or provider/MCP credentials, or merges configuration.
 Build explicitly after native changes; the launcher never builds implicitly.
 `--binary /absolute/path/rustx` selects another executable. Missing binaries produce
-an actionable error. Native paths/values pass through unchanged; relative native
-paths resolve from the command's working directory (pnpm runs scripts in `dev/`).
-Use absolute paths for settings, runtime roots, and Workspaces.
+an actionable error. Native paths/values pass through unchanged; native parsers own validation.
+User configuration and runtime-root bindings require absolute paths. Use an
+absolute Workspace path too (pnpm runs scripts in `dev/`).
+`--config` rebinds only the User document; User resources stay at `~/rustx/.agents`.
 
 ## Canonical commands
 
@@ -26,7 +27,7 @@ Use absolute paths for settings, runtime roots, and Workspaces.
 
 ```sh
 pnpm --dir dev app-server -- \
-  --user-settings /absolute/path/settings.toml \
+  --config /absolute/path/rustx.toml \
   --runtime-root /absolute/path/runtime
 ```
 
@@ -45,13 +46,13 @@ with an explicit native transport; see [App Server](docs/app-server-protocol.md)
 
 ```sh
 pnpm --dir dev tui -- \
-  --user-settings /absolute/path/settings.toml \
+  --config /absolute/path/rustx.toml \
   --workspace /absolute/path/workspace
 ```
 
 TUI arguments pass through to its own parser. `--workspace` supplies the Session's
 initial cwd through `session/create`; native `SessionPersistentState.cwd` remains
-its durable authority. `--runtime-root`, `--models`, `--resume`, and other documented
+its durable authority. `--runtime-root`, `--model`, `--resume`, and other documented
 [TUI options](tui/README.md) remain available. The TUI owns and reaps its stdio
 App Server child. Direct `pnpm --dir tui start --connect ...` serves the distinct
 case of attaching to an externally owned App Server.
@@ -60,7 +61,7 @@ case of attaching to an externally owned App Server.
 
 ```sh
 pnpm --dir dev web -- \
-  --user-settings /absolute/path/settings.toml \
+  --config /absolute/path/rustx.toml \
   --runtime-root /absolute/path/runtime \
   --workspace /absolute/path/workspace \
   --workspace /absolute/path/another-workspace
@@ -78,7 +79,7 @@ nor persisted in browser storage. Never enter a provider key in this screen.
 
 The Product Host retains all Workspace navigation/authorization decisions. Only
 explicit exact roots are authorized; descendants are not implicitly admitted.
-Native project trust remains separate. Dev Host names/order/registrations are
+Native configuration resolution remains separate from Host navigation authorization. Dev Host names/order/registrations are
 intentionally ephemeral for each composition. Persistent operator-owned Host
 metadata belongs to a separately managed Host, not launcher scratch.
 
@@ -102,7 +103,7 @@ delivering a kill signal alone is not treated as settlement.
 
 Scratch contains one random transport token (0600), one Host config (0600), and the
 Host's ephemeral registration metadata, beneath a private temporary directory
-(0700). User settings, runtime roots, Workspace files and persistent Host metadata
+(0700). User configuration, runtime roots, Workspace files and persistent Host metadata
 are never launcher scratch and are never removed. Launcher SIGINT/SIGHUP/SIGTERM
 return 130/129/143;
 the TUI retains its own raw-key Ctrl+C behavior and ordinary clean exit status.
@@ -116,7 +117,7 @@ even successfully, ends the composition with a failure status.
   They do not compose a local runtime. Normal local work uses `pnpm --dir dev web`.
 - [Strict Web dogfooding](web-console/DOGFOODING.md) and `pnpm --dir web-console
   test:e2e` are acceptance fixtures. Their fake providers, scripted scenarios,
-  trust setup and test Workspaces remain fixture-only. The normal launcher imports
+  isolated CFG3 sources and test Workspaces remain fixture-only. The normal launcher imports
   none of these. Both reuse only the bounded native listener-announcement parser;
   fixture lifecycle and provider assertions stay fixture-owned. The browser suite also exercises the real development launcher
   without fake providers or a Workspace Host proxy.

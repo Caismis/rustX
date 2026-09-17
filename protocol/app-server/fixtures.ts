@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v5.js';
+import type {ProtocolMessage} from './v6.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -50,7 +50,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 5,
+      "protocol_version": 6,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -67,7 +67,7 @@ export const fixtures = [
     "id": 7,
     "result": {
       "type": "initialized",
-      "protocol_version": 5,
+      "protocol_version": 6,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,
@@ -90,13 +90,13 @@ export const fixtures = [
     "method": "interaction/respond",
     "params": {
       "target": {
-        "session_id": "session-fixture",
-        "conversation_id": "conversation-fixture",
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
       "interaction": {
-        "conversation_id": "conversation-fixture",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "interaction_id": "interaction-fixture"
       },
       "response": {
@@ -134,8 +134,8 @@ export const fixtures = [
     "method": "session/event",
     "params": {
       "target": {
-        "session_id": "session-fixture",
-        "conversation_id": "conversation-fixture",
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
@@ -153,8 +153,8 @@ export const fixtures = [
     "method": "session/closed",
     "params": {
       "target": {
-        "session_id": "session-fixture",
-        "conversation_id": "conversation-fixture",
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       }
@@ -166,12 +166,12 @@ export const fixtures = [
     "result": {
       "type": "session",
       "session": {
-        "id": "session-fixture",
+        "id": "ses_00000000-0000-7000-8000-000000000001",
         "name": null,
         "created_at": "1970-01-01T00:00:00Z",
         "updated_at": "1970-01-01T00:00:01Z",
-        "active_node": "node-fixture",
-        "active_conversation_id": "conversation-fixture",
+        "active_node": "node_00000000-0000-7000-8000-000000000001",
+        "active_conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "node_count": 1
       }
     }
@@ -182,8 +182,8 @@ export const fixtures = [
     "method": "artifact/read",
     "params": {
       "target": {
-        "session_id": "session-fixture",
-        "conversation_id": "conversation-fixture",
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
@@ -196,8 +196,8 @@ export const fixtures = [
     "method": "session/upload",
     "params": {
       "target": {
-        "session_id": "session-fixture",
-        "conversation_id": "conversation-fixture",
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
@@ -215,8 +215,8 @@ export const fixtures = [
     "method": "session/subscribe",
     "params": {
       "target": {
-        "session_id": "session-fixture",
-        "conversation_id": "conversation-fixture",
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
@@ -229,8 +229,8 @@ export const fixtures = [
     "method": "session/trace",
     "params": {
       "target": {
-        "session_id": "session-fixture",
-        "conversation_id": "conversation-fixture",
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
@@ -244,8 +244,8 @@ export const fixtures = [
     "method": "session/transcript",
     "params": {
       "target": {
-        "session_id": "session-fixture",
-        "conversation_id": "conversation-fixture",
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
@@ -258,7 +258,7 @@ export const fixtures = [
     "id": "exact-u64",
     "method": "session/fork",
     "params": {
-      "session_id": "session-fixture",
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
       "node_id": null,
       "surface_revision": "9007199254740993",
       "boundary": null
@@ -270,8 +270,8 @@ export const fixtures = [
     "method": "inbound/edit",
     "params": {
       "target": {
-        "session_id": "session-fixture",
-        "conversation_id": "conversation-fixture",
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
@@ -289,8 +289,8 @@ export const fixtures = [
     "method": "inbound/remove",
     "params": {
       "target": {
-        "session_id": "session-fixture",
-        "conversation_id": "conversation-fixture",
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
@@ -307,8 +307,8 @@ export const fixtures = [
     "method": "goal/control",
     "params": {
       "target": {
-        "session_id": "session-fixture",
-        "conversation_id": "conversation-fixture",
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
@@ -346,7 +346,7 @@ export const fixtures = [
     "jsonrpc": "2.0",
     "id": "exact-u64",
     "result": {
-      "type": "resources_reloaded",
+      "type": "configuration_reloaded",
       "resource_revision": "9007199254740993",
       "capability_revision": "9007199254740993"
     }
@@ -358,16 +358,6 @@ export const fixtures = [
       "type": "inbound_accepted",
       "message_id": "message-fixture",
       "inbound_sequence": "9007199254740993"
-    }
-  },
-  {
-    "jsonrpc": "2.0",
-    "id": "exact-u64",
-    "result": {
-      "type": "approval_mode",
-      "effective_approval_mode": "policy",
-      "pending_approval_mode": null,
-      "revision": "9007199254740993"
     }
   },
   {
@@ -388,8 +378,8 @@ export const fixtures = [
     "method": "session/event",
     "params": {
       "target": {
-        "session_id": "session-fixture",
-        "conversation_id": "conversation-fixture",
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
@@ -401,7 +391,7 @@ export const fixtures = [
           "runs": [
             {
               "id": {
-                "conversation_id": "conversation-fixture",
+                "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
                 "attempt_id": "attempt-fixture",
                 "invocation": "9007199254740993"
               },
@@ -419,7 +409,7 @@ export const fixtures = [
               "agents_consumed": 0,
               "candidate": {
                 "run": {
-                  "conversation_id": "conversation-fixture",
+                  "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
                   "attempt_id": "attempt-fixture",
                   "invocation": "9007199254740993"
                 },

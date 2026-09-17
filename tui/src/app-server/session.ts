@@ -54,11 +54,8 @@
 import {
   compareExact,
   sameTarget,
-  type ApprovalMode,
   type AttachmentTarget,
   type CapabilityView,
-  type DefaultDocument,
-  type DefaultTarget,
   type GoalControl,
   type GoalView,
   type InteractionRef,
@@ -73,7 +70,6 @@ import {
   type RuntimeClientSubagentWorkspaceDisposalOutcome,
   type RuntimeClientTranscriptCursor,
   type RuntimeClientTranscriptPage,
-  type SaveDefaultResult,
   type SessionModelConfig,
   type SessionModelView,
   type SessionNodeId,
@@ -402,14 +398,14 @@ export class AppServerSession {
   }
 
   /** Atomically reloads resources for future admitted attempts. */
-  async reloadResources(): Promise<{
+  async reloadConfiguration(): Promise<{
     resourceRevision: string;
     capabilityRevision: string;
   }> {
     const reloaded = await this.#client.call(
-      "resources/reload",
+      "configuration/reload",
       { target: this.#target },
-      "resources_reloaded",
+      "configuration_reloaded",
     );
     return {
       resourceRevision: reloaded.resource_revision,
@@ -417,7 +413,7 @@ export class AppServerSession {
     };
   }
 
-  /** The safe public catalog. This is why the client never reads models.toml. */
+  /** The safe public catalog. This is why the client never reads rustx.toml. */
   async modelCatalog(): Promise<ModelCatalogView> {
     const models = await this.#client.call(
       "settings/models",
@@ -452,48 +448,10 @@ export class AppServerSession {
     return model.model;
   }
 
-  /** Requests the authoritative runtime ApprovalMode transition. */
-  async approvalModeSet(mode: ApprovalMode): Promise<{
-    effectiveApprovalMode: ApprovalMode;
-    pendingApprovalMode?: ApprovalMode;
-    revision: string;
-  }> {
-    const set = await this.#client.call(
-      "settings/setApprovalMode",
-      { target: this.#target, mode },
-      "approval_mode",
-    );
-    return {
-      effectiveApprovalMode: set.effective_approval_mode,
-      pendingApprovalMode: set.pending_approval_mode ?? undefined,
-      revision: set.revision,
-    };
-  }
-
-  async defaultsRead(): Promise<DefaultDocument> {
-    const read = await this.#client.call(
-      "settings/defaults",
-      { target: this.#target, scope: "user" },
-      "defaults",
-    );
-    return read.document;
-  }
-
-  async defaultSave(
-    expectedRevision: string,
-    setting: DefaultTarget,
-  ): Promise<SaveDefaultResult> {
-    const saved = await this.#client.call(
-      "settings/saveDefault",
-      {
-        target: this.#target,
-        scope: "user",
-        expected_revision: expectedRevision,
-        setting,
-      },
-      "default_saved",
-    );
-    return saved.result;
+  /** One native read of the published immutable configuration. */
+  async configuration(): Promise<import("../protocol/app-server.ts").EffectiveConfiguration> {
+    const result = await this.#client.call("configuration/effective", { target: this.#target }, "effective_configuration");
+    return result.projection;
   }
 
   // -------------------------------------------------------------------------

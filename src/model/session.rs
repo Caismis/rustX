@@ -466,9 +466,18 @@ mod tests {
 
     #[test]
     fn analyze_session_model_config_validates_primary_and_explicit_summary() {
-        let catalog = ModelCatalog::from_toml_slice(include_bytes!(
-            "../../examples/local-runtime/minimal/models.toml"
-        ))
+        let document: crate::local_runtime::authoring::RuntimeLayer = crate::toml_authoring::parse(
+            include_bytes!("../../examples/local-runtime/minimal/rustx.toml"),
+        )
+        .unwrap();
+        let catalog = ModelCatalog::from_document(
+            crate::model::authoring::Catalog {
+                schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
+                providers: document.providers.unwrap(),
+                models: document.models.unwrap(),
+            }
+            .into(),
+        )
         .unwrap();
         let mut config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
         config.max_output_tokens = Some(2048);
@@ -506,9 +515,18 @@ mod tests {
 
     #[test]
     fn analyze_session_model_config_validates_complete_summary_selection() {
-        let catalog = ModelCatalog::from_toml_slice(include_bytes!(
-            "../../examples/local-runtime/minimal/models.toml"
-        ))
+        let document: crate::local_runtime::authoring::RuntimeLayer = crate::toml_authoring::parse(
+            include_bytes!("../../examples/local-runtime/minimal/rustx.toml"),
+        )
+        .unwrap();
+        let catalog = ModelCatalog::from_document(
+            crate::model::authoring::Catalog {
+                schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
+                providers: document.providers.unwrap(),
+                models: document.models.unwrap(),
+            }
+            .into(),
+        )
         .unwrap();
         let mut config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
         for (model, profile, budget) in [

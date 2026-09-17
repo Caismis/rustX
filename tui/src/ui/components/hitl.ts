@@ -60,7 +60,6 @@ import type {
   RoutedInteraction,
 } from "../../protocol/app-server.ts";
 import {
-  compareInteractionRefs,
   interactionRefLabel,
   moveInteractionFocus,
   sameInteractionRef,
@@ -184,14 +183,7 @@ export class HumanInteractionOverlay implements PopupContent {
     preferences: PresentationPreferences,
   ): void {
     const previousKey = this.#focusedKey;
-    // Presentation order is the lexicographic routed identity pair, defined
-    // here rather than inherited from list position: it orders the display
-    // and nothing else.
-    this.#interactions = interactions
-      .slice()
-      .sort((left, right) =>
-        compareInteractionRefs(left.interaction, right.interaction),
-      );
+    this.#interactions = interactions.slice();
     this.#focused = focused;
     this.#focusedKey = interactionKey(focused);
     this.#preferences = preferences;

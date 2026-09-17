@@ -324,11 +324,19 @@ mod tests {
     #[test]
     fn cold_reopen_preserves_bytes_and_never_overwrites() {
         let dir = tempfile::tempdir().unwrap();
-        let store = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+        let store = ArtifactStore::new(
+            ConversationId::new("conv_559aead0-8264-7579-8d39-09718cdd05ab"),
+            &dir,
+        )
+        .unwrap();
         let id = store.put_bounded(b"canonical attachment").unwrap();
         let reserved = store.create_artifact().unwrap();
         drop(store);
-        let reopened = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+        let reopened = ArtifactStore::new(
+            ConversationId::new("conv_559aead0-8264-7579-8d39-09718cdd05ab"),
+            &dir,
+        )
+        .unwrap();
         let next = reopened.put_bounded(b"new attachment").unwrap();
         assert_ne!(id, next);
         assert_ne!(reserved, next);
@@ -336,7 +344,11 @@ mod tests {
         assert!(reopened.open_writer(&id).is_err());
         assert_eq!(reopened.read_bounded(&id).unwrap(), b"canonical attachment");
         let other = tempfile::tempdir().unwrap();
-        let other = ArtifactStore::new(ConversationId::new("B"), other.path()).unwrap();
+        let other = ArtifactStore::new(
+            ConversationId::new("conv_df7e70e5-0215-74f4-834b-bee64a9e3789"),
+            other.path(),
+        )
+        .unwrap();
         assert!(other.read_bounded(&id).is_err());
     }
 
@@ -344,7 +356,11 @@ mod tests {
     fn bounded_carrier_rejects_paths_missing_symlinks_and_oversize() {
         use crate::runtime::identity::ArtifactId;
         let dir = tempfile::tempdir().unwrap();
-        let store = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+        let store = ArtifactStore::new(
+            ConversationId::new("conv_559aead0-8264-7579-8d39-09718cdd05ab"),
+            &dir,
+        )
+        .unwrap();
         assert!(store.read_bounded(&ArtifactId::new("../secret")).is_err());
         assert!(store.read_bounded(&ArtifactId::new("artifact_99")).is_err());
         assert!(
@@ -373,7 +389,11 @@ mod tests {
     #[test]
     fn allocation_is_monotonic_and_deterministic() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let store = ArtifactStore::new(ConversationId::new("conv-1"), &dir).expect("store");
+        let store = ArtifactStore::new(
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+            &dir,
+        )
+        .expect("store");
         assert_eq!(
             store.create_artifact().expect("first").as_str(),
             "artifact_1"
@@ -422,7 +442,11 @@ mod tests {
     #[test]
     fn artifact_capacity_exact_boundary_is_mutation_free_and_survives_cold_reopen() {
         let dir = tempfile::tempdir().unwrap();
-        let store = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+        let store = ArtifactStore::new(
+            ConversationId::new("conv_559aead0-8264-7579-8d39-09718cdd05ab"),
+            &dir,
+        )
+        .unwrap();
         for ordinal in 1..=super::MAX_ARTIFACTS_PER_STORE {
             let bytes = ordinal.to_le_bytes();
             let id = store.put_bounded(&bytes).unwrap();
@@ -431,7 +455,11 @@ mod tests {
         assert_capacity_noop(&store);
         let before = root_contents(&store);
         drop(store);
-        let reopened = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+        let reopened = ArtifactStore::new(
+            ConversationId::new("conv_559aead0-8264-7579-8d39-09718cdd05ab"),
+            &dir,
+        )
+        .unwrap();
         assert_capacity_noop(&reopened);
         assert_eq!(root_contents(&reopened), before);
         for ordinal in 1..=super::MAX_ARTIFACTS_PER_STORE {
@@ -443,7 +471,11 @@ mod tests {
     #[test]
     fn artifact_capacity_counts_unwritten_and_failed_reserved_slots_after_reopen() {
         let dir = tempfile::tempdir().unwrap();
-        let store = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+        let store = ArtifactStore::new(
+            ConversationId::new("conv_559aead0-8264-7579-8d39-09718cdd05ab"),
+            &dir,
+        )
+        .unwrap();
         let retained = store.put_bounded(b"retained").unwrap();
         for _ in 1..super::MAX_ARTIFACTS_PER_STORE {
             store.create_artifact().unwrap();
@@ -459,7 +491,11 @@ mod tests {
         std::fs::remove_dir(store.path_of(&unwritten)).unwrap();
         assert_capacity_noop(&store);
         drop(store);
-        let reopened = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+        let reopened = ArtifactStore::new(
+            ConversationId::new("conv_559aead0-8264-7579-8d39-09718cdd05ab"),
+            &dir,
+        )
+        .unwrap();
         assert_capacity_noop(&reopened);
         assert_eq!(reopened.read_bounded(&retained).unwrap(), b"retained");
     }
@@ -475,7 +511,11 @@ mod tests {
                     b"",
                 )
                 .unwrap();
-                let store = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+                let store = ArtifactStore::new(
+                    ConversationId::new("conv_559aead0-8264-7579-8d39-09718cdd05ab"),
+                    &dir,
+                )
+                .unwrap();
                 let before = root_contents(&store);
                 assert_eq!(store.state().next, frontier);
                 assert!(matches!(
@@ -498,7 +538,11 @@ mod tests {
     fn reservation_creation_failure_does_not_advance_but_existing_reservation_does() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("artifacts");
-        let store = ArtifactStore::new(ConversationId::new("A"), &root).unwrap();
+        let store = ArtifactStore::new(
+            ConversationId::new("conv_559aead0-8264-7579-8d39-09718cdd05ab"),
+            &root,
+        )
+        .unwrap();
         std::fs::remove_dir(&root).unwrap();
         assert!(store.create_artifact().is_err());
         assert_eq!(store.state().next, 0);
@@ -516,7 +560,11 @@ mod tests {
     #[test]
     fn written_bytes_are_retained_verbatim() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let store = ArtifactStore::new(ConversationId::new("conv-1"), &dir).expect("store");
+        let store = ArtifactStore::new(
+            ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+            &dir,
+        )
+        .expect("store");
         let id = store.create_artifact().expect("allocate");
         let mut writer = store.open_writer(&id).expect("open");
         writer.write_all(b"hello\n").expect("write");

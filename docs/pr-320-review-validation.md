@@ -38,14 +38,14 @@ The submitted review's five findings are addressed below.
    knows Session catalog persistence. The XML renderer is unchanged.
    `context_estimates_the_same_rendering_as_provider_input` exercises the new
    boundary and checks identical estimates. The scripted upload projection test
-   changes current trusted workspace metadata after snapshot capture and verifies
+   changes current workspace metadata after snapshot capture and verifies
    reconstruction still uses only frozen request paths. A source audit finds no
    `local_runtime` or `catalog.json` in `src/context`.
 4. **Faithful editor restoration.** The controller unions canonical copied-lineage
    uploads with the selected editor boundary uploads before independent copying.
    It converts the exact ordered canonical editor facts into native
    `UserInputBlock` text/receipt input owned by the destination. Same-Session
-   branches share receipts without copying. The unmerged v4 schema/TypeScript and
+   branches share receipts without copying. The schema/TypeScript and
    native transition types now express that contract. TUI retains restored receipts
    alongside the exact body and sends them on admission; it shows the attachment
    count and never assumes a client-local path exists on the server.

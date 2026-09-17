@@ -10,9 +10,7 @@ use std::sync::Arc;
 
 fn fixture() -> (TempDir, SessionCatalog, SessionDeletePreview) {
     let (dir, mut catalog, _) = open_catalog();
-    let target = catalog
-        .snapshot(&crate::local_runtime::SessionId::new("session-1"))
-        .unwrap();
+    let target = catalog.snapshot(&first_session(&catalog)).unwrap();
     let store = store_for(&catalog, &target.id, &target.active_conversation_id);
     let child_id = child(dir.path(), &store, 1, false);
     let socket =
@@ -36,14 +34,14 @@ fn residue(root: &Path, preview: &SessionDeletePreview) -> Vec<PathBuf> {
         .map(|s| match s {
             DeletionScope::Node {
                 conversation_id, ..
+            }
+            | DeletionScope::Child {
+                conversation_id, ..
             } => root
                 .join("sessions")
                 .join(preview.session_id.as_str())
                 .join("conversations")
                 .join(conversation_id.as_str()),
-            DeletionScope::Child {
-                conversation_id, ..
-            } => root.join("subagents").join(conversation_id.as_str()),
         })
         .collect()
 }
@@ -76,10 +74,7 @@ fn deletion_preview_releases_guards_execute_reacquires_and_rejects_stale() {
         Err(SessionDeleteResult::Stale { .. })
     ));
     assert!(paths.iter().all(|p| p.exists()));
-    let current = catalog
-        .snapshot(&crate::local_runtime::SessionId::new("session-1"))
-        .unwrap()
-        .id;
+    let current = catalog.snapshot(&first_session(&catalog)).unwrap().id;
     assert!(matches!(
         catalog.delete_preview(&current),
         SessionDeleteResult::Preview { .. }
@@ -213,7 +208,16 @@ fn deletion_cleanup_owns_frozen_plan_without_root_guard_and_identity_is_absorbin
     assert!(paths.iter().all(|p| !p.exists()));
     assert!(
         catalog
-            .snapshot(&crate::local_runtime::SessionId::new("session-2"))
+            .snapshot(
+                &catalog
+                    .document
+                    .sessions
+                    .values()
+                    .max_by_key(|session| session.ordinal)
+                    .unwrap()
+                    .id
+                    .clone()
+            )
             .is_ok()
     );
 }
@@ -271,7 +275,7 @@ fn deletion_process_child() {
     let controller = Arc::new(ProductController::acquire(Path::new(&root)).unwrap());
     let mut catalog = reopen_catalog(controller.root());
     catalog.retain_lifecycle(controller);
-    let id = SessionId::new("session-1");
+    let id = first_session(&catalog);
     let SessionDeleteResult::Preview { preview } = catalog.delete_preview(&id) else {
         panic!("preview");
     };
@@ -328,7 +332,16 @@ fn deletion_process_death_after_commit_and_mid_cleanup_converges_without_discove
         // Corrupt unrelated live storage: ownership discovery now fails. The
         // frozen cleanup must still complete without opening any live store.
         let active = catalog
-            .snapshot(&crate::local_runtime::SessionId::new("session-2"))
+            .snapshot(
+                &catalog
+                    .document
+                    .sessions
+                    .values()
+                    .max_by_key(|session| session.ordinal)
+                    .unwrap()
+                    .id
+                    .clone(),
+            )
             .unwrap();
         fs::write(
             catalog.database_path(&active.id, &active.active_conversation_id),
@@ -379,16 +392,22 @@ fn deletion_rust_types_roundtrip_every_shared_protocol_result_and_reject_paths()
     for request in [
         RuntimeClientRequest::SessionDeletePreview {
             id: RequestId::new(1),
-            session_id: "session-1".into(),
+            session_id: crate::local_runtime::SessionId::new(
+                "ses_01900000-0000-7000-8000-000000000001",
+            ),
         },
         RuntimeClientRequest::SessionDelete {
             id: RequestId::new(2),
-            session_id: "session-1".into(),
+            session_id: crate::local_runtime::SessionId::new(
+                "ses_01900000-0000-7000-8000-000000000001",
+            ),
             expected_target_revision: "a".repeat(64),
         },
         RuntimeClientRequest::SessionDeleteRecover {
             id: RequestId::new(3),
-            session_id: "session-1".into(),
+            session_id: crate::local_runtime::SessionId::new(
+                "ses_01900000-0000-7000-8000-000000000001",
+            ),
         },
     ] {
         assert!(request.requires_async());
@@ -572,7 +591,16 @@ fn deletion_cleanup_path_failure_preserves_external_data_and_retries_same_work()
     ));
     // The bad deletion residue must not prevent access to the active Session.
     let active = catalog
-        .snapshot(&crate::local_runtime::SessionId::new("session-2"))
+        .snapshot(
+            &catalog
+                .document
+                .sessions
+                .values()
+                .max_by_key(|session| session.ordinal)
+                .unwrap()
+                .id
+                .clone(),
+        )
         .unwrap();
     let active_path = catalog.database_path(&active.id, &active.active_conversation_id);
     let root = ProductRoot::existing(dir.path()).unwrap();
@@ -634,7 +662,7 @@ fn deletion_workspace_transition_is_stale_and_preview_blockers_are_typed() {
         }
     ));
     assert!(matches!(
-        catalog.delete_preview(&SessionId::new("unknown")),
+        catalog.delete_preview(&SessionId::new("ses_b23a6a84-39c0-7de5-8158-93e7c90c1e32")),
         SessionDeleteResult::NotFound { .. }
     ));
 }
@@ -652,23 +680,21 @@ fn deletion_retired_native_domains_reject_stale_allocation_access() {
         SessionDeleteResult::Deleted { .. }
     ));
     let root = ProductRoot::existing(dir.path()).unwrap();
+    let survivor = first_session(&catalog);
     for scope in &preview.scopes {
-        let (conversation, alternate) = match scope {
+        let conversation = match scope {
             DeletionScope::Node {
                 conversation_id, ..
-            } => (
-                conversation_id,
-                root.root().join("subagents").join(conversation_id.as_str()),
-            ),
-            DeletionScope::Child {
+            }
+            | DeletionScope::Child {
                 conversation_id, ..
-            } => (
-                conversation_id,
-                root.root()
-                    .join("sessions/new-session/conversations")
-                    .join(conversation_id.as_str()),
-            ),
+            } => conversation_id,
         };
+        let alternate = catalog
+            .database_path(&survivor, conversation)
+            .parent()
+            .unwrap()
+            .to_path_buf();
         fs::create_dir_all(&alternate).unwrap();
         assert!(
             ConversationAccess::existing(&root, &alternate).is_err(),
@@ -730,7 +756,16 @@ fn deletion_live_ownership_cannot_claim_a_pending_frozen_child() {
         .unwrap()
         .unwrap();
     let active = catalog
-        .snapshot(&crate::local_runtime::SessionId::new("session-2"))
+        .snapshot(
+            &catalog
+                .document
+                .sessions
+                .values()
+                .max_by_key(|session| session.ordinal)
+                .unwrap()
+                .id
+                .clone(),
+        )
         .unwrap();
     event.conversation_id = active.active_conversation_id.clone();
     event.sequence = 0;
@@ -761,19 +796,14 @@ fn assert_completed_absent(root: &Path, id: &SessionId) {
 #[test]
 fn deletion_completed_worksets_do_not_accumulate_and_native_allocators_advance() {
     let (dir, mut catalog, _) = open_catalog();
-    for n in 1..=6 {
-        let target = catalog
-            .snapshot(&crate::local_runtime::SessionId::new(format!(
-                "session-{n}"
-            )))
-            .unwrap();
-        assert_eq!(target.id.as_str(), format!("session-{n}"));
-        assert_eq!(
-            target.active_conversation_id.as_str(),
-            format!("conversation-{n}")
-        );
+    let mut seen = BTreeSet::new();
+    for _ in 0..6 {
+        let target = catalog.snapshot(&first_session(&catalog)).unwrap();
+        assert!(seen.insert(target.id.clone()));
         let next = catalog.prepare_session(&state(), &[]).unwrap();
-        assert_eq!(next.node_id.as_str(), format!("node-{}", n + 1));
+        assert!(!seen.contains(&next.session_id));
+        assert_ne!(next.conversation_id, target.active_conversation_id);
+        assert_ne!(next.node_id, target.active_node);
         catalog
             .publish_session(&next, SessionNodeOrigin::New)
             .unwrap();
@@ -800,9 +830,7 @@ fn deletion_completed_worksets_do_not_accumulate_and_native_allocators_advance()
 #[test]
 fn catalog_generation_rejects_stale_metadata_and_planned_publication() {
     let (dir, mut catalog, _) = open_catalog();
-    let target = catalog
-        .snapshot(&crate::local_runtime::SessionId::new("session-1"))
-        .unwrap();
+    let target = catalog.snapshot(&first_session(&catalog)).unwrap();
     let mut stale = catalog.clone();
     let old_plan = catalog.document.clone();
     catalog
@@ -826,7 +854,7 @@ fn catalog_generation_rejects_stale_metadata_and_planned_publication() {
     assert_eq!(fs::read(&catalog.path).unwrap(), bytes);
     assert_eq!(
         reopen_catalog(dir.path())
-            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+            .snapshot(&first_session(&catalog))
             .unwrap()
             .name
             .as_deref(),
@@ -837,21 +865,24 @@ fn catalog_generation_rejects_stale_metadata_and_planned_publication() {
 #[test]
 fn deletion_protocol_projection_is_bounded_for_large_frozen_graphs() {
     use crate::local_runtime::supervisor::project_session_deletion;
+    let session_id = SessionId::generate();
     let mut lengths = Vec::new();
     for size in [1, 10, 10_000] {
         let scopes: Vec<_> = (0..size)
-            .map(|i| DeletionScope::Child {
-                conversation_id: ConversationId::new(format!("conversation-1-subagent-{i}")),
-                parent_conversation: ConversationId::new("conversation-1"),
+            .map(|_| DeletionScope::Child {
+                conversation_id: ConversationId::generate(),
+                parent_conversation: ConversationId::new(
+                    "conv_413055e0-cb3a-7c6d-89b6-b446a98e0ad1",
+                ),
             })
             .chain(std::iter::once(DeletionScope::Node {
-                node_id: SessionNodeId::new("node-1"),
-                conversation_id: ConversationId::new("conversation-1"),
+                node_id: SessionNodeId::new("node_35971be6-e9bb-724a-8955-82fe0e42e048"),
+                conversation_id: ConversationId::new("conv_413055e0-cb3a-7c6d-89b6-b446a98e0ad1"),
             }))
             .collect();
         let preview = SessionDeletePreview {
             upload_workspaces: vec![],
-            session_id: SessionId::new("session-1"),
+            session_id: session_id.clone(),
             name: Some("x".repeat(10_000)),
             target_revision: "a".repeat(64),
             scopes: scopes.clone(),
@@ -869,7 +900,7 @@ fn deletion_protocol_projection_is_bounded_for_large_frozen_graphs() {
         assert!(!text.contains("scopes"));
         let record = DeletionRecord {
             upload_workspaces: vec![],
-            session_id: SessionId::new("session-1"),
+            session_id: session_id.clone(),
             target_revision: "a".repeat(64),
             scopes,
         };
@@ -883,7 +914,7 @@ fn deletion_protocol_projection_is_bounded_for_large_frozen_graphs() {
                 detail: "/private/path".repeat(size),
             },
             SessionDeleteResult::Blocked {
-                session_id: SessionId::new("session-1"),
+                session_id: session_id.clone(),
                 reason: DeletionBlocker::Workspace {
                     resources: vec!["private resource".into(); size],
                 },
@@ -909,9 +940,7 @@ fn deletion_protocol_projection_is_bounded_for_large_frozen_graphs() {
 #[test]
 fn deletion_protocol_counts_real_durable_ownership_without_exporting_it() {
     let (dir, mut catalog, _) = open_catalog();
-    let target = catalog
-        .snapshot(&crate::local_runtime::SessionId::new("session-1"))
-        .unwrap();
+    let target = catalog.snapshot(&first_session(&catalog)).unwrap();
     let store = store_for(&catalog, &target.id, &target.active_conversation_id);
     for ordinal in 1..=128 {
         child(dir.path(), &store, ordinal, false);
@@ -937,7 +966,7 @@ fn deletion_allocator_watermarks_advance_past_skipped_orphan_ids() {
     let (dir, mut catalog, _) = open_catalog();
     let orphan = catalog.prepare_session(&state(), &[]).unwrap();
     let target = catalog.prepare_session(&state(), &[]).unwrap();
-    assert_eq!(target.session_id.as_str(), "session-3");
+    assert_ne!(target.session_id, orphan.session_id);
     catalog
         .publish_session(&target, SessionNodeOrigin::New)
         .unwrap();
@@ -945,7 +974,8 @@ fn deletion_allocator_watermarks_advance_past_skipped_orphan_ids() {
     // must never let the allocator rewind past the later published identity.
     fs::remove_dir_all(orphan.database_path.parent().unwrap()).unwrap();
     let survivor = catalog.prepare_session(&state(), &[]).unwrap();
-    assert_eq!(survivor.session_id.as_str(), "session-4");
+    assert_ne!(survivor.session_id, target.session_id);
+    assert_ne!(survivor.session_id, orphan.session_id);
     catalog
         .publish_session(&survivor, SessionNodeOrigin::New)
         .unwrap();
@@ -965,8 +995,10 @@ fn deletion_allocator_watermarks_advance_past_skipped_orphan_ids() {
     assert_completed_absent(dir.path(), &target.session_id);
     let reopened = reopen_catalog(dir.path());
     let next = reopened.prepare_session(&state(), &[]).unwrap();
-    assert_eq!(next.session_id.as_str(), "session-5");
-    assert_eq!(next.node_id.as_str(), "node-5");
+    assert_ne!(next.session_id, target.session_id);
+    assert_ne!(next.session_id, survivor.session_id);
+    assert_ne!(next.node_id, target.node_id);
+    assert_ne!(next.node_id, survivor.node_id);
 }
 
 #[tokio::test]
@@ -984,7 +1016,7 @@ async fn deletion_stale_control_response_requires_a_new_preview_token() {
         result: Wire::Preview { preview: first },
     } = supervisor
         .handle(Request::DeletePreview {
-            session_id: initial.session_id.to_string(),
+            session_id: initial.session_id.clone(),
         })
         .await
         .unwrap()
@@ -999,7 +1031,7 @@ async fn deletion_stale_control_response_requires_a_new_preview_token() {
     for _ in 0..2 {
         let RuntimeClientResult::SessionDeletion { result } = supervisor
             .handle(Request::Delete {
-                session_id: source.id.to_string(),
+                session_id: source.id.clone(),
                 expected_target_revision: first.target_revision.clone(),
             })
             .await
@@ -1018,7 +1050,7 @@ async fn deletion_stale_control_response_requires_a_new_preview_token() {
         result: Wire::Preview { preview: fresh },
     } = supervisor
         .handle(Request::DeletePreview {
-            session_id: source.id.to_string(),
+            session_id: source.id.clone(),
         })
         .await
         .unwrap()
@@ -1030,7 +1062,7 @@ async fn deletion_stale_control_response_requires_a_new_preview_token() {
     assert!(matches!(
         supervisor
             .handle(Request::Delete {
-                session_id: source.id.to_string(),
+                session_id: source.id.clone(),
                 expected_target_revision: fresh.target_revision,
             })
             .await

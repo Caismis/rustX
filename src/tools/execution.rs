@@ -133,12 +133,14 @@ mod tests {
 
     #[test]
     fn tool_handle_is_a_tagged_kind_id_pair() {
-        let handle = ExecutionHandle::tool(&ToolExecutionId::new("exec_1"));
+        let handle = ExecutionHandle::tool(&ToolExecutionId::new(
+            "exec_215a03ee-2332-70b6-8e2d-634da8066f98",
+        ));
         assert_eq!(handle.kind, ExecutionKind::Tool);
-        assert_eq!(handle.id, "exec_1");
+        assert_eq!(handle.id, "exec_215a03ee-2332-70b6-8e2d-634da8066f98");
         assert_eq!(
             serde_json::to_value(&handle).expect("handle serializes"),
-            serde_json::json!({"kind": "tool", "id": "exec_1"})
+            serde_json::json!({"kind": "tool", "id": "exec_215a03ee-2332-70b6-8e2d-634da8066f98"})
         );
     }
 

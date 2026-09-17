@@ -336,7 +336,7 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_execution_intrinsic_
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let runtime = ConversationToolRuntime::from_config(
-            ConversationId::new("policy-conversation"),
+            ConversationId::new("conv_ca331247-ceb5-78df-8a3c-76f58694841f"),
             ConversationRuntimeConfig::new(&workspace, dir.path().join("artifacts")),
         )
         .expect("runtime");
@@ -413,7 +413,7 @@ fn independent_native_execution_policies_coexist_in_one_registry() {
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     let runtime = ConversationToolRuntime::from_config(
-        ConversationId::new("independent-policy-conversation"),
+        ConversationId::new("conv_d68f6793-d4de-77b9-81e9-e7cfa7338090"),
         ConversationRuntimeConfig::new(&workspace, dir.path().join("artifacts")),
     )
     .expect("runtime");
@@ -667,22 +667,12 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
 
 async fn selected_capabilities(
     fixture: &common::NativeFixture,
-    mut policy: rustx::capabilities::AgentActivation,
+    policy: rustx::capabilities::AgentActivation,
 ) -> Result<
     rustx::capabilities::CapabilityCoordinator,
     rustx::capabilities::CapabilityPreparationError,
 > {
     let registry = selection_registry(fixture);
-    for definition in registry.definitions() {
-        if let Some(source) = definition.origin.source() {
-            policy
-                .profile
-                .tools
-                .sources
-                .entry(source)
-                .or_insert(rustx::capabilities::selection::SourceToolSelection::All);
-        }
-    }
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
             source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
@@ -716,72 +706,16 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
     // flags. Production adapter validation separately rejects unsupported
     // nonempty requests; the scripted adapter captures that exact boundary.
     for tool_calls in [true, false] {
-        for (selection, expected) in [
-            (
-                Selection::default(),
-                vec![
-                    "execution",
-                    "ask_user",
-                    "read",
-                    "write",
-                    "edit",
-                    "glob",
-                    "grep",
-                    "bash",
-                ],
-            ),
-            (
-                Selection {
-                    no_direct_tools: true,
-                    ..Default::default()
-                },
-                vec![],
-            ),
-            (
-                Selection {
-                    exclude_tools: vec!["read".into()],
-                    ..Default::default()
-                },
-                vec![
-                    "execution",
-                    "ask_user",
-                    "write",
-                    "edit",
-                    "glob",
-                    "grep",
-                    "bash",
-                ],
-            ),
-            (
-                Selection {
-                    tools: Some(vec!["grep".into()]),
-                    ..Default::default()
-                },
-                vec!["grep"],
-            ),
-            (
-                Selection {
-                    tools: Some(vec!["grep".into(), "read".into()]),
-                    ..Default::default()
-                },
-                vec!["grep", "read"],
-            ),
-            (
-                Selection {
-                    tools: Some(vec!["read".into(), "grep".into()]),
-                    exclude_tools: vec!["read".into()],
-                    ..Default::default()
-                },
-                vec!["grep"],
-            ),
-            (
-                Selection {
-                    no_builtin_tools: true,
-                    ..Default::default()
-                },
-                vec![],
-            ),
+        for expected in [
+            vec![],
+            vec!["read"],
+            vec!["read", "grep"],
+            vec!["execution", "read", "bash"],
         ] {
+            let mut selection = Selection::default();
+            selection.profile.tools.builtin = expected.iter().map(|name| (*name).into()).collect();
+            selection.profile.skills =
+                Some(rustx::runtime::agent_profile::AgentSkillSelection::All);
             let fixture = common::native_fixture_without_extensions();
             let skill_root = fixture
                 .runtime
@@ -833,10 +767,7 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
             rustx::tools::native::register_subagent_child_tools(&mut child, &[frozen_read])
                 .unwrap();
             assert_eq!(child.names(), ["read"]);
-            assert!(
-                !rustx::skills::admitted_skill_entries(snapshot.skills().catalog_entries(), &child)
-                    .is_empty()
-            );
+            assert!(!snapshot.model_skill_entries().is_empty());
             assert!(
                 child
                     .preflight(&ToolCall {
@@ -903,11 +834,10 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
                 expected,
                 "{selection:?}"
             );
-            assert_eq!(
+            assert!(
                 requests[0]
                     .effective_system_prompt
-                    .contains("Use the Read tool"),
-                expected.contains(&"read")
+                    .contains("file-reading Tool")
             );
             assert!(
                 !requests[0]
@@ -921,66 +851,20 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
 #[tokio::test]
 async fn invalid_exact_selection_rejects_capability_preparation_without_fallback() {
     use rustx::capabilities::AgentActivation as Selection;
-    for selection in [
-        Selection {
-            tools: Some(vec![]),
-            ..Default::default()
-        },
-        Selection {
-            tools: Some(vec!["read".into(), "read".into()]),
-            ..Default::default()
-        },
-        Selection {
-            tools: Some(vec!["unknown".into()]),
-            ..Default::default()
-        },
-        Selection {
-            tools: Some(vec!["unadmitted_workflow".into()]),
-            ..Default::default()
-        },
-        Selection {
-            exclude_tools: vec!["typo".into()],
-            ..Default::default()
-        },
-        Selection {
-            exclude_tools: vec![String::new()],
-            ..Default::default()
-        },
-        Selection {
-            no_direct_tools: true,
-            tools: Some(vec!["read".into()]),
-            ..Default::default()
-        },
+    for names in [
+        vec!["read", "read"],
+        vec!["unknown"],
+        vec!["unadmitted_workflow"],
+        vec![""],
     ] {
+        let mut selection = Selection::default();
+        selection.profile.tools.builtin = names.into_iter().map(str::to_owned).collect();
         let fixture = common::native_fixture();
         assert!(matches!(
             selected_capabilities(&fixture, selection).await,
             Err(rustx::capabilities::CapabilityPreparationError::ToolActivation(_))
         ));
     }
-}
-
-#[test]
-fn a_same_named_external_read_does_not_satisfy_the_lazy_skill_dependency() {
-    let fixture = common::native_fixture();
-    let mut external = definition(&fixture, "read");
-    external.origin = rustx::tools::types::ToolOrigin::Mcp {
-        server_id: rustx::runtime::identity::McpServerId::new("external"),
-    };
-    let mut registry = rustx::tools::executor::ToolRegistry::new();
-    registry
-        .register(external.clone(), fixture.registry.executor(&external.id))
-        .unwrap();
-    let entries = [rustx::skills::SkillCatalogEntry {
-        name: "lazy".into(),
-        description: "Lazy instructions".into(),
-        location: "/skills/lazy/SKILL.md".into(),
-    }];
-    assert!(rustx::skills::admitted_skill_entries(&entries, &registry).is_empty());
-    assert_eq!(
-        rustx::skills::admitted_skill_entries(&entries, &fixture.registry),
-        &entries
-    );
 }
 
 #[tokio::test]
@@ -997,7 +881,11 @@ async fn filtered_calls_cannot_recover_available_native_or_generated_dispatchers
         let coordinator = selected_capabilities(
             &fixture,
             rustx::capabilities::AgentActivation {
-                no_direct_tools: true,
+                profile: {
+                    let mut profile = rustx::local_runtime::config::AgentProfileDocument::default();
+                    profile.tools.builtin = Vec::new();
+                    profile
+                },
                 ..Default::default()
             },
         )
@@ -1059,7 +947,11 @@ async fn main_no_direct_tools_coexists_with_independent_workflow_terminal_author
     let main = selected_capabilities(
         &fixture,
         rustx::capabilities::AgentActivation {
-            no_direct_tools: true,
+            profile: {
+                let mut profile = rustx::local_runtime::config::AgentProfileDocument::default();
+                profile.tools.builtin = Vec::new();
+                profile
+            },
             ..Default::default()
         },
     )
@@ -1146,7 +1038,11 @@ async fn native_admission_pins_policy_axes_and_exposure_across_candidate_changes
     let coordinator = selected_capabilities(
         &fixture,
         rustx::capabilities::AgentActivation {
-            tools: Some(vec!["bash".into()]),
+            profile: {
+                let mut profile = rustx::local_runtime::config::AgentProfileDocument::default();
+                profile.tools.builtin = vec!["bash".into()];
+                profile
+            },
             ..Default::default()
         },
     )
@@ -1185,7 +1081,14 @@ async fn native_admission_pins_policy_axes_and_exposure_across_candidate_changes
     let inputs = rustx::capabilities::CapabilityResourceInputs {
         source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
         base_tool_registry: Arc::new(replacement),
-        agent_activation: rustx::capabilities::AgentActivation::default(),
+        agent_activation: rustx::capabilities::AgentActivation {
+            profile: {
+                let mut p = rustx::local_runtime::config::AgentProfileDocument::default();
+                p.tools.builtin = vec!["write".into()];
+                p
+            },
+            ..Default::default()
+        },
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
         mcp_servers: std::collections::BTreeMap::new(),
         base_environment: fixture.runtime.environment().clone(),

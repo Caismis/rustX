@@ -67,7 +67,7 @@ export function approvalInteraction(
 ): RoutedInteraction {
   const request: InteractionRequest = {
     id,
-    conversation_id: "conv-test",
+    conversation_id: "conv_01900000-0000-7000-8000-000000000002",
     attempt_id: "attempt-1",
     turn: 2,
     kind: {
@@ -93,7 +93,7 @@ export function questionnaireInteraction(
 ): RoutedInteraction {
   const request: InteractionRequest = {
     id,
-    conversation_id: "conv-test",
+    conversation_id: "conv_01900000-0000-7000-8000-000000000002",
     attempt_id: "attempt-1",
     turn: 3,
     kind: {
@@ -137,7 +137,7 @@ export function questionnaireInteraction(
 function fromSubagent(
   routed: RoutedInteraction,
   agent = "reviewer",
-  childConversationId = "conv-child-1",
+  childConversationId = "conv_01900000-0000-7000-8000-000000000001",
 ): RoutedInteraction {
   return {
     ...routed,
@@ -147,7 +147,7 @@ function fromSubagent(
     },
     source: {
       type: "subagent",
-      subagent_id: "conv-1-subagent-1",
+      subagent_id: "conv_57d68983-5497-771e-baaa-5f1356061697",
       child_conversation_id: childConversationId,
       agent_name: agent,
     },
@@ -271,19 +271,14 @@ export function snapshot(
     };
   return {
     trace_updates: [], trace: { entries: [] },
-    launch_settings: null,
     goal: null,
-    // The runtime always projects its own composition for a live or frozen
-    // Agent; the default fixture is the ordinary composed Agent Status
-    // extension with no explicit timezone, plus the composed Todo extension.
-    effective_extensions: { goal: null, agent_status: { time: { enabled: true, timezone: null }, background: { enabled: true } }, todo: {} },
+    // Plugins are absent unless explicitly authored.
+    effective_plugins: { goal: null, agent_status: null, todo: null },
     settings_evidence: "live_session",
-    settings_lifetimes: { launch: "launch_capture", model: "next_admission", approval: "safe_boundary", resources: "resource_publication", attempt: "frozen_admission", presentation: "client_local", saved_defaults: "next_launch", extensions: "launch_capture" },
     workflows: { revision: "0", runs: [], omitted_runs: 0 },
-    conversation_id: "conv-test",
+    conversation_id: "conv_01900000-0000-7000-8000-000000000002",
     shutting_down: false,
     effective_approval_mode: "policy",
-    approval_mode_revision: "0",
     messages,
     transcript,
     inbound: { pending: [] },
@@ -358,11 +353,11 @@ export function sessionView(
   overrides: Partial<SessionView> = {},
 ): SessionView {
   return {
-    id: "session-1",
+    id: "ses_84097828-fc31-78c8-9292-10df48901a85",
     created_at: "2026-08-21T00:00:00Z",
     updated_at: "2026-08-21T00:00:00Z",
-    active_node: "node-1",
-    active_conversation_id: "conv-test",
+    active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
+    active_conversation_id: "conv_01900000-0000-7000-8000-000000000002",
     node_count: 1,
     ...overrides,
   };
@@ -476,9 +471,9 @@ export function subagent(
   overrides: Partial<RuntimeClientSubagent> = {},
 ): RuntimeClientSubagent {
   return {
-    subagent_id: "conv-1-subagent-1",
+    subagent_id: "conv_57d68983-5497-771e-baaa-5f1356061697",
     child_agent_id: "agent-child",
-    child_conversation_id: "conv-1-subagent-1",
+    child_conversation_id: "conv_57d68983-5497-771e-baaa-5f1356061697",
     agent,
     definition_digest: definitionDigest,
     // The effective execution-profile identity is always projected, on live

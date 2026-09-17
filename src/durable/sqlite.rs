@@ -163,7 +163,7 @@ use super::inbox::{
 /// durable `SubagentOwnershipCommitted` fact carries `(agent,
 /// definition_digest)` instead of a profile name, so an already-committed
 /// child stays bound to the definition it actually started with even after a
-/// resource reload redefines that agent name.
+/// configuration reload redefines that agent name.
 ///
 /// Version 18 freezes Issue #146's workspace authority facts: a committed
 /// child records its exact workspace snapshot, including the committed base
@@ -248,7 +248,7 @@ use super::inbox::{
 /// Version 35 requires the fixed Journal presentation indexes for bounded Trace
 /// seeks. Older development stores are rejected, never lazily repaired.
 /// Version 37 adds native compare-and-set revisions to Pending Inbound.
-pub const SQLITE_SCHEMA_VERSION: i64 = 37;
+pub const SQLITE_SCHEMA_VERSION: i64 = 38;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -562,7 +562,7 @@ impl SqliteConversationStore {
             .map_err(|error| storage(format!("read existing identity: {error}")))?;
         if stored != conversation_id.as_str() {
             return Err(ConversationStoreError::ConversationIdMismatch {
-                stored: ConversationId::new(stored),
+                stored: ConversationId::parse(stored).map_err(storage)?,
                 requested: conversation_id,
             });
         }
@@ -5264,7 +5264,7 @@ fn bind_identity(
             .map_err(|error| storage(format!("bind conversation identity: {error}")))?;
     } else if stored != conversation_id.as_str() {
         return Err(ConversationStoreError::ConversationIdMismatch {
-            stored: ConversationId::new(stored),
+            stored: ConversationId::parse(stored).map_err(storage)?,
             requested: conversation_id.clone(),
         });
     }
@@ -9021,7 +9021,10 @@ mod tests {
     }
 
     fn store() -> SqliteConversationStore {
-        SqliteConversationStore::in_memory(ConversationId::new("conv-1")).unwrap()
+        SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ))
+        .unwrap()
     }
 
     fn user_message(id: &str, text: &str) -> MessageBlock {
@@ -9100,7 +9103,7 @@ mod tests {
     fn invalid_agent_status_metadata_is_rejected_by_durable_decode() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("conversation.sqlite");
-        let conversation_id = ConversationId::new("metadata-corruption");
+        let conversation_id = ConversationId::new("conv_45cf2e82-15bc-7eb9-8052-70016ae024aa");
         let message_id = MessageId::new("status-invalid-after-persist");
         let status = MessageBlock::User(UserMessageBlock {
             id: message_id.clone(),
@@ -9204,7 +9207,7 @@ mod tests {
     fn existing_management_head_read_excludes_cross_connection_commit_until_snapshot_ends() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("conversation.sqlite");
-        let id = ConversationId::new("management-read-snapshot");
+        let id = ConversationId::new("conv_4d5a6b2b-74d8-71a9-8041-37c01c71550c");
         let writer = SqliteConversationStore::open(id.clone(), &path).unwrap();
         let reader = SqliteConversationStore::open_existing(id, &path).unwrap();
         let competing = Connection::open(&path).unwrap();
@@ -9339,7 +9342,7 @@ mod tests {
     fn immutable_surface_revisions_survive_compactions_and_restart() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("conversation.sqlite");
-        let conversation_id = ConversationId::new("conv-surface-history");
+        let conversation_id = ConversationId::new("conv_3756ff3c-c24d-7348-8827-12caf1896498");
         let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
         let a = user_message("a", "A");
         let b = user_message("b", "B");
@@ -9504,7 +9507,7 @@ mod tests {
         ];
         for (index, fault) in faults.into_iter().enumerate() {
             let store = SqliteConversationStore::in_memory(ConversationId::new(format!(
-                "conv-compaction-fault-{index}"
+                "conv_00000000-0000-7000-8000-{index:012x}"
             )))
             .unwrap();
             let a = user_message("a", "A");
@@ -9770,7 +9773,7 @@ mod tests {
     fn request_start_is_atomic_and_reconstructs_from_durable_history() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("conversation.sqlite");
-        let conversation_id = ConversationId::new("conv-request-history");
+        let conversation_id = ConversationId::new("conv_cf107b20-dc7b-70e4-83e3-eea701e0da84");
         let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
         let a = user_message("a", "A");
         let b = user_message("b", "B");
@@ -10373,7 +10376,7 @@ mod tests {
     fn agent_status_head_resume_uses_one_bounded_lookup() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("conversation.sqlite");
-        let conversation_id = ConversationId::new("status-head-resume");
+        let conversation_id = ConversationId::new("conv_f9113f99-5f0f-7b59-8f83-495e254f63f1");
         let emission = AgentStatusEmission {
             module_id: AgentStatusModuleId::Todo,
             key: "active_actionable".to_owned(),
@@ -10417,7 +10420,7 @@ mod tests {
     fn a_version_32_profile_store_is_refused_without_migration() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("profile-v32.sqlite");
-        let id = ConversationId::new("conv-v32");
+        let id = ConversationId::new("conv_bb2149cf-1f8d-7c3c-8c60-73f4acb0a518");
         {
             let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
             store
@@ -10438,7 +10441,7 @@ mod tests {
                 result,
                 Err(ConversationStoreError::SchemaVersionMismatch {
                     stored: 32,
-                    expected: 37
+                    expected: 38
                 })
             ));
         }
@@ -10862,7 +10865,9 @@ mod tests {
     fn background_terminal_publication_is_idempotent_and_terminal_unique() {
         let store = store();
         let conversation_id = store.conversation_id().clone();
-        let execution_id = crate::runtime::identity::ToolExecutionId::new("execution-1");
+        let execution_id = crate::runtime::identity::ToolExecutionId::new(
+            "exec_63093cff-69b8-7efb-82db-20a75f993612",
+        );
         let message_id = MessageId::new("background-notification-1");
         let timestamp = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
         let notification = UserMessageBlock {
@@ -10963,9 +10968,10 @@ mod tests {
                 RuntimeEvent::SubagentOwnershipCommitted {
                     subagent_id: subagent_id.clone(),
                     child_agent_id: child_agent_id.clone(),
-                    child_conversation_id: crate::runtime::identity::ConversationId::new(
-                        subagent_id.as_str(),
-                    ),
+                    child_conversation_id:
+                        crate::scripted_suites::common::identity::child_conversation_id(
+                            subagent_id.as_str(),
+                        ),
                     tool_call_id: ToolCallId::new("call-sub"),
                     agent: "explore".to_owned(),
                     definition_digest: "sha256:definition".to_owned(),
@@ -11233,9 +11239,8 @@ mod tests {
             RuntimeEvent::SubagentOwnershipCommitted {
                 subagent_id: other.clone(),
                 child_agent_id: other_child,
-                child_conversation_id: crate::runtime::identity::ConversationId::new(
-                    other.as_str(),
-                ),
+                child_conversation_id:
+                    crate::scripted_suites::common::identity::child_conversation_id(other.as_str()),
                 tool_call_id: ToolCallId::new("call-other"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
@@ -11626,7 +11631,10 @@ mod tests {
                 RuntimeEvent::SubagentOwnershipCommitted {
                     subagent_id: subagent_id.clone(),
                     child_agent_id: child_agent_id.clone(),
-                    child_conversation_id: ConversationId::new(subagent_id.as_str()),
+                    child_conversation_id:
+                        crate::scripted_suites::common::identity::child_conversation_id(
+                            subagent_id.as_str(),
+                        ),
                     tool_call_id: ToolCallId::new("workflow-call"),
                     agent: "reviewer".to_owned(),
                     definition_digest: "sha256:definition".to_owned(),
@@ -11716,9 +11724,10 @@ mod tests {
                 RuntimeEvent::SubagentOwnershipCommitted {
                     subagent_id: subagent_id.clone(),
                     child_agent_id: AgentId::new(format!("agent-{subagent_id}")),
-                    child_conversation_id: crate::runtime::identity::ConversationId::new(
-                        subagent_id.as_str(),
-                    ),
+                    child_conversation_id:
+                        crate::scripted_suites::common::identity::child_conversation_id(
+                            subagent_id.as_str(),
+                        ),
                     tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
                     agent: "worker".to_owned(),
                     definition_digest: "sha256:definition".to_owned(),
@@ -12302,7 +12311,9 @@ mod tests {
             RuntimeEvent::SubagentOwnershipCommitted {
                 subagent_id: s1.clone(),
                 child_agent_id: AgentId::new("agent-a"),
-                child_conversation_id: crate::runtime::identity::ConversationId::new("child-a"),
+                child_conversation_id: crate::runtime::identity::ConversationId::new(
+                    "conv_4761f81f-3cff-7c88-84c5-21410a0b63f3",
+                ),
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
@@ -12333,7 +12344,9 @@ mod tests {
             RuntimeEvent::SubagentOwnershipCommitted {
                 subagent_id: s1.clone(),
                 child_agent_id: AgentId::new("agent-a"),
-                child_conversation_id: crate::runtime::identity::ConversationId::new("child-a"),
+                child_conversation_id: crate::runtime::identity::ConversationId::new(
+                    "conv_4761f81f-3cff-7c88-84c5-21410a0b63f3",
+                ),
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
@@ -12371,7 +12384,9 @@ mod tests {
             RuntimeEvent::SubagentOwnershipCommitted {
                 subagent_id: s2.clone(),
                 child_agent_id: AgentId::new("agent-b"),
-                child_conversation_id: crate::runtime::identity::ConversationId::new("child-b"),
+                child_conversation_id: crate::runtime::identity::ConversationId::new(
+                    "conv_027fd54f-460d-7e47-84f4-ffff3ee8af4a",
+                ),
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-b"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
@@ -12663,14 +12678,14 @@ mod tests {
     fn reopening_a_store_for_the_wrong_conversation_fails_closed() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("conversation.sqlite");
-        let conversation_id = ConversationId::new("conversation-a");
+        let conversation_id = ConversationId::new("conv_30d36aa9-aeae-79e9-8322-f17c7d13842a");
         drop(SqliteConversationStore::open(conversation_id, &path).unwrap());
 
         assert!(matches!(
-            SqliteConversationStore::open(ConversationId::new("conversation-b"), &path),
+            SqliteConversationStore::open(ConversationId::new("conv_ddb81244-a13c-7d38-842c-03c613793b90"), &path),
             Err(ConversationStoreError::ConversationIdMismatch { stored, requested })
-                if stored == ConversationId::new("conversation-a")
-                    && requested == ConversationId::new("conversation-b")
+                if stored == ConversationId::new("conv_30d36aa9-aeae-79e9-8322-f17c7d13842a")
+                    && requested == ConversationId::new("conv_ddb81244-a13c-7d38-842c-03c613793b90")
         ));
     }
 
@@ -12791,7 +12806,10 @@ mod tests {
             .unwrap();
         drop(connection);
         assert!(matches!(
-            SqliteConversationStore::open(ConversationId::new("conv-1"), &path),
+            SqliteConversationStore::open(
+                ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+                &path
+            ),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 99,
                 expected: SQLITE_SCHEMA_VERSION
@@ -12809,7 +12827,7 @@ mod tests {
     fn pre_m9b_schema_version_is_rejected_explicitly() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("pre-m9b.sqlite");
-        let conversation_id = ConversationId::new("conv-pre-m9b");
+        let conversation_id = ConversationId::new("conv_22848931-dd71-7669-86f8-0840ad55e434");
         {
             // Build a fully-shaped store at the current schema, then downgrade
             // only the schema version to the pre-M9b value: the table shape is
@@ -12838,11 +12856,11 @@ mod tests {
     /// It is the obsolete choice-only shape: each question carries `options`
     /// and `multi_select` instead of a typed `answer`, and the subject records
     /// no requester identity at all.
-    const V30_QUESTIONNAIRE_REQUESTED: &str = r#"{"schema_version":1,"event_id":"interaction-requested-v30","sequence":1,"conversation_id":"conv-v30","timestamp":"2026-01-01T00:00:00Z","event":{"type":"interaction_requested","interaction_id":"interaction-v30","subject":{"type":"questionnaire","invocation_id":{"caller":"agent","call_id":"legacy-call"},"questionnaire":{"questions":[{"question":"Which direction?","header":"Direction","options":[{"label":"First","description":"The first authored option."},{"label":"Second","description":"The second authored option."}],"multi_select":false}]}}}}"#;
+    const V30_QUESTIONNAIRE_REQUESTED: &str = r#"{"schema_version":1,"event_id":"interaction-requested-v30","sequence":1,"conversation_id":"conv_7ee23a93-1fb2-7d39-84d8-def51c2d5f73","timestamp":"2026-01-01T00:00:00Z","event":{"type":"interaction_requested","interaction_id":"interaction-v30","subject":{"type":"questionnaire","invocation_id":{"caller":"agent","call_id":"legacy-call"},"questionnaire":{"questions":[{"question":"Which direction?","header":"Direction","options":[{"label":"First","description":"The first authored option."},{"label":"Second","description":"The second authored option."}],"multi_select":false}]}}}}"#;
 
     /// The matching schema-30 settlement: the answer names the authored
     /// **label**, which the typed vocabulary replaced with an option index.
-    const V30_QUESTIONNAIRE_SETTLED: &str = r#"{"schema_version":1,"event_id":"interaction-settled-v30","sequence":2,"conversation_id":"conv-v30","timestamp":"2026-01-01T00:00:01Z","event":{"type":"interaction_settled","interaction_id":"interaction-v30","settlement":{"type":"questionnaire_submitted","submission":{"answers":[{"question_index":0,"answer":{"type":"single_option","value":{"label":"First"}}}]}}}}"#;
+    const V30_QUESTIONNAIRE_SETTLED: &str = r#"{"schema_version":1,"event_id":"interaction-settled-v30","sequence":2,"conversation_id":"conv_7ee23a93-1fb2-7d39-84d8-def51c2d5f73","timestamp":"2026-01-01T00:00:01Z","event":{"type":"interaction_settled","interaction_id":"interaction-v30","settlement":{"type":"questionnaire_submitted","submission":{"answers":[{"question_index":0,"answer":{"type":"single_option","value":{"label":"First"}}}]}}}}"#;
 
     /// Issue #242 changed the durable *semantic vocabulary* of the
     /// Questionnaire interaction audit, so the store version must gate open.
@@ -12864,7 +12882,7 @@ mod tests {
     fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("questionnaire-v30.sqlite");
-        let conversation_id = ConversationId::new("conv-v30");
+        let conversation_id = ConversationId::new("conv_7ee23a93-1fb2-7d39-84d8-def51c2d5f73");
         {
             // A fully-shaped store at the current schema, carrying the exact
             // rows a schema-30 runtime would have written, then downgraded to
@@ -12912,7 +12930,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 37);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 38);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -12931,7 +12949,7 @@ mod tests {
 
     /// A schema-31 subagent ownership fact: `(agent, definition_digest)` and
     /// no effective execution-profile identity at all.
-    const V31_SUBAGENT_OWNERSHIP: &str = r#"{"schema_version":1,"event_id":"subagent-committed-event:conv-v31-subagent-1","sequence":1,"conversation_id":"conv-v31","timestamp":"2026-01-01T00:00:00Z","event":{"type":"subagent_ownership_committed","subagent_id":"conv-v31-subagent-1","child_agent_id":"agent-child","child_conversation_id":"conv-v31-subagent-1","tool_call_id":"call-sub","agent":"explore","definition_digest":"sha256:d1","ownership":"normal","workspace":{"logical_workspace":"<shared-workspace>","isolation":{"mode":"shared"}}}}"#;
+    const V31_SUBAGENT_OWNERSHIP: &str = r#"{"schema_version":1,"event_id":"subagent-committed-event:conv-v31-subagent-1","sequence":1,"conversation_id":"conv_5b135cc1-effd-7c32-88a8-1e18c1b056bd","timestamp":"2026-01-01T00:00:00Z","event":{"type":"subagent_ownership_committed","subagent_id":"conv_5b135cc1-effd-7c32-88a8-1e18c1b056bd-subagent-1","child_agent_id":"agent-child","child_conversation_id":"conv_5b135cc1-effd-7c32-88a8-1e18c1b056bd-subagent-1","tool_call_id":"call-sub","agent":"explore","definition_digest":"sha256:d1","ownership":"normal","workspace":{"logical_workspace":"<shared-workspace>","isolation":{"mode":"shared"}}}}"#;
 
     /// Issue #258 made the effective execution-profile identity a durable
     /// execution fact, so the store version must gate open.
@@ -12950,7 +12968,7 @@ mod tests {
     fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("ownership-v31.sqlite");
-        let conversation_id = ConversationId::new("conv-v31");
+        let conversation_id = ConversationId::new("conv_5b135cc1-effd-7c32-88a8-1e18c1b056bd");
         {
             let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
             let connection = store.conn.lock().unwrap();
@@ -12981,7 +12999,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 37);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 38);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -13010,7 +13028,7 @@ mod tests {
                     .push(events.and_then(|events| events.last().map(|event| event.sequence)));
             }
         }
-        let id = ConversationId::new("journal-cut");
+        let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936178");
         let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
         let observer = Arc::new(Observer::default());
         assert_eq!(store.observe_journal(observer.clone()).unwrap(), 0);
@@ -13042,8 +13060,10 @@ mod tests {
     #[test]
     fn trace_schema_indexes_are_required_and_queries_use_them() {
         use super::super::presentation::{FactQuery, FactScope};
-        let store =
-            SqliteConversationStore::in_memory(ConversationId::new("trace-indexes")).unwrap();
+        let store = SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_ab18a567-5190-73a5-8156-2e8693be6392",
+        ))
+        .unwrap();
         let connection = store.conn.lock().unwrap();
         verify_schema_shape(&connection).unwrap();
         let scopes = [
@@ -13140,7 +13160,7 @@ mod tests {
     fn schema_34_without_fixed_trace_index_contract_is_rejected() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("old.sqlite");
-        let id = ConversationId::new("old-trace");
+        let id = ConversationId::new("conv_a2b8feb8-c105-7980-8a72-d8482750c3fc");
         {
             let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
             store
@@ -13157,7 +13177,7 @@ mod tests {
             SqliteConversationStore::open(id, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 34,
-                expected: 37
+                expected: 38
             })
         ));
     }
@@ -13168,7 +13188,7 @@ mod tests {
     fn a_current_store_records_the_typed_interaction_audit_schema_version() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("current.sqlite");
-        let conversation_id = ConversationId::new("conv-current");
+        let conversation_id = ConversationId::new("conv_497e1eed-f051-7f55-8d8c-4775b598e15c");
         let stored: i64 = {
             let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
             let connection = store.conn.lock().unwrap();
@@ -13180,7 +13200,7 @@ mod tests {
                 )
                 .unwrap()
         };
-        assert_eq!(stored, 37);
+        assert_eq!(stored, 38);
         assert_eq!(stored, SQLITE_SCHEMA_VERSION);
         SqliteConversationStore::open(conversation_id, &path).expect("a current store reopens");
     }
@@ -13190,7 +13210,7 @@ mod tests {
         use crate::runtime::workflow::{WorkflowExecutionOutcome, WorkflowLoopExit, test_instance};
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("loop-facts.sqlite");
-        let conversation = ConversationId::new("loop-facts");
+        let conversation = ConversationId::new("conv_701197a0-a688-77da-8a0f-ce405d769eb8");
         let mut node = test_instance("feedback", "loop");
         node.block.run.conversation_id = conversation.clone();
         node.block.invocations = vec![0, 2];
@@ -13251,7 +13271,7 @@ mod tests {
     fn schema_29_without_loop_lifecycle_facts_is_rejected() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("pre-loop.sqlite");
-        let conversation = ConversationId::new("loop-schema");
+        let conversation = ConversationId::new("conv_4406c108-b4ff-727c-8a70-ab32b1f0efd5");
         {
             let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
             store
@@ -13277,7 +13297,7 @@ mod tests {
     fn schema_27_without_workflow_recovery_guards_is_rejected() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("without-recovery-guard.sqlite");
-        let conversation = ConversationId::new("guard-schema");
+        let conversation = ConversationId::new("conv_d85e9707-bae4-7aba-8e7e-3bf98a5f0a4b");
         {
             let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
             store
@@ -13307,7 +13327,7 @@ mod tests {
     fn pre_issue_106_schema_version_is_rejected_explicitly() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("pre-issue-106.sqlite");
-        let conversation_id = ConversationId::new("conv-pre-issue-106");
+        let conversation_id = ConversationId::new("conv_f9a4212a-8c18-76b4-8b37-69acee1c9a60");
         {
             let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
             store
@@ -13341,7 +13361,7 @@ mod tests {
     fn pre_answer_obligation_schema_is_rejected_explicitly() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("pre-answer-obligation.sqlite");
-        let conversation_id = ConversationId::new("conv-pre-answer-obligation");
+        let conversation_id = ConversationId::new("conv_09e32769-fc6b-71ac-81e2-c993e7ff5861");
         {
             let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
             store
@@ -13368,7 +13388,7 @@ mod tests {
     fn pre_structured_questionnaire_schema_is_rejected_explicitly() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("pre-structured-questionnaire.sqlite");
-        let conversation_id = ConversationId::new("conv-pre-structured-questionnaire");
+        let conversation_id = ConversationId::new("conv_9be9531e-63d0-70aa-8359-c06d857d1479");
         {
             let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
             store
@@ -13394,7 +13414,7 @@ mod tests {
     fn pre_issue_130_schema_version_is_rejected_explicitly() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("pre-issue-130.sqlite");
-        let conversation_id = ConversationId::new("conv-pre-issue-130");
+        let conversation_id = ConversationId::new("conv_e0814883-a446-7275-827d-b31701d9c6cc");
         {
             let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
             store
@@ -13424,7 +13444,7 @@ mod tests {
     fn issue136_schema_version_is_rejected_explicitly() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("pre-issue-136.sqlite");
-        let conversation_id = ConversationId::new("conv-pre-issue-136");
+        let conversation_id = ConversationId::new("conv_fa864790-c311-717f-8884-b4f0363af078");
         {
             let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
             store
@@ -13454,7 +13474,7 @@ mod tests {
     fn issue137_schema_version_is_rejected_explicitly() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("pre-issue-137.sqlite");
-        let conversation_id = ConversationId::new("conv-pre-issue-137");
+        let conversation_id = ConversationId::new("conv_a824ca2a-191a-74db-864b-400f12825324");
         {
             let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
             store
@@ -13483,7 +13503,7 @@ mod tests {
     fn issue136_cancellation_phases_survive_durable_reload() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("cancellation-phases.sqlite");
-        let conversation_id = ConversationId::new("conv-issue-136-cancellation-phases");
+        let conversation_id = ConversationId::new("conv_d865e314-7198-7c52-8c86-68581b290333");
         let base = user_message("user-issue-136", "Run the tools");
         let assistant = MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("assistant-issue-136"),
@@ -13565,7 +13585,7 @@ mod tests {
     fn pre_proposal_state_machine_schema_is_rejected_explicitly() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("pre-proposal-state-machine.sqlite");
-        let conversation_id = ConversationId::new("conv-pre-proposal-state-machine");
+        let conversation_id = ConversationId::new("conv_dfd0b924-9046-7f41-80a4-91c6b251f14c");
         {
             let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
             store

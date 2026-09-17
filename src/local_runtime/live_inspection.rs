@@ -41,6 +41,7 @@ impl LiveConversationInspectionLease {
     /// Acquires the child-owned liveness lease at the identity-derived path.
     pub(crate) fn acquire(
         root: &Path,
+        session_id: &crate::runtime::identity::SessionId,
         conversation_id: &crate::runtime::identity::ConversationId,
     ) -> std::io::Result<Self> {
         let root = crate::runtime::local_storage::ProductRoot::existing(root)?;
@@ -49,6 +50,7 @@ impl LiveConversationInspectionLease {
         }
         let path = crate::runtime::subagent::child_conversation_inspection_liveness_path(
             root.root(),
+            session_id,
             conversation_id,
         );
         let lifecycle = crate::runtime::local_storage::ConversationAccess::existing(

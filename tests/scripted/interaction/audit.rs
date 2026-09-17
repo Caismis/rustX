@@ -493,7 +493,7 @@ async fn run_approval(
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn requested_fact_commits_before_the_prompt_reaches_a_client() {
     let (run, _) = run_approval(
-        "conv-109-before-prompt",
+        "conv_c1043ed8-2b33-7fba-a13e-7c929ed994f2",
         Some(InteractionResponse::Approval {
             decision: ApprovalDecision::Allow,
         }),
@@ -589,7 +589,7 @@ async fn requested_fact_commits_before_the_prompt_reaches_a_client() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn approved_settlement_commits_before_tool_execution_started() {
     let (run, invocations) = run_approval(
-        "conv-109-approval-order",
+        "conv_a304632d-7612-7747-94c5-e98522450565",
         Some(InteractionResponse::Approval {
             decision: ApprovalDecision::Allow,
         }),
@@ -640,7 +640,7 @@ async fn approved_settlement_commits_before_tool_execution_started() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn denial_is_a_denied_tool_result_with_matching_interaction_audit() {
     let (run, invocations) = run_approval(
-        "conv-109-denial",
+        "conv_081f2ebf-c06d-7594-87c8-d281873f67f8",
         Some(InteractionResponse::Approval {
             decision: ApprovalDecision::Deny {
                 reason: "denied by the operator".to_owned(),
@@ -699,7 +699,7 @@ async fn denial_is_a_denied_tool_result_with_matching_interaction_audit() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn interaction_settlement_is_exactly_once_for_one_identity() {
     let (run, _) = run_approval(
-        "conv-109-exactly-once",
+        "conv_19da6383-661c-7fa2-b770-69f79b6c9087",
         Some(InteractionResponse::Approval {
             decision: ApprovalDecision::Allow,
         }),
@@ -764,7 +764,7 @@ async fn interaction_settlement_is_exactly_once_for_one_identity() {
 /// all: rustX never records that a user was asked something no user saw.
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn a_headless_attempt_records_no_interaction_audit_and_fails_closed() {
-    let conversation = "conv-109-headless";
+    let conversation = "conv_5f2b4647-2277-79a7-adc4-5e2497b58d88";
     let store = Arc::new(
         SqliteConversationStore::in_memory(ConversationId::new(conversation)).expect("store"),
     );
@@ -830,7 +830,7 @@ async fn a_headless_attempt_records_no_interaction_audit_and_fails_closed() {
 /// same interaction identity exactly once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn interaction_audit_survives_client_detach_and_reattach() {
-    let conversation = "conv-109-detach";
+    let conversation = "conv_9169a8f4-fa68-748e-951d-e3dcf9862d81";
     let store = Arc::new(
         SqliteConversationStore::in_memory(ConversationId::new(conversation)).expect("store"),
     );

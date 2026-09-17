@@ -21,6 +21,8 @@ use crate::tools::types::ToolOrigin;
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct CapabilityInspection {
+    pub definitions: Vec<ResourceDefinition>,
+    pub resource_diagnostics: Vec<ResourceDiagnostic>,
     pub main: Option<AgentInspection>,
     pub agents: BTreeMap<SubagentName, AgentInspection>,
     pub workflows: BTreeMap<WorkflowId, WorkflowInspection>,
@@ -38,9 +40,9 @@ pub struct AgentInspection {
     pub tools: Vec<ToolInspection>,
     pub tool_selection: Vec<crate::capabilities::selection::AgentToolSelection>,
     pub skills: Vec<SkillProvenance>,
-    pub disabled_skills: Vec<String>,
     pub agents: Vec<SubagentName>,
     pub workflows: Vec<WorkflowId>,
+    #[serde(rename = "plugins")]
     pub extensions: Vec<ExtensionInspection>,
     pub diagnostics: Vec<AgentProfileDiagnostic>,
 }
@@ -91,12 +93,31 @@ pub enum WorkflowInspection {
 #[serde(tag = "status", rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum SourceInspection {
-    Inactive {
-        activation: crate::capabilities::activation::SourceActivation,
-    },
     Unprepared,
     Ready,
     Unavailable,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceFamily {
+    Agent,
+    Workflow,
+    ManagedPython,
+    Mcp,
+    Skill,
+}
+
+/// A defined identity is independent of selection and materialization. Clients
+/// present these native facts without discovering paths or computing overlays.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResourceDefinition {
+    pub family: ResourceFamily,
+    pub name: String,
+    pub location: crate::runtime::resources::ResourceLocation,
+    pub valid: bool,
 }
 
 impl AgentInspection {
@@ -120,7 +141,6 @@ impl AgentInspection {
                 .filter(|entry| profile.skills.contains(&entry.name))
                 .cloned()
                 .collect(),
-            disabled_skills: profile.disabled_skills.clone(),
             agents: profile.agents.iter().cloned().collect(),
             workflows: profile.workflows.iter().cloned().collect(),
             extensions: vec![
@@ -146,6 +166,28 @@ impl AgentInspection {
     }
 }
 
+/// Bounded resource diagnostics expose source ownership, never source contents.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
+pub struct ResourceDiagnostic {
+    pub file: Option<std::path::PathBuf>,
+    pub identity: String,
+    pub reason: String,
+}
+impl ResourceDiagnostic {
+    pub(crate) fn from_error(error: &crate::runtime::resources::RuntimeResourceLoadError) -> Self {
+        Self {
+            file: error.source_file.clone(),
+            identity: error.field_path.clone().unwrap_or_default(),
+            reason: error
+                .diagnostic_reason
+                .unwrap_or("resource is invalid or unreadable")
+                .into(),
+        }
+    }
+}
+
 impl CapabilityInspection {
     pub(crate) fn collect<'a>(
         main: Option<&ResolvedAgentProfile>,
@@ -161,6 +203,17 @@ impl CapabilityInspection {
         skills: &SkillSnapshot,
     ) -> Self {
         Self {
+            definitions: workflows
+                .locations
+                .iter()
+                .map(|(id, location)| ResourceDefinition {
+                    family: ResourceFamily::Workflow,
+                    name: id.to_string(),
+                    location: location.clone(),
+                    valid: !workflows.invalid().contains_key(id),
+                })
+                .collect(),
+            resource_diagnostics: Vec::new(),
             main: main.map(|profile| AgentInspection::from_resolved(profile, skills)),
             agents: agents
                 .map(|(name, profile, source)| {
@@ -194,11 +247,6 @@ impl CapabilityInspection {
                     (
                         id.clone(),
                         match state {
-                            CapabilitySourceState::Inactive { activation } => {
-                                SourceInspection::Inactive {
-                                    activation: *activation,
-                                }
-                            }
                             CapabilitySourceState::Unprepared => SourceInspection::Unprepared,
                             CapabilitySourceState::Ready => SourceInspection::Ready,
                             CapabilitySourceState::Unavailable { .. } => {
@@ -286,7 +334,7 @@ mod tests {
     #[test]
     fn cfg275_wire_fixture_preserves_native_tags_and_order() {
         let value: serde_json::Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/runtime-client/capabilities-v34.json"
+            "../../tests/fixtures/runtime-client/capabilities-v38.json"
         ))
         .unwrap();
         let inspection: CapabilityInspection = serde_json::from_value(value.clone()).unwrap();

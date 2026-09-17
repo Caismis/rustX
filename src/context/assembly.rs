@@ -1112,7 +1112,7 @@ mod tests {
     fn input() -> ContributorInputSnapshot {
         ContributorInputSnapshot {
             attempt_id: AttemptId::new("attempt-1"),
-            conversation_id: ConversationId::new("conversation-1"),
+            conversation_id: ConversationId::new("conv_413055e0-cb3a-7c6d-89b6-b446a98e0ad1"),
             turn: 1,
             surface_revision: SurfaceRevision::INITIAL,
             surface_ids: vec![MessageId::new("inbound")],

@@ -70,7 +70,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 5;
+export const APP_SERVER_PROTOCOL_VERSION = 6;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -135,20 +135,18 @@ export class UncertainOutcomeError extends Error {
 /** Every generated method must deliberately classify a lost response. */
 export type ResponseLossClass = "read" | "side_effecting" | "connection_local";
 export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
-  "settings/defaults": "read",
-  "settings/saveDefault": "side_effecting",
   "session/unload": "side_effecting",
   "session/transcript": "read",
   "session/trace": "read",
   "artifact/read": "read",
   "session/upload": "side_effecting",
-  "settings/sourcesRead": "read",
-  "settings/sourcesWrite": "side_effecting",
+  "configuration/sourcesRead": "read",
+  "configuration/effective": "read",
+  "configuration/sourceWrite": "side_effecting",
   "settings/selectModel": "side_effecting",
   "settings/model": "read",
   "settings/models": "read",
   "settings/setModel": "side_effecting",
-  "settings/setApprovalMode": "side_effecting",
   "resources/read": "read",
   "context/compact": "side_effecting",
   "goal/control": "side_effecting",
@@ -186,7 +184,7 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "interaction/cancel": "side_effecting",
   "settings/read": "read",
   "settings/replace": "side_effecting",
-  "resources/reload": "side_effecting",
+  "configuration/reload": "side_effecting",
 } satisfies Record<MethodName, ResponseLossClass>);
 
 interface PendingRequest {
@@ -336,7 +334,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v5 protocol message");
+      this.#fail("invalid App Server v6 protocol message");
       return;
     }
 

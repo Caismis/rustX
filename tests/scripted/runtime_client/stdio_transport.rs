@@ -479,7 +479,7 @@ async fn run_session(
 
 /// One `initialize` record.
 fn initialize_record(id: u64) -> Vec<u8> {
-    format!("{{\"method\":\"initialize\",\"id\":{id},\"protocol_version\":37}}\n").into_bytes()
+    format!("{{\"method\":\"initialize\",\"id\":{id},\"protocol_version\":38}}\n").into_bytes()
 }
 
 /// Parses one captured record as a response.
@@ -517,7 +517,7 @@ async fn idle_host(conversation: &str) -> RuntimeClientHost {
 /// are separated exactly, and each produces exactly one response.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn coalesced_records_in_one_read_are_separated() {
-    let host = idle_host("conv-38-coalesced").await;
+    let host = idle_host("conv_c5795629-01f9-7187-9de4-8c27e7ee2e94").await;
     let mut input = initialize_record(1);
     input.extend_from_slice(b"{\"method\":\"snapshot_get\",\"id\":2}\n");
     input.extend_from_slice(b"{\"method\":\"capability_get\",\"id\":3}\n");
@@ -535,7 +535,7 @@ async fn coalesced_records_in_one_read_are_separated() {
 /// One record split across many underlying reads is reassembled exactly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_record_split_across_reads_is_reassembled() {
-    let host = idle_host("conv-38-split").await;
+    let host = idle_host("conv_e3187d9c-22a5-70e4-aa5a-268c493723ff").await;
     let record = initialize_record(1);
     let chunks: Vec<&[u8]> = record.chunks(3).collect();
     let outcome = run_session(host.endpoint(), &chunks, PIPE_BYTES).await;
@@ -551,11 +551,11 @@ async fn a_record_split_across_reads_is_reassembled() {
 /// CRLF input is accepted by removing exactly one terminal CR.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn crlf_records_are_accepted() {
-    let host = idle_host("conv-38-crlf").await;
+    let host = idle_host("conv_1d86d008-9ed5-78cd-a533-d37bab683d68").await;
     let outcome = run_session(
         host.endpoint(),
         &[
-            b"{\"method\":\"initialize\",\"id\":1,\"protocol_version\":37}\r\n",
+            b"{\"method\":\"initialize\",\"id\":1,\"protocol_version\":38}\r\n",
             b"{\"method\":\"snapshot_get\",\"id\":2}\r\n",
         ],
         PIPE_BYTES,
@@ -573,7 +573,7 @@ async fn crlf_records_are_accepted() {
 /// reaches canonical history unchanged.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_escaped_newline_stays_inside_one_record() {
-    let fixture = RuntimeClientFixture::builder("conv-38-escaped")
+    let fixture = RuntimeClientFixture::builder("conv_c8a69c05-9883-7c08-8986-89db60129daa")
         .build()
         .await;
     let outcome = run_session(
@@ -613,7 +613,7 @@ async fn an_escaped_newline_stays_inside_one_record() {
 /// JSON fails as the first malformed record and applies nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn physical_multiline_json_is_a_framing_failure() {
-    let fixture = RuntimeClientFixture::builder("conv-38-multiline")
+    let fixture = RuntimeClientFixture::builder("conv_7497fd1c-1fc5-755e-9639-5010102ad26c")
         .build()
         .await;
     let outcome = run_session(
@@ -659,11 +659,11 @@ async fn invalid_records_are_fatal_and_write_nothing() {
         ),
         (
             "wrong-type",
-            br#"{"method":"initialize","id":"two","protocol_version":37}"#,
+            br#"{"method":"initialize","id":"two","protocol_version":38}"#,
         ),
     ];
     for (name, record) in cases {
-        let fixture = RuntimeClientFixture::builder(&format!("conv-38-invalid-{name}"))
+        let fixture = RuntimeClientFixture::builder("conv_00000000-0000-7000-8000-000000000004")
             .build()
             .await;
         let mut chunk = record.to_vec();
@@ -709,12 +709,12 @@ async fn invalid_records_are_fatal_and_write_nothing() {
 /// an explicit truncation error. Neither is cancellation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn eof_distinguishes_a_boundary_from_a_truncated_record() {
-    let host = idle_host("conv-38-eof-clean").await;
+    let host = idle_host("conv_3b0f50a2-678b-7e94-834c-c825d1e180c4").await;
     let outcome = run_session(host.endpoint(), &[&initialize_record(1)], PIPE_BYTES).await;
     assert!(matches!(outcome.result, Ok(StdioSessionEnd::InputEof)));
     assert_eq!(outcome.records.len(), 1);
 
-    let host = idle_host("conv-38-eof-truncated").await;
+    let host = idle_host("conv_50fbd3a1-03b4-71a2-a83f-34ded4f86c94").await;
     let mut truncated = initialize_record(1);
     truncated.extend_from_slice(br#"{"method":"snapshot_get","id":2}"#);
     let outcome = run_session(host.endpoint(), &[&truncated], PIPE_BYTES).await;
@@ -766,7 +766,7 @@ async fn a_partly_read_record_survives_an_event_winning_the_select() {
     /// The rest of that request, released only after the event was written.
     const REQUEST_SUFFIX: &[u8] = b"}\n";
 
-    let fixture = RuntimeClientFixture::builder("conv-38-partial-record")
+    let fixture = RuntimeClientFixture::builder("conv_35db73dd-716a-7150-92fc-a523f3847c9d")
         .build()
         .await;
     let sink = CapturingSink::default();
@@ -865,7 +865,7 @@ fn sized_submit_record(id: u64, bytes: usize) -> Vec<u8> {
 /// A record of exactly the limit is accepted; the LF is not counted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_input_record_at_the_limit_is_accepted() {
-    let fixture = RuntimeClientFixture::builder("conv-38-at-limit")
+    let fixture = RuntimeClientFixture::builder("conv_d4887c8a-4398-7545-a2c0-72df6edaf4c3")
         .build()
         .await;
     let record = sized_submit_record(2, STDIO_JSONL_MAX_RECORD_BYTES);
@@ -889,7 +889,7 @@ async fn an_input_record_at_the_limit_is_accepted() {
 /// part of the oversized request is applied.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_input_record_over_the_limit_is_rejected_without_dispatch() {
-    let fixture = RuntimeClientFixture::builder("conv-38-over-limit")
+    let fixture = RuntimeClientFixture::builder("conv_14b2097a-ea61-7bb0-b6c1-c479e0b19975")
         .build()
         .await;
     let record = sized_submit_record(2, STDIO_JSONL_MAX_RECORD_BYTES + 1);
@@ -937,7 +937,7 @@ async fn an_oversized_outbound_record_terminates_without_truncating() {
     // `initialize` response (which carries the linearized snapshot) cannot
     // be framed.
     let huge = "y".repeat(STDIO_JSONL_MAX_RECORD_BYTES + 1024);
-    let fixture = RuntimeClientFixture::builder("conv-38-huge-output")
+    let fixture = RuntimeClientFixture::builder("conv_aee41511-3bd5-7248-b7db-5be6c3a1c36f")
         .initial_messages(vec![MessageBlock::User(support::fake::inbound_message(
             "seed",
             &huge,
@@ -977,7 +977,7 @@ async fn an_oversized_outbound_record_terminates_without_truncating() {
 /// with another, and no human text is ever written.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_output_stream_is_protocol_only_and_ordered() {
-    let fixture = RuntimeClientFixture::builder("conv-38-purity")
+    let fixture = RuntimeClientFixture::builder("conv_b9063129-9b94-736b-b729-f4e44f2ab54f")
         .script(vec![
             FakeStep::Emit(ModelEvent::Started),
             FakeStep::Emit(ModelEvent::TextDelta {
@@ -1088,7 +1088,7 @@ async fn the_output_stream_is_protocol_only_and_ordered() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn eof_detaches_without_cancelling_the_running_attempt() {
     let (release, release_rx) = model_release();
-    let fixture = RuntimeClientFixture::builder("conv-38-eof-detach")
+    let fixture = RuntimeClientFixture::builder("conv_8445a137-1fba-7f75-9795-1de06a9e2a06")
         .script(vec![
             FakeStep::Emit(ModelEvent::Started),
             FakeStep::ParkUntilReleased(release_rx),
@@ -1177,7 +1177,7 @@ async fn eof_detaches_without_cancelling_the_running_attempt() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_broken_output_pipe_detaches_without_retrying() {
     let (release, release_rx) = model_release();
-    let fixture = RuntimeClientFixture::builder("conv-38-broken-pipe")
+    let fixture = RuntimeClientFixture::builder("conv_25a508bf-f06b-7486-a1d7-f59b19e00ca5")
         .script(vec![
             FakeStep::Emit(ModelEvent::Started),
             FakeStep::ParkUntilReleased(release_rx),
@@ -1249,7 +1249,7 @@ async fn a_broken_output_pipe_detaches_without_retrying() {
 /// attachment identity on the same byte stream.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn detach_keeps_the_byte_stream_open() {
-    let host = idle_host("conv-38-detach").await;
+    let host = idle_host("conv_6c2736e7-af9c-7f31-899e-f7c0303b484c").await;
     let outcome = run_session(
         host.endpoint(),
         &[
@@ -1304,7 +1304,7 @@ async fn detach_keeps_the_byte_stream_open() {
 /// transport.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shutdown_does_not_close_the_transport() {
-    let fixture = RuntimeClientFixture::builder("conv-38-shutdown")
+    let fixture = RuntimeClientFixture::builder("conv_12bebfe0-c724-7539-a875-0e5e306365d3")
         .build()
         .await;
     let sink = CapturingSink::default();
@@ -1421,7 +1421,7 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
             }),
         ]
     };
-    let fixture = RuntimeClientFixture::builder("conv-38-backpressure")
+    let fixture = RuntimeClientFixture::builder("conv_3597d6e9-eaa8-78c2-a2ec-39be7714d35b")
         // A deliberately tiny replay ring, so a stalled consumer provably
         // falls behind retention rather than merely lagging.
         .replay_limit(Some(2))

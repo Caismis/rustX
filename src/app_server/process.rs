@@ -18,11 +18,10 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-pub const USAGE: &str = "usage: rustx app-server [--user-settings <settings.toml>] [--models <models.toml>] [--runtime-root <path>] --listen <stdio|ws://IP:PORT> [--token-file <path>]\nUser settings default: $XDG_CONFIG_HOME/rustx/settings.toml (default ~/.config/rustx/settings.toml).\n--user-settings fixes the user TOML source for this process; relative CLI paths use launch cwd.\n--models and --runtime-root override canonical user TOML source bindings.\nWebSocket requires a dedicated base64url token file. stdio requires owned pipes.";
+pub const USAGE: &str = "usage: rustx app-server [--config <absolute-path>] [--runtime-root <absolute-path>] --listen <stdio|ws://IP:PORT> [--token-file <path>]\nUser config defaults to ~/rustx/rustx.toml; User resources remain ~/rustx/.agents. Runtime storage defaults to ~/rustx/runtime. Bindings last for this process. WebSocket requires a dedicated token file; stdio requires owned pipes.";
 
 struct Options {
-    settings: Option<PathBuf>,
-    models: Option<PathBuf>,
+    config: Option<PathBuf>,
     root: Option<PathBuf>,
     listen: String,
     token: Option<PathBuf>,
@@ -30,8 +29,7 @@ struct Options {
 impl Options {
     fn parse(arguments: Vec<String>) -> Result<Self, String> {
         let mut options = Self {
-            settings: None,
-            models: None,
+            config: None,
             root: None,
             listen: String::new(),
             token: None,
@@ -47,8 +45,7 @@ impl Options {
                 .filter(|value| !value.is_empty())
                 .ok_or("option requires a value")?;
             match flag.as_str() {
-                "--user-settings" => options.settings = Some(value.into()),
-                "--models" => options.models = Some(value.into()),
+                "--config" => options.config = Some(value.into()),
                 "--runtime-root" => options.root = Some(value.into()),
                 "--listen" => options.listen = value,
                 "--token-file" => options.token = Some(value.into()),
@@ -64,38 +61,35 @@ impl Options {
 
 fn compose(options: &Options) -> Result<AppServerHost, String> {
     let host = HostEnvironment::capture()?;
-    let absolute = |path: &PathBuf| {
-        if path.is_absolute() {
-            path.clone()
-        } else {
-            host.launch_directory.join(path)
+    for (name, path) in [
+        ("--config", options.config.as_ref()),
+        ("--runtime-root", options.root.as_ref()),
+    ] {
+        if path.is_some_and(|path| !path.is_absolute()) {
+            return Err(format!("{name} requires an absolute process binding"));
         }
-    };
-    let settings = options
-        .settings
+    }
+    let absolute = |path: &PathBuf| path.clone();
+    let config_path = options
+        .config
         .as_ref()
-        .map_or_else(|| host.config_directory.join("settings.toml"), absolute);
+        .map_or_else(|| host.config_directory.join("rustx.toml"), absolute);
     // Explicit selection is required; only the omitted canonical default may
     // be absent. Parsing and canonical source binding remain in the shared owner.
-    if options.settings.is_some()
-        && !std::fs::metadata(&settings).is_ok_and(|metadata| metadata.is_file())
+    if options.config.is_some()
+        && !std::fs::metadata(&config_path).is_ok_and(|metadata| metadata.is_file())
     {
         return Err("explicit user settings source must be an existing readable TOML file".into());
     }
     let configuration = UserConfigManager::bootstrap(
         UserConfigSources {
-            settings,
-            models: host.config_directory.join("models.toml"),
-            runtime_root: host.state_directory.join("app-server"),
+            config_path,
+            runtime_root: host.state_directory.clone(),
             home_directory: host.home_directory,
-            config_directory: host.config_directory,
-            state_directory: host.state_directory,
         },
-        options.models.as_ref().map(absolute),
         options.root.as_ref().map(absolute),
     )
     .map_err(|error| error.to_string())?;
-    configuration.validate_catalog()?;
     let sessions =
         SessionController::open(configuration.runtime_root()).map_err(|error| error.to_string())?;
     let policy = configuration.app_server_policy()?;

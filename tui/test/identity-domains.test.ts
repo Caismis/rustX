@@ -48,7 +48,7 @@ import type { InteractionRef } from "../src/protocol/app-server.ts";
 
 const COLLIDING = "same";
 const INTERACTION: InteractionRef = {
-  conversation_id: "conv-test",
+  conversation_id: "conv_01900000-0000-7000-8000-000000000002",
   interaction_id: COLLIDING,
 };
 
@@ -227,9 +227,9 @@ describe("identity domains never alias", () => {
     // `call_*` / `exec_*` are incidental wire spellings. The domains are kept
     // apart by structure, so an id that looks like the *other* domain still
     // behaves as the domain it was filed under.
-    const misleading = withToggledToolCall(defaultPreferences(), "exec_7");
-    assert.equal(isToolCallExpanded(misleading, "exec_7"), true);
-    assert.equal(isBackgroundExecutionExpanded(misleading, "exec_7"), false);
+    const misleading = withToggledToolCall(defaultPreferences(), "exec_64692f59-5f7d-7854-920b-7d2afa58aafd");
+    assert.equal(isToolCallExpanded(misleading, "exec_64692f59-5f7d-7854-920b-7d2afa58aafd"), true);
+    assert.equal(isBackgroundExecutionExpanded(misleading, "exec_64692f59-5f7d-7854-920b-7d2afa58aafd"), false);
     assert.equal(isInteractionExpanded(misleading, INTERACTION), false);
   });
 
@@ -267,30 +267,30 @@ describe("/expand addresses one domain at a time", () => {
     });
     // Even when the string looks like an execution id: there is no search
     // across namespaces and no "first match wins".
-    assert.deepEqual(await expand("exec-7"), {
+    assert.deepEqual(await expand("exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5"), {
       kind: "preference",
-      preference: { type: "expand_call", callId: "exec-7" },
+      preference: { type: "expand_call", callId: "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5" },
     });
   });
 
   it("addresses a background execution only when told to", async () => {
-    assert.deepEqual(await expand("background exec-7"), {
+    assert.deepEqual(await expand("background exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5"), {
       kind: "preference",
-      preference: { type: "expand_background", executionId: "exec-7" },
+      preference: { type: "expand_background", executionId: "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5" },
     });
-    assert.deepEqual(await expand("bg exec-7"), {
+    assert.deepEqual(await expand("bg exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5"), {
       kind: "preference",
-      preference: { type: "expand_background", executionId: "exec-7" },
+      preference: { type: "expand_background", executionId: "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5" },
     });
   });
 
   it("addresses a pending interaction only when told to", async () => {
-    assert.deepEqual(await expand("interaction conv-test::attempt-1-interaction-1"), {
+    assert.deepEqual(await expand("interaction conv_01900000-0000-7000-8000-000000000002::attempt-1-interaction-1"), {
       kind: "preference",
       preference: {
         type: "expand_interaction",
         interaction: {
-          conversation_id: "conv-test",
+          conversation_id: "conv_01900000-0000-7000-8000-000000000002",
           interaction_id: "attempt-1-interaction-1",
         },
       },

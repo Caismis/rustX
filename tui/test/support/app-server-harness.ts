@@ -61,7 +61,7 @@ export interface Harness {
 /** Connects, attaches one Session, and binds a dispatcher to it. */
 export async function harness(
   initial: RuntimeClientSnapshot = defaultSnapshot(),
-  sessionId = "session-1",
+  sessionId = "ses_84097828-fc31-78c8-9292-10df48901a85",
 ): Promise<Harness> {
   const transport = new FakeTransport();
   const connecting = AppServerClient.initialize({ transport });

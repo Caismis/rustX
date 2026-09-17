@@ -20,3 +20,6 @@ mod pending_inbound;
 mod publication;
 mod recovery;
 mod transcript_history;
+
+#[path = "../common/identity.rs"]
+mod identity_fixture;

@@ -11,7 +11,7 @@
 //!   "override": {           // optional, Issue #258
 //!     "tools":  {"builtin": ["read", "grep", "bash"]},
 //!     "skills": ["rust-review"],
-//!     "extensions": {"agentStatus": {"enabled": true}}
+//!     "plugins": {"agentStatus": {"enabled": true}}
 //!   }
 //! }
 //! ```
@@ -42,18 +42,13 @@
 //! The named definition is the child's **default** execution profile. The
 //! model chooses which named agent runs and may, through `override`, replace
 //! exactly three dimensions of that default — `tools`, `skills`,
-//! `extensions` — within an explicit delegation ceiling. Model, instructions,
+//! `plugins` — validated against the admitted generation. Model, instructions,
 //! timeout, project instructions, workspace policy, approval policy, and
 //! credentials belong to the definition alone and are deliberately not
 //! per-call arguments.
 //!
-//! The ceiling is a native decision, never a model argument: this executor
-//! always resolves through
-//! [`AttemptSubagentContext::resolve`](crate::runtime::subagent::AttemptSubagentContext::resolve),
-//! which pins the Main admission domain and the dynamic
-//! `DelegatedByModel` authority. A model cannot request the trusted Workflow
-//! authority mode, change the admission domain, or supply an authority
-//! snapshot of its own.
+//! Root authorizes the named Agent through its explicit allowlist. The child
+//! owns an independent profile; Root Tool and Plugin selections are not ceilings.
 //!
 //! The executor stays a thin adapter over the conversation-owned
 //! [`SubagentRegistry`]: input validation, attempt-scoped resolution, the
@@ -172,13 +167,12 @@ pub(super) fn definition(catalog: &AgentCatalog) -> Option<ToolDefinition> {
              report arrives later as a new message, immediately preceded by a runtime message \
              that names the exact execution handle it belongs to; do not retry or poll \
              for it.\n\nEach named agent defines the child's default instructions, model, \
-             tools, Skills, and extensions. Omit \"override\" to run those defaults exactly. \
+             tools, Skills, and Plugins. Omit \"override\" to run those defaults exactly. \
              Use \"override\" only to specialize this one child: each field you include \
              REPLACES that whole dimension rather than adding to it, and each field you omit \
              keeps the agent's default. \"tools\": {{}} means no tools, \"skills\": [] means \
-             no Skills, and \"extensions\": {{}} means no extensions. You may only request \
-             capabilities the named agent already has or that you hold yourself; anything \
-             else is refused and no child is started. The agent's instructions, model, \
+             no Skills, and \"plugins\": {{}} means no Plugins. Selected Tools must exist in the admitted generation; \
+             Plugins must support one-shot child execution. The agent's instructions, model, \
              timeout, and workspace policy can never be overridden.\n\n{}",
             render_agent_routing(catalog)
         ),
@@ -269,11 +263,18 @@ impl ToolExecutor for SubagentExecutor {
                         ));
                     }
                 };
-                let resolved =
-                    match subagent_context.resolve(&agent, input.invocation_override.as_ref()) {
-                        Ok(resolved) => resolved,
-                        Err(error) => return failed_result(error.to_string()),
-                    };
+                let child_cancellation = context.cancellation.child_signal();
+                let resolved = match subagent_context
+                    .resolve_admitted(
+                        &agent,
+                        input.invocation_override.as_ref(),
+                        &child_cancellation,
+                    )
+                    .await
+                {
+                    Ok(resolved) => resolved,
+                    Err(error) => return failed_result(error.to_string()),
+                };
                 let spec = SubagentStartSpec {
                     resolved,
                     approval_mode: subagent_context.approval_mode(),
@@ -291,7 +292,6 @@ impl ToolExecutor for SubagentExecutor {
                 // handshake, child external capability composition) AND the
                 // commit decision. There is no second, unrelated cancellation
                 // model for the same staged lifecycle.
-                let child_cancellation = context.cancellation.child_signal();
                 let prepared = match self.subagents.prepare(&spec, &child_cancellation).await {
                     Ok(prepared) => prepared,
                     Err(SubagentStartError::Cancelled) => {
@@ -449,7 +449,7 @@ mod tests {
             subagent_id: crate::runtime::identity::SubagentId::new("conversation-1-subagent-2"),
             child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
             child_conversation_id: crate::runtime::identity::ConversationId::new(
-                "conversation-1-subagent-2",
+                "conv_7ffb8fb9-96df-7369-86cb-c7b7cf85136b",
             ),
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),
@@ -498,7 +498,7 @@ mod tests {
             "model",
             "tools",
             "skills",
-            "extensions",
+            "plugins",
             "instructions",
             "agents_md",
             "workspace",
@@ -533,7 +533,7 @@ mod tests {
             "override": {
                 "tools": {"builtin": ["read"]},
                 "skills": ["code-review"],
-                "extensions": {"agentStatus": {"enabled": true}},
+                "plugins": {"agentStatus": {"enabled": true}},
             },
         }))
         .expect("the three goal dimensions are accepted together");
@@ -575,19 +575,20 @@ mod tests {
 base_url = "http://127.0.0.1:9/v1"
 api_key = "test-only-secret"
 
-[[providers.local.models]]
+[models."local/model"]
+provider = "local"
 id = "model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
-[providers.local.models.capabilities]
+[models."local/model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/model".compat]
 chat_reasoning_replay = "omit"
 "#;
 
@@ -649,7 +650,7 @@ chat_reasoning_replay = "omit"
         git(&workspace_root, &["commit", "-m", "initial"]);
         std::fs::write(workspace_root.join("tracked.txt"), "dirty parent\n").expect("dirty file");
 
-        let conversation_id = ConversationId::new("conv-dirty-parent");
+        let conversation_id = ConversationId::new("conv_34a98c0b-66c1-78a0-8d50-8251107771ec");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
                 .expect("in-memory store"),
@@ -661,6 +662,10 @@ chat_reasoning_replay = "omit"
             clock: Arc::new(SystemClock),
             monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
             spawn: SubagentSpawnPlan {
+                session_id: crate::runtime::identity::SessionId::new(
+                    "ses_01900000-0000-7000-8000-000000000001",
+                ),
+
                 program: std::path::PathBuf::from("/nonexistent/rustx"),
                 product_root: crate::runtime::local_storage::ProductRoot::create(
                     &runtime_root.clone(),
@@ -739,13 +744,12 @@ chat_reasoning_replay = "omit"
         );
 
         DirtyParentPlane {
-            subagent_context: AttemptSubagentContext::new(
+            subagent_context: AttemptSubagentContext::test_context(
                 crate::runtime::identity::AttemptId::new("native-subagent-test-attempt"),
                 resources,
                 SessionModelConfig::of(model),
                 models,
                 ApprovalMode::Policy,
-                crate::extensions::NativeAgentExtensions::none(),
             ),
             workspace: crate::tools::workspace::Workspace::new(&workspace_root).expect("workspace"),
             artifacts: crate::tools::artifacts::ArtifactStore::new(
@@ -848,7 +852,7 @@ chat_reasoning_replay = "omit"
         std::fs::create_dir_all(&workspace_root).expect("workspace");
         std::fs::create_dir_all(&runtime_root).expect("runtime root");
 
-        let conversation_id = ConversationId::new("conv-delegation");
+        let conversation_id = ConversationId::new("conv_4cff03c5-a15a-7544-8863-0f841872d8f5");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
                 .expect("in-memory store"),
@@ -860,6 +864,10 @@ chat_reasoning_replay = "omit"
             clock: Arc::new(SystemClock),
             monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
             spawn: SubagentSpawnPlan {
+                session_id: crate::runtime::identity::SessionId::new(
+                    "ses_01900000-0000-7000-8000-000000000001",
+                ),
+
                 program: std::path::PathBuf::from("/nonexistent/rustx"),
                 product_root: crate::runtime::local_storage::ProductRoot::create(&runtime_root)
                     .unwrap(),
@@ -955,13 +963,12 @@ chat_reasoning_replay = "omit"
         );
 
         DelegationPlane {
-            subagent_context: AttemptSubagentContext::new(
+            subagent_context: AttemptSubagentContext::test_context(
                 crate::runtime::identity::AttemptId::new("delegation-test-attempt"),
                 resources,
                 SessionModelConfig::of(model),
                 models,
                 ApprovalMode::Policy,
-                crate::extensions::NativeAgentExtensions::none(),
             ),
             workspace: crate::tools::workspace::Workspace::new(&workspace_root).expect("workspace"),
             artifacts: crate::tools::artifacts::ArtifactStore::new(
@@ -1040,14 +1047,14 @@ chat_reasoning_replay = "omit"
     /// assertion, not "the record was removed".
     #[cfg(unix)]
     #[tokio::test]
-    async fn sub258_an_unauthorized_override_starts_no_child_and_commits_no_ownership() {
+    async fn cfg3_an_undefined_tool_override_starts_no_child_and_commits_no_ownership() {
         let plane = delegation_plane();
         let result = invoke_subagent(
             &plane,
             serde_json::json!({
                 "agent": "reviewer",
                 "task": "review",
-                "override": {"tools": {"builtin": ["write"]}},
+                "override": {"tools": {"builtin": ["missing_tool"]}},
             }),
         )
         .await;
@@ -1055,7 +1062,7 @@ chat_reasoning_replay = "omit"
             panic!("an unauthorized override fails: {:?}", result.status);
         };
         assert!(
-            rendered.contains("builtin:write"),
+            rendered.contains("missing_tool"),
             "the refusal names the exact capability: {rendered}"
         );
         assert!(
@@ -1261,7 +1268,7 @@ chat_reasoning_replay = "omit"
             .cloned()
             .collect::<Vec<_>>();
         names.sort();
-        assert_eq!(names, vec!["extensions", "skills", "tools"]);
+        assert_eq!(names, vec!["plugins", "skills", "tools"]);
         assert_eq!(
             over["additionalProperties"],
             serde_json::json!(false),
@@ -1279,7 +1286,7 @@ chat_reasoning_replay = "omit"
             "no override dimension advertises an explicit null: {rendered}"
         );
         assert_eq!(
-            over["properties"]["extensions"]["additionalProperties"],
+            over["properties"]["plugins"]["additionalProperties"],
             serde_json::json!(false),
             "the extension vocabulary stays closed: an unknown extension name is refused"
         );

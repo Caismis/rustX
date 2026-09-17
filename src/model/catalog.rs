@@ -5,7 +5,7 @@
 //! which credential authorizes it. There is deliberately no other path:
 //!
 //! ```text
-//! models.toml -> authoring::Catalog -> ModelCatalogDocument -> ModelCatalog
+//! rustx.toml -> RuntimeLayer -> ModelCatalogDocument -> ModelCatalog
 //!               (strict TOML)       (native typed)          (validated)
 //! ModelCatalog -> ResolvedModelCatalog (host credentials bound at admission)
 //! ```
@@ -130,70 +130,32 @@ catalog_identity!(ProviderId, "provider", true, false);
 catalog_identity!(ModelId, "model", false, true);
 catalog_identity!(ReasoningProfileId, "reasoning profile", true, false);
 
-/// A fully qualified catalog model reference: `provider-id/model-id`.
-///
-/// The first `/` separates the provider from the model. The model ID itself
-/// may contain additional `/` characters, as is common for Hugging Face
-/// identities such as `Qwen/Qwen3`, but no model-ID segment may be empty.
-///
-/// This is the explicit model-identity domain of the runtime. Concatenated
-/// strings never travel through the runtime in its place: a reference either
-/// resolves to exactly one catalog model or it fails.
+/// An authored Model identity. Its spelling has no provider or wire semantics.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, schemars::JsonSchema)]
 #[schemars(with = "String")]
-pub struct ModelRef {
-    provider: ProviderId,
-    model: ModelId,
-}
+pub struct ModelRef(String);
 
 impl ModelRef {
-    /// Creates a reference from its two parts.
+    /// Constructs an explicitly qualified name; qualification is naming only.
     #[must_use]
-    pub const fn new(provider: ProviderId, model: ModelId) -> Self {
-        Self { provider, model }
+    #[allow(clippy::needless_pass_by_value)] // Own both explicit naming components at construction.
+    pub fn new(provider: ProviderId, model: ModelId) -> Self {
+        Self(format!("{provider}/{model}"))
     }
 
-    /// Parses the canonical `provider-id/model-id` form.
-    ///
-    /// The first `/` separates the provider; the remainder is the model ID.
-    ///
+    /// Parses a nonempty catalog identity, independently of Provider bindings.
     /// # Errors
-    ///
-    /// Returns [`ModelCatalogError::InvalidModelRef`] when the value does
-    /// not contain a `/` separating two valid identities.
+    /// Rejects invalid identity segments.
     pub fn parse(value: &str) -> Result<Self, ModelCatalogError> {
-        let mut parts = value.splitn(2, '/');
-        let (Some(provider), Some(model)) = (parts.next(), parts.next()) else {
-            return Err(ModelCatalogError::InvalidModelRef {
-                value: value.to_owned(),
-            });
-        };
-        let provider =
-            ProviderId::parse(provider).map_err(|_| ModelCatalogError::InvalidModelRef {
-                value: value.to_owned(),
-            })?;
-        let model = ModelId::parse(model).map_err(|_| ModelCatalogError::InvalidModelRef {
+        ModelId::parse(value).map_err(|_| ModelCatalogError::InvalidModelRef {
             value: value.to_owned(),
         })?;
-        Ok(Self { provider, model })
-    }
-
-    /// The provider identity.
-    #[must_use]
-    pub const fn provider(&self) -> &ProviderId {
-        &self.provider
-    }
-
-    /// The model identity within its provider.
-    #[must_use]
-    pub const fn model(&self) -> &ModelId {
-        &self.model
+        Ok(Self(value.to_owned()))
     }
 }
-
 impl fmt::Display for ModelRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}", self.provider, self.model)
+        f.write_str(&self.0)
     }
 }
 
@@ -727,6 +689,8 @@ pub struct ReasoningConfig {
 /// One validated catalog model definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelDefinition {
+    /// Explicit provider binding, independent of the catalog name.
+    pub provider: ProviderId,
     /// The model identity within its provider.
     pub id: ModelId,
     /// The protocol an adapter must speak to this model.
@@ -773,8 +737,6 @@ pub struct ProviderDefinition {
     pub base_url: String,
     /// The declared credential source.
     pub api_key: CredentialSource,
-    /// The provider's models, keyed by identity.
-    pub models: BTreeMap<ModelId, Arc<ModelDefinition>>,
 }
 
 /// The validated model catalog.
@@ -786,6 +748,7 @@ pub struct ProviderDefinition {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelCatalog {
     providers: BTreeMap<ProviderId, ProviderDefinition>,
+    models: BTreeMap<ModelRef, Arc<ModelDefinition>>,
 }
 
 impl ModelCatalog {
@@ -794,8 +757,8 @@ impl ModelCatalog {
     pub fn view(&self) -> ModelCatalogView {
         let mut models = Vec::new();
         for reference in self.model_refs() {
-            let provider = &self.providers[&reference.provider];
-            let model = &provider.models[&reference.model];
+            let model = &self.models[&reference];
+            let provider = &self.providers[&model.provider];
             models.push(CatalogModelView {
                 model: reference,
                 protocol: model.protocol,
@@ -863,7 +826,22 @@ impl ModelCatalog {
             let definition = validate_provider(&id, provider)?;
             providers.insert(id, definition);
         }
-        Ok(Self { providers })
+        let mut models = BTreeMap::new();
+        for (name, document) in document.models {
+            let reference = ModelRef::parse(&name)?;
+            let provider = ProviderId::parse(&document.provider)?;
+            if !providers.contains_key(&provider) {
+                return Err(ModelCatalogError::UnknownProvider { provider });
+            }
+            models.insert(
+                reference.clone(),
+                Arc::new(validate_model(&reference, document)?),
+            );
+        }
+        if models.is_empty() {
+            return Err(ModelCatalogError::EmptyCatalog);
+        }
+        Ok(Self { providers, models })
     }
 
     /// The providers in deterministic identity order.
@@ -878,27 +856,16 @@ impl ModelCatalog {
     /// Returns [`ModelCatalogError::UnknownProvider`] or
     /// [`ModelCatalogError::UnknownModel`].
     pub fn model(&self, reference: &ModelRef) -> Result<&Arc<ModelDefinition>, ModelCatalogError> {
-        let provider = self.providers.get(reference.provider()).ok_or_else(|| {
-            ModelCatalogError::UnknownProvider {
-                provider: reference.provider().clone(),
-            }
-        })?;
-        provider
-            .models
-            .get(reference.model())
+        self.models
+            .get(reference)
             .ok_or_else(|| ModelCatalogError::UnknownModel {
                 model: reference.clone(),
             })
     }
 
-    /// Every model reference in deterministic order.
+    /// Every model reference in deterministic presentation order.
     pub fn model_refs(&self) -> impl Iterator<Item = ModelRef> + '_ {
-        self.providers.values().flat_map(|provider| {
-            provider
-                .models
-                .keys()
-                .map(|model| ModelRef::new(provider.id.clone(), model.clone()))
-        })
+        self.models.keys().cloned()
     }
 
     /// Captures credential inputs for every provider without requiring unused keys.
@@ -922,7 +889,6 @@ impl ModelCatalog {
                     credential: std::sync::Arc::new(std::sync::OnceLock::new()),
                     captured: captured.clone(),
                     source: provider.api_key.clone(),
-                    models: provider.models.clone(),
                 },
             );
         }
@@ -941,7 +907,6 @@ pub struct ResolvedProvider {
     credential: std::sync::Arc<std::sync::OnceLock<Result<ResolvedCredential, ModelCatalogError>>>,
     captured: crate::credentials::CredentialSnapshot,
     source: CredentialSource,
-    models: BTreeMap<ModelId, Arc<ModelDefinition>>,
 }
 
 impl ResolvedProvider {
@@ -1008,7 +973,6 @@ impl fmt::Debug for ResolvedProvider {
             .field("credential", &"<redacted>")
             .field("captured", &self.captured)
             .field("credential_source", &self.source)
-            .field("models", &self.models.keys().collect::<Vec<_>>())
             .finish()
     }
 }
@@ -1050,12 +1014,8 @@ impl ResolvedModelCatalog {
         &self,
         reference: &ModelRef,
     ) -> Result<(&ResolvedProvider, &Arc<ModelDefinition>), ModelCatalogError> {
-        let provider = self.provider(reference.provider())?;
-        let model = provider.models.get(reference.model()).ok_or_else(|| {
-            ModelCatalogError::UnknownModel {
-                model: reference.clone(),
-            }
-        })?;
+        let model = self.catalog.model(reference)?;
+        let provider = self.provider(&model.provider)?;
         Ok((provider, model))
     }
 
@@ -1138,6 +1098,9 @@ pub struct ModelCatalogDocument {
     /// rejected rather than silently resolved by last-write-wins.
     #[serde(deserialize_with = "deserialize_unique_map")]
     pub providers: BTreeMap<String, ProviderDocument>,
+    /// Independently named complete Model definitions.
+    #[serde(deserialize_with = "deserialize_unique_map")]
+    pub models: BTreeMap<String, ModelDocument>,
 }
 
 const fn default_schema_version() -> u32 {
@@ -1153,8 +1116,6 @@ pub struct ProviderDocument {
     pub base_url: String,
     /// The mandatory credential source: a literal or `$ENV_VAR`.
     pub api_key: CredentialSource,
-    /// The provider's models.
-    pub models: Vec<ModelDocument>,
 }
 
 /// One model entry of the catalog document.
@@ -1162,6 +1123,8 @@ pub struct ProviderDocument {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct ModelDocument {
+    /// Explicit Provider identity.
+    pub provider: String,
     /// The model identity within its provider.
     pub id: String,
     /// The protocol an adapter must speak.
@@ -1223,26 +1186,10 @@ fn validate_provider(
 ) -> Result<ProviderDefinition, ModelCatalogError> {
     validate_base_url(id, &document.base_url)?;
     let api_key = document.api_key.clone();
-    if document.models.is_empty() {
-        return Err(ModelCatalogError::ProviderWithoutModels {
-            provider: id.clone(),
-        });
-    }
-    let mut models: BTreeMap<ModelId, Arc<ModelDefinition>> = BTreeMap::new();
-    for model in document.models {
-        let definition = validate_model(id, model)?;
-        if models.contains_key(&definition.id) {
-            return Err(ModelCatalogError::DuplicateModel {
-                model: ModelRef::new(id.clone(), definition.id.clone()),
-            });
-        }
-        models.insert(definition.id.clone(), Arc::new(definition));
-    }
     Ok(ProviderDefinition {
         id: id.clone(),
         base_url: document.base_url,
         api_key,
-        models,
     })
 }
 
@@ -1270,11 +1217,11 @@ fn validate_base_url(provider: &ProviderId, base_url: &str) -> Result<(), ModelC
 }
 
 fn validate_model(
-    provider: &ProviderId,
+    reference: &ModelRef,
     document: ModelDocument,
 ) -> Result<ModelDefinition, ModelCatalogError> {
     let id = ModelId::parse(document.id)?;
-    let reference = ModelRef::new(provider.clone(), id.clone());
+    let reference = reference.clone();
 
     if document.context_window == 0 || document.max_output_tokens == 0 {
         return Err(ModelCatalogError::InvalidLimits {
@@ -1331,6 +1278,7 @@ fn validate_model(
     }
 
     Ok(ModelDefinition {
+        provider: ProviderId::parse(document.provider)?,
         id,
         protocol: document.protocol,
         context_window: document.context_window,
@@ -1616,7 +1564,7 @@ impl std::error::Error for ModelCatalogError {}
 /// The safe public catalog view served to Runtime Clients.
 ///
 /// A client selects a model and a reasoning profile from this view; it never
-/// reads `models.toml` itself and never sees a credential, an adapter, or a
+/// reads `rustx.toml` itself and never sees a credential, an adapter, or a
 /// provider HTTP client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1672,601 +1620,339 @@ pub struct ReasoningProfileView {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ChatReasoningReplay, ChatToolProtocol, CredentialSource, CredentialSourceView,
-        MapCredentialEnvironment, ModelCatalog, ModelCatalogDocument, ModelCatalogError,
-        ModelCompat, ModelRef, ProviderId, ResolvedCredential,
-    };
+    use super::*;
+    use serde_json::{Value, json};
 
-    // Programmatic native-document fixtures, independent of authoring syntax.
-    // The TOML boundary has its own tests in model::authoring.
-    fn fixture_catalog(bytes: &[u8]) -> Result<ModelCatalog, ModelCatalogError> {
-        let document = serde_json::from_slice(bytes).map_err(|e| ModelCatalogError::Syntax {
+    fn document() -> Value {
+        json!({
+            "providers": {"p": {"baseUrl":"https://gateway.example/v1", "apiKey":"$RUSTX_KEY"}},
+            "models": {"chosen": {
+                "provider":"p", "id":"wire/model", "protocol":"openai_chat_completions",
+                "contextWindow":1000, "maxOutputTokens":100,
+                "capabilities":{"inputModalities":["text"],"outputModalities":["text"],"toolCalls":true,"reasoning":false},
+                "compat":{"chatReasoningReplay":"omit"}
+            }}
+        })
+    }
+    fn catalog(value: Value) -> Result<ModelCatalog, ModelCatalogError> {
+        let doc = serde_json::from_value(value).map_err(|e| ModelCatalogError::Syntax {
             detail: e.to_string(),
         })?;
-        ModelCatalog::from_document(document)
+        ModelCatalog::from_document(doc)
     }
-
-    fn catalog_json(provider_body: &str) -> String {
-        format!(r#"{{"providers": {{"p": {provider_body}}}}}"#)
+    fn selected() -> ModelRef {
+        ModelRef::parse("chosen").unwrap()
     }
-
-    fn model_json(extra: &str) -> String {
-        let compat = if extra.contains("\"compat\"") {
-            String::new()
-        } else {
-            r#", "compat":{"chatReasoningReplay":"omit"}"#.to_owned()
-        };
-        format!(
-            r#"{{"id":"m","protocol":"openai_chat_completions","contextWindow":1000,
-                 "maxOutputTokens":100,
-                 "capabilities":{{"inputModalities":["text"],"outputModalities":["text"],
-                                  "toolCalls":true,"reasoning":false}}{compat}{extra}}}"#
+    fn registry(value: Value) -> crate::model::invocation::ModelBindingRegistry {
+        crate::model::invocation::ModelBindingRegistry::new(
+            catalog(value)
+                .unwrap()
+                .resolve(&MapCredentialEnvironment::new([(
+                    "RUSTX_KEY".into(),
+                    "fixture-key".into(),
+                )]))
+                .unwrap(),
         )
+        .unwrap()
     }
-
-    fn valid_catalog() -> String {
-        catalog_json(&format!(
-            r#"{{"baseUrl":"https://gateway.example/v1","apiKey":"$RUSTX_KEY","models":[{}]}}"#,
-            model_json("")
-        ))
-    }
-
-    /// A provider without an explicit `baseUrl` cannot be represented.
     #[test]
-    fn missing_base_url_fails() {
-        let json = catalog_json(&format!(
-            r#"{{"apiKey":"$K","models":[{}]}}"#,
-            model_json("")
+    fn provider_and_model_names_never_supply_semantics() {
+        let mut value = document();
+        let p = value["providers"]
+            .as_object_mut()
+            .unwrap()
+            .remove("p")
+            .unwrap();
+        value["providers"]["openai"] = p;
+        value["models"]["chosen"]["provider"] = "openai".into();
+        let catalog = catalog(value).unwrap();
+        assert_eq!(
+            catalog.providers().next().unwrap().base_url,
+            "https://gateway.example/v1"
+        );
+        assert_eq!(
+            catalog.model(&selected()).unwrap().id.as_str(),
+            "wire/model"
+        );
+        assert!(matches!(
+            catalog.model(&ModelRef::parse("openai/wire/model").unwrap()),
+            Err(ModelCatalogError::UnknownModel { .. })
         ));
-        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
+    }
+    #[test]
+    fn provider_required_fields_and_unknown_fields_fail() {
+        for field in ["baseUrl", "apiKey"] {
+            let mut value = document();
+            value["providers"]["p"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(matches!(
+                catalog(value),
+                Err(ModelCatalogError::Syntax { .. })
+            ));
+        }
+        for pointer in [
+            "/providers/p",
+            "/models/chosen",
+            "/models/chosen/capabilities",
+            "/models/chosen/compat",
+        ] {
+            let mut value = document();
+            value.pointer_mut(pointer).unwrap()["unknown"] = true.into();
+            assert!(catalog(value).is_err(), "{pointer}");
+        }
+        let mut value = document();
+        value["providers"]["p"]["models"] = json!([]);
         assert!(
-            matches!(error, ModelCatalogError::Syntax { .. }),
-            "{error:?}"
+            matches!(catalog(value), Err(ModelCatalogError::Syntax { .. })),
+            "Providers cannot contain Models"
         );
-        assert!(error.to_string().contains("baseUrl"));
     }
-
-    /// A provider without an explicit `apiKey` source cannot be represented.
-    #[test]
-    fn missing_api_key_fails() {
-        let json = catalog_json(&format!(
-            r#"{{"baseUrl":"https://x.example/v1","models":[{}]}}"#,
-            model_json("")
-        ));
-        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
-        assert!(error.to_string().contains("apiKey"));
-    }
-
-    /// No provider *name* implies an endpoint: a provider called `openai`
-    /// still requires an explicit base URL, and the declared one is used
-    /// verbatim.
-    #[test]
-    fn provider_name_never_implies_an_endpoint() {
-        let without = r#"{"providers":{"openai":{"apiKey":"$K","models":[]}}}"#;
-        assert!(fixture_catalog(without.as_bytes()).is_err());
-
-        let with = format!(
-            r#"{{"providers":{{"openai":{{"baseUrl":"https://local.test/v1","apiKey":"k",
-                 "models":[{}]}}}}}}"#,
-            model_json("")
-        );
-        let catalog = fixture_catalog(with.as_bytes()).expect("valid");
-        let provider = catalog.providers().next().expect("one provider");
-        assert_eq!(provider.base_url, "https://local.test/v1");
-    }
-
-    /// An unsupported base URL scheme is rejected structurally.
     #[test]
     fn invalid_base_url_fails() {
-        for value in [
+        for url in [
             "",
             "gateway.example",
             "ftp://x/y",
             "https://",
-            "https://user:password@example.com/v1",
-            "https://example.com/v1?route=chat",
+            "https://u:p@example.com/v1",
+            "https://example.com/v1?x=1",
             "https://example.com/v1#fragment",
-            "https:// example.com/v1",
+            "https:// example.com",
         ] {
-            let json = catalog_json(&format!(
-                r#"{{"baseUrl":{value:?},"apiKey":"k","models":[{}]}}"#,
-                model_json("")
-            ));
-            let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
+            let mut value = document();
+            value["providers"]["p"]["baseUrl"] = url.into();
             assert!(
-                matches!(error, ModelCatalogError::InvalidBaseUrl { .. }),
-                "{value:?} -> {error:?}"
+                matches!(
+                    catalog(value),
+                    Err(ModelCatalogError::InvalidBaseUrl { .. })
+                ),
+                "{url}"
             );
         }
     }
-
     #[test]
-    fn always_on_reasoning_without_profiles_resolves_enabled() {
-        let json = catalog_json(
-            r#"{"baseUrl":"https://a.example","apiKey":"k","models":[
-                 {"id":"m","protocol":"openai_chat_completions","contextWindow":1000,
-                 "maxOutputTokens":100,
-                 "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
-                                   "toolCalls":true,"reasoning":true},
-                  "compat":{"chatReasoningReplay":"omit"},
-                  "requestParams":{"provider_reasoning":{"mode":"default"}}}]}"#,
-        );
-        let catalog = fixture_catalog(json.as_bytes()).expect("valid");
-        let resolved = catalog
+    fn independent_model_provider_reference_is_required() {
+        let mut value = document();
+        value["models"]["chosen"]["provider"] = "missing".into();
+        assert!(catalog(value).is_err());
+        let mut value = document();
+        value["models"]["chosen"]
+            .as_object_mut()
+            .unwrap()
+            .remove("provider");
+        assert!(matches!(
+            catalog(value),
+            Err(ModelCatalogError::Syntax { .. })
+        ));
+    }
+    #[test]
+    fn environment_credentials_resolve_lazily_or_fail_without_disclosing_values() {
+        let catalog = catalog(document()).unwrap();
+        let empty = catalog
             .resolve(&MapCredentialEnvironment::default())
-            .expect("literal credential resolves");
-        let registry = crate::model::invocation::ModelBindingRegistry::new(resolved)
-            .expect("supported adapter binds");
-        let invocation = registry
-            .resolve(&crate::model::invocation::ModelSelection::of(
-                ModelRef::parse("p/m").expect("reference"),
-            ))
-            .expect("always-on model resolves");
-        assert!(invocation.reasoning_enabled());
-        assert_eq!(invocation.reasoning_profile(), None);
-        assert_eq!(
-            invocation.request_params().get("provider_reasoning"),
-            Some(&serde_json::json!({"mode":"default"}))
-        );
-    }
-
-    #[test]
-    fn foreign_protocol_compat_is_rejected_even_for_default_valued_fields() {
-        let chat_with_responses_storage = catalog_json(&format!(
-            r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[{}]}}"#,
-            model_json(r#","compat":{"responsesStorage":"stored"}"#)
-        ));
-        assert!(matches!(
-            fixture_catalog(chat_with_responses_storage.as_bytes())
-                .expect_err("foreign storage compat must fail"),
-            ModelCatalogError::InvalidCompat { .. }
-        ));
-
-        let anthropic_with_chat_compat = catalog_json(
-            r#"{"baseUrl":"https://a.example","apiKey":"k","models":[
-                 {"id":"m","protocol":"anthropic_messages","contextWindow":1000,
-                  "maxOutputTokens":100,
-                  "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
-                                   "toolCalls":true,"reasoning":false},
-                  "compat":{"chatMaxTokensField":"max_tokens"}}]}"#,
-        );
-        assert!(matches!(
-            fixture_catalog(anthropic_with_chat_compat.as_bytes())
-                .expect_err("foreign chat compat must fail"),
-            ModelCatalogError::InvalidCompat { .. }
-        ));
-    }
-
-    #[test]
-    fn catalog_round_trip_does_not_create_foreign_default_compat() {
-        let document: ModelCatalogDocument =
-            serde_json::from_str(&valid_catalog()).expect("document parses");
-        let encoded = serde_json::to_vec(&document).expect("document serializes");
-        fixture_catalog(&encoded).expect("serialized defaults remain valid");
-    }
-
-    /// `$ENV_VAR` resolves from the environment; a missing variable is a
-    /// startup configuration failure naming only the variable.
-    #[test]
-    fn environment_credentials_resolve_or_fail() {
-        let catalog = fixture_catalog(valid_catalog().as_bytes()).expect("valid");
-        let environment =
-            MapCredentialEnvironment::new([("RUSTX_KEY".to_owned(), "sk-secret".to_owned())]);
-        let resolved = catalog.resolve(&environment).expect("resolves");
-        let provider = resolved.provider(&ProviderId::new("p")).expect("provider");
-        assert_eq!(provider.credential().unwrap().expose(), "sk-secret");
-        assert_eq!(
-            provider.credential_source(),
-            CredentialSourceView::Environment {
-                variable: "RUSTX_KEY".to_owned()
-            }
-        );
-
-        let empty = MapCredentialEnvironment::default();
-        let unresolved = catalog
-            .resolve(&empty)
-            .expect("unused credentials are lazy");
-        let error = unresolved
+            .unwrap();
+        let error = empty
             .provider(&ProviderId::new("p"))
             .unwrap()
             .credential()
-            .expect_err("binding must fail");
+            .unwrap_err();
         assert!(matches!(
             error,
             ModelCatalogError::MissingEnvironmentCredential { .. }
         ));
         assert!(error.to_string().contains("RUSTX_KEY"));
-        assert!(!error.to_string().contains("sk-secret"));
-    }
-
-    /// No credential value appears in Debug output or error text.
-    #[test]
-    fn credentials_never_appear_in_debug_or_errors() {
-        let secret = "sk-do-not-print";
-        let resolved = ResolvedCredential::new(secret);
-        assert_eq!(format!("{resolved:?}"), "<redacted>");
-        assert_eq!(resolved.to_string(), "<redacted>");
-
-        let source = CredentialSource::Literal(secret.to_owned());
-        assert!(!format!("{source:?}").contains(secret));
-
-        let json = catalog_json(&format!(
-            r#"{{"baseUrl":"https://x.example/v1","apiKey":{secret:?},"models":[{}]}}"#,
-            model_json("")
-        ));
-        let catalog = fixture_catalog(json.as_bytes()).expect("valid");
-        assert!(!format!("{catalog:?}").contains(secret));
         let resolved = catalog
-            .resolve(&MapCredentialEnvironment::default())
-            .expect("literal resolves without the environment");
-        assert!(!format!("{resolved:?}").contains(secret));
+            .resolve(&MapCredentialEnvironment::new([(
+                "RUSTX_KEY".into(),
+                "sk-do-not-print".into(),
+            )]))
+            .unwrap();
+        let provider = resolved.provider(&ProviderId::new("p")).unwrap();
+        assert_eq!(provider.credential().unwrap().expose(), "sk-do-not-print");
         assert_eq!(
-            resolved
-                .provider(&ProviderId::new("p"))
-                .expect("provider")
-                .credential()
-                .unwrap()
-                .expose(),
-            secret
+            provider.credential_source(),
+            CredentialSourceView::Environment {
+                variable: "RUSTX_KEY".into()
+            }
+        );
+        assert!(!format!("{resolved:?}").contains("sk-do-not-print"));
+        let secret = ResolvedCredential::new("sk-do-not-print");
+        assert_eq!(format!("{secret:?}"), "<redacted>");
+        assert_eq!(secret.to_string(), "<redacted>");
+        assert!(
+            !format!("{:?}", CredentialSource::Literal("sk-do-not-print".into()))
+                .contains("sk-do-not-print")
         );
     }
-
-    /// Duplicate provider identities and duplicate model identities both
-    /// fail rather than silently resolving by last-write-wins.
     #[test]
-    fn duplicate_identities_fail() {
-        let duplicate_provider = format!(
-            r#"{{"providers":{{"p":{{"baseUrl":"https://a.example","apiKey":"k","models":[{m}]}},
-                                "p":{{"baseUrl":"https://b.example","apiKey":"k","models":[{m}]}}}}}}"#,
-            m = model_json("")
-        );
-        let error = fixture_catalog(duplicate_provider.as_bytes()).expect_err("must fail");
-        assert!(error.to_string().contains("duplicate key"));
-
-        let duplicate_model = catalog_json(&format!(
-            r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[{m},{m}]}}"#,
-            m = model_json("")
+    fn invalid_protocol_and_limits_fail() {
+        let mut value = document();
+        value["models"]["chosen"]["protocol"] = "guessed".into();
+        assert!(matches!(
+            catalog(value),
+            Err(ModelCatalogError::Syntax { .. })
         ));
-        let error = fixture_catalog(duplicate_model.as_bytes()).expect_err("must fail");
-        assert!(matches!(error, ModelCatalogError::DuplicateModel { .. }));
-    }
-
-    /// An unknown protocol is rejected at load, never defaulted.
-    #[test]
-    fn unknown_protocol_fails() {
-        let json = catalog_json(
-            r#"{"baseUrl":"https://a.example","apiKey":"k","models":[
-                 {"id":"m","protocol":"future_protocol","contextWindow":10,"maxOutputTokens":1,
-                  "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
-                                  "toolCalls":true,"reasoning":false}}]}"#,
-        );
-        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
-        assert!(matches!(error, ModelCatalogError::Syntax { .. }));
-    }
-
-    /// Impossible context/output limits fail.
-    #[test]
-    fn impossible_limits_fail() {
-        for (window, output) in [(0_u64, 10_u32), (10, 0), (10, 10), (10, 50)] {
-            let json = catalog_json(&format!(
-                r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[
-                     {{"id":"m","protocol":"openai_responses","contextWindow":{window},
-                       "maxOutputTokens":{output},
-                       "capabilities":{{"inputModalities":["text"],"outputModalities":["text"],
-                                        "toolCalls":true,"reasoning":false}}}}]}}"#
-            ));
-            let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
-            assert!(
-                matches!(error, ModelCatalogError::InvalidLimits { .. }),
-                "{window}/{output} -> {error:?}"
-            );
+        for (window, output) in [(0, 100), (100, 0), (100, 101)] {
+            let mut value = document();
+            value["models"]["chosen"]["contextWindow"] = window.into();
+            value["models"]["chosen"]["maxOutputTokens"] = output.into();
+            assert!(catalog(value).is_err());
         }
     }
-
-    /// Malformed capability sets fail: an empty modality set and a model
-    /// that cannot carry the text conversation path are both rejected.
     #[test]
     fn malformed_capabilities_fail() {
-        let empty = catalog_json(
-            r#"{"baseUrl":"https://a.example","apiKey":"k","models":[
-                 {"id":"m","protocol":"anthropic_messages","contextWindow":100,
-                  "maxOutputTokens":10,
-                  "capabilities":{"inputModalities":[],"outputModalities":["text"],
-                                  "toolCalls":true,"reasoning":false}}]}"#,
-        );
-        assert!(matches!(
-            fixture_catalog(empty.as_bytes()).expect_err("must fail"),
-            ModelCatalogError::InvalidCapabilities { .. }
-        ));
-
-        let no_text = catalog_json(
-            r#"{"baseUrl":"https://a.example","apiKey":"k","models":[
-                 {"id":"m","protocol":"anthropic_messages","contextWindow":100,
-                  "maxOutputTokens":10,
-                  "capabilities":{"inputModalities":["image"],"outputModalities":["text"],
-                                  "toolCalls":true,"reasoning":false}}]}"#,
-        );
-        assert!(matches!(
-            fixture_catalog(no_text.as_bytes()).expect_err("must fail"),
-            ModelCatalogError::InvalidCapabilities { .. }
-        ));
-    }
-
-    /// An invalid reasoning default profile fails, and no off/low/medium/high
-    /// profile is ever synthesized.
-    #[test]
-    fn invalid_reasoning_default_fails() {
-        let json = catalog_json(&format!(
-            r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[{}]}}"#,
-            model_json(
-                r#","reasoning":{"defaultProfile":"missing","profiles":{"off":{"enabled":false}}}"#
-            )
-        ));
-        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
-        assert!(matches!(error, ModelCatalogError::InvalidReasoning { .. }));
-        assert!(error.to_string().contains("default_profile"));
-    }
-
-    /// A model that declares `capabilities.reasoning = false` may not
-    /// declare a profile that semantically enables reasoning.
-    #[test]
-    fn reasoning_profile_contradicting_capabilities_fails() {
-        let json = catalog_json(&format!(
-            r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[{}]}}"#,
-            model_json(
-                r#","reasoning":{"defaultProfile":"on","profiles":{"on":{"enabled":true}}}"#
-            )
-        ));
-        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
-        assert!(matches!(error, ModelCatalogError::InvalidReasoning { .. }));
-    }
-
-    /// A model-default request parameter that collides with a
-    /// runtime-protected wire key fails at catalog load.
-    #[test]
-    fn model_default_protected_key_collision_fails() {
-        let json = catalog_json(&format!(
-            r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[{}]}}"#,
-            model_json(r#","requestParams":{"messages":[]}"#)
-        ));
-        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
-        assert!(matches!(error, ModelCatalogError::ProtectedKey { .. }));
-        assert!(error.to_string().contains("messages"));
-    }
-
-    /// A reasoning-profile request parameter that collides with a protected
-    /// key fails at catalog load.
-    #[test]
-    fn reasoning_profile_protected_key_collision_fails() {
-        let json = catalog_json(&format!(
-            r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[{}]}}"#,
-            model_json(r#","capabilities_placeholder":0"#)
-        ));
-        // `capabilities_placeholder` is not a schema field: unknown fields
-        // are rejected, which is itself the contract under test here.
-        assert!(fixture_catalog(json.as_bytes()).is_err());
-
-        let json = catalog_json(
-            r#"{"baseUrl":"https://a.example","apiKey":"k","models":[
-                 {"id":"m","protocol":"anthropic_messages","contextWindow":100,
-                  "maxOutputTokens":10,
-                  "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
-                                  "toolCalls":true,"reasoning":true},
-                  "reasoning":{"defaultProfile":"on","profiles":{
-                     "on":{"enabled":true,"requestParams":{"max_tokens":99}}}}}]}"#,
-        );
-        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
-        assert!(matches!(error, ModelCatalogError::ProtectedKey { .. }));
-        assert!(error.to_string().contains("max_tokens"));
-    }
-
-    /// A model reference resolves unambiguously to exactly one model, including
-    /// a model ID containing additional `/` characters, and an unknown
-    /// reference fails explicitly.
-    #[test]
-    fn model_references_resolve_unambiguously() {
-        let catalog = fixture_catalog(valid_catalog().as_bytes()).expect("valid");
-        let reference = ModelRef::parse("p/m").expect("parses");
-        assert_eq!(reference.to_string(), "p/m");
-        assert_eq!(
-            catalog.model(&reference).expect("resolves").id.as_str(),
-            "m"
-        );
-        assert!(matches!(
-            catalog
-                .model(&ModelRef::parse("p/other").expect("parses"))
-                .expect_err("unknown"),
-            ModelCatalogError::UnknownModel { .. }
-        ));
-        assert!(matches!(
-            catalog
-                .model(&ModelRef::parse("other/m").expect("parses"))
-                .expect_err("unknown"),
-            ModelCatalogError::UnknownProvider { .. }
-        ));
-        assert!(ModelRef::parse("no-separator").is_err());
-        let nested = ModelRef::parse("a/b/c").expect("the model ID may contain slashes");
-        assert_eq!(nested.provider().as_str(), "a");
-        assert_eq!(nested.model().as_str(), "b/c");
-        assert_eq!(nested.to_string(), "a/b/c");
-    }
-
-    #[test]
-    fn model_reference_grammar_rejects_empty_model_segments() {
-        for value in ["a/b", "a/b/c"] {
-            assert!(ModelRef::parse(value).is_ok(), "{value:?} should parse");
-        }
-        for value in ["a/", "/b", "a//b", "a/b/"] {
-            assert!(ModelRef::parse(value).is_err(), "{value:?} should fail");
-        }
-    }
-
-    #[test]
-    fn openai_chat_requires_explicit_reasoning_replay() {
-        let json = catalog_json(
-            r#"{"baseUrl":"https://a.example","apiKey":"k","models":[
-                 {"id":"m","protocol":"openai_chat_completions","contextWindow":1000,
-                  "maxOutputTokens":100,
-                  "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
-                                  "toolCalls":true,"reasoning":false}}]}"#,
-        );
-        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
-        assert!(matches!(error, ModelCatalogError::InvalidCompat { .. }));
-        assert!(error.to_string().contains("compat.chat_reasoning_replay"));
-        assert!(error.to_string().contains("p/m"));
-    }
-
-    #[test]
-    fn chat_reasoning_replay_values_are_explicit_and_round_trip() {
-        for (wire, expected) in [
-            ("reasoning", ChatReasoningReplay::Reasoning),
-            ("reasoning_content", ChatReasoningReplay::ReasoningContent),
-            ("omit", ChatReasoningReplay::Omit),
+        for capabilities in [
+            json!({"inputModalities":[],"outputModalities":["text"],"toolCalls":true,"reasoning":false}),
+            json!({"inputModalities":["text"],"outputModalities":[],"toolCalls":true,"reasoning":false}),
         ] {
-            let json = catalog_json(&format!(
-                r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[
-                     {{"id":"m","protocol":"openai_chat_completions","contextWindow":1000,
-                      "maxOutputTokens":100,
-                      "capabilities":{{"inputModalities":["text"],"outputModalities":["text"],
-                                      "toolCalls":true,"reasoning":false}},
-                      "compat":{{"chatReasoningReplay":"{wire}"}}}}]}}"#
+            let mut value = document();
+            value["models"]["chosen"]["capabilities"] = capabilities;
+            assert!(matches!(
+                catalog(value),
+                Err(ModelCatalogError::InvalidCapabilities { .. })
             ));
-            let catalog = fixture_catalog(json.as_bytes()).expect("valid catalog");
-            let compat = catalog
-                .model(&ModelRef::parse("p/m").expect("reference"))
-                .expect("model")
-                .compat;
-            assert_eq!(compat.chat_reasoning_replay, Some(expected));
-            let serialized = serde_json::to_value(compat).expect("serialize compat");
-            assert_eq!(serialized["chatReasoningReplay"], wire);
-            let decoded: ModelCompat = serde_json::from_value(serialized).expect("decode compat");
-            assert_eq!(decoded, compat);
         }
     }
-
-    /// The in-band tool dialect is an explicit per-model declaration that
-    /// round-trips, and it defaults to `native` so no model is opted into
-    /// reserved-markup detection implicitly.
     #[test]
-    fn chat_tool_protocol_is_explicit_and_round_trips() {
-        for (wire, expected) in [
+    fn model_references_are_independent_names_with_nonempty_segments() {
+        for name in ["chosen", "a/b", "a/b/c"] {
+            assert!(ModelRef::parse(name).is_ok());
+        }
+        for name in ["", "a/", "/b", "a//b", "a/b/", "white space"] {
+            assert!(ModelRef::parse(name).is_err());
+        }
+        assert!(catalog(document()).unwrap().model(&selected()).is_ok());
+        assert!(matches!(
+            catalog(document())
+                .unwrap()
+                .model(&ModelRef::parse("missing").unwrap()),
+            Err(ModelCatalogError::UnknownModel { .. })
+        ));
+    }
+    #[test]
+    fn chat_reasoning_replay_is_explicit_and_round_trips() {
+        let mut value = document();
+        value["models"]["chosen"]["compat"] = json!({});
+        assert!(matches!(
+            catalog(value),
+            Err(ModelCatalogError::InvalidCompat { .. })
+        ));
+        for replay in ["reasoning", "reasoning_content", "omit"] {
+            let mut value = document();
+            value["models"]["chosen"]["compat"]["chatReasoningReplay"] = replay.into();
+            let doc: ModelCatalogDocument = serde_json::from_value(value).unwrap();
+            assert!(catalog(serde_json::to_value(doc).unwrap()).is_ok());
+        }
+    }
+    #[test]
+    fn protocol_specific_compat_rejects_foreign_even_default_valued_members() {
+        for protocol in ["openai_responses", "anthropic_messages"] {
+            for (field, setting) in [
+                ("chatReasoningReplay", "omit"),
+                ("chatToolProtocol", "native"),
+                ("chatMaxTokensField", "max_completion_tokens"),
+            ] {
+                let mut value = document();
+                value["models"]["chosen"]["protocol"] = protocol.into();
+                value["models"]["chosen"]["compat"] = json!({field:setting});
+                assert!(
+                    matches!(catalog(value), Err(ModelCatalogError::InvalidCompat { .. })),
+                    "{protocol} {field}"
+                );
+            }
+        }
+        let mut value = document();
+        value["models"]["chosen"]["compat"]["responsesStorage"] = "stored".into();
+        assert!(matches!(
+            catalog(value),
+            Err(ModelCatalogError::InvalidCompat { .. })
+        ));
+    }
+    #[test]
+    fn absent_compat_never_serializes_foreign_defaults() {
+        let mut value = document();
+        value["models"]["chosen"]["protocol"] = "anthropic_messages".into();
+        value["models"]["chosen"]["compat"] = json!({});
+        let doc: ModelCatalogDocument = serde_json::from_value(value).unwrap();
+        let value = serde_json::to_value(doc).unwrap();
+        assert_eq!(value["models"]["chosen"]["compat"], json!({}));
+        assert!(catalog(value).is_ok());
+    }
+    #[test]
+    fn chat_tool_protocol_defaults_and_explicit_variants() {
+        let default = catalog(document()).unwrap();
+        assert_eq!(
+            default
+                .model(&selected())
+                .unwrap()
+                .compat
+                .chat_tool_protocol,
+            ChatToolProtocol::Native
+        );
+        for (name, expected) in [
             ("native", ChatToolProtocol::Native),
             ("qwen_xml", ChatToolProtocol::QwenXml),
         ] {
-            let json = catalog_json(&format!(
-                r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[
-                     {{"id":"m","protocol":"openai_chat_completions","contextWindow":1000,
-                      "maxOutputTokens":100,
-                      "capabilities":{{"inputModalities":["text"],"outputModalities":["text"],
-                                      "toolCalls":true,"reasoning":false}},
-                      "compat":{{"chatReasoningReplay":"omit","chatToolProtocol":"{wire}"}}}}]}}"#
-            ));
-            let catalog = fixture_catalog(json.as_bytes()).expect("valid catalog");
-            let compat = catalog
-                .model(&ModelRef::parse("p/m").expect("reference"))
-                .expect("model")
-                .compat;
-            assert_eq!(compat.chat_tool_protocol, expected);
-            let serialized = serde_json::to_value(compat).expect("serialize compat");
-            assert_eq!(serialized["chatToolProtocol"], wire);
-            let decoded: ModelCompat = serde_json::from_value(serialized).expect("decode compat");
-            assert_eq!(decoded, compat);
+            let mut value = document();
+            value["models"]["chosen"]["compat"]["chatToolProtocol"] = name.into();
+            assert_eq!(
+                catalog(value)
+                    .unwrap()
+                    .model(&selected())
+                    .unwrap()
+                    .compat
+                    .chat_tool_protocol,
+                expected
+            );
         }
     }
-
-    /// An undeclared dialect is `native`: reserved-markup detection is opt-in
-    /// per model and is never inferred from a provider or model name.
     #[test]
-    fn chat_tool_protocol_defaults_to_native() {
-        let json = catalog_json(
-            r#"{"baseUrl":"https://a.example","apiKey":"k","models":[
-                 {"id":"Qwen/Qwen3","protocol":"openai_chat_completions","contextWindow":1000,
-                  "maxOutputTokens":100,
-                  "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
-                                  "toolCalls":true,"reasoning":false},
-                  "compat":{"chatReasoningReplay":"reasoning"}}]}"#,
-        );
-        let catalog = fixture_catalog(json.as_bytes()).expect("valid catalog");
-        let compat = catalog
-            .model(&ModelRef::parse("p/Qwen/Qwen3").expect("reference"))
-            .expect("model")
-            .compat;
-        assert_eq!(compat.chat_tool_protocol, ChatToolProtocol::Native);
-        let serialized = serde_json::to_value(compat).expect("serialize compat");
-        assert!(serialized.get("chatToolProtocol").is_none());
-    }
-
-    #[test]
-    fn chat_tool_protocol_is_invalid_for_non_chat_protocols() {
-        for protocol in ["openai_responses", "anthropic_messages"] {
-            let json = catalog_json(&format!(
-                r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[
-                     {{"id":"m","protocol":"{protocol}","contextWindow":1000,
-                      "maxOutputTokens":100,
-                      "capabilities":{{"inputModalities":["text"],"outputModalities":["text"],
-                                      "toolCalls":true,"reasoning":false}},
-                      "compat":{{"chatToolProtocol":"qwen_xml"}}}}]}}"#
+    fn invalid_reasoning_default_and_capability_contradiction_fail() {
+        for reasoning in [
+            json!({"defaultProfile":"missing","profiles":{"off":{"enabled":false}}}),
+            json!({"defaultProfile":"on","profiles":{"on":{"enabled":true}}}),
+        ] {
+            let mut value = document();
+            value["models"]["chosen"]["reasoning"] = reasoning;
+            assert!(matches!(
+                catalog(value),
+                Err(ModelCatalogError::InvalidReasoning { .. })
             ));
-            let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
-            assert!(matches!(error, ModelCatalogError::InvalidCompat { .. }));
         }
     }
-
     #[test]
-    fn chat_reasoning_replay_is_invalid_for_non_chat_protocols() {
-        for protocol in ["openai_responses", "anthropic_messages"] {
-            let json = catalog_json(&format!(
-                r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[
-                     {{"id":"m","protocol":"{protocol}","contextWindow":1000,
-                      "maxOutputTokens":100,
-                      "capabilities":{{"inputModalities":["text"],"outputModalities":["text"],
-                                      "toolCalls":true,"reasoning":false}},
-                      "compat":{{"chatReasoningReplay":"omit"}}}}]}}"#
-            ));
-            let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
-            assert!(matches!(error, ModelCatalogError::InvalidCompat { .. }));
-        }
-    }
-
-    /// A provider can publish a model whose provider-facing identity contains
-    /// slashes, and the resolved invocation preserves that identity for the
-    /// request body.
-    #[test]
-    fn slash_bearing_model_ids_reach_the_provider_request() {
-        let json = catalog_json(
-            r#"{"baseUrl":"https://gateway.example/v1","apiKey":"k","models":[
-                 {"id":"Qwen/Qwen3","protocol":"openai_chat_completions","contextWindow":1000,
-                 "maxOutputTokens":100,
-                 "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
-                                  "toolCalls":true,"reasoning":false},
-                 "compat":{"chatReasoningReplay":"omit"}}]}"#,
-        );
-        let catalog = fixture_catalog(json.as_bytes()).expect("valid");
-        let reference = ModelRef::parse("p/Qwen/Qwen3").expect("reference");
-        assert_eq!(
-            catalog.model(&reference).expect("model exists").id.as_str(),
-            "Qwen/Qwen3"
-        );
-
-        let resolved = catalog
-            .resolve(&MapCredentialEnvironment::default())
-            .expect("literal credential resolves");
-        let registry = crate::model::invocation::ModelBindingRegistry::new(resolved)
-            .expect("supported adapter binds");
-        let invocation = registry
-            .resolve(&crate::model::invocation::ModelSelection::of(reference))
-            .expect("model resolves");
-        assert_eq!(invocation.invocation_config().model, "Qwen/Qwen3");
-    }
-
-    /// Unknown catalog fields are rejected rather than silently ignored.
-    #[test]
-    fn unknown_fields_are_rejected() {
-        let json = catalog_json(&format!(
-            r#"{{"baseUrl":"https://a.example","apiKey":"k","future":true,"models":[{}]}}"#,
-            model_json("")
+    fn request_defaults_and_reasoning_profiles_cannot_replace_protected_structure() {
+        let mut value = document();
+        value["models"]["chosen"]["requestParams"] = json!({"messages":[]});
+        assert!(matches!(
+            catalog(value),
+            Err(ModelCatalogError::ProtectedKey { .. })
         ));
-        assert!(fixture_catalog(json.as_bytes()).is_err());
+        let mut value = document();
+        value["models"]["chosen"]["reasoning"] = json!({"defaultProfile":"off","profiles":{"off":{"enabled":false,"requestParams":{"messages":[]}}}});
+        assert!(matches!(
+            catalog(value),
+            Err(ModelCatalogError::ProtectedKey { .. })
+        ));
+    }
+    #[test]
+    fn always_on_reasoning_and_opaque_parameters_remain_adapter_owned() {
+        let mut value = document();
+        value["models"]["chosen"]["capabilities"]["reasoning"] = true.into();
+        value["models"]["chosen"]["requestParams"] =
+            json!({"provider_reasoning":{"mode":"default"}, "opaque":[null, true, {"future":42}]});
+        let bindings = registry(value);
+        let invocation = bindings
+            .resolve(&crate::model::invocation::ModelSelection::of(selected()))
+            .unwrap();
+        assert!(invocation.reasoning_enabled());
+        assert_eq!(invocation.reasoning_profile(), None);
+        assert_eq!(invocation.request_params()["opaque"][2]["future"], 42);
+        assert_eq!(
+            invocation.request_params()["provider_reasoning"]["mode"],
+            "default"
+        );
     }
 }

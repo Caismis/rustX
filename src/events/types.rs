@@ -595,7 +595,7 @@ pub enum RuntimeEvent {
         /// The deterministic definition digest frozen at start (Issue
         /// #144).
         ///
-        /// Name alone is not identity: a later resource reload may redefine
+        /// Name alone is not identity: a later configuration reload may redefine
         /// the same agent name, and this durable digest is what keeps an
         /// already-committed child bound to the definition it actually
         /// started with.
@@ -1082,7 +1082,7 @@ mod tests {
             schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
             event_id: EventId::new("evt-1"),
             sequence: 1,
-            conversation_id: ConversationId::new("conv-1"),
+            conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             attempt_id: Some(AttemptId::new("attempt-1")),
             turn_id: None,
             timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
@@ -1262,7 +1262,9 @@ mod tests {
             },
             RuntimeEvent::CompactionCompleted {
                 generation: 1,
-                summary_message_id: crate::runtime::identity::MessageId::new("conv-summary-1"),
+                summary_message_id: crate::runtime::identity::MessageId::new(
+                    "conv_bf9336db-1fdc-769c-91d4-5e2675927a3c",
+                ),
                 surface_revision: crate::conversation::SurfaceRevision::new(4),
                 tokens_before: TokenMeasurement {
                     input_tokens: 100,

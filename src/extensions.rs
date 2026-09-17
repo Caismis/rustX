@@ -1,117 +1,15 @@
-//! The closed, Rust-owned, launch-scoped **Native Agent Extension**
-//! composition boundary (Issue #256).
+//! Closed Rust-owned Agent Plugins. User-facing configuration uses `plugins`.
 //!
-//! ```text
-//! Agent core
-//!   ConversationRuntime
-//!   Agent Loop
-//!   Tool Plane
-//!   Context Assembly / Context Engine
-//!   durability / cancellation / recovery
+//! Root and named profiles each opt into Agent Status, Todo, and Goal. Omitted
+//! Plugins are off. Workspace replaces each Plugin identity as a whole object.
+//! Plugins compose through the existing Context Assembly, Tool Plane, and
+//! Conversation owners; there is no dynamic loader or third-party lifecycle API.
 //!
-//! Native Agent Extensions
-//!   Agent Status        <- the first migrated extension (Issue #256)
-//!   Todo                <- the first STATEFUL, Tool-providing one (#259)
-//!   Goal                <- revisioned durable root state and ordinary admission (#84)
-//! ```
-//!
-//! # What a Native Agent Extension is
-//!
-//! An extension is *optional Agent behavior or context augmentation* that
-//! belongs to one concrete Agent/Conversation composition. It is not a
-//! plugin, not a capability, and not an ordinary Tool: ordinary tool
-//! selection stays the business of `agent.tools.builtin`/`--tools` and the
-//! capability plane.
-//!
-//! # Two authority planes, not one list
-//!
-//! Tool *selection* and extension *composition* are separate authorities, and
-//! the model's Tool set is their composition:
-//!
-//! ```text
-//! ordinary selected Tool capabilities        the capability plane decides
-//! + enabled extension-provided Tool surfaces this module decides
-//! + already-admitted domain protocols        the admitting domain decides
-//! ```
-//!
-//! Neither plane filters the other. `--no-direct-tools` selects zero *ordinary*
-//! capabilities; it does not disable an independently composed extension, so a
-//! genuinely Tool-free model request needs no ordinary Tools **and** no
-//! Tool-providing extension. Symmetrically, naming an extension's Tool in
-//! `agent.tools.builtin`, `--tools`, `--exclude-tools`, a role's `tools.builtin`, or a
-//! Workflow capability selection is refused: those surfaces address ordinary
-//! execution capabilities only, and an extension is switched on by composing
-//! it. The classification is semantic, not incidental — `--no-builtin-tools`
-//! removes ordinary built-ins, not every Tool that happens to be written in
-//! Rust.
-//!
-//! The one core invariant:
-//!
-//! > An extension may contribute behavior only through an existing native
-//! > owner/seam. Extension composition never becomes a second Agent Loop,
-//! > Tool Plane, Context Engine, conversation owner, admission path, or
-//! > durability authority.
-//!
-//! Agent Status obeys it literally: it produces one bounded structured
-//! contribution that **Context Assembly** admits as an ordinary Runtime
-//! context fact. Context Assembly remains the request-time owner of
-//! admission, ordering, provenance, projection, and token semantics.
-//!
-//! # Why this is deliberately not a plugin runtime
-//!
-//! The composition is a *closed struct with one named member per extension*,
-//! not `Vec<Box<dyn Extension>>`. There is no lifecycle trait, no dynamic
-//! registration, no event-hook registry, no arbitrary model-request
-//! mutation, and no third-party loading. Adding an extension means adding a
-//! typed member here and wiring it through its real owning subsystem — Tool
-//! Plane for tools, Context Assembly for context, `ConversationRuntime` for
-//! runtime coordination, Runtime Client for projection. That cost is the
-//! point: it keeps every extension's authority reviewable.
-//!
-//! # Launch-scoped lifetime
-//!
-//! > A running `ConversationRuntime` executes against the native extension
-//! > composition frozen for that launch.
-//!
-//! [`NativeAgentExtensionsDocument`] is authored configuration;
-//! [`NativeAgentExtensions`] is the frozen decision. The document is read
-//! once, at composition, through the ordinary launch resolver. Resource
-//! reload republishes a `RuntimeResourceSnapshot` and deliberately never
-//! reaches this value, so a configuration edit cannot install or uninstall
-//! an extension inside an already-composed runtime. Restart/resume is a new
-//! launch: it resolves the current document through the same resolver and
-//! rewrites no canonical Session history.
-//!
-//! # Root and child are independently authored
-//!
-//! > Root Agent extensions and named-Subagent extensions are independently
-//! > authored compositions.
-//!
-//! Root `[agent.extensions]` and named `[extensions]` use the same Agent Profile
-//! document and semantic resolver. A child never
-//! *implicitly inherits* the root's set: a role that authors no `extensions`
-//! composes none. Root product defaults are an explicit lower-priority profile
-//! layer.
-//!
-//! Since Issue #258 the invoking Agent's frozen root composition does appear
-//! in the resolver — as **delegation authority**, never as an inheritance
-//! source:
-//!
-//! ```text
-//! role default composition ------------------> effective child composition
-//! invocation override (explicit) ------------> effective child composition
-//! invoking Agent's frozen root composition --> AUTHORITY ONLY
-//!                                              (may this caller ask for it)
-//! ```
-//!
-//! So a child composes an extension for exactly two reasons: its definition
-//! authored it, or an entitled caller explicitly asked for it and
-//! [`authorize_delegated_extensions`] covered every contributor. Nothing
-//! travels from root to child on its own. Only the effective authorized
-//! composition enters `ResolvedSubagentSpec`, and the child process
-//! materializes exactly that value without rereading `rustx.toml`, project
-//! configuration, host configuration, role files, or any later resource
-//! generation.
+//! A configuration generation freezes composition. Reload prepares and publishes
+//! the complete next generation at a safe boundary. Admitted work keeps its old
+//! composition. Todo lists and Goal state remain Conversation domain state.
+//! Named Agents own independent composition; Root authorizes their names, not
+//! their Tool or Plugin dimensions. Child scope constraints remain native.
 
 use std::sync::Arc;
 
@@ -178,7 +76,7 @@ pub struct GoalExtensionConfig {}
 /// exactly the semantics they had before the migration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-#[derive(schemars::JsonSchema)]
+#[derive(schemars::JsonSchema, Default)]
 pub struct AgentStatusExtensionDocument {
     /// Whether this composition includes the Agent Status extension at all.
     ///
@@ -190,16 +88,6 @@ pub struct AgentStatusExtensionDocument {
     pub time: TimeStatusConfig,
     /// The Background contributor configuration.
     pub background: BackgroundStatusConfig,
-}
-
-impl Default for AgentStatusExtensionDocument {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            time: TimeStatusConfig::default(),
-            background: BackgroundStatusConfig::default(),
-        }
-    }
 }
 
 /// The authored Todo extension (Issue #259).
@@ -224,19 +112,10 @@ impl Default for AgentStatusExtensionDocument {
 /// not launch configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-#[derive(schemars::JsonSchema)]
+#[derive(schemars::JsonSchema, Default)]
 pub struct TodoExtensionDocument {
     /// Whether this composition includes the Todo extension at all.
     pub enabled: bool,
-}
-
-impl Default for TodoExtensionDocument {
-    fn default() -> Self {
-        // The product default. It is deliberately expressed here rather than
-        // in `agent.tools.builtin`: Todo is an extension, and only extension
-        // composition may decide whether it exists.
-        Self { enabled: true }
-    }
 }
 
 /// The **frozen** Todo extension configuration of one composition.
@@ -668,16 +547,14 @@ impl NativeAgentExtensions {
     /// materialized.
     ///
     /// ```text
-    /// ordinary selected Tool capabilities      agent.tools.builtin / --tools /
-    ///                                          --exclude-tools / tools.builtin
-    /// + enabled extension-provided Tools       the extension plane
+    /// ordinary selected Tool capabilities      agent.tools / named tools
+    /// + explicitly enabled Plugin Tools        agent.plugins / named plugins
     /// + already-admitted domain protocols      Workflow output, ...
     /// ```
     ///
-    /// The two planes never filter one another: `--no-direct-tools` selects zero
-    /// *ordinary* capabilities and says nothing about an independently
-    /// composed extension, and an extension can never be switched on by
-    /// naming its Tool in an ordinary allowlist.
+    /// An empty ordinary Tool selection does not disable an explicitly enabled
+    /// Plugin. Naming a Plugin Tool in the ordinary whitelist cannot enable it.
+    /// Root and named-Agent Plugins default off.
     ///
     /// The answer is deliberately a list of **names**, not registrations: a
     /// prospective description must not be able to put an executable Tool
@@ -819,9 +696,7 @@ impl NativeAgentExtensions {
     /// which is framed.
     ///
     /// The sentinel is a spelling no IANA zone name can carry, so it can
-    /// never collide with an enabled zone's framing. Authorization reads the
-    /// same rule: a disabled Time contributor needs no timezone authority
-    /// (see [`authorize_delegated_extensions`]).
+    /// never collide with an enabled zone's framing.
     ///
     /// [`Self::authored_digest_framing`] deliberately keeps distinguishing a
     /// disabled contributor's authored zone, because a definition digest
@@ -991,10 +866,8 @@ impl ExtensionToolPlane {
     ///
     /// Crate-private: the capability plane composes extension Tools through
     /// `select_tools`, and nothing outside this crate has a reason to inject
-    /// them into a registry of its own. A caller that legitimately needs one
-    /// conversation's complete model Tool set asks that conversation for it —
-    /// [`ConversationToolRuntime::compose_model_tools`] — so the composition
-    /// is always named by the owner whose state backs it.
+    /// them into a registry after profile selection. The plane retains the
+    /// Conversation-owned executors backing every registration.
     ///
     /// # Errors
     ///
@@ -1003,8 +876,7 @@ impl ExtensionToolPlane {
     /// registry already holds.
     ///
     /// [`ToolRegistryError`]: crate::tools::executor::ToolRegistryError
-    /// [`ConversationToolRuntime::compose_model_tools`]: crate::tools::runtime::ConversationToolRuntime::compose_model_tools
-    pub(crate) fn register_into(
+    pub fn register_into(
         &self,
         registry: &mut crate::tools::executor::ToolRegistry,
     ) -> Result<(), crate::tools::executor::ToolRegistryError> {
@@ -1119,162 +991,6 @@ pub const AGENT_STATUS_EXTENSION: &str = "agentStatus";
 /// The canonical authored name of the Todo extension (Issue #259).
 pub const TODO_EXTENSION: &str = "todo";
 
-/// One refused delegated extension configuration.
-///
-/// It names the offending extension and the bounded reason no legitimate
-/// authority source covers it, so the resolver's typed error carries a
-/// diagnostic derived from the actual vocabulary rather than assembled prose.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExtensionDelegationRefusal {
-    /// The canonical authored extension name.
-    pub extension: &'static str,
-    /// The bounded reason the delegation ceiling does not cover the request.
-    pub detail: String,
-}
-
-/// Authorizes one requested child composition against the **union** of the
-/// two independent extension authority sources (Issue #258).
-///
-/// ```text
-/// allowed = role_authority  UNION  invoking_agent_frozen_authority
-/// ```
-///
-/// The union is taken **per behavior-affecting contributor**, which is the
-/// whole correction: a whole-composition `role.authorizes(x) || parent.
-/// authorizes(x)` is strictly narrower than a union and refuses a request
-/// whose contributors are each legitimately held, merely because no single
-/// source happens to hold all of them at once.
-///
-/// ```text
-/// role      Time on (UTC),  Background off
-/// invoking  Time off,       Background on
-/// requested Time on (UTC),  Background on      -> authorized
-///           Time comes from the role; Background from the invoking Agent.
-///           Nothing is manufactured.
-/// ```
-///
-/// The contributors of today's whole closed vocabulary, and what each needs:
-///
-/// ```text
-/// Agent Status composed at all  some source composes Agent Status
-/// time.enabled = true           some source composes Agent Status with Time
-///                               enabled AND the same EFFECTIVE timezone
-/// background.enabled = true     some source composes Agent Status with
-///                               Background enabled
-/// Todo composed at all          some source composes Todo
-/// a contributor set to false    narrowing; needs no authority at all
-/// requested extension absent    narrowing; needs no authority at all
-/// ```
-///
-/// Todo has no contributor axis, so it needs no per-contributor union: the
-/// extension is either composed or not. Note what is *not* being authorized —
-/// access to anyone's task list. A child composes its own
-/// [`ConversationTodoList`](crate::tools::todo::ConversationTodoList) over its
-/// own conversation, so the authority question is only whether this caller may
-/// ask for the capability at all.
-///
-/// Timezone authority is decided on
-/// [`effective_status_timezone`](crate::context::effective_status_timezone),
-/// never on the raw `Option`. An absent requested zone is a request to render
-/// **UTC**, because that is what it renders at execution, so an authority
-/// that only renders `Asia/Shanghai` does not cover it. Treating absence as
-/// "unspecified" would have made it a wildcard that manufactures UTC out of
-/// any timezone authority at all.
-///
-/// This is not a permission framework: the vocabulary is closed, the match is
-/// exhaustive over it, and adding an extension is a compile error until its
-/// authority semantics are decided here.
-///
-/// # Errors
-///
-/// Returns the first contributor no authority source covers.
-pub fn authorize_delegated_extensions(
-    role_authority: &NativeAgentExtensions,
-    invoking_authority: &NativeAgentExtensions,
-    requested: &NativeAgentExtensions,
-) -> Result<(), ExtensionDelegationRefusal> {
-    // Destructured so a new member cannot be silently left unauthorized.
-    let NativeAgentExtensions {
-        agent_status: requested_agent_status,
-        todo: requested_todo,
-        goal: requested_goal,
-    } = requested;
-    if requested_goal.is_some()
-        && role_authority.goal.is_none()
-        && invoking_authority.goal.is_none()
-    {
-        return Err(ExtensionDelegationRefusal {
-            extension: "goal",
-            detail: "No authority source composes Goal".to_owned(),
-        });
-    }
-
-    // ---- Todo (Issue #259) ----
-    //
-    // Todo has no contributor configuration, so composing it is the whole
-    // request and one source composing it is the whole authority. The child
-    // gets its *own* list either way: what is being authorized is whether
-    // this caller may ask for the capability, never whose state it reads.
-    if requested_todo.is_some()
-        && role_authority.todo.is_none()
-        && invoking_authority.todo.is_none()
-    {
-        return Err(ExtensionDelegationRefusal {
-            extension: TODO_EXTENSION,
-            detail: "neither authority composes the Todo extension".to_owned(),
-        });
-    }
-
-    let Some(requested_agent_status) = requested_agent_status.as_ref() else {
-        // Composing nothing is narrowing under every authority.
-        return Ok(());
-    };
-
-    // The two sources contribute independently; neither is a fallback for
-    // the other, and neither is merged into an execution value.
-    let sources = [
-        role_authority.agent_status.as_ref(),
-        invoking_authority.agent_status.as_ref(),
-    ];
-    let covered = |authorizes: &dyn Fn(&AgentStatusConfig) -> bool| {
-        sources.iter().flatten().any(|config| authorizes(config))
-    };
-    let refuse = |detail: String| {
-        Err(ExtensionDelegationRefusal {
-            extension: AGENT_STATUS_EXTENSION,
-            detail,
-        })
-    };
-
-    // Composing Agent Status at all is itself behavior, independently of its
-    // two contributors: the composed/absent fact is what the effective
-    // execution profile digest frames and what the Runtime Client projects,
-    // so it is never a free wrapper that a caller may add unauthorized.
-    if !covered(&|_| true) {
-        return refuse("neither authority composes the Agent Status extension at all".to_owned());
-    }
-
-    if requested_agent_status.time.enabled {
-        let requested_zone = requested_agent_status.time.effective_timezone();
-        if !covered(&|config| {
-            config.time.enabled && config.time.effective_timezone() == requested_zone
-        }) {
-            return refuse(format!(
-                "neither authority composes the Agent Status Time contributor in timezone {}",
-                requested_zone.name()
-            ));
-        }
-    }
-
-    if requested_agent_status.background.enabled && !covered(&|config| config.background.enabled) {
-        return refuse(
-            "neither authority composes the Agent Status Background contributor".to_owned(),
-        );
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1294,15 +1010,12 @@ mod tests {
     }
 
     #[test]
-    fn cfg273_root_product_defaults_are_an_explicit_profile_layer() {
-        let resolved = crate::local_runtime::config::builtin_root_profile()
-            .extensions
-            .resolve();
-        assert!(resolved.agent_status().is_some());
-        assert!(resolved.todo().is_some());
-        assert_eq!(
-            resolved.prospective_tool_names(),
-            vec![crate::tools::native::TODO_TOOL_NAME]
+    fn cfg332_root_plugins_default_off() {
+        assert!(
+            crate::local_runtime::config::builtin_root_profile()
+                .extensions
+                .resolve()
+                .is_empty()
         );
     }
 
@@ -1405,8 +1118,8 @@ mod tests {
         for value in [
             serde_json::json!({"futureGoal": {"enabled": true}}),
             serde_json::json!({"agent_status": {"future": true}}),
-            serde_json::json!({"agent_status": {"time": {"future": true}}}),
-            serde_json::json!({"agent_status": {"background": {"future": true}}}),
+            serde_json::json!({"agent_status": {"enabled": true, "time": {"future": true}}}),
+            serde_json::json!({"agent_status": {"enabled": true, "background": {"future": true}}}),
             // Todo's closed record is just as strict: it has one member.
             serde_json::json!({"todo": {"future": true}}),
             serde_json::json!({"todo": {"enabled": "true"}}),
@@ -1422,13 +1135,11 @@ mod tests {
     fn ext256_the_digest_framing_separates_every_semantic_composition() {
         let framings = [
             NativeAgentExtensions::none(),
-            crate::local_runtime::config::builtin_root_profile()
-                .extensions
+            NativeAgentExtensions::with_todo().and_agent_status(AgentStatusConfig::default()),
+            document(serde_json::json!({"agent_status": {"enabled": true, "time": {"enabled": false}}})).resolve(),
+            document(serde_json::json!({"agent_status": {"enabled": true, "background": {"enabled": false}}}))
                 .resolve(),
-            document(serde_json::json!({"agent_status": {"time": {"enabled": false}}})).resolve(),
-            document(serde_json::json!({"agent_status": {"background": {"enabled": false}}}))
-                .resolve(),
-            document(serde_json::json!({"agent_status": {"time": {"timezone": "Asia/Shanghai"}}}))
+            document(serde_json::json!({"agent_status": {"enabled": true, "time": {"timezone": "Asia/Shanghai"}}}))
                 .resolve(),
             // Issue #259: Todo is framed too, so a role that composes it is a
             // different definition from one that does not.
@@ -1457,10 +1168,10 @@ mod tests {
             crate::local_runtime::config::builtin_root_profile()
                 .extensions
                 .resolve(),
-            document(serde_json::json!({"agent_status": {"time": {"enabled": false}}})).resolve(),
-            document(serde_json::json!({"agent_status": {"background": {"enabled": false}}}))
+            document(serde_json::json!({"agent_status": {"enabled": true, "time": {"enabled": false}}})).resolve(),
+            document(serde_json::json!({"agent_status": {"enabled": true, "background": {"enabled": false}}}))
                 .resolve(),
-            document(serde_json::json!({"agent_status": {"time": {"timezone": "Asia/Shanghai"}}}))
+            document(serde_json::json!({"agent_status": {"enabled": true, "time": {"timezone": "Asia/Shanghai"}}}))
                 .resolve(),
             document(serde_json::json!({"agent_status": {"enabled": true}})).resolve(),
             NativeAgentExtensions::with_todo(),
@@ -1471,7 +1182,9 @@ mod tests {
             // the status engine's is.
             let todos = composition.todo().map(|_| {
                 crate::tools::todo::ConversationTodoList::new(
-                    crate::runtime::identity::ConversationId::new("ext-materialization"),
+                    crate::runtime::identity::ConversationId::new(
+                        "conv_5570a61c-c5b9-7294-843c-8fabb529cb86",
+                    ),
                 )
             });
             assert_eq!(
@@ -1489,7 +1202,7 @@ mod tests {
         for composition in [
             NativeAgentExtensions::none(),
             NativeAgentExtensions::with_todo(),
-            document(serde_json::json!({"agent_status": {"time": {"timezone": "Asia/Shanghai"}}}))
+            document(serde_json::json!({"agent_status": {"enabled": true, "time": {"timezone": "Asia/Shanghai"}}}))
                 .resolve(),
         ] {
             let encoded = serde_json::to_vec(&composition).expect("encodes");
@@ -1497,14 +1210,6 @@ mod tests {
             assert_eq!(decoded, composition);
         }
     }
-
-    // =================================================================
-    // Issue #258 — the extension delegation authorization algebra.
-    //
-    // These live here, at the closed vocabulary's own owner, because the
-    // question they answer is per-extension semantics ("what does this
-    // configuration DO"), not resolver plumbing.
-    // =================================================================
 
     fn zone(name: &str) -> chrono_tz::Tz {
         name.parse().expect("a real IANA timezone")
@@ -1527,216 +1232,7 @@ mod tests {
         })
     }
 
-    /// The requested composition, parsed through the real override
-    /// vocabulary so the test cannot express a request a caller could not.
-    fn requested(value: serde_json::Value) -> NativeAgentExtensions {
-        serde_json::from_value::<NativeAgentExtensionSelection>(value)
-            .expect("the selection parses")
-            .resolve()
-    }
-
-    /// The union is a **union**, not "one source authorizes the whole
-    /// composition". A request whose contributors are independently held by
-    /// the role and by the invoking Agent is authorized; the previous
-    /// whole-composition `role.authorizes(x) || parent.authorizes(x)` check
-    /// refused exactly this case.
-    #[test]
-    fn sub258_role_and_parent_contributors_combine_into_one_authorized_request() {
-        let role = status(true, None, false);
-        let invoking = status(false, None, true);
-        // Neither source alone covers this request.
-        assert!(
-            authorize_delegated_extensions(
-                &role,
-                &NativeAgentExtensions::none(),
-                &requested(serde_json::json!({"agentStatus": {"background": {"enabled": true}}})),
-            )
-            .is_err(),
-            "the role alone does not hold Background"
-        );
-        assert!(
-            authorize_delegated_extensions(
-                &NativeAgentExtensions::none(),
-                &invoking,
-                &requested(serde_json::json!({"agentStatus": {"time": {"enabled": true}}})),
-            )
-            .is_err(),
-            "the invoking Agent alone does not hold Time"
-        );
-        // Together they do, and no authority is manufactured: Time comes
-        // from the role and Background from the invoking Agent.
-        assert_eq!(
-            authorize_delegated_extensions(
-                &role,
-                &invoking,
-                &requested(serde_json::json!({
-                    "agentStatus": {
-                        "time": {"enabled": true},
-                        "background": {"enabled": true}
-                    }
-                })),
-            ),
-            Ok(()),
-        );
-    }
-
-    /// Each source is legitimate authority on its own.
-    #[test]
-    fn sub258_either_authority_source_alone_authorizes_what_it_holds() {
-        let held = status(true, Some(zone("Asia/Shanghai")), true);
-        let request = requested(serde_json::json!({
-            "agentStatus": {
-                "time": {"enabled": true, "timezone": "Asia/Shanghai"},
-                "background": {"enabled": true}
-            }
-        }));
-        assert_eq!(
-            authorize_delegated_extensions(&held, &NativeAgentExtensions::none(), &request),
-            Ok(()),
-            "role-only authority succeeds"
-        );
-        assert_eq!(
-            authorize_delegated_extensions(&NativeAgentExtensions::none(), &held, &request),
-            Ok(()),
-            "parent-only authority succeeds"
-        );
-    }
-
-    /// A contributor no source holds is refused, and the refusal names the
-    /// contributor rather than the whole composition.
-    #[test]
-    fn sub258_a_contributor_held_by_neither_source_is_refused() {
-        let role = status(true, None, false);
-        let invoking = status(true, None, false);
-        let refusal = authorize_delegated_extensions(
-            &role,
-            &invoking,
-            &requested(serde_json::json!({
-                "agentStatus": {"time": {"enabled": false}, "background": {"enabled": true}}
-            })),
-        )
-        .expect_err("Background is held by neither source");
-        assert_eq!(refusal.extension, AGENT_STATUS_EXTENSION);
-        assert!(
-            refusal.detail.contains("Background"),
-            "the refusal names the uncovered contributor: {}",
-            refusal.detail
-        );
-    }
-
-    /// Composing the extension at all is behavior — the Agent Status engine
-    /// carries the always-on Todo contributor — so it can never be
-    /// manufactured out of a state in which no source composes it.
-    #[test]
-    fn sub258_the_extension_itself_cannot_be_manufactured_from_neither_source() {
-        for request in [
-            serde_json::json!({"agentStatus": {}}),
-            serde_json::json!({
-                "agentStatus": {"time": {"enabled": false}, "background": {"enabled": false}}
-            }),
-        ] {
-            let refusal = authorize_delegated_extensions(
-                &NativeAgentExtensions::none(),
-                &NativeAgentExtensions::none(),
-                &requested(request.clone()),
-            )
-            .expect_err("no source composes Agent Status");
-            assert_eq!(refusal.extension, AGENT_STATUS_EXTENSION);
-        }
-    }
-
-    /// Narrowing is free: composing nothing, or switching a contributor off,
-    /// needs no authority at all.
-    #[test]
-    fn sub258_narrowing_a_composition_needs_no_authority() {
-        let none = NativeAgentExtensions::none();
-        assert_eq!(
-            authorize_delegated_extensions(&none, &none, &requested(serde_json::json!({}))),
-            Ok(()),
-            "composing no extension is narrowing under every authority"
-        );
-        // A disabled Time contributor is not a timezone request, so a role
-        // that renders another zone entirely still authorizes it.
-        assert_eq!(
-            authorize_delegated_extensions(
-                &status(true, Some(zone("Asia/Shanghai")), true),
-                &none,
-                &requested(serde_json::json!({
-                    "agentStatus": {
-                        "time": {"enabled": false, "timezone": "Europe/Berlin"},
-                        "background": {"enabled": false}
-                    }
-                })),
-            ),
-            Ok(()),
-            "disabled Time creates no timezone authority requirement"
-        );
-    }
-
-    /// Timezone authorization is decided on the zone the child would
-    /// **render**, never on the raw `Option` shape.
-    ///
-    /// An absent zone is a request for UTC, because that is what it renders.
-    /// Treating it as "unspecified" made it a wildcard that manufactured UTC
-    /// out of any timezone authority at all.
-    #[test]
-    fn sub258_timezone_authority_follows_effective_execution_semantics() {
-        let none = NativeAgentExtensions::none();
-        let omitted = requested(serde_json::json!({
-            "agentStatus": {"time": {"enabled": true}, "background": {"enabled": false}}
-        }));
-
-        // An authority that itself renders UTC covers it, spelled either way.
-        for authority in [
-            status(true, None, false),
-            status(true, Some(chrono_tz::UTC), false),
-        ] {
-            assert_eq!(
-                authorize_delegated_extensions(&authority, &none, &omitted),
-                Ok(()),
-                "{authority:?} renders UTC and therefore authorizes a UTC request"
-            );
-        }
-
-        // An authority that renders another region does not.
-        let refusal = authorize_delegated_extensions(
-            &status(true, Some(zone("Asia/Shanghai")), false),
-            &none,
-            &omitted,
-        )
-        .expect_err("Asia/Shanghai authority does not cover a UTC child");
-        assert!(
-            refusal.detail.contains("UTC"),
-            "the refusal names the EFFECTIVE requested zone: {}",
-            refusal.detail
-        );
-
-        // ...unless the other source does, which is the union again.
-        assert_eq!(
-            authorize_delegated_extensions(
-                &status(true, Some(zone("Asia/Shanghai")), false),
-                &status(true, None, false),
-                &omitted,
-            ),
-            Ok(()),
-            "the invoking Agent's UTC composition covers what the role does not"
-        );
-
-        // `UTC` and `Etc/UTC` render different labels, so they are different
-        // zones here and neither substitutes for the other.
-        assert!(
-            authorize_delegated_extensions(
-                &status(true, Some(zone("Etc/UTC")), false),
-                &none,
-                &omitted,
-            )
-            .is_err(),
-            "Etc/UTC renders the label Etc/UTC, which is not what an omitted zone renders"
-        );
-    }
-
-    /// The one owner of "absent means UTC" is the presentation owner, and
-    /// authorization reads exactly that value.
+    /// Omitted timezone renders the native UTC default.
     #[test]
     fn sub258_the_effective_timezone_owner_is_the_presentation_owner() {
         assert_eq!(
@@ -1854,44 +1350,6 @@ mod tests {
                 .effective_digest_framing()
                 .contains(super::INACTIVE_TIMEZONE_FRAMING),
             "an executing zone never frames as the inactive sentinel"
-        );
-    }
-
-    /// Authorization reads the same effective semantics the framing does: a
-    /// disabled Time contributor needs no timezone authority at all, and an
-    /// enabled one needs authority for its effective zone.
-    ///
-    /// The two rules must not drift apart — a digest that ignores a disabled
-    /// zone while authorization demands authority for it would refuse a
-    /// request whose identity says it is the one already authorized.
-    #[test]
-    fn sub258_a_disabled_time_contributor_needs_no_timezone_authority() {
-        let background_only = status(false, None, true);
-        for requested in [
-            status(false, Some(chrono_tz::UTC), true),
-            status(false, Some(zone("Asia/Shanghai")), true),
-            status(false, None, true),
-        ] {
-            assert!(
-                authorize_delegated_extensions(
-                    &background_only,
-                    &NativeAgentExtensions::none(),
-                    &requested,
-                )
-                .is_ok(),
-                "a contributor that never runs demands no zone authority"
-            );
-        }
-
-        // Enabling it does demand authority, for the EFFECTIVE zone.
-        assert!(
-            authorize_delegated_extensions(
-                &background_only,
-                &NativeAgentExtensions::none(),
-                &status(true, Some(zone("Asia/Shanghai")), true),
-            )
-            .is_err(),
-            "an enabled contributor needs authority for the zone it renders"
         );
     }
 }

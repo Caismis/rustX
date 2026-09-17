@@ -18,17 +18,17 @@ import { sessionView } from "./support/fixtures.ts";
 
 const sessions = [
   {
-    id: "session-1",
+    id: "ses_84097828-fc31-78c8-9292-10df48901a85",
     name: "current work",
     updated_at: "2026-08-21T00:00:00Z",
-    cwd: "/server/work", active_node: "node-1",
+    cwd: "/server/work", active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
     active: true,
   },
   {
-    id: "session-2",
+    id: "ses_5d906140-8048-712d-8539-25aed45333a1",
     name: "saved review",
     updated_at: "2026-08-20T00:00:00Z",
-    cwd: "/server/work", active_node: "node-2",
+    cwd: "/server/work", active_node: "node_1779f59f-4df2-71f6-b81a-eb08fb52a5d8",
     active: false,
   },
 ];
@@ -54,7 +54,7 @@ describe("native Session selectors", () => {
     for (const character of "saved") selector.handleInput(character);
     selector.handleInput("\r");
 
-    assert.equal(selected, "session-2");
+    assert.equal(selected, "ses_5d906140-8048-712d-8539-25aed45333a1");
     assert.match(
       selector.render(80).map(plainText).join("\n"),
       /saved review/,
@@ -68,16 +68,16 @@ describe("native Session selectors", () => {
     const selector = new SessionSelector({
       sessions: [
         {
-          id: "session-3",
+          id: "ses_eb278475-f606-7143-97df-8cb657e1c7ee",
           preview: "restore the auth module",
           updated_at: "2026-08-19T00:00:00Z",
-          cwd: "/server/work", active_node: "node-3",
+          cwd: "/server/work", active_node: "node_a84cfe8a-8631-726c-9ac1-92ef5c781daf",
 
         },
         {
-          id: "session-4",
+          id: "ses_e1cdfcfb-8292-7831-b0a3-c977a5fd646f",
           updated_at: "2026-08-18T00:00:00Z",
-          cwd: "/server/work", active_node: "node-4",
+          cwd: "/server/work", active_node: "node_9bc63dae-6e56-7eb2-a8f7-c494ec3e2077",
 
         },
       ],
@@ -92,7 +92,7 @@ describe("native Session selectors", () => {
     };
     for (const character of "auth") selector.handleInput(character);
     selector.handleInput("\r");
-    assert.equal(selected, "session-3");
+    assert.equal(selected, "ses_eb278475-f606-7143-97df-8cb657e1c7ee");
   });
 
   it("keeps fork selection as a native historical boundary", () => {
@@ -115,15 +115,15 @@ describe("native Session selectors", () => {
 
   it("distinguishes activating a node from creating a branch", () => {
     const root: SessionNodeView = {
-      id: "node-1",
-      conversation_id: "conv-test",
-      origin: { type: "new" },
+      id: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
+      conversation_id: "conv_01900000-0000-7000-8000-000000000002",
+      ordinal: "1", origin: { type: "new" },
     };
     const branch: SessionNodeView = {
-      id: "node-2",
-      parent: "node-1",
-      conversation_id: "conv-2",
-      origin: { type: "fork", source_session: "session-1", source_node: "node-1", source_surface_revision: "4", source_user_message: "user-c" },
+      id: "node_1779f59f-4df2-71f6-b81a-eb08fb52a5d8",
+      parent: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
+      conversation_id: "conv_1eef1854-fea7-788b-9e49-ca0ec811fb0c",
+      ordinal: "2", origin: { type: "fork", source_session: "ses_84097828-fc31-78c8-9292-10df48901a85", source_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048", source_surface_revision: "4", source_user_message: "user-c" },
     };
     const session = sessionView({
       node_count: 2,
@@ -149,17 +149,17 @@ describe("native Session selectors", () => {
   it("renders a root node with the root glyph", () => {
     const selector = new TreeSelector({
       session: sessionView(),
-      nodes: [{ id: "node-1", conversation_id: "conv-test", origin: { type: "new" } }],
+      nodes: [{ id: "node_35971be6-e9bb-724a-8955-82fe0e42e048", conversation_id: "conv_01900000-0000-7000-8000-000000000002", ordinal: "1", origin: { type: "new" } }],
       boundaries: [],
     });
     const rendered = selector.render(120).map(plainText).join("\n");
 
-    assert.match(rendered, /├─ node-1/);
+    assert.match(rendered, /├─ node_35971be6-e9bb-724a-8955-82fe0e42e048/);
     assert.doesNotMatch(rendered, /└─ node-1/);
   });
 
   it("keeps an exhausted node stream at its loaded end while history continues", () => {
-    const initialNodes = Array.from({ length: 32 }, (_, index) => node(`node-${index}`));
+    const initialNodes = Array.from({ length: 32 }, (_, index) => node(`node_01900000-0000-7000-8000-${String(index).padStart(12, "0")}`));
     const initialBoundaries = Array.from({ length: 32 }, (_, index) => boundaryAt(`user-${index}`));
     const selector = new TreeSelector({
       session: sessionView(),
@@ -214,7 +214,7 @@ describe("native Session selectors", () => {
   });
 
   it("keeps an exhausted history stream at its loaded end while nodes continue", () => {
-    const initialNodes = Array.from({ length: 32 }, (_, index) => node(`node-${index}`));
+    const initialNodes = Array.from({ length: 32 }, (_, index) => node(`node_01900000-0000-7000-8000-${String(index).padStart(12, "0")}`));
     const initialBoundaries = Array.from({ length: 32 }, (_, index) => boundaryAt(`user-${index}`));
     const selector = new TreeSelector({
       session: sessionView(),
@@ -268,7 +268,7 @@ describe("native Session selectors", () => {
   it("stops paired paging when both streams exhaust together", () => {
     const selector = new TreeSelector({
       session: sessionView(),
-      nodes: Array.from({ length: 32 }, (_, index) => node(`node-${index}`)),
+      nodes: Array.from({ length: 32 }, (_, index) => node(`node_01900000-0000-7000-8000-${String(index).padStart(12, "0")}`)),
       nextNodeOffset: 32,
       boundaries: Array.from({ length: 32 }, (_, index) => boundaryAt(`user-${index}`)),
       nextHistoryOffset: 32,
@@ -298,7 +298,7 @@ function node(id: string): SessionNodeView {
   return {
     id,
     conversation_id: `conversation-${id}`,
-    origin: { type: "new" },
+    ordinal: "1", origin: { type: "new" },
   };
 }
 
@@ -322,10 +322,10 @@ describe("finite viewports (issue #161)", () => {
 
   it("keeps the selected Session visible beyond the first viewport", () => {
     const many = Array.from({ length: 10 }, (_, index) => ({
-      id: `session-${index}`,
+      id: `ses_01900000-0000-7000-8000-${String(index).padStart(12, "0")}`,
       name: `work ${index}`,
       updated_at: "2026-08-21T00:00:00Z",
-      cwd: "/server/work", active_node: `node-${index}`,
+      cwd: "/server/work", active_node: `node_01900000-0000-7000-8000-${String(index).padStart(12, "0")}`,
       active: false,
     }));
     const selector = new SessionSelector({ sessions: many });
@@ -342,10 +342,10 @@ describe("finite viewports (issue #161)", () => {
     const markerRow = rows.find((line) => line.includes("❯"));
     assert.ok(markerRow?.includes("work 7"), "the selected session is visible and marked");
     // Both physical rows of the selected entry render.
-    assert.ok(rows.some((line) => line.includes("session-7 · node node-7")));
+    assert.ok(rows.some((line) => line.includes(many[7]!.id)));
 
     selector.handleInput("\r");
-    assert.deepEqual(chosen, ["session-7"], "Enter selects the visible marked item");
+    assert.deepEqual(chosen, [many[7]!.id], "Enter selects the visible marked item");
 
     for (let index = 0; index < 7; index += 1) selector.handleInput("\u001b[A");
     assert.ok(
@@ -391,7 +391,7 @@ describe("finite viewports (issue #161)", () => {
   });
 
   it("keeps the selected tree entry visible across nodes and branches", () => {
-    const nodes = Array.from({ length: 8 }, (_, index) => node(`node-${index}`));
+    const nodes = Array.from({ length: 8 }, (_, index) => node(`node_01900000-0000-7000-8000-${String(index).padStart(12, "0")}`));
     const boundaries = Array.from({ length: 4 }, (_, index) => boundaryAt(`user-${index}`));
     const selector = new TreeSelector({
       session: sessionView(),
@@ -414,13 +414,13 @@ describe("finite viewports (issue #161)", () => {
     for (let index = 0; index < 6; index += 1) selector.handleInput("\u001b[A");
     const rows = interiorRows(frame);
     assert.ok(
-      rows.find((line) => line.includes("❯"))?.includes("node-5"),
+      rows.find((line) => line.includes("❯"))?.includes(nodes[5]!.id),
       "the selected node stays visible while moving upward",
     );
-    assert.ok(rows.some((line) => line.includes("conversation-node-5")));
+    assert.ok(rows.some((line) => line.includes(nodes[5]!.conversation_id)));
 
     selector.handleInput("\r");
-    assert.deepEqual(chosen, ["node-5"], "Enter selects the visible marked node");
+    assert.deepEqual(chosen, [nodes[5]!.id], "Enter selects the visible marked node");
   });
 });
 

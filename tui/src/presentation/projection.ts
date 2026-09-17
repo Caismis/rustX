@@ -57,7 +57,6 @@ export interface ProjectedEvent {
   event: RuntimeClientEvent;
 }
 import { parseSnapshot, publishedTodos } from "./todos.ts";
-import { compareInteractionRefs } from "./interaction-focus.ts";
 import type {
   AttemptPresentation,
   PresentationState,
@@ -84,17 +83,13 @@ export function emptyPresentationState(
     capabilities: { revision: EXACT_ZERO, tools: [], skills: [] },
     resources: emptyResources(),
     sessionModel,
-    launchSettings: null,
-    effectiveExtensions: null,
+    effectivePlugins: null,
     settingsEvidence: "live_session",
-    settingsLifetimes: null,
     todos: undefined,
     goal: null,
     runtimeShutdown: false,
     durabilityFailure: null,
     effectiveApprovalMode: "policy",
-    pendingApprovalMode: undefined,
-    approvalModeRevision: EXACT_ZERO,
   };
 }
 
@@ -102,6 +97,7 @@ export function emptyPresentationState(
 function emptyResources(): PresentationState["resources"] {
   return {
     inspection: {
+      definitions: [], resource_diagnostics: [],
       main: null,
       agents: {},
       workflows: {},
@@ -216,15 +212,11 @@ export function replaceFromSnapshot(
         ? undefined
         : (parseSnapshot(snapshot.todos) ?? { tasks: [], next_id: "1" }),
     sessionModel: snapshot.model ?? null,
-    launchSettings: snapshot.launch_settings ?? null,
-    effectiveExtensions: snapshot.effective_extensions ?? null,
+    effectivePlugins: snapshot.effective_plugins ?? null,
     settingsEvidence: snapshot.settings_evidence,
-    settingsLifetimes: snapshot.settings_lifetimes,
     runtimeShutdown: snapshot.shutting_down,
     durabilityFailure: snapshot.durability_failure ?? null,
     effectiveApprovalMode: snapshot.effective_approval_mode,
-    pendingApprovalMode: snapshot.pending_approval_mode ?? undefined,
-    approvalModeRevision: snapshot.approval_mode_revision ?? EXACT_ZERO,
   };
 }
 
@@ -355,12 +347,6 @@ export function reduce(
         interactionId: event.audit.interaction_id,
         settlement: event.audit.settlement,
       });
-      return next;
-
-    case "approval_mode_changed":
-      next.effectiveApprovalMode = event.effective_approval_mode;
-      next.pendingApprovalMode = event.pending_approval_mode ?? undefined;
-      next.approvalModeRevision = event.revision;
       return next;
 
     case "context_compaction_started":
@@ -690,6 +676,9 @@ export function reduce(
       // reload retired.
       next.capabilities = event.capabilities;
       next.resources = event.resources;
+      next.effectivePlugins = event.plugins ?? null;
+      next.sessionModel = event.model;
+      next.effectiveApprovalMode = event.approval_mode;
       return next;
 
     case "session_model_changed":
@@ -1126,9 +1115,7 @@ function upsertInteraction(
     sameInteraction(entry.interaction, interaction.interaction)
   );
   if (index === -1) {
-    return [...interactions, interaction].sort((left, right) =>
-      compareInteractions(left, right),
-    );
+    return [...interactions, interaction];
   }
   const updated = [...interactions];
   updated[index] = interaction;
@@ -1143,11 +1130,4 @@ function sameInteraction(
     left.conversation_id === right.conversation_id &&
     left.interaction_id === right.interaction_id
   );
-}
-
-function compareInteractions(
-  left: RoutedInteraction,
-  right: RoutedInteraction,
-): number {
-  return compareInteractionRefs(left.interaction, right.interaction);
 }

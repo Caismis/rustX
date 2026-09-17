@@ -110,7 +110,7 @@ function representative(): RuntimeClientSnapshot {
         }),
       ],
     }),
-    background: [backgroundExecution("exec-1", "running")],
+    background: [backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running")],
     pending_interactions: [approvalInteraction()],
     model: sessionModel("beta/model-b"),
     inbound: {
@@ -196,7 +196,7 @@ describe("snapshot reconstruction", () => {
     const preferences = withExpandedInteractions(
       withExpandedBackgroundExecutions(
         withExpandedToolCalls(prefs(), ["call-1", "call-2"]),
-        ["exec-1"],
+        ["exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb"],
       ),
       [approvalInteraction().interaction],
     );
@@ -259,19 +259,14 @@ describe("snapshot reconstruction", () => {
   });
 });
 
-it("pure Tool/footer/approval rendering performs no filesystem, process, or native control effects", async (t) => {
+it("pure Tool/footer rendering performs no filesystem, process, or native control effects", async (t) => {
   const fs = await import("node:fs");
   const childProcess = await import("node:child_process");
   const net = await import("node:net");
-  const { ApprovalSelector } = await import("../src/ui/components/approval-selector.ts");
   const { renderToolCard } = await import("../src/ui/components/tool-card.ts");
   const { rendererFor } = await import("../src/ui/components/tool-renderers.ts");
   const state = replaceFromSnapshot(representative(), runtimeCursor(42));
   const tools = correlateTools(state);
-  const nativeControls: unknown[] = [];
-  const picker = new ApprovalSelector({ state: () => state,
-    submit: async (mode) => { nativeControls.push(mode); }, close: () => {}, change: () => {},
-  });
   // Imports/fixtures are complete before effect tripwires are installed.
   t.mock.method(globalThis, "fetch", () => assert.fail("render called a provider/network service"));
   t.mock.method(net.Socket.prototype, "connect", () => assert.fail("render opened a provider/runtime socket"));
@@ -290,7 +285,4 @@ it("pure Tool/footer/approval rendering performs no filesystem, process, or nati
   const rendered = renderFooter(state, "connected");
   assert.match(rendered, /approval POLICY/);
   for (const tool of tools.byCallId.values()) renderToolCard(tool, { expanded: true, budget: prefs().previewBudget });
-  picker.render(100); picker.handleInput("\x1b[B"); picker.render(100);
-  picker.handleInput("\r"); picker.render(100); picker.handleInput("\x1b");
-  assert.deepEqual(nativeControls, []);
 });

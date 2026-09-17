@@ -1,4 +1,4 @@
-import type { AttachmentTarget, ApprovalMode, MethodResult, SessionUserMessageBoundary, UserInputBlock } from '../../../../protocol/app-server/v5';
+import type { AttachmentTarget, MethodResult, SessionUserMessageBoundary, UserInputBlock } from '../../../../protocol/app-server/v6';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 
@@ -58,11 +58,6 @@ export class CommandSession {
     if (!this.current()) return;
     await this.client.refresh(this.sessionId);
     if (this.current()) return this.models();
-  }
-  async setApproval(mode: ApprovalMode) {
-    this.requireCurrent();
-    await this.client.request({ method: 'settings/setApprovalMode', params: { target: this.target, mode } }, 'approval_mode');
-    if (this.current()) await this.client.refresh(this.sessionId);
   }
   async boundaries(offset = 0) {
     this.requireCurrent();

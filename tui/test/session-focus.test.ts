@@ -43,7 +43,7 @@ const CAPABILITIES = {
 function targetFor(session: string, index: number): AttachmentTarget {
   return {
     session_id: session,
-    conversation_id: `conv-${session}`,
+    conversation_id: `conv_01900000-0000-7000-8000-${String(index).padStart(12, "0")}`,
     runtime_incarnation: String(index),
     attachment_id: `attach-${index}`,
   };
@@ -90,13 +90,13 @@ async function focus(
 describe("multi-Session focus on one connection", () => {
   it("keeps Session A attached and running while Session B is visible", async () => {
     const connected = await host();
-    const a = await focus(connected, "session-a", 1, { running: true });
-    const b = await focus(connected, "session-b", 2);
+    const a = await focus(connected, "ses_fa57a52d-bf08-7902-9852-9730a3e99db6", 1, { running: true });
+    const b = await focus(connected, "ses_e8de016f-bd70-782f-ad23-25e81df82550", 2);
 
     // Both attachments exist at once. One App Server, two live Sessions.
     assert.equal(connected.host.attached.length, 2);
-    assert.equal(connected.host.attachment("session-a"), a);
-    assert.equal(connected.host.attachment("session-b"), b);
+    assert.equal(connected.host.attachment("ses_fa57a52d-bf08-7902-9852-9730a3e99db6"), a);
+    assert.equal(connected.host.attachment("ses_e8de016f-bd70-782f-ad23-25e81df82550"), b);
 
     // Session A is still the runtime's business, and it is still running.
     assert.equal(a.state.attempt?.phase.type, "running");
@@ -106,8 +106,8 @@ describe("multi-Session focus on one connection", () => {
 
   it("sends no cancellation, unload, detach or shutdown when focus changes", async () => {
     const connected = await host();
-    await focus(connected, "session-a", 1, { running: true });
-    await focus(connected, "session-b", 2);
+    await focus(connected, "ses_fa57a52d-bf08-7902-9852-9730a3e99db6", 1, { running: true });
+    await focus(connected, "ses_e8de016f-bd70-782f-ad23-25e81df82550", 2);
 
     const methods = connected.transport.log.requests.map((m) => m.method);
     for (const forbidden of [
@@ -130,8 +130,8 @@ describe("multi-Session focus on one connection", () => {
 
   it("keeps Session A's events flowing while Session B holds the screen", async () => {
     const connected = await host();
-    const a = await focus(connected, "session-a", 1, { running: true });
-    const b = await focus(connected, "session-b", 2);
+    const a = await focus(connected, "ses_fa57a52d-bf08-7902-9852-9730a3e99db6", 1, { running: true });
+    const b = await focus(connected, "ses_e8de016f-bd70-782f-ad23-25e81df82550", 2);
     const stopA = connected.host.client.onNotification((m) => a.applyNotification(m));
     const stopB = connected.host.client.onNotification((m) => b.applyNotification(m));
 
@@ -150,10 +150,10 @@ describe("multi-Session focus on one connection", () => {
 
   it("reuses the existing attachment when focus returns to a Session", async () => {
     const connected = await host();
-    const a = await focus(connected, "session-a", 1, { running: true });
-    await focus(connected, "session-b", 2);
+    const a = await focus(connected, "ses_fa57a52d-bf08-7902-9852-9730a3e99db6", 1, { running: true });
+    await focus(connected, "ses_e8de016f-bd70-782f-ad23-25e81df82550", 2);
 
-    const returned = await connected.host.attach("session-a");
+    const returned = await connected.host.attach("ses_fa57a52d-bf08-7902-9852-9730a3e99db6");
 
     assert.equal(returned, a, "the same attachment, not a second one");
     assert.equal(
@@ -165,8 +165,8 @@ describe("multi-Session focus on one connection", () => {
 
   it("repairs the returning projection from authoritative state", async () => {
     const connected = await host();
-    const a = await focus(connected, "session-a", 1, { running: true });
-    await focus(connected, "session-b", 2);
+    const a = await focus(connected, "ses_fa57a52d-bf08-7902-9852-9730a3e99db6", 1, { running: true });
+    await focus(connected, "ses_e8de016f-bd70-782f-ad23-25e81df82550", 2);
 
     // While A was off screen the server moved on. The client does not
     // reconstruct that from what it last believed; it asks.
@@ -202,7 +202,7 @@ describe("multi-Session focus on one connection", () => {
 
   it("drops the route when the server retires an attachment, without inventing an outcome", async () => {
     const connected = await host();
-    const a = await focus(connected, "session-a", 1, { running: true });
+    const a = await focus(connected, "ses_fa57a52d-bf08-7902-9852-9730a3e99db6", 1, { running: true });
     const stop = connected.host.client.onNotification((m) => a.applyNotification(m));
 
     connected.transport.notify({
@@ -212,7 +212,7 @@ describe("multi-Session focus on one connection", () => {
     });
     await tick();
 
-    assert.equal(connected.host.attachment("session-a"), undefined);
+    assert.equal(connected.host.attachment("ses_fa57a52d-bf08-7902-9852-9730a3e99db6"), undefined);
     // The runtime was unloaded. The attempt it was running is not thereby
     // settled, and this client never says it was.
     assert.equal(a.state.attempt?.phase.type, "running");
@@ -223,14 +223,14 @@ describe("multi-Session focus on one connection", () => {
 describe("explicit release is a different operation from focus", () => {
   it("detach sends exactly one detach and forgets the route", async () => {
     const connected = await host();
-    await focus(connected, "session-a", 1);
-    const pending = connected.host.detach("session-a");
+    await focus(connected, "ses_fa57a52d-bf08-7902-9852-9730a3e99db6", 1);
+    const pending = connected.host.detach("ses_fa57a52d-bf08-7902-9852-9730a3e99db6");
     const detach = (await connected.transport.log.awaitMethod("session/detach")).at(-1)!;
     connected.transport.respond(detach.id, { type: "detached" });
     await pending;
 
     assert.equal(connected.transport.log.count("session/detach"), 1);
-    assert.equal(connected.host.attachment("session-a"), undefined);
+    assert.equal(connected.host.attachment("ses_fa57a52d-bf08-7902-9852-9730a3e99db6"), undefined);
     const methods = connected.transport.log.requests.map((m) => m.method);
     assert.ok(!methods.includes("turn/cancel"));
     assert.ok(!methods.includes("session/unload"));
@@ -238,7 +238,7 @@ describe("explicit release is a different operation from focus", () => {
 
   it("unload is an explicit product action, never a side effect of navigation", async () => {
     const connected = await host();
-    const a = await focus(connected, "session-a", 1);
+    const a = await focus(connected, "ses_fa57a52d-bf08-7902-9852-9730a3e99db6", 1);
     const pending = a.unload();
     const unload = (await connected.transport.log.awaitMethod("session/unload")).at(-1)!;
     // The request carries the full four-domain target, so the server can
@@ -252,7 +252,7 @@ describe("explicit release is a different operation from focus", () => {
 describe("process ownership", () => {
   it("an external host disconnects on exit and stops nothing", async () => {
     const connected = await host();
-    await focus(connected, "session-a", 1, { running: true });
+    await focus(connected, "ses_fa57a52d-bf08-7902-9852-9730a3e99db6", 1, { running: true });
 
     const exit = await connected.host.shutdown();
 

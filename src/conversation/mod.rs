@@ -1346,10 +1346,10 @@ mod tests {
     /// Summary identities are deterministic and namespaced by conversation.
     #[test]
     fn summary_ids_are_deterministic_and_namespaced() {
-        let conversation = ConversationId::new("conv-1");
+        let conversation = ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         assert_eq!(
             summary_message_id(&conversation, 1).as_str(),
-            "conv-1-summary-1"
+            format!("{conversation}-summary-1")
         );
         assert_ne!(
             summary_message_id(&conversation, 1),
@@ -1357,7 +1357,10 @@ mod tests {
         );
         assert_ne!(
             summary_message_id(&conversation, 1),
-            summary_message_id(&ConversationId::new("conv-2"), 1)
+            summary_message_id(
+                &ConversationId::new("conv_1eef1854-fea7-788b-8e49-ca0ec811fb0c"),
+                1
+            )
         );
     }
 }

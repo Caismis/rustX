@@ -66,7 +66,7 @@ function fakeSession(
   state: unknown = {
     attempt: { attemptId: "attempt-1", phase: { type: "running" as const } },
   },
-  sessionId = "session-1",
+  sessionId = "ses_84097828-fc31-78c8-9292-10df48901a85",
 ): AppServerSession {
   // Even lifecycle-focused tests expose a complete native presentation
   // snapshot: the footer reads it at render time, including terminal resizes.
@@ -261,7 +261,7 @@ describe("RustxTuiApp lifecycle", () => {
       subagentStatus: (id: string) => Promise<unknown>;
     }).subagentStatus = async (id) => {
       statusReads += 1;
-      assert.equal(id, "conv-1-subagent-1");
+      assert.equal(id, "conv_57d68983-5497-771e-baaa-5f1356061697");
       return subagent("explore", "sha256:child");
     };
     const app = appOver(session as unknown as AppServerSession);
@@ -419,7 +419,7 @@ describe("RustxTuiApp lifecycle", () => {
       fakeHost({
         log,
         catalog: {
-          createSession: async () => ({ session: sessionView({ id: "session-2" }) }),
+          createSession: async () => ({ session: sessionView({ id: "ses_5d906140-8048-712d-8539-25aed45333a1" }) }),
         },
         attach: async () => {
           throw new AppServerRequestError("session/attach", {
@@ -474,10 +474,10 @@ describe("RustxTuiApp lifecycle", () => {
             sessionsListed();
             return {
               sessions: [{
-                id: "session-1",
+                id: "ses_84097828-fc31-78c8-9292-10df48901a85",
                 name: "current",
                 updated_at: "2026-08-21T00:00:00Z",
-                cwd: "/server/work", active_node: "node-1",
+                cwd: "/server/work", active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
               }],
             };
           },
@@ -519,7 +519,7 @@ describe("RustxTuiApp lifecycle", () => {
     const session = fakeSession(state);
     const log: string[] = [];
     let previews = 0, executes = 0, cancelled = 0;
-    let rows = [{ id: "old", name: "history", updated_at: "today", cwd: "/server/work", active_node: "node-2" }];
+    let rows = [{ id: "old", name: "history", updated_at: "today", cwd: "/server/work", active_node: "node_1779f59f-4df2-71f6-b81a-eb08fb52a5d8" }];
     (session as unknown as { cancelCurrentAttempt: () => Promise<string> }).cancelCurrentAttempt =
       async () => { cancelled++; return "attempt"; };
     const app = appOver(session as unknown as AppServerSession, fakeHost({ log, catalog: {
@@ -561,7 +561,7 @@ describe("RustxTuiApp lifecycle", () => {
     const app = appOver(session as unknown as AppServerSession, fakeHost({ catalog: {
       listSessions: async () => {
         lists++;
-        return { sessions: lists === 1 ? [{ id: "old", name: "history", updated_at: "today", cwd: "/server/work", active_node: "node-2" }] : [] };
+        return { sessions: lists === 1 ? [{ id: "old", name: "history", updated_at: "today", cwd: "/server/work", active_node: "node_1779f59f-4df2-71f6-b81a-eb08fb52a5d8" }] : [] };
       },
       previewSessionDeletion: async () => ({ status: "preview", preview: { session_id: "old", name: "history", target_revision: "revision", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } }),
       deleteSession: () => { executes++; return execution.promise; },
@@ -670,7 +670,7 @@ describe("RustxTuiApp lifecycle", () => {
 
     process.stdin.emit("data", "\u001b");
     assert.deepEqual(await declineObserved, {
-      id: "conv-test::attempt-1-interaction-question-1",
+      id: "conv_01900000-0000-7000-8000-000000000002::attempt-1-interaction-question-1",
       response: {
         type: "questionnaire",
         response: { type: "declined" },
@@ -779,7 +779,7 @@ describe("RustxTuiApp lifecycle", () => {
     await waitForApplicationContinuation();
     assert.deepEqual(responses, [
       {
-        id: "conv-test::attempt-1-interaction-1",
+        id: "conv_01900000-0000-7000-8000-000000000002::attempt-1-interaction-1",
         response: {
           type: "approval",
           decision: { type: "deny", reason: "denied by the user" },
@@ -829,7 +829,7 @@ describe("RustxTuiApp lifecycle", () => {
     const state = {
       ...emptyPresentationState(sessionModel("alpha/model-a")),
       attempt: { ...attemptView(), phase: { type: "running" as const } },
-      pendingInteractions: [approval, childQuestion],
+      pendingInteractions: [childQuestion, approval],
     };
     const session = fakeSession(state) as unknown as Record<string, unknown> & {
       publishState(nextState: unknown): void;
@@ -851,14 +851,13 @@ describe("RustxTuiApp lifecycle", () => {
     const running = app.run();
     await waitForApplicationContinuation();
 
-    // Deterministic focus: conv-child-1 sorts before conv-test, so the child
-    // questionnaire is focused first. Esc is its explicit typed decline.
+    // The server published the child questionnaire first. Esc declines it.
     process.stdin.emit("data", "\u001b");
     await waitForPiEscapeDisambiguation();
     await waitForApplicationContinuation();
     assert.deepEqual(responses, [
       {
-        id: "conv-child-1::child-b-interaction-1",
+        id: "conv_01900000-0000-7000-8000-000000000001::child-b-interaction-1",
         response: { type: "questionnaire", response: { type: "declined" } },
       },
     ]);
@@ -870,7 +869,7 @@ describe("RustxTuiApp lifecycle", () => {
     process.stdin.emit("data", "\r");
     await waitForApplicationContinuation();
     assert.deepEqual(responses[1], {
-      id: "conv-test::attempt-1-interaction-approval-a",
+      id: "conv_01900000-0000-7000-8000-000000000002::attempt-1-interaction-approval-a",
       response: {
         type: "approval",
         decision: { type: "deny", reason: "denied by the user" },
@@ -975,7 +974,7 @@ describe("RustxTuiApp lifecycle", () => {
     await waitForApplicationContinuation();
     assert.deepEqual(responses, [
       {
-        id: "conv-test::attempt-1-interaction-question-b",
+        id: "conv_01900000-0000-7000-8000-000000000002::attempt-1-interaction-question-b",
         response: { type: "questionnaire", response: { type: "declined" } },
       },
     ]);
@@ -987,7 +986,7 @@ describe("RustxTuiApp lifecycle", () => {
     process.stdin.emit("data", "\r");
     await waitForApplicationContinuation();
     assert.deepEqual(responses[1], {
-      id: "conv-test::attempt-1-interaction-approval-a",
+      id: "conv_01900000-0000-7000-8000-000000000002::attempt-1-interaction-approval-a",
       response: {
         type: "approval",
         decision: { type: "deny", reason: "denied by the user" },
@@ -1037,7 +1036,7 @@ describe("RustxTuiApp lifecycle", () => {
     await waitForApplicationContinuation();
     assert.deepEqual(responses, [
       {
-        id: "conv-test::attempt-1-interaction-approval-9",
+        id: "conv_01900000-0000-7000-8000-000000000002::attempt-1-interaction-approval-9",
         response: {
           type: "approval",
           decision: { type: "deny", reason: "denied by the user" },
@@ -1085,7 +1084,7 @@ describe("RustxTuiApp lifecycle", () => {
     await waitForApplicationContinuation();
     assert.deepEqual(responses, [
       {
-        id: "conv-test::attempt-1-interaction-approval-a",
+        id: "conv_01900000-0000-7000-8000-000000000002::attempt-1-interaction-approval-a",
         response: {
           type: "approval",
           decision: { type: "deny", reason: "denied by the user" },
@@ -1155,13 +1154,13 @@ describe("RustxTuiApp lifecycle", () => {
       ...emptyPresentationState(sessionModel("alpha/model-a")),
       attempt: { ...attemptView(), phase: { type: "running" as const } },
     };
-    const oldSession = fakeSession(runningState, "session-a");
+    const oldSession = fakeSession(runningState, "ses_fa57a52d-bf08-7902-9852-9730a3e99db6");
     (oldSession as unknown as { cancelCurrentAttempt: () => Promise<string> })
       .cancelCurrentAttempt = async () => {
         oldCancelled += 1;
         return "old-attempt";
       };
-    const nextSession = fakeSession(runningState, "session-b");
+    const nextSession = fakeSession(runningState, "ses_e8de016f-bd70-782f-ad23-25e81df82550");
     (nextSession as unknown as { cancelCurrentAttempt: () => Promise<string> })
       .cancelCurrentAttempt = async () => {
         nextCancelled += 1;
@@ -1180,16 +1179,16 @@ describe("RustxTuiApp lifecycle", () => {
           // 1: the footer's read when A is bound.
           // 2: the `/session` command, held open on purpose.
           // 3+: the footer's read once B is bound.
-          if (refreshCalls === 1) return sessionView({ id: "session-a", name: "A" });
+          if (refreshCalls === 1) return sessionView({ id: "ses_fa57a52d-bf08-7902-9852-9730a3e99db6", name: "A" });
           if (refreshCalls === 2) {
             oldInspectionStarted();
             return oldInspection.promise;
           }
-          return sessionView({ id: "session-b", name: "B" });
+          return sessionView({ id: "ses_e8de016f-bd70-782f-ad23-25e81df82550", name: "B" });
         },
         catalog: {
           createSession: async () => ({
-            session: sessionView({ id: "session-b", name: "B" }),
+            session: sessionView({ id: "ses_e8de016f-bd70-782f-ad23-25e81df82550", name: "B" }),
           }),
         },
       }),
@@ -1205,7 +1204,7 @@ describe("RustxTuiApp lifecycle", () => {
 
     // The old request really completes after B is visible. Its inspection
     // result must not acquire B's overlay or steal its editor focus.
-    oldInspection.resolve(sessionView({ id: "session-a", name: "stale A" }));
+    oldInspection.resolve(sessionView({ id: "ses_fa57a52d-bf08-7902-9852-9730a3e99db6", name: "stale A" }));
     await waitForApplicationContinuation();
     process.stdin.emit("data", "\u001b");
     await waitForPiEscapeDisambiguation();
@@ -1233,8 +1232,8 @@ describe("RustxTuiApp lifecycle", () => {
       ...emptyPresentationState(sessionModel("alpha/model-a")),
       attempt: { ...attemptView(), phase: { type: "running" as const } },
     };
-    const oldSession = fakeSession(runningState, "session-a");
-    const nextSession = fakeSession(runningState, "session-b");
+    const oldSession = fakeSession(runningState, "ses_fa57a52d-bf08-7902-9852-9730a3e99db6");
+    const nextSession = fakeSession(runningState, "ses_e8de016f-bd70-782f-ad23-25e81df82550");
     let renames = 0;
 
     try {
@@ -1247,7 +1246,7 @@ describe("RustxTuiApp lifecycle", () => {
           },
           catalog: {
             createSession: async () => ({
-              session: sessionView({ id: "session-b", name: "B" }),
+              session: sessionView({ id: "ses_e8de016f-bd70-782f-ad23-25e81df82550", name: "B" }),
             }),
             renameSession: async () => {
               renames += 1;
@@ -1255,7 +1254,7 @@ describe("RustxTuiApp lifecycle", () => {
                 oldRenameStarted();
                 return oldRename.promise;
               }
-              return sessionView({ id: "session-b", name: "current B" });
+              return sessionView({ id: "ses_e8de016f-bd70-782f-ad23-25e81df82550", name: "current B" });
             },
           },
         }),
@@ -1274,7 +1273,7 @@ describe("RustxTuiApp lifecycle", () => {
       process.stdin.emit("data", "/name current B\r");
       await waitForApplicationContinuation();
       renders.start();
-      oldRename.resolve(sessionView({ id: "session-a", name: "stale A" }));
+      oldRename.resolve(sessionView({ id: "ses_fa57a52d-bf08-7902-9852-9730a3e99db6", name: "stale A" }));
       await waitForApplicationContinuation();
       assert.equal(renders.count(), 0, "late A feedback must not touch B's surface");
 
@@ -1329,10 +1328,10 @@ describe("RustxTuiApp lifecycle", () => {
                 firstPage();
                 return {
                   sessions: [{
-                    id: "session-a",
+                    id: "ses_fa57a52d-bf08-7902-9852-9730a3e99db6",
                     name: "A",
                     updated_at: "2026-08-21T00:00:00Z",
-                    cwd: "/server/work", active_node: "node-a",
+                    cwd: "/server/work", active_node: "node_66570ff0-5a20-7404-b084-d4aca94293ef",
                   }],
                   nextOffset: 1,
                 };
@@ -1379,11 +1378,11 @@ describe("RustxTuiApp lifecycle", () => {
     });
     const oldSession = fakeSession(
       emptyPresentationState(sessionModel("alpha/model-a")),
-      "session-1",
+      "ses_84097828-fc31-78c8-9292-10df48901a85",
     );
     const nextSession = fakeSession(
       emptyPresentationState(sessionModel("alpha/model-a")),
-      "session-2",
+      "ses_5d906140-8048-712d-8539-25aed45333a1",
     );
 
     const app = appOver(
@@ -1391,7 +1390,7 @@ describe("RustxTuiApp lifecycle", () => {
       fakeHost({
         log,
         attach: async (sessionId) => {
-          assert.equal(sessionId, "session-2");
+          assert.equal(sessionId, "ses_5d906140-8048-712d-8539-25aed45333a1");
           log.push("attach");
           attached();
           return nextSession;
@@ -1399,7 +1398,7 @@ describe("RustxTuiApp lifecycle", () => {
         catalog: {
           createSession: async () => {
             log.push("create");
-            return { session: sessionView({ id: "session-2", name: "B" }) };
+            return { session: sessionView({ id: "ses_5d906140-8048-712d-8539-25aed45333a1", name: "B" }) };
           },
         },
       }),
@@ -1434,11 +1433,11 @@ describe("RustxTuiApp lifecycle", () => {
 
     const oldSession = fakeSession(
       emptyPresentationState(sessionModel("alpha/model-a")),
-      "session-1",
+      "ses_84097828-fc31-78c8-9292-10df48901a85",
     );
     const nextSession = fakeSession(
       emptyPresentationState(sessionModel("alpha/model-a")),
-      "session-2",
+      "ses_5d906140-8048-712d-8539-25aed45333a1",
     );
     (nextSession as unknown as {
       submitInbound: (
@@ -1459,7 +1458,7 @@ describe("RustxTuiApp lifecycle", () => {
         },
         catalog: {
           createSession: async () => ({
-            session: sessionView({ id: "session-2", name: "committed fork" }),
+            session: sessionView({ id: "ses_5d906140-8048-712d-8539-25aed45333a1", name: "committed fork" }),
             editorContent: [{ type: "text", text: prompt }],
             durabilityDiagnostic: "catalog visibility committed; durability uncertain",
           }),
@@ -1543,7 +1542,7 @@ async function deletionAppHarness(overlapInitial = false) {
   const lists: Array<[string | undefined, number | undefined]> = [];
   const executes: string[][] = [], recovers: string[] = [], responses: unknown[] = [];
   let cancelled = 0;
-  let rows: SessionSummaryView[] = [{ id: "old", name: "historical-target", updated_at: "today", cwd: "/server/work", active_node: "node-2", }];
+  let rows: SessionSummaryView[] = [{ id: "old", name: "historical-target", updated_at: "today", cwd: "/server/work", active_node: "node_1779f59f-4df2-71f6-b81a-eb08fb52a5d8", }];
   let listResponse: ((query?: string, offset?: number) => Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }>) | undefined;
   // Deletion addresses the durable Session catalog on the host; the attached
   // Session owns only what an attachment owns.
@@ -1770,7 +1769,7 @@ it("a delayed initial resume response cannot resurrect a row after deletion reco
     await waitForApplicationContinuation();
     const reconciled = h.surface();
     assert.doesNotMatch(h.text(), /historical-target/);
-    h.lateList.resolve({ sessions: [{ id: "old", name: "historical-target", updated_at: "today", cwd: "/server/work", active_node: "node-2", }] });
+    h.lateList.resolve({ sessions: [{ id: "old", name: "historical-target", updated_at: "today", cwd: "/server/work", active_node: "node_1779f59f-4df2-71f6-b81a-eb08fb52a5d8", }] });
     await waitForApplicationContinuation();
     assert.equal(h.surface(), reconciled, "pre-mutation initial query cannot reopen a stale selector");
     assert.doesNotMatch(h.text(), /historical-target/);
@@ -1918,221 +1917,6 @@ for (const replacement of ["HITL", "snapshot"] as const) {
       assert.equal(h.cancelled(), 0); assert.deepEqual(h.responses, []);
     } finally { await h.finish(); }
   });
-}
-
-it("approval overlay routes one typed request, consumes Esc, and discards stale snapshot surfaces", async () => {
-  const state = stateOf({ attempt: attemptView({ phase: { type: "running" } }) });
-  const session = fakeSession(state) as unknown as Record<string, unknown> & {
-    publishState(next: typeof state): void; publishSnapshot(): void;
-  };
-  const response = deferred<Awaited<ReturnType<AppServerSession["approvalModeSet"]>>>();
-  const requests: string[] = [];
-  let cancellations = 0;
-  session.approvalModeSet = (mode: string) => { requests.push(mode); return response.promise; };
-  session.cancelCurrentAttempt = async () => { cancellations++; return "a1"; };
-  const surfaces: Array<{ content: Parameters<TUI["showOverlay"]>[0]; visible: boolean }> = [];
-  const original = TUI.prototype.showOverlay;
-  TUI.prototype.showOverlay = function(content, options) {
-    const surface = { content, visible: true }; surfaces.push(surface);
-    const handle = original.call(this, content, options);
-    const hide = handle.hide;
-    handle.hide = () => { surface.visible = false; hide(); };
-    return handle;
-  };
-  const app = appOver(session as unknown as AppServerSession);
-  const running = app.run();
-  const input = async (data: string) => { process.stdin.emit("data", data); await waitForApplicationContinuation(); };
-  const active = () => surfaces.findLast((surface) => surface.visible);
-  const text = () => active()?.content.render(100).map(plainText).join("\n") ?? "";
-  try {
-    await input("/approval\r");
-    assert.match(text(), /✓ Policy/);
-    await input("\x1b[B"); await input("\x1b[27u");
-    assert.equal(active(), undefined); assert.equal(cancellations, 0); assert.deepEqual(requests, []);
-    await input("/approval\r"); await input("\x1b[B"); await input("\r");
-    assert.match(text(), /Enable full access/); assert.match(text(), /❯ Cancel/);
-    await input("\r"); assert.deepEqual(requests, []);
-    await input("/approval\r"); await input("\x1b[B"); await input("\r");
-    await input("\t"); await input("\r"); await input("\r");
-    assert.deepEqual(requests, ["full_access"]);
-    assert.match(text(), /Current attempt: Policy/);
-    await input("\x1b[27u"); await input("/approval\r");
-    assert.equal(active(), undefined); assert.deepEqual(requests, ["full_access"]);
-    response.resolve({ effectiveApprovalMode: "policy", pendingApprovalMode: "full_access", revision: "1" });
-    await waitForApplicationContinuation();
-    session.publishState({ ...state, pendingApprovalMode: "full_access", approvalModeRevision: "1" });
-    await input("/approval\r");
-    assert.match(text(), /Current attempt: Policy/); assert.match(text(), /Next attempt: Full access/);
-    const stale = active()!;
-    session.publishSnapshot();
-    session.publishState({ ...state, effectiveApprovalMode: "full_access", approvalModeRevision: "2" });
-    stale.content.handleInput?.("\r");
-    assert.deepEqual(requests, ["full_access"]);
-    await input("/approval\r");
-    assert.match(text(), /✓ Full access/); assert.doesNotMatch(text(), /Next attempt/);
-    assert.equal(cancellations, 0);
-    await input("\r");
-    assert.deepEqual(requests, ["full_access", "policy"]);
-    assert.equal((session.state as { effectiveApprovalMode?: string }).effectiveApprovalMode, "full_access", "the response never mutates local effective state");
-  } finally {
-    await app.quit(); await running; TUI.prototype.showOverlay = original;
-  }
-});
-
-/** Approval-specific gates over the existing real-app input/attachment seams. */
-async function approvalOwnerHarness(t: TestContext, sameAttachment = false) {
-  type Reply = Awaited<ReturnType<AppServerSession["approvalModeSet"]>>;
-  function owner(model: string) {
-    const state = stateOf({ model: sessionModel(model), attempt: attemptView({ phase: { type: "running" } }) });
-    const session = fakeSession(state) as unknown as Record<string, unknown> & {
-      publishState(next: typeof state): void; publishSnapshot(): void;
-    };
-    const requests: Array<{ mode: string; response: ReturnType<typeof deferred<Reply>> }> = [];
-    let cancelled = 0;
-    session.approvalModeSet = (mode: string) => {
-      const response = deferred<Reply>(); requests.push({ mode, response }); return response.promise;
-    };
-    session.cancelCurrentAttempt = async () => { cancelled++; return "active-attempt"; };
-    return { state, session, requests, cancelled: () => cancelled };
-  }
-  const a = owner("owner/a");
-  const b = owner("owner/b");
-  const bound = deferred<void>();
-  const bView = sessionView({ id: "owner/b", name: "owner/b" });
-  const surfaces: Array<{ content: Parameters<TUI["showOverlay"]>[0]; visible: boolean }> = [];
-  const originalOverlay = TUI.prototype.showOverlay;
-  t.mock.method(TUI.prototype, "showOverlay", function(this: TUI, content: Parameters<TUI["showOverlay"]>[0], options: Parameters<TUI["showOverlay"]>[1]) {
-    const surface = { content, visible: true }; surfaces.push(surface);
-    const handle = originalOverlay.call(this, content, options);
-    const hide = handle.hide;
-    handle.hide = () => { surface.visible = false; hide(); };
-    return handle;
-  });
-  const feedback: Array<{ level: string; text: string }> = [];
-  let transient: TransientFeedbackSurface | undefined;
-  const originalReplace = TransientFeedbackSurface.prototype.replace;
-  t.mock.method(TransientFeedbackSurface.prototype, "replace", function(this: TransientFeedbackSurface, value: Parameters<TransientFeedbackSurface["replace"]>[0]) {
-    transient = this; feedback.push(value); originalReplace.call(this, value);
-  });
-  const app = appOver(
-    a.session as unknown as AppServerSession,
-    fakeHost({
-      catalog: {
-        createSession: async () => {
-          if (sameAttachment) {
-            // A Session transition can land on the attachment already in
-            // focus. The accepted focus change still advances the app's
-            // presentation owner epoch, so a late continuation is still stale.
-            a.session.publishState(b.state);
-            a.session.approvalModeSet = b.session.approvalModeSet;
-          }
-          return { session: bView };
-        },
-      },
-      attach: async () => {
-        bound.resolve();
-        return (sameAttachment ? a.session : b.session) as unknown as AppServerSession;
-      },
-    }),
-  );
-  const running = app.run();
-  const input = async (data: string) => { process.stdin.emit("data", data); await waitForApplicationContinuation(); };
-  const active = () => surfaces.findLast((surface) => surface.visible);
-  return {
-    a, b, input, active, feedback,
-    text: () => active()?.content.render(100).map(plainText).join("\n") ?? "",
-    feedbackRows: () => transient?.render(50) ?? [],
-    enable: async () => {
-      await input("/approval\r"); await input("\x1b[B\r"); await input("\t\r");
-    },
-    switchOwner: async () => {
-      await input("/new\r");
-      if (!sameAttachment) await bound.promise;
-      await waitForApplicationContinuation();
-    },
-    finish: async () => { await app.quit(); await running; },
-  };
-}
-
-for (const outcome of ["success", "failure"] as const) {
-  it(`${outcome} after approval submission and Esc still reports to the current owner and settles its token`, async (t) => {
-    const h = await approvalOwnerHarness(t);
-    try {
-      await h.enable();
-      assert.deepEqual(h.a.requests.map((request) => request.mode), ["full_access"]);
-      assert.match(h.text(), /Current attempt: Policy/);
-      await h.input("\x1b[27u");
-      assert.equal(h.active(), undefined);
-      assert.equal(h.a.cancelled(), 0);
-      assert.equal((h.a.session.state as { effectiveApprovalMode?: string }).effectiveApprovalMode, "policy");
-      await h.input("/approval\r");
-      assert.equal(h.active(), undefined, "Esc did not settle the still-pending native request");
-      const before = h.feedback.length;
-      const request = h.a.requests[0]!;
-      if (outcome === "success") request.response.resolve({ effectiveApprovalMode: "policy", pendingApprovalMode: "full_access", revision: "1" });
-      else request.response.reject(new Error("native rejection\n" + "detail ".repeat(100)));
-      await waitForApplicationContinuation();
-      assert.equal(h.feedback.length, before + 1);
-      const feedback = h.feedback.at(-1)!;
-      assert.equal(feedback.level, outcome === "success" ? "info" : "error");
-      assert.match(feedback.text, outcome === "success" ? /accepted: effective Policy · next attempt Full access/ : /Approval change failed: native rejection/);
-      assert.ok(h.feedbackRows().length <= 3);
-      assert.ok(h.feedbackRows().every((row) => plainWidth(row) <= 50));
-      assert.equal((h.a.session.state as { effectiveApprovalMode?: string }).effectiveApprovalMode, "policy", "no optimistic mutation");
-      assert.equal((h.a.session.state as { pendingApprovalMode?: string }).pendingApprovalMode, undefined, "control reply is not copied into projection");
-      await h.input("/approval\r");
-      assert.match(h.text(), /Approval mode/, "its own completion released the token");
-      assert.equal(h.a.requests.length, 1);
-    } finally { await h.finish(); }
-  });
-}
-
-for (const sameAttachment of [false, true]) {
-  for (const outcome of ["success", "failure"] as const) {
-    it(`old approval ${outcome} cannot clear or repaint B's request after ${sameAttachment ? "Session ownership changes on the same attachment" : "attachment replacement"}`, async (t) => {
-      const h = await approvalOwnerHarness(t, sameAttachment);
-      try {
-        await h.enable();
-        const stale = h.active()!;
-        await h.input("\x1b[27u");
-        await h.switchOwner();
-        // Old popup input is stale even if called directly after replacement.
-        stale.content.handleInput?.("\r");
-        await h.enable();
-        assert.equal(h.a.requests.length, 1);
-        assert.equal(h.b.requests.length, 1, "A's pending operation does not block B");
-        assert.match(h.text(), /Current attempt: Policy/);
-        const before = [...h.feedback];
-        const aRequest = h.a.requests[0]!;
-        if (outcome === "success") aRequest.response.resolve({ effectiveApprovalMode: "full_access", revision: "99" });
-        else aRequest.response.reject(new Error("stale owner A failure"));
-        await waitForApplicationContinuation();
-        assert.deepEqual(h.feedback, before, "A's result/error cannot repaint B");
-        assert.match(h.text(), /Current attempt: Policy/);
-        assert.doesNotMatch(h.text(), /Current attempt: Full access|stale owner/);
-        await h.input("\r\r");
-        assert.equal(h.b.requests.length, 1);
-        await h.input("\x1b[27u"); await h.input("/approval\r");
-        assert.equal(h.active(), undefined, "A's finally cannot clear B's pending token");
-        assert.equal(h.b.requests.length, 1);
-        const current = sameAttachment ? h.a.session : h.b.session;
-        current.publishState({ ...h.b.state, pendingApprovalMode: "full_access", approvalModeRevision: "2" });
-        h.b.requests[0]!.response.resolve({ effectiveApprovalMode: "policy", pendingApprovalMode: "full_access", revision: "2" });
-        await waitForApplicationContinuation();
-        assert.match(h.feedback.at(-1)!.text, /accepted: effective Policy · next attempt Full access/);
-        await h.input("/approval\r");
-        assert.match(h.text(), /Current attempt: Policy/);
-        assert.match(h.text(), /Next attempt: Full access/);
-        assert.equal((current.state as { effectiveApprovalMode?: string }).effectiveApprovalMode, "policy");
-        assert.equal(h.a.cancelled() + h.b.cancelled(), 0);
-        // B's own completion (and no other completion) admits the next request.
-        await h.input("\r");
-        assert.equal(h.b.requests.length, 2);
-        h.b.requests[1]!.response.resolve({ effectiveApprovalMode: "policy", revision: "3" });
-        await waitForApplicationContinuation();
-      } finally { await h.finish(); }
-    });
-  }
 }
 
 it("remote recovery installs a fresh attachment and fences old callbacks without replay", async () => {

@@ -13,8 +13,11 @@ fn child(
     ordinal: u64,
     isolated: bool,
 ) -> ConversationId {
+    let session =
+        crate::local_runtime::session_deletion::conversation_owner(root, parent.conversation_id())
+            .unwrap();
     let subagent = SubagentId::for_conversation(parent.conversation_id(), ordinal);
-    let id = ConversationId::new(subagent.as_str());
+    let id = ConversationId::generate();
     let workspace = if isolated {
         WorkspaceSnapshot {
             borrowed_from: None,
@@ -74,7 +77,7 @@ fn child(
         );
         parent.accept_subagent_terminal(None, draft, event).unwrap();
     }
-    let database = crate::runtime::subagent::child_conversation_store_path(root, &id);
+    let database = crate::runtime::subagent::child_conversation_store_path(root, &session, &id);
     std::fs::create_dir_all(database.parent().unwrap()).unwrap();
     SqliteConversationStore::open(id.clone(), &database)
         .unwrap()
@@ -173,27 +176,28 @@ fn deletion_tree_membership_excludes_independent_fork_clone_and_shared_resources
 fn deletion_nested_durable_children_restart_and_workspace_blocker() {
     let (directory, catalog, _) = open_catalog();
     let (session, node, _) = catalog
-        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-        .map(|(node, state)| {
-            (
-                crate::local_runtime::SessionId::new("session-1"),
-                node,
-                state,
-            )
-        })
+        .lineage(&first_session(&catalog), None)
+        .map(|(node, state)| (first_session(&catalog), node, state))
         .unwrap();
     let parent = store_for(&catalog, &session, &node.conversation_id);
     let child_id = child(directory.path(), &parent, 1, true);
     let child_store = SqliteConversationStore::open(
         child_id.clone(),
-        &crate::runtime::subagent::child_conversation_store_path(directory.path(), &child_id),
+        &crate::runtime::subagent::child_conversation_store_path(
+            directory.path(),
+            &session,
+            &child_id,
+        ),
     )
     .unwrap();
     let grandchild = child(directory.path(), &child_store, 1, false);
     // Unreferenced child storage is not an ownership edge.
-    let unrelated = ConversationId::new("unrelated-child");
-    let path =
-        crate::runtime::subagent::child_conversation_store_path(directory.path(), &unrelated);
+    let unrelated = ConversationId::new("conv_924dfff8-a386-7858-88ff-2bfe3c6f79cd");
+    let path = crate::runtime::subagent::child_conversation_store_path(
+        directory.path(),
+        &session,
+        &unrelated,
+    );
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     SqliteConversationStore::open(unrelated.clone(), &path)
         .unwrap()
@@ -237,19 +241,17 @@ fn deletion_unknown_and_missing_lookup_never_creates_state() {
     );
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     assert!(
-        SessionDeletionPreflight::acquire(directory.path(), &SessionId::new("unknown")).is_err()
+        SessionDeletionPreflight::acquire(
+            directory.path(),
+            &SessionId::new("ses_b23a6a84-39c0-7de5-8158-93e7c90c1e32")
+        )
+        .is_err()
     );
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     let catalog = SessionCatalog::create(directory.path(), &state()).unwrap();
     let (session, node, _) = catalog
-        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-        .map(|(node, state)| {
-            (
-                crate::local_runtime::SessionId::new("session-1"),
-                node,
-                state,
-            )
-        })
+        .lineage(&first_session(&catalog), None)
+        .map(|(node, state)| (first_session(&catalog), node, state))
         .unwrap();
     let database = catalog.database_path(&session, &node.conversation_id);
     std::fs::remove_dir_all(database.parent().unwrap()).unwrap();
@@ -262,7 +264,7 @@ fn deletion_unknown_and_missing_lookup_never_creates_state() {
     );
     assert!(
         SqliteConversationStore::open_existing(
-            ConversationId::new("unknown"),
+            ConversationId::new("conv_b23a6a84-39c0-7de5-8158-93e7c90c1e32"),
             &directory.path().join("unknown.sqlite")
         )
         .is_err()
@@ -274,14 +276,8 @@ fn deletion_unknown_and_missing_lookup_never_creates_state() {
 fn deletion_tampered_catalog_and_symlink_escape_fail_closed() {
     let (directory, catalog, _) = open_catalog();
     let (session, node, _) = catalog
-        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-        .map(|(node, state)| {
-            (
-                crate::local_runtime::SessionId::new("session-1"),
-                node,
-                state,
-            )
-        })
+        .lineage(&first_session(&catalog), None)
+        .map(|(node, state)| (first_session(&catalog), node, state))
         .unwrap();
     let database = catalog.database_path(&session, &node.conversation_id);
     let outside = tempfile::tempdir().unwrap();
@@ -304,23 +300,19 @@ fn deletion_tampered_catalog_and_symlink_escape_fail_closed() {
 fn deletion_live_inspection_blocks_and_stale_marker_is_reusable() {
     let (directory, catalog, _) = open_catalog();
     let (session, node, _) = catalog
-        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-        .map(|(node, state)| {
-            (
-                crate::local_runtime::SessionId::new("session-1"),
-                node,
-                state,
-            )
-        })
+        .lineage(&first_session(&catalog), None)
+        .map(|(node, state)| (first_session(&catalog), node, state))
         .unwrap();
     let parent = store_for(&catalog, &session, &node.conversation_id);
     let id = child(directory.path(), &parent, 1, false);
     let path = crate::runtime::subagent::child_conversation_inspection_liveness_path(
         directory.path(),
+        &session,
         &id,
     );
     let lease = crate::local_runtime::live_inspection::LiveConversationInspectionLease::acquire(
         directory.path(),
+        &session,
         &id,
     )
     .unwrap();
@@ -338,6 +330,7 @@ fn deletion_live_inspection_blocks_and_stale_marker_is_reusable() {
     drop(SessionDeletionPreflight::acquire(directory.path(), &session).unwrap());
     let _next = crate::local_runtime::live_inspection::LiveConversationInspectionLease::acquire(
         directory.path(),
+        &session,
         &id,
     )
     .unwrap();
@@ -353,14 +346,8 @@ fn deletion_process_writer_gate() {
     let _authority = crate::runtime::local_storage::ProductController::acquire(root).unwrap();
     let catalog = SessionCatalog::create(root, &state()).unwrap();
     let (session, node, _) = catalog
-        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-        .map(|(node, state)| {
-            (
-                crate::local_runtime::SessionId::new("session-1"),
-                node,
-                state,
-            )
-        })
+        .lineage(&first_session(&catalog), None)
+        .map(|(node, state)| (first_session(&catalog), node, state))
         .unwrap();
     let store = store_for(&catalog, &session, &node.conversation_id);
     let identity = crate::runtime::local_storage::ProductRoot::existing(root).unwrap();
@@ -375,7 +362,7 @@ fn deletion_process_writer_gate() {
     let child_id = child(root, &store, 1, false);
     let child_store = SqliteConversationStore::open(
         child_id.clone(),
-        &crate::runtime::subagent::child_conversation_store_path(root, &child_id),
+        &crate::runtime::subagent::child_conversation_store_path(root, &session, &child_id),
     )
     .unwrap();
     child(root, &child_store, 1, false);
@@ -416,11 +403,12 @@ fn deletion_cross_process_parent_death_preserves_nested_ownership() {
             break;
         }
     }
-    assert!(SessionDeletionPreflight::acquire(root.path(), &SessionId::new("session-1")).is_err());
+    let catalog = SessionCatalog::open_existing(root.path()).unwrap().unwrap();
+    assert!(SessionDeletionPreflight::acquire(root.path(), &first_session(&catalog)).is_err());
     process.kill().unwrap();
     process.wait().unwrap();
     let preflight =
-        SessionDeletionPreflight::acquire(root.path(), &SessionId::new("session-1")).unwrap();
+        SessionDeletionPreflight::acquire(root.path(), &first_session(&catalog)).unwrap();
     assert_eq!(preflight.conversations().len(), 3);
     assert_eq!(
         preflight
@@ -436,24 +424,18 @@ fn deletion_cross_process_parent_death_preserves_nested_ownership() {
 fn deletion_duplicate_and_cyclic_child_identity_fail_closed() {
     let (root, catalog, _) = open_catalog();
     let (session, node, _) = catalog
-        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-        .map(|(node, state)| {
-            (
-                crate::local_runtime::SessionId::new("session-1"),
-                node,
-                state,
-            )
-        })
+        .lineage(&first_session(&catalog), None)
+        .map(|(node, state)| (first_session(&catalog), node, state))
         .unwrap();
     let parent = store_for(&catalog, &session, &node.conversation_id);
     let id = child(root.path(), &parent, 1, false);
     let child_store = SqliteConversationStore::open(
         id.clone(),
-        &crate::runtime::subagent::child_conversation_store_path(root.path(), &id),
+        &crate::runtime::subagent::child_conversation_store_path(root.path(), &session, &id),
     )
     .unwrap();
     let subagent = SubagentId::for_conversation(&id, 1);
-    let mut event = crate::runtime::subagent::ownership_event(
+    let event = crate::runtime::subagent::ownership_event(
         &id,
         &subagent,
         &AgentId::new("agent-cycle"),
@@ -469,14 +451,7 @@ fn deletion_duplicate_and_cyclic_child_identity_fail_closed() {
     child_store.append_event(event.clone()).unwrap();
     assert!(SessionDeletionPreflight::acquire(root.path(), &session).is_err());
     // Simulate a tampered durable child reference without following or creating it.
-    if let crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
-        child_conversation_id,
-        ..
-    } = &mut event.event
-    {
-        *child_conversation_id = ConversationId::new("../../outside");
-    }
-    let path = crate::runtime::subagent::child_conversation_store_path(root.path(), &id);
+    let path = crate::runtime::subagent::child_conversation_store_path(root.path(), &session, &id);
     drop(child_store);
     let connection = rusqlite::Connection::open(&path).unwrap();
     let json: String = connection
@@ -487,6 +462,7 @@ fn deletion_duplicate_and_cyclic_child_identity_fail_closed() {
     let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
     // Keep the stored envelope shape and modify its typed payload.
     value["event"] = serde_json::to_value(event.event).unwrap();
+    value["event"]["child_conversation_id"] = serde_json::json!("../../outside");
     connection
         .execute(
             "UPDATE events SET event_json=?1",
@@ -523,13 +499,13 @@ fn deletion_hot_journal_reads_are_nonmutating_and_startup_recovers_owned_stores(
     }
     process.kill().unwrap();
     process.wait().unwrap();
-    let database = root
-        .path()
-        .join("sessions/session-1/conversations/conversation-1/conversation.sqlite");
+    let catalog = SessionCatalog::open_existing(root.path()).unwrap().unwrap();
+    let session = catalog.snapshot(&first_session(&catalog)).unwrap();
+    let database = catalog.database_path(&session.id, &session.active_conversation_id);
     let journal = database.with_file_name("conversation.sqlite-journal");
     let before = std::fs::read(&database).unwrap();
     let journal_before = std::fs::read(&journal).unwrap();
-    assert!(SessionDeletionPreflight::acquire(root.path(), &SessionId::new("session-1")).is_err());
+    assert!(SessionDeletionPreflight::acquire(root.path(), &first_session(&catalog)).is_err());
     assert_eq!(before, std::fs::read(&database).unwrap());
     assert_eq!(journal_before, std::fs::read(&journal).unwrap());
     let writer = std::sync::Arc::new(
@@ -537,11 +513,10 @@ fn deletion_hot_journal_reads_are_nonmutating_and_startup_recovers_owned_stores(
     );
     let catalog = SessionCatalog::open_existing(root.path()).unwrap().unwrap();
     catalog
-        .recover_session_storage(&SessionId::new("session-1"), &writer)
+        .recover_session_storage(&first_session(&catalog), &writer)
         .unwrap();
     drop((catalog, writer));
-    let preflight =
-        SessionDeletionPreflight::acquire(root.path(), &SessionId::new("session-1")).unwrap();
+    let preflight = SessionDeletionPreflight::acquire(root.path(), &session.id).unwrap();
     assert_eq!(preflight.conversations().len(), 3);
 }
 
@@ -549,14 +524,8 @@ fn deletion_hot_journal_reads_are_nonmutating_and_startup_recovers_owned_stores(
 fn deletion_wal_metadata_is_rejected_before_sqlite_can_create_sidecars() {
     let (root, catalog, _) = open_catalog();
     let (session, node, _) = catalog
-        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-        .map(|(node, state)| {
-            (
-                crate::local_runtime::SessionId::new("session-1"),
-                node,
-                state,
-            )
-        })
+        .lineage(&first_session(&catalog), None)
+        .map(|(node, state)| (first_session(&catalog), node, state))
         .unwrap();
     let database = catalog.database_path(&session, &node.conversation_id);
     let connection = rusqlite::Connection::open(&database).unwrap();
@@ -721,7 +690,7 @@ fn deletion_revision_changes_for_target_nodes_children_and_nested_children() {
     assert_ne!(with_node, with_child, "a durable child adds owned scope");
     let nested_parent = SqliteConversationStore::open(
         id.clone(),
-        &crate::runtime::subagent::child_conversation_store_path(root.path(), &id),
+        &crate::runtime::subagent::child_conversation_store_path(root.path(), &session, &id),
     )
     .unwrap();
     child(root.path(), &nested_parent, 1, false);
@@ -737,14 +706,8 @@ fn deletion_revision_tracks_retained_and_partial_and_complete_disposal() {
     use crate::events::types::SubagentWorkspaceDisposalSettlement;
     let (root, catalog, _) = open_catalog();
     let (session, node, _) = catalog
-        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-        .map(|(node, state)| {
-            (
-                crate::local_runtime::SessionId::new("session-1"),
-                node,
-                state,
-            )
-        })
+        .lineage(&first_session(&catalog), None)
+        .map(|(node, state)| (first_session(&catalog), node, state))
         .unwrap();
     let parent = store_for(&catalog, &session, &node.conversation_id);
     let initial = revision(root.path(), &session);
@@ -832,17 +795,25 @@ fn deletion_target_child_access_blocks_but_unrelated_child_access_does_not() {
     let identity = ProductRoot::existing(root.path()).unwrap();
     let _unrelated = ConversationAccess::existing(
         &identity,
-        crate::runtime::subagent::child_conversation_store_path(identity.root(), &unrelated)
-            .parent()
-            .unwrap(),
+        crate::runtime::subagent::child_conversation_store_path(
+            identity.root(),
+            &other.session_id,
+            &unrelated,
+        )
+        .parent()
+        .unwrap(),
     )
     .unwrap();
     assert!(SessionDeletionPreflight::acquire(root.path(), &target).is_ok());
     let target_access = ConversationAccess::existing(
         &identity,
-        crate::runtime::subagent::child_conversation_store_path(identity.root(), &target_child)
-            .parent()
-            .unwrap(),
+        crate::runtime::subagent::child_conversation_store_path(
+            identity.root(),
+            &target,
+            &target_child,
+        )
+        .parent()
+        .unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -890,7 +861,7 @@ fn deletion_snapshot_freezes_native_ownership_commits_but_not_ordinary_events() 
         &other.conversation_id,
         &id,
         &AgentId::new("agent"),
-        &ConversationId::new(id.as_str()),
+        &ConversationId::generate(),
         &ToolCallId::new("call"),
         &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
         &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
@@ -950,14 +921,8 @@ fn deletion_detached_private_stores_and_writers_retain_target_access() {
     use crate::runtime::local_storage::{ConversationAccess, ProductRoot};
     let (root, catalog, _) = open_catalog();
     let (session, node, _) = catalog
-        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-        .map(|(node, state)| {
-            (
-                crate::local_runtime::SessionId::new("session-1"),
-                node,
-                state,
-            )
-        })
+        .lineage(&first_session(&catalog), None)
+        .map(|(node, state)| (first_session(&catalog), node, state))
         .unwrap();
     let allocation = catalog
         .database_path(&session, &node.conversation_id)
@@ -1002,6 +967,7 @@ fn deletion_target_process_gate() {
     let _owner: Box<dyn std::any::Any> = if let Ok(id) = std::env::var("RUSTX_260_TARGET_CHILD") {
         let database = crate::runtime::subagent::child_conversation_store_path(
             root.root(),
+            &SessionId::new(std::env::var("RUSTX_260_TARGET_SESSION").unwrap()),
             &ConversationId::new(id),
         );
         Box::new(ConversationAccess::existing(&root, database.parent().unwrap()).unwrap())
@@ -1033,10 +999,20 @@ fn deletion_cross_process_target_child_unrelated_child_and_destructive_conflict(
         .unwrap();
     let other_store = store_for(&catalog, &other.session_id, &other.conversation_id);
     let unrelated_child = child(root.path(), &other_store, 1, false);
-    for (key, value, blocks) in [
-        ("RUSTX_260_TARGET_CHILD", unrelated_child.as_str(), false),
-        ("RUSTX_260_TARGET_CHILD", target_child.as_str(), true),
-        ("RUSTX_260_TARGET_SESSION", target.as_str(), true),
+    for (key, value, session, blocks) in [
+        (
+            "RUSTX_260_TARGET_CHILD",
+            unrelated_child.as_str(),
+            &other.session_id,
+            false,
+        ),
+        (
+            "RUSTX_260_TARGET_CHILD",
+            target_child.as_str(),
+            &target,
+            true,
+        ),
+        ("RUSTX_260_TARGET_SESSION", target.as_str(), &target, true),
     ] {
         let mut process = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
@@ -1045,6 +1021,7 @@ fn deletion_cross_process_target_child_unrelated_child_and_destructive_conflict(
                 "--nocapture",
             ])
             .env("RUSTX_260_TARGET_ROOT", root.path())
+            .env("RUSTX_260_TARGET_SESSION", session.as_str())
             .env(key, value)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -1100,14 +1077,8 @@ fn deletion_alias_startup_authors_one_canonical_session_allocation() {
     let catalog = SessionCatalog::create(&alias, &state()).unwrap();
     assert_eq!(catalog.root, identity.root().join("sessions"));
     let (session, node, _) = catalog
-        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-        .map(|(node, state)| {
-            (
-                crate::local_runtime::SessionId::new("session-1"),
-                node,
-                state,
-            )
-        })
+        .lineage(&first_session(&catalog), None)
+        .map(|(node, state)| (first_session(&catalog), node, state))
         .unwrap();
     let database = catalog.database_path(&session, &node.conversation_id);
     assert!(database.starts_with(identity.root()));

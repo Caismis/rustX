@@ -2,7 +2,7 @@
 
 For normal local development with your own native settings, use the
 [canonical dev launcher](../DEVELOPMENT.md). This guide is the strict scripted
-acceptance environment; its fake provider, scenario assertions, trust setup and
+acceptance environment; its fake provider, scenario assertions, isolated CFG3 sources and
 test Workspaces are intentionally fixture-only.
 
 
@@ -35,15 +35,13 @@ RUSTX_WORKSPACE_HOST_CONFIG=/printed/host-config.json pnpm --dir web-console pre
 Open `http://127.0.0.1:4173`. Read the printed token file locally, enter the endpoint
 and transport token, and Connect. Workspace A and B must appear. If they do not,
 check the Host environment variable; do not bypass authorization by entering cwd.
-The fixture grants project trust unless launched with `--untrusted`. Its isolated
-HOME/config/state/runtime roots are removed on shutdown. Only fake credential
-references are used. Do not use this local trusted fixture as a remote auth service.
+The fixture uses isolated User/Workspace configuration and runtime roots, removed
+on shutdown, with fake credential references only. Both scopes participate in CFG3
+resolution. Host navigation authorization does not gate Workspace configuration.
+Do not use this local fixture as a remote authentication service.
 
-The scenario is optional (default `web_console_dogfood`). For example,
-`pnpm --dir web-console dogfood:server --untrusted` starts that default without
-pre-granting native project trust. `--untrusted` may precede or follow the scenario;
-unknown flags and multiple scenarios are rejected. Host Workspace authorization
-is unchanged.
+The scenario is optional (default `web_console_dogfood`). Unknown flags and multiple
+scenarios are rejected.
 
 For gate commands below, set `control` to the printed `providerControl` URL:
 
@@ -149,10 +147,11 @@ Edit the pending row, save, remove, and queue the original text again. Open its
 editor, release `goal-round`, and wait for `Queued input handled.`. The claimed
 row's obsolete draft must not be sendable. Cancel the draft. Pause/resume Goal;
 edit its objective/budget while paused. Reload; native current data returns.
-Extension activation in Settings is separate from this current domain data.
+Plugin composition in Settings is separate from this current domain data.
 
 Restart with `dogfood:server web_commands`. Create A. Type `/mdl`, choose
-`fixture/second-model`; `/permission` offers typed native choices. `/tools` opens
+`fixture/second-model`; global approval policy is authored in Settings and requires
+a separate Reload after Save. `/tools` opens
 inventory. Escape returns focus to the composer. `/not-a-command` must refuse,
 not become a prompt. Attach `note.txt`; send `Regenerate my uploaded note`.
 Retry / Regenerate at that User boundary. Release `retry-request-reached` after
@@ -172,60 +171,38 @@ Integrations contains the existing acceptance Skill, reviewer Agent and review_p
 Workflow. At Workspace scope toggle the root Workflow selection; its YAML and
 Agent TOML files must remain byte-identical. This is selection, not content editing.
 
-## 5. Settings, authority, trust and integrations
+## 5. CFG3 Settings and source authoring
 
-Use a fresh default fixture for configuration-only exploration (no prompts).
+Use a fresh fixture without prompts. Open **Effective | User | Workspace**.
 
-- **Provider/model definitions are editable in Web v1.** In User catalog add a
-  Provider with a loopback endpoint and environment-reference metadata; add a
-  model, choose its protocol, explicit input/output text capabilities and limits.
-  OpenAI Chat requires an explicit Chat reasoning replay choice under protocol
-  compatibility (e.g. omit). Save, reload, edit, save, delete and reload. Invalid
-  native combinations reject before changing source. No endpoint probe occurs.
-- Compare User, trusted Workspace and Session selections. Only authorized layers
-  participate; Reset followed by Save removes the selected layer. Effective is
-  read-only. Review canonical target, revision, winner/lower authored layers and
-  apply lifetime; loaded resources/frozen attempts can legitimately differ.
-- **MCP definitions are editable in Web v1**, at User and trusted Workspace only.
-  Add an inert stdio entry (`python3`, arguments as separate rows), round-trip it,
-  then define the same identity at Workspace with HTTP transport and a loopback
-  URL. Clear stdio-only fields when changing transport. Workspace wins as a whole
-  entry; editing the shadowed User entry does not change it. Compare Unconfigured,
-  Disabled and Enabled. Source save does not itself connect/probe an MCP server.
-  There is no browser-direct MCP Probe feature; native resource reload is the
-  available explicit runtime action where exposed. Use the checked-in local
-  `web-console/test/e2e/web09-mcp.py` only when deliberately testing preparation.
-- To inspect stale CAS, edit a draft, append a comment to its printed canonical
-  source in another terminal, then Save. The draft survives conflict; only an
-  explicit reviewed Save retries. Response-loss injection is automated in
-  `recovery.spec.ts`; after uncertainty, reconnect and Reload / discard draft,
-  never blindly repeat the write.
-- **Skill definitions are authored outside Web v1.** Source policy, root
-  visibility, explicit Session paths and the admitted catalog are different
-  controls/facts; inspect native Global/Workspace provenance.
-- **Named Agent definitions are authored outside Web v1.** Root `agent.agents`
-  selection never edits Agent TOML. Same-name Workspace definitions replace User
-  resources as a whole. **Workflow definitions are authored outside Web v1.**
-  Workspace YAML programs remain distinct from root `agent.workflows` selection.
-- Inspect Extensions: toggling one preserves same-source siblings but does not
-  recursively merge scope collections or mutate current Todo/Goal state. Current
-  resource and capability generations are native facts. Unsupported controls stay
-  absent/read-only. Provider/MCP secret values never appear; this Host has no
-  write-only secret endpoint, so supply credentials outside Web.
-- Restart with `dogfood:server web_console_dogfood --untrusted`. Place deliberately
-  invalid `rustx.toml` in the printed A cwd before opening A. Host still authorizes
-  navigation/create; native project controls remain inactive/read-only. Opening
-  A does not grant trust. User/Host security policy cannot be widened by Workspace
-  or Session. To test picker absence, stop Web, set `picker: false` in the printed
-  Host config, restart Web: Add Workspace disappears and no arbitrary path entry
-  replaces it. The automated two-Host/two-process fixture also tests cross-routing
-  rejection; it does not claim OS sandbox isolation.
+- Add/edit/delete Providers and Models independently in both authored scopes.
+  Workspace replaces the complete same-name object; omitted credentials never
+  come from User. Effective shows native values and provenance read-only.
+- Edit Root Native Tools as an exact whitelist; MCP/Python source selections and
+  Skill prompt visibility support all/exact/none. Resource existence grants no
+  Root authority. Inspect the actual User config binding separately from fixed
+  User resource roots.
+- Enable a closed Plugin explicitly; all default off. Plugin selection never
+  mutates current Todo/Goal domain state.
+- Add an inert MCP definition, then a complete same-name Workspace replacement.
+  Saving the definition alone must not connect it. Agent/Workflow selection and
+  finite admitted demand drive materialization. Use `test/e2e/web09-mcp.py` only
+  as the local fixture when deliberately selecting that source.
+- Edit a named Agent as a complete profile, including description/instructions,
+  model inheritance, independent Tools/Skills/Plugins, timeout and worktree policy.
+  Root's delegation allowlist is separate. Skill, Python and Workflow source
+  editors are outside this UI; their native inventory remains available.
+- Save and confirm pending reload while generation N stays loaded. Reload and
+  verify N → N+1. Invalid source or busy ownership retains N with native diagnostics.
+- Create an external-editor CAS conflict. The draft survives; review the current
+  revision before another deliberate Save. Lost responses trigger authoritative
+  rereads without replay. Reconnect is not an automatic Save or Reload.
+- Invalid Workspace content must be diagnosed, never treated as an inactive trust
+  scope. Host picker authorization remains separate from native configuration.
 
-**Web v1 has no raw TOML/YAML/Markdown/code editor. Web v1 has no Local Workspace
-private configuration layer** (`rustx.local.toml`). Browser persistence holds only
-endpoint/open-view navigation hints; Host metadata holds registrations/names/order.
-Do not hide private project settings there or in unrelated Session fields. A real
-need for a private per-user/per-project layer requires a separate architecture issue.
+The browser owns forms and drafts. Rust owns parsing, validation, overlay,
+provenance, serialization, CAS and publication. No browser configuration layer,
+secret-value viewer or full raw-source editor is introduced.
 
 ## 6. Responsive and keyboard pass
 

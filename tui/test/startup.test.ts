@@ -17,15 +17,19 @@ import { FakeTransport, paramsOf, tick } from "./support/app-server-peer.ts";
 import { SERVER_CAPABILITIES } from "./support/app-server-harness.ts";
 import { snapshot, sessionView } from "./support/fixtures.ts";
 
+const SESSION_A = "ses_01900000-0000-7000-8000-000000001001";
+const SESSION_B = "ses_01900000-0000-7000-8000-000000001002";
+const SESSION_NEW = "ses_01900000-0000-7000-8000-000000001003";
+const SESSION_CREATED = "ses_01900000-0000-7000-8000-000000001004";
 const parsedResume = () => parseArguments(["--binary", "rustx", "--resume", "--workspace", "/server/work"]);
-const rows = ["A", "B"].map((id) => ({ id, name: `Session ${id}`, cwd: "/server/work", active_node: `node-${id}`, updated_at: "2026-09-14T00:00:00Z" }));
+const rows = [SESSION_A, SESSION_B].map((id) => ({ id, name: `Session ${id}`, cwd: "/server/work", active_node: `node_${id.slice(4)}`, updated_at: "2026-09-14T00:00:00Z" }));
 const diagnostics = fixtures.flatMap((f) => "result" in f && f.result?.type === "diagnostics" ? [f.result] : [])[0]!;
 
 async function connected() {
   const transport = new FakeTransport();
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
-  transport.respond(request!.id, { type: "initialized", protocol_version: 5, capabilities: SERVER_CAPABILITIES });
+  transport.respond(request!.id, { type: "initialized", protocol_version: 6, capabilities: SERVER_CAPABILITIES });
   return { transport, host: new AppServerHost({ client: await pending, ownership: "external" }) };
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {
@@ -38,7 +42,7 @@ async function attachment(transport: FakeTransport, id: string, count = 1) {
   const request = (await transport.log.awaitMethod("session/attach", count)).at(-1)!;
   assert.equal(paramsOf(request, "session/attach").session_id, id);
   transport.respond(request.id, { type: "attached", target: {
-    session_id: id, conversation_id: "conv-test", attachment_id: `att-${id}`, runtime_incarnation: "1",
+    session_id: id, conversation_id: "conv_01900000-0000-7000-8000-000000000002", attachment_id: `att-${id}`, runtime_incarnation: "1",
   }, snapshot: snapshot(), cursor: "0" });
   return request;
 }
@@ -114,13 +118,13 @@ it("resume browses without control and attaches only the selected B", async (t) 
   await tick();
   noControl(transport);
   h.surfaces[0]!.onSelect!(rows[1]!);
-  await attachment(transport, "B");
+  await attachment(transport, SESSION_B);
   await finishFocus(transport);
-  assert.deepEqual(host.attached.map((s) => s.sessionId), ["B"]);
+  assert.deepEqual(host.attached.map((s) => s.sessionId), [SESSION_B]);
   assert.equal(transport.log.count("session/attach"), 1);
   assert.equal(transport.log.count("session/unload"), 0);
   assert.equal(transport.log.count("turn/cancel"), 0);
-  assert.match(h.feedback.at(-1)!, /showing session B/);
+  assert.equal(h.feedback.at(-1), `showing session ${SESSION_B}`);
   assert.equal(h.editor.disableSubmit, false);
 });
 
@@ -134,17 +138,17 @@ it("a controlled A does not block browsing; its conflict occurs only on selectio
   const selector = h.surfaces[0]!;
   selector.onSelect!(rows[0]!);
   const [request] = await transport.log.awaitMethod("session/attach");
-  assert.equal(paramsOf(request!, "session/attach").session_id, "A");
+  assert.equal(paramsOf(request!, "session/attach").session_id, SESSION_A);
   transport.respondError(request!.id, { code: -32000, message: "A is controlled", data: { kind: "controller_in_use" } });
   await tick();
-  assert.match(h.feedback.at(-1)!, /could not open Session A: another client already controls this Session/);
+  assert.equal(h.feedback.at(-1), `could not open Session ${SESSION_A}: another client already controls this Session`);
   assert.equal(host.client.closed, undefined);
   assert.equal(host.attached.length, 0);
   assert.equal(h.surfaces.at(-1), selector, "the same picker remains recoverable");
   selector.onSelect!(rows[1]!);
-  await attachment(transport, "B", 2);
+  await attachment(transport, SESSION_B, 2);
   await finishFocus(transport);
-  assert.deepEqual(host.attached.map((s) => s.sessionId), ["B"]);
+  assert.deepEqual(host.attached.map((s) => s.sessionId), [SESSION_B]);
   assert.equal(transport.log.count("session/attach"), 2, "one explicit attempt per chosen identity");
 });
 
@@ -156,9 +160,9 @@ for (const resume of [true, false]) {
     if (resume) await catalog(transport, []);
     const [create] = await transport.log.awaitMethod("session/create");
     assert.equal(paramsOf(create!, "session/create").settings.cwd, "/server/work/../project");
-    transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: "new" }) });
-    await attachment(transport, "new");
-    assert.equal((await starting).session?.sessionId, "new");
+    transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: SESSION_NEW }) });
+    await attachment(transport, SESSION_NEW);
+    assert.equal((await starting).session?.sessionId, SESSION_NEW);
     assert.equal(transport.log.count("session/create"), 1);
     assert.equal(transport.log.count("session/attach"), 1);
     assert.equal(transport.log.count("session/list"), resume ? 1 : 0);
@@ -168,10 +172,10 @@ for (const resume of [true, false]) {
 
 it("explicit --session/--node attaches that identity directly without browsing or creating", async () => {
   const { host, transport } = await connected();
-  const starting = prepareStartup(host, parseArguments(["--binary", "rustx", "--session", "B", "--node", "node-B"]));
-  const request = await attachment(transport, "B");
-  assert.equal(paramsOf(request, "session/attach").node_id, "node-B");
-  assert.equal((await starting).session?.sessionId, "B");
+  const starting = prepareStartup(host, parseArguments(["--binary", "rustx", "--session", SESSION_B, "--node", "node_46e1cc43-3b60-768f-a449-f55af17cbce3"]));
+  const request = await attachment(transport, SESSION_B);
+  assert.equal(paramsOf(request, "session/attach").node_id, "node_46e1cc43-3b60-768f-a449-f55af17cbce3");
+  assert.equal((await starting).session?.sessionId, SESSION_B);
   assert.equal(transport.log.count("session/list"), 0);
   assert.equal(transport.log.count("session/create"), 0);
   await host.shutdown();
@@ -193,7 +197,7 @@ it("unfocused reconnect refreshes only the catalog and fences the old picker", a
   await tick();
   noControl(next.transport);
   h.surfaces[1]!.onSelect!(rows[1]!);
-  await attachment(next.transport, "B");
+  await attachment(next.transport, SESSION_B);
   await finishFocus(next.transport);
   assert.equal(next.transport.log.count("session/attach"), 1);
 });
@@ -206,7 +210,7 @@ it("a lost first attachment response returns to unfocused browsing without repla
   const h = appFor(t, first.host, await starting, async () => next.host);
   h.surfaces[0]!.onSelect!(rows[0]!);
   const [pending] = await first.transport.log.awaitMethod("session/attach");
-  assert.equal(paramsOf(pending!, "session/attach").session_id, "A");
+  assert.equal(paramsOf(pending!, "session/attach").session_id, SESSION_A);
   first.transport.fail("socket_error");
   await catalog(next.transport);
   await tick();
@@ -216,9 +220,9 @@ it("a lost first attachment response returns to unfocused browsing without repla
   assert.equal(h.editor.disableSubmit, true);
   assert.match(h.feedback.at(-1)!, /no unanswered mutations were resent/);
   h.surfaces.at(-1)!.onSelect!(rows[1]!);
-  await attachment(next.transport, "B");
+  await attachment(next.transport, SESSION_B);
   await finishFocus(next.transport);
-  assert.deepEqual(next.host.attached.map((s) => s.sessionId), ["B"]);
+  assert.deepEqual(next.host.attached.map((s) => s.sessionId), [SESSION_B]);
 });
 
 async function createFromEmpty(h: ReturnType<typeof appFor>, host: AppServerHost, transport: FakeTransport) {
@@ -233,12 +237,12 @@ async function createFromEmpty(h: ReturnType<typeof appFor>, host: AppServerHost
   selector.handleInput("\r");
   assert.equal(transport.log.count("session/create"), 1, "pending action is single-submit");
   assert.deepEqual(paramsOf(create!, "session/create").settings, parsedResume().sessionSettings);
-  transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: "created" }),
+  transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: SESSION_CREATED }),
     editor_content: [{ type: "text", text: "transition draft" }], durability_diagnostic: "durability test notice" });
-  const attach = await attachment(transport, "created");
+  const attach = await attachment(transport, SESSION_CREATED);
   assert.equal(paramsOf(attach, "session/attach").node_id, sessionView().active_node);
   await finishFocus(transport);
-  assert.deepEqual(host.attached.map((s) => s.sessionId), ["created"]);
+  assert.deepEqual(host.attached.map((s) => s.sessionId), [SESSION_CREATED]);
   assert.equal(h.editor.disableSubmit, false);
   assert.equal(h.editor.getText(), "transition draft");
   assert.match(h.feedback.at(-1)!, /durability test notice/);
@@ -259,13 +263,13 @@ it("delete last Session leaves an empty unfocused picker until explicit New Sess
   selector.handleInput("\x04");
   const [preview] = await transport.log.awaitMethod("session/deletePreview");
   transport.respond(preview!.id, { type: "deletion", result: { status: "preview", preview: {
-    session_id: "A", target_revision: "revision-A", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0,
+    session_id: SESSION_A, target_revision: "revision-A", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0,
   } } });
   await tick();
   selector.handleInput("\t"); selector.handleInput("\r");
   const [deletion] = await transport.log.awaitMethod("session/delete");
-  assert.deepEqual(paramsOf(deletion!, "session/delete"), { session_id: "A", expected_target_revision: "revision-A" });
-  transport.respond(deletion!.id, { type: "deletion", result: { status: "deleted", session_id: "A" } });
+  assert.deepEqual(paramsOf(deletion!, "session/delete"), { session_id: SESSION_A, expected_target_revision: "revision-A" });
+  transport.respond(deletion!.id, { type: "deletion", result: { status: "deleted", session_id: SESSION_A } });
   await catalog(transport, [], 2);
   await tick();
   assert.equal(h.surfaces.at(-1), selector);
@@ -316,7 +320,7 @@ it("committed create retires empty authority before failed attach; reopening rea
   const stale = h.surfaces[0]!;
   stale.handleInput("\r");
   const [create] = await transport.log.awaitMethod("session/create");
-  transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: "created" }) });
+  transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: SESSION_CREATED }) });
   const [attach] = await transport.log.awaitMethod("session/attach");
   assert.deepEqual(h.hidden, [stale], "empty authority retires before attach settles");
   transport.respondError(attach!.id, { code: -32000, message: "attach rejected", data: { kind: "operation_failed" } });
@@ -333,7 +337,7 @@ it("committed create retires empty authority before failed attach; reopening rea
   assert.equal(transport.disposed, false, "same host is retained");
 
   h.input("\r"); // Explicitly reopen resume through the unfocused input path.
-  const createdRow = { ...rows[0]!, id: "created" };
+  const createdRow = { ...rows[0]!, id: SESSION_CREATED };
   await catalog(transport, [createdRow]);
   await tick();
   const fresh = h.surfaces.at(-1)!;
@@ -343,11 +347,11 @@ it("committed create retires empty authority before failed attach; reopening rea
   assert.equal(transport.log.count("session/create"), 1);
   assert.equal(transport.log.count("session/attach"), 1, "catalog refresh does not retry attachment");
   fresh.handleInput("\r");
-  await attachment(transport, "created", 2);
+  await attachment(transport, SESSION_CREATED, 2);
   await finishFocus(transport);
   assert.equal(transport.log.count("session/create"), 1);
   assert.equal(h.editor.disableSubmit, false);
-  assert.deepEqual(host.attached.map((session) => session.sessionId), ["created"]);
+  assert.deepEqual(host.attached.map((session) => session.sessionId), [SESSION_CREATED]);
 });
 
 for (const stage of ["create", "attach"] as const) {
@@ -359,7 +363,7 @@ for (const stage of ["create", "attach"] as const) {
     old.handleInput("\r");
     const [create] = await first.transport.log.awaitMethod("session/create");
     if (stage === "attach") {
-      first.transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: "created" }) });
+      first.transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: SESSION_CREATED }) });
       await first.transport.log.awaitMethod("session/attach");
     }
     first.transport.fail("socket_error");

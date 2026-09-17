@@ -194,7 +194,7 @@ impl ToolSelectionDocument {
 
             if let Some(extension) = super::extension_provided_tool(name) {
                 return Err(format!(
-                    "{name} is provided by the {extension:?} Agent Extension, not by ordinary Tool selection; compose it with extensions.{extension}.enabled instead"
+                    "{name} is provided by the {extension:?} Plugin; configure plugins.{extension}.enabled"
                 ));
             }
         }
@@ -213,7 +213,6 @@ impl ToolSelectionDocument {
 #[derive(schemars::JsonSchema)]
 pub enum SourceResolutionFailure {
     Undefined,
-    Inactive(super::activation::SourceActivation),
     Unprepared,
     Unavailable {
         #[serde(skip)]
@@ -224,9 +223,6 @@ impl std::fmt::Display for SourceResolutionFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Undefined => f.write_str("source is not defined or discovered"),
-            Self::Inactive(activation) => {
-                f.write_str(activation.admit().err().unwrap_or("source is inactive"))
-            }
             Self::Unprepared => f.write_str("source is eligible but not prepared"),
             Self::Unavailable { reason } => f.write_str(reason),
         }
@@ -257,7 +253,7 @@ impl ToolSelectionError {
             ..
         } = &mut fact
         {
-            reason.clear();
+            "source preparation failed".clone_into(reason);
         }
         fact
     }
@@ -294,9 +290,6 @@ pub fn source_state(
 ) -> Result<(), SourceResolutionFailure> {
     match availability.get(source) {
         None => Err(SourceResolutionFailure::Undefined),
-        Some(CapabilitySourceState::Inactive { activation }) => {
-            Err(SourceResolutionFailure::Inactive(*activation))
-        }
         Some(CapabilitySourceState::Unprepared) => Err(SourceResolutionFailure::Unprepared),
         Some(CapabilitySourceState::Unavailable { reason }) => {
             Err(SourceResolutionFailure::Unavailable {
@@ -635,7 +628,6 @@ mod tests {
     }
     #[test]
     fn resolution_classifies_absence_authority_materialization_and_exact_absence() {
-        use super::super::activation::SourceActivation;
         let source = ToolSourceId::Mcp(McpServerId::new("github"));
         let tools = [source_definition(&source, "a")];
         for mode in [
@@ -644,18 +636,6 @@ mod tests {
         ] {
             for (state, expected) in [
                 (None, SourceResolutionFailure::Undefined),
-                (
-                    Some(CapabilitySourceState::Inactive {
-                        activation: SourceActivation::Disabled,
-                    }),
-                    SourceResolutionFailure::Inactive(SourceActivation::Disabled),
-                ),
-                (
-                    Some(CapabilitySourceState::Inactive {
-                        activation: SourceActivation::Untrusted,
-                    }),
-                    SourceResolutionFailure::Inactive(SourceActivation::Untrusted),
-                ),
                 (
                     Some(CapabilitySourceState::Unprepared),
                     SourceResolutionFailure::Unprepared,
@@ -902,6 +882,8 @@ github = "all"
             )
             .unwrap();
             assert_eq!(selected.definitions().len(), 1);
+            let mut policy = policy;
+            policy.profile.extensions.todo.enabled = true;
             let extension = crate::tools::native::todo_tool_registration();
             let error = super::super::tools::select_tools(
                 &[registration],

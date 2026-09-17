@@ -10,10 +10,12 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentSource {
+    pub revision: String,
     pub identity: SubagentName,
     pub selected: PathBuf,
     pub layer: &'static str,
     pub overridden: Option<PathBuf>,
+    pub overridden_revision: Option<String>,
 }
 
 pub(crate) fn parse(text: &str) -> Result<AgentProfileDocument, String> {
@@ -58,99 +60,137 @@ pub(crate) fn load_profile_files(
 fn candidates(
     boundary: &Path,
     root: &Path,
+    diagnostics: &mut Vec<RuntimeResourceLoadError>,
 ) -> Result<BTreeMap<SubagentName, PathBuf>, RuntimeResourceLoadError> {
     let mut result = BTreeMap::new();
     for path in super::resource_directory::files(boundary, root, "toml")? {
-        let name = path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| {
-                RuntimeResourceLoadError::new("Agent filename must be UTF-8").at(&path, "agents")
-            })?;
-        let name = SubagentName::parse(name)
-            .map_err(|e| RuntimeResourceLoadError::new(e.to_string()).at(&path, "agents"))?;
+        let Some(name) = path.file_stem().and_then(|name| name.to_str()) else {
+            diagnostics.push(
+                RuntimeResourceLoadError::new("Agent filename must be UTF-8").at(&path, "agents"),
+            );
+            continue;
+        };
+        let Ok(name) = SubagentName::parse(name) else {
+            diagnostics.push(
+                RuntimeResourceLoadError::new("invalid Agent filename identity")
+                    .at(&path, "agents"),
+            );
+            continue;
+        };
         result.insert(name, path);
     }
     Ok(result)
 }
 
+#[allow(clippy::too_many_lines)] // One bounded, shadow-before-parse catalog pass.
 pub(crate) fn load_authorized(
     workspace: &Path,
     user_root: &Path,
-    project_trusted: bool,
 ) -> Result<(AgentCatalog, BTreeMap<SubagentName, AgentSource>), RuntimeResourceLoadError> {
-    let users = candidates(user_root, user_root)?;
-    let projects = if project_trusted {
-        candidates(workspace, &workspace.join(".agents/agents"))?
-    } else {
+    let mut diagnostics = Vec::new();
+    let mut users = candidates(user_root, user_root, &mut diagnostics).unwrap_or_else(|error| {
+        diagnostics.push(error);
         BTreeMap::new()
-    };
+    });
+    let projects = candidates(
+        workspace,
+        &workspace.join(".agents/agents"),
+        &mut diagnostics,
+    )
+    .unwrap_or_else(|error| {
+        // An unreadable higher collection cannot authorize lower identities
+        // whose potential shadowing cannot be determined.
+        users.clear();
+        diagnostics.push(error);
+        BTreeMap::new()
+    });
     let mut selected = users.clone();
     selected.extend(projects.clone());
     if selected.len() > crate::runtime::subagent::MAX_SUBAGENT_DEFINITIONS {
-        return Err(RuntimeResourceLoadError::new(
-            "Agent catalog exceeds native count bound",
-        ));
+        diagnostics.push(
+            RuntimeResourceLoadError::new("Agent catalog exceeds native count bound")
+                .at(&workspace.join(".agents/agents"), "agents"),
+        );
+        selected.clear();
     }
     let mut definitions = Vec::new();
+    let mut invalid = BTreeMap::new();
     let mut sources = BTreeMap::new();
     for (name, path) in &selected {
         let project_exists = projects.contains_key(name);
         let user_exists = users.contains_key(name);
         let user = user_root.join(format!("{name}.toml"));
         let (boundary, layer) = if project_exists {
-            (workspace, "project")
+            (workspace, "workspace")
         } else {
             (user_root, "user")
         };
         let field = format!("agents.{name}");
         let error = |message: String| RuntimeResourceLoadError::new(message).at(path, &field);
-        let bytes = crate::bounded_file::read_bounded(path).map_err(error)?;
-        let text = std::str::from_utf8(&bytes).map_err(|e| error(e.to_string()))?;
-        let agent = parse(text).map_err(|e| {
-            error(e).because("canonical Agent TOML violates its strict typed authoring contract")
-        })?;
-        if agent.agents_md.files.len()
-            > crate::runtime::subagent::catalog::MAX_SUBAGENT_PROJECT_FILES
-        {
-            return Err(error(
-                "agents_md.files exceeds the native file-count bound".into(),
-            ));
-        }
-        let mut files = Vec::new();
-        for file in &agent.agents_md.files {
-            let resolved = boundary.join(file);
-            validate_project_resource_path(boundary, &resolved)
-                .map_err(|e| e.at(path, format!("{field}.agents_md.files")))?;
-            let bytes = crate::bounded_file::read_bounded(&resolved).map_err(error)?;
-            let content = String::from_utf8(bytes).map_err(|e| error(e.to_string()))?;
-            files.push(ProjectContextFile {
-                path: resolved,
-                content,
-            });
-        }
-        let profile = crate::runtime::agent_profile::AgentProfile::from_document(
-            &agent,
-            crate::runtime::agent_profile::AgentProfileKind::Named,
-            files,
-        )
-        .map_err(error)?;
-        definitions.push(
+        let mut revision = "unreadable".to_owned();
+        let result = (|| -> Result<NamedAgentDefinition, RuntimeResourceLoadError> {
+            let bytes = super::resource_directory::read_resource(boundary, path)?;
+            revision = super::settings::revision(Some(&bytes));
+            let text = std::str::from_utf8(&bytes).map_err(|e| error(e.to_string()))?;
+            let agent = parse(text).map_err(|e| {
+                error(e)
+                    .because("canonical Agent TOML violates its strict typed authoring contract")
+            })?;
+            if agent.agents_md.files.len()
+                > crate::runtime::subagent::catalog::MAX_SUBAGENT_PROJECT_FILES
+            {
+                return Err(error(
+                    "agents_md.files exceeds the native file-count bound".into(),
+                ));
+            }
+            let mut files = Vec::new();
+            for file in &agent.agents_md.files {
+                let resolved = boundary.join(file);
+                validate_project_resource_path(boundary, &resolved)
+                    .map_err(|e| e.at(path, format!("{field}.agents_md.files")))?;
+                let bytes = crate::bounded_file::read_bounded(&resolved).map_err(error)?;
+                let content = String::from_utf8(bytes).map_err(|e| error(e.to_string()))?;
+                files.push(ProjectContextFile {
+                    path: resolved,
+                    content,
+                });
+            }
+            let profile = crate::runtime::agent_profile::AgentProfile::from_document(
+                &agent,
+                crate::runtime::agent_profile::AgentProfileKind::Named,
+                files,
+            )
+            .map_err(error)?;
             NamedAgentDefinition::new(name.clone(), profile, path.clone())
-                .map_err(|e| error(e.to_string()))?,
-        );
+                .map_err(|e| error(e.to_string()))
+        })();
+        match result {
+            Ok(definition) => definitions.push(definition),
+            Err(error) => {
+                invalid.insert(name.clone(), error);
+            }
+        }
         sources.insert(
             name.clone(),
             AgentSource {
+                revision,
                 identity: name.clone(),
                 selected: path.clone(),
                 layer,
                 overridden: (project_exists && user_exists).then_some(user.clone()),
+                overridden_revision: (project_exists && user_exists).then(|| {
+                    super::settings::read_document(&user).map_or_else(
+                        |_| "unreadable".into(),
+                        |bytes| super::settings::revision(bytes.as_deref()),
+                    )
+                }),
             },
         );
     }
-    let catalog =
+    let mut catalog =
         AgentCatalog::new(definitions).map_err(|e| RuntimeResourceLoadError::new(e.to_string()))?;
+    catalog.set_invalid(invalid);
+    catalog.discovery_diagnostics = diagnostics;
     Ok((catalog, sources))
 }
 
@@ -166,15 +206,34 @@ pub(crate) mod test_support {
     }
     static GATES: Mutex<Vec<(PathBuf, Weak<Gate>)>> = Mutex::new(Vec::new());
     pub(crate) fn arm(workspace: &Path) -> Arc<Gate> {
+        // Match the canonical Workspace used by the real candidate loader,
+        // including macOS temporary-directory aliases.
+        let workspace = workspace.canonicalize().expect("existing test Workspace");
         let gate = Arc::new(Gate {
             entered: watch::channel(false).0,
             release: watch::channel(false).0,
         });
         let mut gates = GATES.lock().unwrap();
-        gates.retain(|(path, weak)| path != workspace && weak.strong_count() > 0);
-        gates.push((workspace.into(), Arc::downgrade(&gate)));
+        gates.retain(|(path, weak)| path != &workspace && weak.strong_count() > 0);
+        gates.push((workspace, Arc::downgrade(&gate)));
         gate
     }
+    #[tokio::test]
+    async fn publication_gate_matches_a_workspace_alias() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical = root.path().canonicalize().unwrap();
+        let alias = canonical.join("alias");
+        std::os::unix::fs::symlink(&canonical, &alias).unwrap();
+        let gate = arm(&alias);
+        let candidate = tokio::spawn(async move { before_publication(&canonical).await });
+        tokio::time::timeout(std::time::Duration::from_secs(10), gate.entered())
+            .await
+            .expect("candidate must reach the gate through its canonical Workspace");
+        assert!(!candidate.is_finished());
+        gate.release();
+        candidate.await.unwrap();
+    }
+
     impl Gate {
         pub(crate) async fn entered(&self) {
             self.entered
@@ -232,7 +291,7 @@ mod tests {
                 "alpha",
                 "description = 'project'\ninstructions = 'project instructions'",
             );
-            let (catalog, sources) = load_authorized(&workspace, &user, true).unwrap();
+            let (catalog, sources) = load_authorized(&workspace, &user).unwrap();
             assert_eq!(
                 catalog
                     .definitions()
@@ -253,7 +312,7 @@ mod tests {
                 "project instructions"
             );
             assert_eq!(
-                load_authorized(&workspace, &user, true)
+                load_authorized(&workspace, &user)
                     .unwrap()
                     .0
                     .get(&alpha)
@@ -277,11 +336,25 @@ mod tests {
         let root = workspace.join(".agents/agents");
         write(&root, "zeta", "broken");
         write(&root, "alpha", "broken");
-        let first = load_authorized(&workspace, &workspace.join("user"), true).unwrap_err();
-        assert_eq!(first.source_file, Some(root.join("alpha.toml")));
+        let first = load_authorized(&workspace, &workspace.join("user"))
+            .unwrap()
+            .0
+            .invalid()
+            .clone();
+        assert_eq!(
+            first.keys().map(SubagentName::as_str).collect::<Vec<_>>(),
+            ["alpha", "zeta"]
+        );
+        assert_eq!(
+            first.values().next().unwrap().source_file,
+            Some(root.join("alpha.toml"))
+        );
         assert_eq!(
             first,
-            load_authorized(&workspace, &workspace.join("user"), true).unwrap_err()
+            *load_authorized(&workspace, &workspace.join("user"))
+                .unwrap()
+                .0
+                .invalid()
         );
     }
     #[test]
@@ -294,7 +367,10 @@ mod tests {
             root.join("alpha.toml"),
             "description = 'Alpha'\ninstructions = 'Inspect'\n[agents_md]\nfiles = ['../outside.md']\n",
         ).unwrap();
-        let error = load_authorized(&workspace, &workspace.join("user"), true).unwrap_err();
+        let catalog = load_authorized(&workspace, &workspace.join("user"))
+            .unwrap()
+            .0;
+        let error = catalog.invalid().values().next().unwrap();
         assert_eq!(
             error.field_path.as_deref(),
             Some("agents.alpha.agents_md.files")
@@ -309,6 +385,14 @@ mod tests {
         let root = workspace.join(".agents/agents");
         std::fs::create_dir_all(&root).unwrap();
         std::os::unix::fs::symlink("/etc/passwd", root.join("alpha.toml")).unwrap();
-        assert!(load_authorized(&workspace, &workspace.join("user"), true).is_err());
+        let catalog = load_authorized(&workspace, &workspace.join("user"))
+            .unwrap()
+            .0;
+        assert!(
+            catalog
+                .get(&SubagentName::parse("alpha").unwrap())
+                .is_none()
+        );
+        assert_eq!(catalog.invalid().len(), 1);
     }
 }

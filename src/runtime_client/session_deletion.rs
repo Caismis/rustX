@@ -1,5 +1,6 @@
 //! Bounded Session-control protocol projections. Native recovery authority is
 //! deliberately absent: clients confirm identity and revision, never a workset.
+use crate::local_runtime::SessionId;
 use serde::{Deserialize, Serialize};
 
 /// Confirmation metadata; counts include the complete native ownership graph.
@@ -7,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientSessionDeletePreview {
-    pub session_id: String,
+    pub session_id: SessionId,
     /// Display name, truncated to at most 256 Unicode scalar values.
     pub name: Option<String>,
     pub target_revision: String,
@@ -42,23 +43,23 @@ pub enum RuntimeClientSessionDeletionResult {
         preview: RuntimeClientSessionDeletePreview,
     },
     Deleted {
-        session_id: String,
+        session_id: SessionId,
     },
     /// Invalidates confirmation; only a fresh preview supplies a replacement token.
     Stale {
-        session_id: String,
+        session_id: SessionId,
     },
     Blocked {
-        session_id: String,
+        session_id: SessionId,
         reason: RuntimeClientSessionDeletionBlocker,
     },
     CommittedCleanupPending {
-        session_id: String,
+        session_id: SessionId,
     },
     CommittedDurabilityUncertain {
-        session_id: String,
+        session_id: SessionId,
     },
     NotFound {
-        session_id: String,
+        session_id: SessionId,
     },
 }

@@ -76,7 +76,8 @@ async fn fixed_tool_only_has_one_outer_result_and_zero_additional_provider_reque
     let (events, outcome) = driver.settle().await;
     assert!(
         matches!(outcome, RuntimeClientOutcome::Completed { .. }),
-        "{outcome:?}"
+        "{outcome:?}: {}",
+        emulator.diagnostics()
     );
     assert_eq!(
         events
@@ -133,7 +134,8 @@ async fn bounded_loop_exhaustion_keeps_one_outer_result_and_no_internal_provider
     let (events, outcome) = driver.settle().await;
     assert!(
         matches!(outcome, RuntimeClientOutcome::Completed { .. }),
-        "{outcome:?}"
+        "{outcome:?}: {}",
+        emulator.diagnostics()
     );
     assert_eq!(
         events
@@ -161,34 +163,21 @@ async fn bounded_loop_exhaustion_keeps_one_outer_result_and_no_internal_provider
 
 fn models_json_for_base_url(base_url: &str) -> String {
     toml::to_string_pretty(&serde_json::json!({
-        "providers": {
-            "emulator": {
-                "base_url": base_url,
-                "api_key": "issue83-secret",
-                "models": [{
-                    "id": MODEL,
-                    "protocol": "openai_chat_completions",
-                    "context_window": 128_000,
-                    "max_output_tokens": 1024,
-                    "capabilities": {
-                        "input_modalities": ["text"],
-                        "output_modalities": ["text"],
-                        "tool_calls": true,
-                        "reasoning": false
-                    },
-                    "compat": {"chat_reasoning_replay": "omit"}
-                }]
-            }
-        }
-    }))
-    .unwrap()
+        "providers": { "emulator": {"base_url": base_url, "api_key": "issue83-secret"} },
+        "models": {format!("emulator/{MODEL}"): {
+            "provider": "emulator", "id": MODEL, "protocol": "openai_chat_completions",
+            "context_window": 128_000, "max_output_tokens": 1024,
+            "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"], "tool_calls": true, "reasoning": false},
+            "compat": {"chat_reasoning_replay": "omit"}
+        }}
+    })).unwrap()
 }
 
 fn models_json(emulator: &ProviderEmulator) -> String {
     models_json_for_base_url(&emulator.openai_base_url())
 }
 
-const CONFIG: &str = r#"schema_version = 8
+const CONFIG: &str = r#"schema_version = 9
 agent_id = "agent-issue83"
 
 [context]
@@ -313,9 +302,11 @@ impl Driver {
         std::fs::create_dir_all(workspace.join(".agents/agents/reviewer"))
             .expect("subagent directory");
         std::fs::create_dir_all(workspace.join(".agents/workflows")).expect("workflow directory");
-        std::fs::write(root.path().join("models.toml"), models_json(emulator))
-            .expect("models.toml");
-        std::fs::write(root.path().join("rustx.toml"), CONFIG).expect("rustx.toml");
+        std::fs::write(
+            root.path().join("rustx.toml"),
+            format!("{CONFIG}\n{}", models_json(emulator)),
+        )
+        .expect("rustx.toml");
         std::fs::write(
             workspace.join(".agents/agents/reviewer.toml"),
             "description = \"The Workflow-only reviewer.\"\ninstructions = \"Review requests carefully.\\n\"\n",
@@ -331,16 +322,9 @@ impl Driver {
         .expect("inactive workflow YAML");
 
         let paths = LaunchFixture {
-            models: root.path().join("models.toml"),
             config: root.path().join("rustx.toml"),
-            skill_paths: Vec::new(),
-            no_automatic_skills: true,
-            no_builtin_tools: false,
-            no_direct_tools: false,
             startup_session: rustx::local_runtime::StartupSession::Empty,
             session_name: None,
-            tools: None,
-            exclude_tools: Vec::new(),
             workspace,
             runtime_root: root.path().join("private"),
         };
@@ -438,11 +422,13 @@ async fn workflow_selection_rejects_an_identity_outside_the_canonical_root() {
     std::fs::create_dir_all(workspace.join(".agents/agents/reviewer")).expect("subagent directory");
     std::fs::create_dir_all(workspace.join(".rustx/workflows")).expect("obsolete directory");
     std::fs::write(
-        root.path().join("models.toml"),
-        models_json_for_base_url("http://127.0.0.1:1/v1"),
+        root.path().join("rustx.toml"),
+        format!(
+            "{CONFIG}\n{}",
+            models_json_for_base_url("http://127.0.0.1:1/v1")
+        ),
     )
-    .expect("models.toml");
-    std::fs::write(root.path().join("rustx.toml"), CONFIG).expect("rustx.toml");
+    .expect("rustx.toml");
     std::fs::write(
         workspace.join(".agents/agents/reviewer.toml"),
         "description = \"The Workflow-only reviewer.\"\ninstructions = \"Review requests carefully.\\n\"\n",
@@ -452,32 +438,20 @@ async fn workflow_selection_rejects_an_identity_outside_the_canonical_root() {
         .expect("legacy workflow YAML");
 
     let paths = LaunchFixture {
-        models: root.path().join("models.toml"),
         config: root.path().join("rustx.toml"),
-        skill_paths: Vec::new(),
-        no_automatic_skills: true,
-        no_builtin_tools: false,
-        no_direct_tools: false,
         startup_session: rustx::local_runtime::StartupSession::Empty,
         session_name: None,
-        tools: None,
-        exclude_tools: Vec::new(),
         workspace,
         runtime_root: root.path().join("private"),
     };
-    let core =
+    let error =
         LocalConversationCore::compose(&paths.resolve(), &LocalRuntimeDependencies::default())
             .await
-            .expect("missing selected Workflow leaves the Agent usable");
-    let resources = core.runtime().runtime_resources();
-    assert!(resources.workflows().entries().is_empty());
-    let profile = resources.root_profile().unwrap();
-    assert!(profile.workflows.is_empty());
-    assert!(profile.diagnostics.iter().any(|diagnostic| matches!(
-        diagnostic,
-        rustx::runtime::agent_profile::AgentProfileDiagnostic::WorkflowUnavailable { id }
-            if id.as_str() == "review_pr"
-    )));
+            .expect_err("a selected missing Workflow fails admission");
+    assert!(
+        format!("{error:?}").contains("WorkflowUnavailable"),
+        "{error:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -487,13 +461,12 @@ async fn discovered_workflow_can_remain_out_of_main_model_admission() {
     std::fs::create_dir_all(workspace.join(".agents/agents/reviewer")).expect("subagent directory");
     std::fs::create_dir_all(workspace.join(".agents/workflows")).expect("workflow directory");
     std::fs::write(
-        root.path().join("models.toml"),
-        models_json_for_base_url("http://127.0.0.1:1/v1"),
-    )
-    .expect("models.toml");
-    std::fs::write(
         root.path().join("rustx.toml"),
-        CONFIG.replace("workflows = [\"review_pr\"]", "workflows = []"),
+        format!(
+            "{}\n{}",
+            CONFIG.replace("workflows = [\"review_pr\"]", "workflows = []"),
+            models_json_for_base_url("http://127.0.0.1:1/v1")
+        ),
     )
     .expect("rustx.toml");
     std::fs::write(
@@ -505,16 +478,9 @@ async fn discovered_workflow_can_remain_out_of_main_model_admission() {
         .expect("workflow YAML");
 
     let paths = LaunchFixture {
-        models: root.path().join("models.toml"),
         config: root.path().join("rustx.toml"),
-        skill_paths: Vec::new(),
-        no_automatic_skills: true,
-        no_builtin_tools: false,
-        no_direct_tools: false,
         startup_session: rustx::local_runtime::StartupSession::Empty,
         session_name: None,
-        tools: None,
-        exclude_tools: Vec::new(),
         workspace,
         runtime_root: root.path().join("private"),
     };
@@ -575,7 +541,11 @@ block:
     .expect("replace future profile");
     std::fs::write(
         driver.root.path().join("rustx.toml"),
-        CONFIG.replace("workflows = [\"review_pr\"]", "workflows = []"),
+        format!(
+            "{}\n{}",
+            CONFIG.replace("workflows = [\"review_pr\"]", "workflows = []"),
+            models_json_for_base_url("http://127.0.0.1:1/v1")
+        ),
     )
     .expect("replace future exposure");
     emulator.release_gate("workflow-child-admitted").await;
@@ -615,7 +585,7 @@ block:
     driver
         .runtime
         .host()
-        .reload_resources()
+        .reload_configuration()
         .await
         .expect("publish edited resources for future attempts");
     assert!(
@@ -731,8 +701,9 @@ async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in
             for wrong in 0..2 {
                 let mut target = interaction.interaction.clone();
                 if wrong == 0 {
-                    target.conversation_id =
-                        rustx::runtime::identity::ConversationId::new("different-owner");
+                    target.conversation_id = rustx::runtime::identity::ConversationId::new(
+                        "conv_caa0e144-b0ac-7276-830d-e1900f83d43c",
+                    );
                 } else {
                     target.interaction_id =
                         rustx::runtime::identity::InteractionId::new("different-interaction");
@@ -825,44 +796,45 @@ impl Driver {
         let root = tempfile::tempdir().unwrap();
         let source =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime");
-        copy_reference(&source, root.path());
         let workspace = root.path().join("workspace");
+        copy_reference(&source, &workspace);
         let reviewer = workspace.join(".agents/agents/reviewer.toml");
         let role = std::fs::read_to_string(&reviewer)
             .unwrap()
             .replace("example/demo-model", "emulator/workflow-model");
         std::fs::write(reviewer, role).unwrap();
+        let mut config: toml::Value =
+            toml::from_str(&std::fs::read_to_string(workspace.join("rustx.toml")).unwrap())
+                .unwrap();
+        let catalog: toml::Value =
+            toml::from_str(&models_json(emulator).replace("1024", "4096")).unwrap();
+        config["providers"] = catalog["providers"].clone();
+        config["models"] = catalog["models"].clone();
+        config["agent"]["model"]["model"] = "emulator/workflow-model".into();
+        config["agent"]["model"]
+            .as_table_mut()
+            .unwrap()
+            .remove("reasoning_profile");
+        std::fs::write(
+            root.path().join("rustx.toml"),
+            toml::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
+        // The copied example's authored configuration is now the bound User fixture;
+        // leave Workspace resources intact and provide no duplicate authored override.
+        std::fs::remove_file(workspace.join("rustx.toml")).unwrap();
         if git {
             reference_git(&workspace, &["init"]);
             reference_git(&workspace, &["add", "."]);
             reference_git(&workspace, &["commit", "-m", "reference baseline"]);
         }
-        std::fs::write(
-            root.path().join("models.toml"),
-            models_json(emulator).replace("1024", "4096"),
-        )
-        .unwrap();
-        let config = std::fs::read_to_string(root.path().join("rustx.toml"))
-            .unwrap()
-            .replace("example/demo-model", "emulator/workflow-model")
-            .replace(
-                "[agent.model.reasoning_profile]\nmode = \"profile\"\nname = \"off\"\n",
-                "",
-            );
-        std::fs::write(root.path().join("rustx.toml"), config).unwrap();
+
         let paths = LaunchFixture {
-            models: root.path().join("models.toml"),
             config: root.path().join("rustx.toml"),
             workspace,
             runtime_root: root.path().join("private"),
-            skill_paths: vec![],
-            no_automatic_skills: false,
-            no_builtin_tools: false,
-            no_direct_tools: false,
             startup_session: rustx::local_runtime::StartupSession::Empty,
             session_name: None,
-            tools: None,
-            exclude_tools: vec![],
         };
         let dependencies = LocalRuntimeDependencies {
             credentials: Some(Arc::new(MapCredentialEnvironment::new([(
@@ -1054,7 +1026,8 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
                 RuntimeClientEvent::AttemptSettled { outcome, .. } => {
                     assert!(
                         matches!(outcome, RuntimeClientOutcome::Completed { .. }),
-                        "{outcome:?}"
+                        "{outcome:?}: {}",
+                        emulator.diagnostics()
                     );
                     break;
                 }
@@ -1072,7 +1045,7 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
         assert_eq!(writes, iterations + usize::from(tampered));
         assert_eq!(check_commands.len(), iterations);
         let definition: serde_json::Value = serde_yaml::from_str(include_str!(
-            "../../examples/local-runtime/workspace/.agents/workflows/implement_and_review.yaml"
+            "../../examples/local-runtime/.agents/workflows/implement_and_review.yaml"
         ))
         .unwrap();
         let frozen = definition["block"]["nodes"]["repair"]["body"]["nodes"]["check"]["arguments"]

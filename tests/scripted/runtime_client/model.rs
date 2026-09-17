@@ -1,7 +1,7 @@
 //! Issue #42: the Runtime Client model read/update contract.
 //!
 //! The client boundary must let #39 control the real session model without
-//! reading `models.toml`, without rebuilding the runtime, and without
+//! reading `rustx.toml`, without rebuilding the runtime, and without
 //! inferring "which model is this attempt actually using" from event
 //! ordering. It must also never expose a credential.
 
@@ -115,13 +115,15 @@ fn session_model(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, SessionModelSt
 
 async fn runtime(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, RuntimeClientHost) {
     let (handle, model) = session_model(scripts);
-    let host = support::runtime_client_fixture::RuntimeClientFixture::builder("conv-42-rc")
-        .session_model(model)
-        .context_policy(NO_COMPACTION)
-        .build()
-        .await
-        .into_parts()
-        .1;
+    let host = support::runtime_client_fixture::RuntimeClientFixture::builder(
+        "conv_95b1a03d-ab33-7d8c-98d3-934561e7386b",
+    )
+    .session_model(model)
+    .context_policy(NO_COMPACTION)
+    .build()
+    .await
+    .into_parts()
+    .1;
     (handle, host)
 }
 

@@ -39,7 +39,7 @@ Use the [canonical development launcher](../DEVELOPMENT.md):
 
 ```sh
 pnpm --dir dev web -- \
-  --user-settings /absolute/path/settings.toml \
+  --config /absolute/path/rustx.toml \
   --runtime-root /absolute/path/runtime \
   --workspace /absolute/path/workspace
 ```
@@ -49,14 +49,14 @@ Host configuration, and Vite carrier. Open the printed browser URL and enter the
 printed endpoint plus the contents of the private token file in **Connect**.
 The native settings resolver remains authoritative; no fake provider starts.
 Choose an authorized Workspace or open a listed native Session. The browser never
-supplies arbitrary cwd authority or grants native project trust.
+supplies arbitrary cwd authority or supplies configuration authority.
 
 Direct `pnpm dev`/`preview` remain component-only commands for focused UI work or
 an independently managed runtime/Host. The [Host contract](WORKSPACES.md) describes
 that operator-owned integration. Use the launcher for complete local composition.
 
 Authentication is #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v5` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v6` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, URL credential, login,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -82,7 +82,7 @@ requests provider/MCP configuration.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v5.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v6.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -186,7 +186,7 @@ telemetry is used by it.
 
 Supported native gestures: list/create/open, delete preview and revision-checked
 delete, Send/Queue/Steer and cancel, Goal pause/resume/edit, typed slash commands,
-native Fork/Branch/Retry and Session tree navigation, model/approval selectors,
+native Fork/Branch/Retry and Session tree navigation, explicit model selection and configuration-owned approval policy,
 answer/decline/cancel interactions, resync, detach, unload/cold attach and reconnect.
 Commands are client grammar, never server command strings. Unsupported slash input
 is refused without prompt fallback. Retry creates a native branch and executes its
@@ -231,7 +231,7 @@ Desktop/mobile screenshots and failure traces go to ignored `test-results/`.
 ## Manual dogfooding procedure
 
 Follow [DOGFOODING.md](DOGFOODING.md). It supplies the Product Host configuration,
-named local provider scenarios, exact prompts/gates, editor/trust checks, and
+named local provider scenarios, exact prompts/gates, editor/CAS checks, and
 keyboard/responsive checks. The fixture must be paired with its printed Host
 configuration; running an unconfigured Web server intentionally fails closed.
 
@@ -278,32 +278,19 @@ from the production entry tree, to exercise native focus and layout at 390/900/1
 See [PROVENANCE.md](PROVENANCE.md) for the source/closure audit and
 [VALIDATION.md](VALIDATION.md) for WEB-01 evidence.
 
-## Provider / Models Settings (WEB-08)
+## CFG3 Settings
 
-Open a Session, then choose **Settings**, or use **Workspace settings** for an
-attached trusted Workspace. The three selection cards have independent Save and
-Reset actions. **Reset** stages omission; **Save** removes that scope's authored
-selection. The effective card uses native prospective resolution, while current
-runtime and admitted attempt models come from the runtime snapshot.
+Settings has **Effective | User | Workspace** views. Effective is read-only and
+reports the loaded generation. User and Workspace edit structured authored
+semantic units, including independent Provider/Model identities, Root capability
+selections, Plugins, MCP definitions and complete named-Agent resources.
 
-The User catalog editor supports explicit Provider endpoints/credential references,
-model protocols, limits, capabilities, request defaults, compatibility and reasoning
-profiles. It writes only the already-bound User catalog. There is no provider secret
-input, discovery request or connection probe. Supply secrets outside Web Console.
-Rust validates the complete catalog on Save. Native types have no separate display
-name fields, so Provider/model identities are displayed directly.
+Save commits one revision-fenced source mutation and leaves the loaded runtime
+unchanged. Reload publishes one coherent generation or reports typed busy/failure
+with the old generation authoritative. Conflicts preserve the draft and original
+revision; uncertain outcomes trigger rereads without mutation replay. The bound
+User config path and fixed User resource root are displayed separately.
 
-Source commits are prospective: use the existing **Unload runtime** and
-**Attach / cold resume** actions when you explicitly want cold resolution. Live
-model switching remains available through the existing `/model` command and native
-live model owner. Neither source saving nor Settings navigation cancels an attempt.
-
-A conflict preserves the draft and refreshes authoritative effective state and the
-scope revision. Review it before choosing Save again, or **Reload / discard draft**.
-A lost response is uncertain; the client rereads and never replays a save. Document
-CAS covers cooperating native writers; tools editing files outside rustX should
-honor its persistent sibling document lock to avoid a race with publication.
-
-Browser coverage (`pnpm test:e2e`) includes a real-server Settings save/reset/catalog
-round-trip, desktop/mobile layout and a zero-Provider-request assertion. Images are
-written to `test-results/settings-{desktop,catalog,mobile}.png`.
+See [the complete Settings contract](../docs/web-settings.md) and
+[configuration reference](../docs/configuration.md). Browser regressions exercise
+Save/Reload, CAS external edits, named-Agent editing and desktop/mobile views.

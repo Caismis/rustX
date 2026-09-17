@@ -156,7 +156,6 @@ pub struct LaunchProjection {
         BTreeMap<crate::runtime::subagent::SubagentName, super::agent_resources::AgentSource>,
     pub workspace: PathBuf,
     pub runtime_root: PathBuf,
-    pub trusted: bool,
     pub selected_model: String,
     pub configuration: Value,
     pub provenance: BTreeMap<String, ProvenanceProjection>,
@@ -175,21 +174,18 @@ pub struct ProvenanceProjection {
 pub struct PartialProjection {
     pub workspace: PathBuf,
     pub runtime_root: PathBuf,
-    pub trusted: bool,
     pub configuration: Value,
 }
 
 impl PartialProjection {
     pub(super) fn new(
         locations: &super::configuration::SessionLocations,
-        trusted: bool,
         mut configuration: Value,
     ) -> Self {
         redact(&mut configuration);
         Self {
             workspace: locations.workspace.clone(),
             runtime_root: locations.runtime_root.clone(),
-            trusted,
             configuration,
         }
     }
@@ -419,29 +415,33 @@ pub(super) fn inspect(
 fn project(operation: &'static str, launch: &ProspectiveSessionConfig) -> Report {
     let mut report = Report::new(operation);
     report.capabilities = Some(launch.inspection.clone());
+    report.diagnostics.extend(
+        launch
+            .inspection
+            .resource_diagnostics
+            .iter()
+            .map(|resource| Diagnostic {
+                classification: "warning",
+                category: "invalid_resource",
+                file: resource.file.clone(),
+                path: resource.identity.clone(),
+                reason: resource.reason.clone(),
+                correction: "correct the authored resource before selecting it".into(),
+                line: None,
+                column: None,
+            }),
+    );
     report.diagnostics.push(Diagnostic {
         classification: "warning",
         category: "unresolved",
         file: None,
-        path: format!("providers.{}", launch.config.initial_model().model.provider()),
+        path: format!("providers.{}", launch.models.model(&launch.session_model().model).expect("resolved model").provider),
         reason: "provider credential availability, endpoint connectivity and model compatibility were not verified".into(),
         correction: "supply credentials at runtime; static validation does not verify provider execution".into(),
         line: None,
         column: None,
     });
-    if !launch.trusted {
-        report.readiness = Some(Readiness::Unresolved);
-        report.diagnostics.push(Diagnostic {
-            classification: "warning",
-            category: "unresolved",
-            file: None,
-            path: "workspace.trust".into(),
-            reason: "workspace is untrusted; project resources remain inert".into(),
-            correction: "review the project and explicitly run rustx --trust grant".into(),
-            line: None,
-            column: None,
-        });
-    }
+
     // Source lifecycle decisions are already frozen in the candidate. Human
     // descriptions render those facts, never evaluate source configuration.
     for (name, state) in &launch.inspection.sources {
@@ -458,19 +458,17 @@ fn project(operation: &'static str, launch: &ProspectiveSessionConfig) -> Report
     redact(&mut configuration);
     report.launch = Some(LaunchProjection {
         roles: launch.role_sources.clone(),
-        provider: launch.models.providers().find(|provider| &provider.id == launch.config.initial_model().model.provider()).map_or(Value::Null, |provider| json!({"id":provider.id, "endpoint":provider.base_url, "credential":provider.api_key.view(), "verification":"deferred; no credential value or connectivity was checked"})),
+        provider: launch.models.providers().find(|provider| provider.id == launch.models.model(&launch.session_model().model).expect("resolved model").provider).map_or(Value::Null, |provider| json!({"id":provider.id, "endpoint":provider.base_url, "credential":provider.api_key.view(), "verification":"deferred; no credential value or connectivity was checked"})),
         workspace: launch.workspace.clone(),
         runtime_root: launch.runtime_root.clone(),
-        trusted: launch.trusted,
-        selected_model: launch.config.initial_model().model.to_string(),
+        selected_model: launch.session_model().model.to_string(),
         configuration,
         provenance: launch.provenance.iter().map(|(field, origin)| {
             let (authority, reason) = match origin {
                 Origin::Builtin => ("builtin", "no higher-precedence declaration; domain default applies"),
                 Origin::User { .. } => ("user", "user declaration overrides builtin; no admitted higher-precedence declaration"),
-                Origin::Project { .. } if launch.trusted => ("trusted_project", "project declaration overrides user/builtin within project-owned fields"),
-                Origin::Project { .. } => ("untrusted_project", "prospective project declaration; runtime admission is withheld"),
-                Origin::Explicit { .. } => ("explicit", "explicit host/Session intent has highest precedence"),
+                Origin::Workspace { .. } => ("workspace", "Workspace semantic unit replaces User or product default"),
+                Origin::Process { .. } => ("explicit", "explicit host/Session intent has highest precedence"),
             };
             (field.clone(), ProvenanceProjection { origin: origin.clone(), authority, reason })
         }).collect(),

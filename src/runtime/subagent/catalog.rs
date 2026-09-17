@@ -313,10 +313,8 @@ impl NamedAgentDefinition {
     /// deduplicated here, so two configurations that differ only in listing
     /// order produce the same definition and the same digest.
     ///
-    /// This is also the admission boundary for the named-Agent Skill
-    /// invariant: every `NamedAgentDefinition` contains
-    /// [`AgentSkillSelection::Exact`](crate::runtime::agent_profile::AgentSkillSelection::Exact),
-    /// because the eligible-catalog-except polarity is root-only semantics.
+    /// Skill visibility retains the complete all/exact/none selection;
+    /// it is resolved against the frozen catalog when this Agent is admitted.
     ///
     /// # Errors
     ///
@@ -369,31 +367,13 @@ impl NamedAgentDefinition {
         let mut tools = tools;
         tools.sort();
         tools.dedup();
-        // The named-definition domain admits exactly one Skill-selection
-        // polarity. Authoring already refuses `disabled_skills` on a named
-        // Agent, but authoring is not the only way to reach this constructor:
-        // an `AgentProfile` is a plain public struct, so this is the boundary
-        // that turns the rule into a semantic invariant of every existing
-        // `NamedAgentDefinition` rather than a property of one input syntax.
-        //
-        // The test is polarity, never contents. `EligibleExcept([])` is the
-        // whole eligible catalog, so an empty deny-list is the *widest*
-        // selection there is, and admitting it would let a named Agent grow a
-        // capability envelope whenever an unrelated Skill entered a later
-        // catalog generation.
-        match &skills {
-            crate::runtime::agent_profile::AgentSkillSelection::Exact(_) => {}
-            crate::runtime::agent_profile::AgentSkillSelection::EligibleExcept(_) => {
-                return Err(NamedAgentDefinitionError::RootOnlySkillSelection { agent: name });
-            }
-        }
         let mut skills = skills;
-        let selectors = skills.names_mut();
-        selectors.sort();
-        selectors.dedup();
-        if let Some(empty) = selectors.iter().find(|skill| skill.trim().is_empty()) {
-            let _ = empty;
-            return Err(NamedAgentDefinitionError::EmptySkillSelector { agent: name });
+        if let Some(selectors) = skills.names_mut() {
+            selectors.sort();
+            selectors.dedup();
+            if selectors.iter().any(|skill| skill.trim().is_empty()) {
+                return Err(NamedAgentDefinitionError::EmptySkillSelector { agent: name });
+            }
         }
         let digest = compute_digest(
             &name,
@@ -568,17 +548,6 @@ pub enum NamedAgentDefinitionError {
         /// The offending agent.
         agent: SubagentName,
     },
-    /// The profile carries root-only Skill selection semantics.
-    ///
-    /// A named Agent selects exact Skill identities
-    /// ([`AgentSkillSelection::Exact`](crate::runtime::agent_profile::AgentSkillSelection::Exact)).
-    /// [`EligibleExcept`](crate::runtime::agent_profile::AgentSkillSelection::EligibleExcept)
-    /// is the root Agent's automatic catalog selection and can never enter a
-    /// named definition, whatever it lists.
-    RootOnlySkillSelection {
-        /// The offending agent.
-        agent: SubagentName,
-    },
     /// The catalog exceeds [`MAX_SUBAGENT_DEFINITIONS`].
     TooManyDefinitions {
         /// The offending count.
@@ -619,12 +588,6 @@ impl core::fmt::Display for NamedAgentDefinitionError {
             Self::EmptySkillSelector { agent } => {
                 write!(formatter, "subagent {agent:?} names an empty Skill")
             }
-            Self::RootOnlySkillSelection { agent } => write!(
-                formatter,
-                "subagent {agent:?} carries root-only Skill selection: a named Agent selects \
-                 exact Skill identities, and the eligible-catalog-except polarity is root-only \
-                 because it would widen the Agent as the catalog grows"
-            ),
             Self::TooManyDefinitions { count } => write!(
                 formatter,
                 "{count} subagent definitions exceed the {MAX_SUBAGENT_DEFINITIONS} bound"
@@ -645,12 +608,34 @@ impl std::error::Error for NamedAgentDefinitionError {}
 /// construction and iteration order is deterministic.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AgentCatalog {
+    pub(crate) discovery_diagnostics: Vec<crate::runtime::resources::RuntimeResourceLoadError>,
     agents: BTreeMap<SubagentName, Arc<NamedAgentDefinition>>,
+    invalid: BTreeMap<SubagentName, crate::runtime::resources::RuntimeResourceLoadError>,
 }
 
 impl AgentCatalog {
+    pub(crate) fn set_invalid(
+        &mut self,
+        invalid: BTreeMap<SubagentName, crate::runtime::resources::RuntimeResourceLoadError>,
+    ) {
+        self.invalid = invalid;
+    }
+    #[must_use]
+    pub fn invalid(
+        &self,
+    ) -> &BTreeMap<SubagentName, crate::runtime::resources::RuntimeResourceLoadError> {
+        &self.invalid
+    }
+
     pub(crate) fn selected_definitions(&self, names: &BTreeSet<SubagentName>) -> Self {
         Self {
+            discovery_diagnostics: self.discovery_diagnostics.clone(),
+            invalid: self
+                .invalid
+                .iter()
+                .filter(|(name, _)| names.contains(*name))
+                .map(|(name, error)| (name.clone(), error.clone()))
+                .collect(),
             agents: self
                 .agents
                 .iter()
@@ -687,7 +672,11 @@ impl AgentCatalog {
                 count: agents.len(),
             });
         }
-        Ok(Self { agents })
+        Ok(Self {
+            agents,
+            invalid: BTreeMap::new(),
+            discovery_diagnostics: Vec::new(),
+        })
     }
 
     /// Whether the catalog admits no named agent.
@@ -737,7 +726,11 @@ impl AgentCatalog {
             };
             agents.insert(name.clone(), Arc::clone(definition));
         }
-        Ok(Self { agents })
+        Ok(Self {
+            agents,
+            invalid: BTreeMap::new(),
+            discovery_diagnostics: Vec::new(),
+        })
     }
 }
 
@@ -956,49 +949,17 @@ mod tests {
         )
     }
 
-    /// Issue #280: the named-Agent domain admits exactly one Skill-selection
-    /// polarity, and the authoring boundary is not the only way in.
-    ///
-    /// A named Agent's capability envelope must be a function of what it
-    /// selected, never of what a later catalog generation happens to contain,
-    /// so `EligibleExcept` — whose empty form is the *widest* selection
-    /// there is — is rejected on polarity alone.
     #[test]
-    fn cfg280_named_definitions_admit_exact_skill_selection_only() {
+    fn cfg332_named_definitions_admit_all_exact_and_empty_skill_visibility() {
         use crate::runtime::agent_profile::AgentSkillSelection;
-
-        // Positive control: both exact shapes are valid named selections, and
-        // the identities survive construction.
-        let empty = definition_with_selection(AgentSkillSelection::Exact(Vec::new()))
-            .expect("an exact empty selection is a valid named Agent");
-        assert!(empty.skills().is_empty());
-        let named = definition_with_selection(AgentSkillSelection::Exact(vec!["foo".to_owned()]))
-            .expect("an exact named selection is a valid named Agent");
-        assert_eq!(named.skills(), ["foo".to_owned()]);
-
-        // Both deny-list shapes are the *same* invalid polarity: emptiness is
-        // not the test, and neither is list content.
-        let expected = NamedAgentDefinitionError::RootOnlySkillSelection {
-            agent: SubagentName::parse("reviewer").expect("canonical name"),
-        };
-        assert_eq!(
-            definition_with_selection(AgentSkillSelection::EligibleExcept(Vec::new())),
-            Err(expected.clone()),
-            "an empty deny-list is the whole eligible catalog, not an empty selection"
-        );
-        assert_eq!(
-            definition_with_selection(AgentSkillSelection::EligibleExcept(vec!["foo".to_owned()])),
-            Err(expected.clone()),
-            "a populated deny-list is rejected identically: the rule is polarity, not contents"
-        );
-
-        // The message names the rule rather than the offending entry, because
-        // no entry is the defect.
-        let message = expected.to_string();
-        assert!(
-            message.contains("root-only") && message.contains("exact Skill identities"),
-            "the error explains the polarity rule: {message}"
-        );
+        for selection in [
+            AgentSkillSelection::All,
+            AgentSkillSelection::Exact(vec![]),
+            AgentSkillSelection::Exact(vec!["foo".into()]),
+        ] {
+            let definition = definition_with_selection(selection.clone()).unwrap();
+            assert_eq!(definition.profile().skills, selection);
+        }
     }
 
     #[test]

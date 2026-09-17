@@ -2,7 +2,7 @@
  * The presentation-only interaction focus model.
  *
  * These tests pin the deterministic contract Issue #185 requires of the
- * human-input queue: focus is derived from the authoritative sorted pending
+ * human-input queue: focus is derived from the authoritative ordered pending
  * list plus the previously focused routed identity, navigation never settles
  * anything, and every pending interaction — any mix of kinds, primary and
  * subagent, including several from one conversation — is independently
@@ -13,7 +13,6 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  compareInteractionRefs,
   moveInteractionFocus,
   reconcileInteractionFocus,
   sameInteractionRef,
@@ -34,38 +33,14 @@ function mixedQueue(): RoutedInteraction[] {
     childApprovalInteraction("child-a-interaction-1", "implement"),
     childQuestionnaireInteraction("child-b-interaction-1", "reviewer"),
     childApprovalInteraction("child-c-interaction-1", "explore"),
-  ].sort((left, right) =>
-    compareInteractionRefs(left.interaction, right.interaction),
-  );
+  ];
 }
 
 describe("interaction focus", () => {
-  it("sorts presentation order by the routed identity pair, never by kind or source", () => {
+  it("focuses the first native publication, independent of UUID order", () => {
     const queue = mixedQueue();
-    assert.deepEqual(
-      queue.map(
-        (entry) =>
-          `${entry.interaction.conversation_id}::${entry.interaction.interaction_id}`,
-      ),
-      [
-        "conv-child-1::child-a-interaction-1",
-        "conv-child-1::child-b-interaction-1",
-        "conv-child-1::child-c-interaction-1",
-        "conv-test::attempt-1-interaction-approval-a",
-        "conv-test::attempt-1-interaction-question-b",
-      ],
-    );
-    // Several interactions from one conversation coexist; approval and
-    // questionnaire coexist; primary and child coexist. No singleton slot.
-    assert.equal(new Set(queue.map((entry) => entry.interaction.interaction_id)).size, 5);
-  });
-
-  it("focuses the smallest routed identity when nothing was focused", () => {
-    const queue = mixedQueue();
-    assert.deepEqual(reconcileInteractionFocus(queue, undefined), {
-      conversation_id: "conv-child-1",
-      interaction_id: "child-a-interaction-1",
-    });
+    assert.deepEqual(reconcileInteractionFocus(queue, undefined), queue[0]!.interaction);
+    assert.deepEqual(reconcileInteractionFocus([...queue].reverse(), undefined), queue.at(-1)!.interaction);
   });
 
   it("drops the focus when the queue empties", () => {
@@ -81,29 +56,27 @@ describe("interaction focus", () => {
     const withArrival = [
       ...queue,
       childQuestionnaireInteraction("child-a-interaction-0", "reviewer"),
-    ].sort((left, right) =>
-      compareInteractionRefs(left.interaction, right.interaction),
-    );
+    ];
     assert.deepEqual(reconcileInteractionFocus(withArrival, focused), focused);
     // Removing an unrelated pending interaction never disturbs the focus.
     const withoutUnrelated = queue.filter((_, index) => index !== 0);
     assert.deepEqual(reconcileInteractionFocus(withoutUnrelated, focused), focused);
   });
 
-  it("advances to the successor when the focused interaction settles", () => {
+  it("returns to the first native item when the focused interaction settles", () => {
     const queue = mixedQueue();
     const focused = queue[1]!.interaction;
     const remaining = queue.filter((_, index) => index !== 1);
-    assert.deepEqual(reconcileInteractionFocus(remaining, focused), queue[2]!.interaction);
+    assert.deepEqual(reconcileInteractionFocus(remaining, focused), queue[0]!.interaction);
   });
 
-  it("falls back to the new last item when the removed focus was last", () => {
+  it("uses native order when the removed focus was last", () => {
     const queue = mixedQueue();
     const focused = queue[queue.length - 1]!.interaction;
     const remaining = queue.slice(0, -1);
     assert.deepEqual(
       reconcileInteractionFocus(remaining, focused),
-      queue[queue.length - 2]!.interaction,
+      queue[0]!.interaction,
     );
   });
 
@@ -120,14 +93,13 @@ describe("interaction focus", () => {
   it("reconciles an unknown current identity before navigating", () => {
     const queue = mixedQueue();
     const stale = {
-      conversation_id: "conv-gone",
+      conversation_id: "conv_196f78ff-e909-7914-90eb-e95e7f64fca0",
       interaction_id: "interaction-9",
     };
-    // "conv-gone" sorts between conv-child-1 and conv-test, so its successor
-    // is the first primary interaction.
+    // Unknown focus first reconciles to the native first item.
     assert.deepEqual(
       moveInteractionFocus(queue, stale, 1),
-      queue[4]!.interaction,
+      queue[1]!.interaction,
     );
   });
 
@@ -135,7 +107,7 @@ describe("interaction focus", () => {
     const queue = mixedQueue();
     const before = JSON.stringify(queue);
     moveInteractionFocus(queue, queue[0]!.interaction, 1);
-    reconcileInteractionFocus(queue, queue[2]!.interaction);
+    reconcileInteractionFocus(queue, queue[0]!.interaction);
     assert.equal(JSON.stringify(queue), before);
   });
 });
@@ -158,83 +130,13 @@ function withIdentity(
 
 describe("identity equality and presentation ordering", () => {
   it("semantic equality is exact field equality, never a collation result", () => {
-    const ref = { conversation_id: "conv-1", interaction_id: "int-1" };
-    assert.ok(sameInteractionRef(ref, { conversation_id: "conv-1", interaction_id: "int-1" }));
-    assert.ok(!sameInteractionRef(ref, { conversation_id: "conv-1", interaction_id: "int-2" }));
-    assert.ok(!sameInteractionRef(ref, { conversation_id: "conv-2", interaction_id: "int-1" }));
+    const ref = { conversation_id: "conv_36524fd8-f674-7fc2-b125-06d01fee0e18", interaction_id: "int-1" };
+    assert.ok(sameInteractionRef(ref, { conversation_id: "conv_36524fd8-f674-7fc2-b125-06d01fee0e18", interaction_id: "int-1" }));
+    assert.ok(!sameInteractionRef(ref, { conversation_id: "conv_36524fd8-f674-7fc2-b125-06d01fee0e18", interaction_id: "int-2" }));
+    assert.ok(!sameInteractionRef(ref, { conversation_id: "conv_1eef1854-fea7-788b-9e49-ca0ec811fb0c", interaction_id: "int-1" }));
   });
 
-  it("distinct ids are never equal through collation equivalence", () => {
-    // Composed vs decomposed Unicode collates as equal under common locale
-    // collation, but these are distinct opaque runtime identities.
-    const composed = { conversation_id: "conv-caf\u00e9", interaction_id: "int-1" };
-    const decomposed = { conversation_id: "conv-cafe\u0301", interaction_id: "int-1" };
-    assert.ok(!sameInteractionRef(composed, decomposed));
-    assert.notEqual(compareInteractionRefs(composed, decomposed), 0);
-    // Case and punctuation variants are distinct identities as well.
-    assert.ok(!sameInteractionRef(
-      { conversation_id: "conv-a", interaction_id: "int-1" },
-      { conversation_id: "conv-A", interaction_id: "int-1" },
-    ));
-    assert.ok(!sameInteractionRef(
-      { conversation_id: "conv-1", interaction_id: "int-1" },
-      { conversation_id: "conv_1", interaction_id: "int-1" },
-    ));
-  });
-
-  it("presentation ordering is locale-independent code-unit order", () => {
-    // UTF-16 code-unit order: uppercase before lowercase, and digit
-    // characters by code ("int-10" < "int-2") — identical on every host,
-    // under every ambient locale.
-    assert.ok(compareInteractionRefs(
-      { conversation_id: "conv-Z", interaction_id: "x" },
-      { conversation_id: "conv-a", interaction_id: "x" },
-    ) < 0);
-    assert.ok(compareInteractionRefs(
-      { conversation_id: "conv-1", interaction_id: "int-10" },
-      { conversation_id: "conv-1", interaction_id: "int-2" },
-    ) < 0);
-    // Antisymmetric, and exact identities order equal.
-    const a = { conversation_id: "conv-1", interaction_id: "int-1" };
-    const b = { conversation_id: "conv-1", interaction_id: "int-2" };
-    assert.equal(
-      Math.sign(compareInteractionRefs(a, b)),
-      -Math.sign(compareInteractionRefs(b, a)),
-    );
-    assert.equal(compareInteractionRefs(a, { ...a }), 0);
-  });
-
-  it("focus reconciliation stays deterministic over case, punctuation, and Unicode ids", () => {
-    const queue = [
-      withIdentity("conv-a", "int-2"),
-      withIdentity("conv-A", "int-1"),
-      withIdentity("conv-caf\u00e9", "int-1"),
-      withIdentity("conv-cafe\u0301", "int-1"),
-    ];
-    // Code-unit order: conv-A < conv-a < conv-cafe+combining < conv-caf\u00e9.
-    assert.deepEqual(reconcileInteractionFocus(queue, undefined), {
-      conversation_id: "conv-A",
-      interaction_id: "int-1",
-    });
-    // The removed focused identity advances to its code-unit successor.
-    const withoutFirst = queue.filter(
-      (entry) => entry.interaction.conversation_id !== "conv-A",
-    );
-    assert.deepEqual(
-      reconcileInteractionFocus(withoutFirst, {
-        conversation_id: "conv-A",
-        interaction_id: "int-1",
-      }),
-      { conversation_id: "conv-a", interaction_id: "int-2" },
-    );
-    // Navigation wraps through the same deterministic order.
-    assert.deepEqual(
-      moveInteractionFocus(queue, { conversation_id: "conv-caf\u00e9", interaction_id: "int-1" }, 1),
-      { conversation_id: "conv-A", interaction_id: "int-1" },
-    );
-    assert.deepEqual(
-      moveInteractionFocus(queue, { conversation_id: "conv-A", interaction_id: "int-1" }, -1),
-      { conversation_id: "conv-caf\u00e9", interaction_id: "int-1" },
-    );
+  it("different UUIDs never compare equal", () => {
+    assert.ok(!sameInteractionRef(withIdentity("conv_00000000-0000-7000-8000-000000000001", "int-1").interaction, withIdentity("conv_00000000-0000-7000-8000-000000000002", "int-1").interaction));
   });
 });

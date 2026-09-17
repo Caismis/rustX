@@ -37,7 +37,7 @@ use rustx::tools::executor::ToolRegistry;
 use support::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
 use support::fake::{FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, tool_call_events};
 
-const CONVERSATION: &str = "conv-134";
+const CONVERSATION: &str = "conv_32894992-27db-75ad-8b32-a722ec7f6e76";
 
 fn conversation() -> ConversationId {
     ConversationId::new(CONVERSATION)

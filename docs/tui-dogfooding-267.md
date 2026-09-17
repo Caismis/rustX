@@ -1,5 +1,9 @@
 # TUI dogfooding presentation contract (#267)
 
+> Historical pre-CFG3 acceptance record for issue #267. Removed approval controls
+> below are not current product instructions. See [TUI README](../tui/README.md)
+> and [CFG3 configuration](configuration.md) for current behavior.
+
 Rust remains the semantic owner. This change needs no protocol or native edits.
 The native implementation and tests from #238 still govern admitted-attempt
 freezing, effective/desired approval reconciliation, model selection, and resync.

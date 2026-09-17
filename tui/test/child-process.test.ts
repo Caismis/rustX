@@ -28,8 +28,7 @@ const FAKE_RUNTIME = fileURLToPath(
 chmodSync(FAKE_RUNTIME, 0o755);
 
 const LAUNCH: AppServerLaunchOptions = {
-  userSettings: "/private/user/settings.toml",
-  models: "/models.toml",
+  config: "/private/user/rustx.toml",
   runtimeRoot: "/private/state",
 };
 
@@ -68,10 +67,8 @@ describe("AppServerChild", () => {
     // configuration travel in `session/create`, never in this argv.
     assert.deepEqual(JSON.parse((await output).trim()), [
       "app-server",
-      "--user-settings",
-      "/private/user/settings.toml",
-      "--models",
-      "/models.toml",
+      "--config",
+      "/private/user/rustx.toml",
       "--runtime-root",
       "/private/state",
       "--listen",

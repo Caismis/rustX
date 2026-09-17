@@ -100,8 +100,9 @@ sent; the committed lineage is unaffected. Use an ordered-block client for those
 inputs. Retry is not restricted by this editor: it sends returned blocks directly.
 Restored upload rows use `(batch_id, token)`, not batch alone, as React identity.
 
-Live model/approval settings belong to the Conversation. A cold new lineage uses
-native Session/launch settings, which can differ from the source's live selections.
+Explicit model choice belongs to Session intent. Approval policy belongs to the
+published configuration generation. Cold composition rereads current source bytes
+and revalidates the Session's optional explicit model.
 The browser never copies its cached model/policy values into a new runtime.
 
 Navigation, dismissal or reconnect can obsolete a continuation after the native
@@ -140,8 +141,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v5 (`rustx.app-server.v5` and generated
-`protocol/app-server/v5.ts` / `v5.schema.json`). v1 initialization and v1-only
+The mandatory App Server vocabulary is v6 (`rustx.app-server.v6` and generated
+`protocol/app-server/v6.ts` / `v6.schema.json`). v1 initialization and v1-only
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 

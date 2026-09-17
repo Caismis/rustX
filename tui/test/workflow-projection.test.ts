@@ -17,7 +17,7 @@ import { plainText } from "../src/ui/theme.ts";
 // Exact `u64` identity domains are canonical decimal text on the App Server
 // wire, so a run invocation past 2^53 survives the round trip.
 const id = {
-  conversation_id: "conv-test",
+  conversation_id: "conv_01900000-0000-7000-8000-000000000002",
   attempt_id: "attempt",
   invocation: "1",
 };
@@ -69,7 +69,7 @@ it("a replacement Workflow snapshot folds without touching canonical history", (
 function row(node: string, branch: string): WorkflowInstanceView {
   return { block: { run: id, definition: { workflow_id: "review", blocks: ["parallel", branch] }, invocations: [0, 0] },
     node, visit: 0, kind: "review", state: { type: "waiting", reason: "review" }, child: null, invocation: null, tool_id: null,
-    interaction: { conversation_id: "conv-test", interaction_id: node }, iteration: null, iterations_max: null,
+    interaction: { conversation_id: "conv_01900000-0000-7000-8000-000000000002", interaction_id: node }, iteration: null, iterations_max: null,
     loop_exit: null, candidate: { run: id, version: "2", content: "old" }, checks_passed: null, review_accepted: true };
 }
 function run(): WorkflowRunView {

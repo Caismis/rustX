@@ -100,8 +100,6 @@ import { ModelSelector } from "./components/model-selector.ts";
 import { InspectionView } from "./components/inspection-view.ts";
 import { SessionDeletionWorkflow } from "./session-deletion-workflow.ts";
 import { ResumeSelector } from "./components/resume-selector.ts";
-import { ApprovalSelector } from "./components/approval-selector.ts";
-import { approvalLabel } from "../presentation/selectors.ts";
 import { ConfirmationView } from "./components/confirmation.ts";
 import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
 import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
@@ -167,11 +165,6 @@ interface PresentationLease {
   session: AppServerSession | undefined;
 }
 
-/** One submitted approval operation; object identity is its completion token. */
-interface PendingApprovalRequest {
-  readonly owner: PresentationLease;
-}
-
 export class RustxTuiApp {
   #host: AppServerHost;
   readonly #reconnect: (() => Promise<AppServerHost>) | undefined;
@@ -207,7 +200,6 @@ export class RustxTuiApp {
 
   #preferences: PresentationPreferences = defaultPreferences();
   #overlay: OverlayHandle | undefined;
-  #pendingApprovalRequest: PendingApprovalRequest | undefined;
   #hitlOverlay: HumanInteractionOverlay | undefined;
   /**
    * Presentation-only focus over `pendingInteractions`, reconciled against
@@ -850,9 +842,6 @@ export class RustxTuiApp {
       case "transient":
         this.#showTransient(outcome.level, outcome.text);
         break;
-      case "choose_approval":
-        this.#showApprovalSelector(lease);
-        break;
       case "choose_model":
         this.#showModelSelector(outcome.models, lease);
         break;
@@ -1053,47 +1042,6 @@ export class RustxTuiApp {
    * The overlay owns focus while it is up and hands it straight back to the
    * editor on select or cancel, so the editor is never left unfocused.
    */
-  #showApprovalSelector(lease: PresentationLease): void {
-    const attachedSession = lease.session;
-    if (attachedSession === undefined) return;
-    const ownerCurrent = () => this.#isCurrentPresentationLease(lease);
-    const ownerPending = () => this.#pendingApprovalRequest !== undefined &&
-      this.#isCurrentPresentationLease(this.#pendingApprovalRequest.owner);
-    if (!ownerCurrent()) return;
-    if (ownerPending()) {
-      this.#showTransient("info", "Approval change is still pending.");
-      return;
-    }
-    let handle: OverlayHandle;
-    const overlayAlive = () => ownerCurrent() && this.#overlay === handle;
-    const selector = new ApprovalSelector({
-      state: () => attachedSession.state,
-      change: () => { if (overlayAlive()) this.#tui.requestRender(); },
-      close: () => { if (overlayAlive()) this.#closeOverlay(); },
-      submit: async (mode) => {
-        if (!overlayAlive() || ownerPending()) return;
-        const request: PendingApprovalRequest = { owner: lease };
-        this.#pendingApprovalRequest = request;
-        try {
-          const result = await attachedSession.approvalModeSet(mode);
-          // Esc ends the popup, not the submitted operation. Feedback belongs
-          // to its presentation owner even when that owner's popup is closed.
-          if (!ownerCurrent()) return;
-          const latest = attachedSession.state;
-          const fact = latest && latest.approvalModeRevision > result.revision ? latest : result;
-          this.#showTransient("info", `Approval request accepted: effective ${approvalLabel(fact.effectiveApprovalMode)}${fact.pendingApprovalMode == null ? "" : ` · next attempt ${approvalLabel(fact.pendingApprovalMode)}`}`);
-        } catch (error) {
-          if (ownerCurrent()) this.#showTransient("error", `Approval change failed: ${compactDiagnostic(error)}`);
-        } finally {
-          // A superseded owner may settle after a new owner submitted another
-          // request. Only this exact token may clear the stored operation.
-          if (this.#pendingApprovalRequest === request) this.#pendingApprovalRequest = undefined;
-        }
-      },
-    });
-    handle = this.#showPopup(selector, { width: "85%", heightPercent: 85 });
-  }
-
   #showModelSelector(models: CatalogModelView[], lease: PresentationLease): void {
     const attachedSession = lease.session;
     if (attachedSession === undefined) return;

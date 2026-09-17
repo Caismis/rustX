@@ -115,7 +115,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
 
     // Current domain state never becomes configuration or browser recovery input.
     const settings = readFileSync(fixture.settings, 'utf8');
-    expect(settings).toContain('[agent.extensions.goal]\nenabled = true');
+    expect(settings).toContain('[agent.plugins.goal]\nenabled = true');
     expect(settings).not.toMatch(/Verify the composer docks|Bind native Todo|Queued during/);
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toMatch(/Verify the composer docks|Bind native Todo|Queued during/);
 

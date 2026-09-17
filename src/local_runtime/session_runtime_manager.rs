@@ -812,6 +812,8 @@ impl SessionRuntimeManager {
     /// Read source provenance while retaining the Session revision it resolves.
     /// # Errors
     /// Session lookup, source validation and exact source conflicts are typed.
+    /// # Panics
+    /// Panics if a prior panic poisoned the resident-runtime registry mutex.
     pub async fn source_settings(
         &self,
         id: &super::session::SessionId,
@@ -877,6 +879,22 @@ impl SessionRuntimeManager {
                 })
             });
         }
+        let resident = {
+            let state = self.registry.0.lock().expect("registry mutex");
+            state.by_session.get(id).and_then(|conversation| {
+                match state.entries.get(conversation) {
+                    Some(Entry::Loaded(resident)) => Some(resident.clone()),
+                    _ => None,
+                }
+            })
+        };
+        let projection = resident
+            .and_then(|resident| resident.shutdown_runtime())
+            .and_then(|runtime| runtime.configuration_view())
+            .map_or_else(
+                || projection.clone(),
+                |loaded| projection.clone().with_loaded(&loaded),
+            );
         Ok((projection, revision, settings.model))
     }
     /// Author a whole Session selection (or omission) using its durable CAS owner.
@@ -926,16 +944,6 @@ impl SessionRuntimeManager {
             .await
             .replace_settings(id, expected, settings)
             .map_err(SourceSettingsError::Session)
-    }
-
-    /// Current source trust, independent of runtime residency and Host authorization.
-    /// # Errors
-    /// Invalid native configuration locations are rejected.
-    pub fn project_trusted(
-        &self,
-        settings: &super::session::SessionPersistentState,
-    ) -> Result<bool, String> {
-        self.configuration.project_trusted(&settings.input())
     }
 
     #[must_use]

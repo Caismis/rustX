@@ -108,7 +108,7 @@ fn write_package(workspace_root: &Path, name: &str, files: &[(&str, &str)]) {
 /// Discovers the one named package, asserting it validates.
 fn discover(workspace_root: &Path, name: &str) -> PythonToolPackage {
     let workspace = Workspace::new(workspace_root).expect("workspace");
-    let discovered = rustx::tools::python::discover_python_packages(&workspace).expect("discover");
+    let discovered = crate::common::discover_python_packages(&workspace).expect("discover");
     let entry = discovered
         .into_iter()
         .find(|entry| entry.server_id == python_server_id(name))
@@ -315,7 +315,7 @@ async fn one_folder_serves_multiple_tools_through_one_server_identity() {
 
     // Discovery: exactly one synthesized server identity for the folder.
     let workspace = Workspace::new(&workspace_root).expect("workspace");
-    let discovered = rustx::tools::python::discover_python_packages(&workspace).expect("discover");
+    let discovered = crate::common::discover_python_packages(&workspace).expect("discover");
     assert_eq!(discovered.len(), 1, "one folder is one package");
     assert_eq!(discovered[0].server_id, python_server_id("calc"));
     let package = discovered[0]
@@ -326,8 +326,13 @@ async fn one_folder_serves_multiple_tools_through_one_server_identity() {
 
     let store = PythonToolStore::new(directory.path().join("runtime")).expect("store");
     let prepared = prepare(&store, &package).await;
-    let server =
-        ConnectedServer::connect(&prepared, "calc", &workspace_root, "conv-managed-calc").await;
+    let server = ConnectedServer::connect(
+        &prepared,
+        "calc",
+        &workspace_root,
+        "conv_edd4f70d-427d-7f1b-923b-46eb11a8dfb1",
+    )
+    .await;
 
     // One server, one frozen catalog carrying both tools.
     let mut names = server
@@ -411,15 +416,25 @@ async fn two_folders_prepare_distinct_environment_identities() {
         assert!(prepared.state_dir.join("manifest.json").is_file());
     }
 
-    let server =
-        ConnectedServer::connect(&alpha, "alpha", &workspace_root, "conv-managed-alpha").await;
+    let server = ConnectedServer::connect(
+        &alpha,
+        "alpha",
+        &workspace_root,
+        "conv_52df7638-6c28-75bd-8942-66421355652d",
+    )
+    .await;
     assert_eq!(
         result_text(&server.call("whoami", serde_json::json!({})).await),
         "alpha-reply"
     );
     server.close().await;
-    let server =
-        ConnectedServer::connect(&beta, "beta", &workspace_root, "conv-managed-beta").await;
+    let server = ConnectedServer::connect(
+        &beta,
+        "beta",
+        &workspace_root,
+        "conv_277ffa6f-d366-79b1-a196-4e7bda35fdae",
+    )
+    .await;
     assert_eq!(
         result_text(&server.call("whoami", serde_json::json!({})).await),
         "beta-reply"
@@ -514,7 +529,7 @@ async fn one_connected_runtime_reuses_one_process_across_calls() {
         &prepared,
         "counter",
         &workspace_root,
-        "conv-managed-counter",
+        "conv_c24527a9-ba04-70df-b38d-c1b97d14e056",
     )
     .await;
     for round in 0..3 {
@@ -602,7 +617,7 @@ def stderr_log(text: str) -> str:
         &prepared,
         "diagnostics",
         &workspace_root,
-        "conv-managed-diagnostics",
+        "conv_6d28468a-f0e2-75e0-a02d-fedac54c87ae",
     )
     .await;
     let call = server
@@ -654,7 +669,7 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
                 &workspace_root,
                 ["crasher", "exportless"].map(|name| format!("python:{name}")),
             ),
-            conversation_id: ConversationId::new("conv-managed-startup"),
+            conversation_id: ConversationId::new("conv_23577bcd-3dfd-7a47-88a7-5bb137bd7483"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
@@ -694,42 +709,16 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
     // Both packages prepare (the uv build succeeds — preparation never
     // validate-launches) and then fail the generic MCP connect. The
     // liveness guard makes a hang a harness failure, not a verdict.
-    let candidate = tokio::time::timeout(LIVENESS, coordinator.prepare_candidate())
+    let before = coordinator.current_snapshot();
+    let failure = tokio::time::timeout(LIVENESS, coordinator.prepare_candidate())
         .await
         .expect("startup failure must not hang the capability preparation")
-        .expect("isolated startup failures must not fail the candidate");
-
-    let crasher = rustx::capabilities::ToolSourceId::ManagedPython("crasher".into());
-    let Some(rustx::capabilities::CapabilitySourceState::Unavailable { reason }) =
-        candidate.availability().get(&crasher)
-    else {
-        panic!(
-            "the failing server lands on its own synthesized source: {:?}",
-            candidate.availability()
-        );
-    };
-    assert!(
-        reason.contains("MCP discovery failed"),
-        "the failure is a structural MCP connect error: {reason}"
-    );
-    assert!(
-        reason.contains("server stderr:") && reason.contains("issue174-import-boom"),
-        "the diagnosis carries the server's stderr: {reason}"
-    );
-
-    let exportless = rustx::capabilities::ToolSourceId::ManagedPython("exportless".into());
-    let Some(rustx::capabilities::CapabilitySourceState::Unavailable { reason }) =
-        candidate.availability().get(&exportless)
-    else {
-        panic!(
-            "the export-less server lands on its own synthesized source: {:?}",
-            candidate.availability()
-        );
-    };
-    assert!(
-        reason.contains("MCP discovery failed") && reason.contains("server stderr:"),
-        "a missing `mcp` entrypoint is diagnosed through the server's stderr: {reason}"
-    );
+        .expect_err("selected source failure rejects the whole candidate");
+    assert!(matches!(
+        failure,
+        rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
+    ));
+    assert!(Arc::ptr_eq(&before, &coordinator.current_snapshot()));
 }
 
 /// Executes one managed tool through a committed capability snapshot's
@@ -755,7 +744,7 @@ async fn call_through_snapshot(
     let executor = registry.executor(&tool_id);
     let artifacts = tempfile::tempdir().expect("artifacts");
     let bundle = rustx::tools::runtime::ConversationToolRuntime::new(
-        ConversationId::new("conv-managed-commit"),
+        ConversationId::new("conv_c35f76d6-98ed-7994-8039-d606a414840c"),
         workspace_root,
         artifacts.path(),
     )
@@ -798,7 +787,7 @@ async fn call_through_snapshot(
 /// generation and the frozen old server keeps serving the old code.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_source_implementation_change_is_observed_through_the_coordinator_commit_path() {
+async fn cold_python_composition_rereads_sources_while_loaded_capture_is_frozen() {
     require_uv!();
     let directory = tempfile::tempdir().expect("fixture root");
     let workspace_root = directory.path().join("workspace");
@@ -818,45 +807,48 @@ def add(a: int, b: int) -> str:
         &[("server.py", server_v1), ("requirements.txt", "# none\n")],
     );
 
-    let coordinator = rustx::capabilities::CapabilityCoordinator::new(
-        rustx::capabilities::CapabilityCoordinatorConfig {
-            source_demand: crate::common::source_demand(&workspace_root, ["python:calc"]),
-            conversation_id: ConversationId::new("conv-managed-freeze"),
-            workspace: Workspace::new(&workspace_root).expect("workspace"),
-            base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
-            extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            agent_activation: rustx::capabilities::AgentActivation {
-                profile: rustx::local_runtime::config::AgentProfileDocument {
-                    tools: rustx::capabilities::selection::ToolSelectionDocument {
-                        builtin: rustx::capabilities::AgentActivation::default()
-                            .profile
-                            .tools
-                            .builtin,
-                        sources: ["calc"]
-                            .map(|package| {
-                                (
-                                    rustx::capabilities::ToolSourceId::ManagedPython(
-                                        package.into(),
-                                    ),
-                                    rustx::capabilities::selection::SourceToolSelection::All,
-                                )
-                            })
-                            .into(),
+    let compose = || {
+        rustx::capabilities::CapabilityCoordinator::new(
+            rustx::capabilities::CapabilityCoordinatorConfig {
+                source_demand: crate::common::source_demand(&workspace_root, ["python:calc"]),
+                conversation_id: ConversationId::new("conv_c2f567d7-f47b-7cca-8f44-f679764e6ecd"),
+                workspace: Workspace::new(&workspace_root).expect("workspace"),
+                base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
+                extension_tools: rustx::extensions::ExtensionToolPlane::none(),
+                agent_activation: rustx::capabilities::AgentActivation {
+                    profile: rustx::local_runtime::config::AgentProfileDocument {
+                        tools: rustx::capabilities::selection::ToolSelectionDocument {
+                            builtin: rustx::capabilities::AgentActivation::default()
+                                .profile
+                                .tools
+                                .builtin,
+                            sources: ["calc"]
+                                .map(|package| {
+                                    (
+                                        rustx::capabilities::ToolSourceId::ManagedPython(
+                                            package.into(),
+                                        ),
+                                        rustx::capabilities::selection::SourceToolSelection::All,
+                                    )
+                                })
+                                .into(),
+                        },
+                        ..rustx::capabilities::AgentActivation::default().profile
                     },
-                    ..rustx::capabilities::AgentActivation::default().profile
+                    ..Default::default()
                 },
-                ..Default::default()
+                // Keep this fixture independent of the developer's HOME.
+                skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
+                    workspace_root.join(".agents/skills"),
+                ),
+                mcp_servers: std::collections::BTreeMap::new(),
+                base_environment: rustx::tools::environment::ToolEnvironment::new(),
+                environment_store_root: directory.path().join("skill-env"),
             },
-            // Keep this fixture independent of the developer's HOME.
-            skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
-                workspace_root.join(".agents/skills"),
-            ),
-            mcp_servers: std::collections::BTreeMap::new(),
-            base_environment: rustx::tools::environment::ToolEnvironment::new(),
-            environment_store_root: directory.path().join("skill-env"),
-        },
-    )
-    .expect("coordinator");
+        )
+        .expect("coordinator")
+    };
+    let coordinator = compose();
     let server_id = python_server_id("calc");
 
     // Commit generation v1 and admit an execution against it.
@@ -890,14 +882,15 @@ def add(a: int, b: int) -> str:
     )
     .expect("edit the live source");
 
-    // The next activation prepares and commits generation v2. The effective
-    // binding changed (a new fingerprint-keyed state directory, hence a new
-    // launch program), so this is a real publication even though the
-    // model-facing schema is byte-identical.
+    assert!(
+        Arc::ptr_eq(&v1_snapshot, &coordinator.current_snapshot()),
+        "disk edits do not publish runtime changes"
+    );
+    let coordinator = compose();
     let candidate_v2 = tokio::time::timeout(LIVENESS, coordinator.prepare_candidate())
         .await
-        .expect("prepare v2 must not hang")
-        .expect("prepare v2");
+        .unwrap()
+        .unwrap();
     let v2_snapshot = coordinator.commit(candidate_v2).expect("commit v2");
     assert_eq!(
         v2_snapshot.tool_registry().definitions(),
@@ -906,13 +899,13 @@ def add(a: int, b: int) -> str:
     );
     assert_eq!(
         v2_snapshot.revision().get(),
-        2,
-        "an implementation change with unchanged schema is a new publication"
+        1,
+        "cold composition starts its own complete publication"
     );
 
     // A future activation executes the new implementation.
     let future_lease = coordinator.acquire_attempt_lease();
-    assert_eq!(future_lease.revision().get(), 2);
+    assert_eq!(future_lease.revision().get(), 1);
     let v2_result = call_through_snapshot(
         &workspace_root,
         &server_id,
@@ -1015,8 +1008,13 @@ def greet(name: str) -> str:
         "the generated project metadata pins the managed build exactly: {pyproject}"
     );
 
-    let server =
-        ConnectedServer::connect(&prepared, "modern", &workspace_root, "conv-managed-2026").await;
+    let server = ConnectedServer::connect(
+        &prepared,
+        "modern",
+        &workspace_root,
+        "conv_960bdcbc-be4e-7763-a215-f4bb0c77992b",
+    )
+    .await;
 
     // The negotiated revision, read off the live generic MCP connection.
     assert_eq!(
@@ -1151,7 +1149,7 @@ def ping() -> str:
                 &workspace_root,
                 ["conflicting", "healthy"].map(|name| format!("python:{name}")),
             ),
-            conversation_id: ConversationId::new("conv-managed-conflict"),
+            conversation_id: ConversationId::new("conv_14bebb23-81a2-7139-846e-ee88c0abad28"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(base_tool_registry),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
@@ -1185,78 +1183,16 @@ def ping() -> str:
     )
     .expect("coordinator");
 
-    let candidate = tokio::time::timeout(LIVENESS, coordinator.prepare_candidate())
+    let before = coordinator.current_snapshot();
+    let failure = tokio::time::timeout(LIVENESS, coordinator.prepare_candidate())
         .await
         .expect("a dependency conflict must not hang the capability preparation")
-        .expect("a package-local dependency conflict must not fail the candidate");
-
-    let conflicting = rustx::capabilities::ToolSourceId::ManagedPython("conflicting".into());
-    let Some(rustx::capabilities::CapabilitySourceState::Unavailable { reason }) =
-        candidate.availability().get(&conflicting)
-    else {
-        panic!(
-            "the unsatisfiable package lands on its own synthesized source: {:?}",
-            candidate.availability()
-        );
-    };
-    assert!(
-        reason.contains("python:conflicting"),
-        "the diagnostic names the affected managed source: {reason}"
-    );
-    assert!(
-        reason.contains("dependency preparation failed"),
-        "the diagnostic names the failing phase: {reason}"
-    );
-    assert!(
-        reason.len() <= rustx::capabilities::CAPABILITY_FAILURE_REASON_MAX_BYTES,
-        "the diagnostic stays bounded: {} bytes",
-        reason.len()
-    );
-
-    // The sibling managed source is untouched by its neighbour's failure.
-    let healthy_id = python_server_id("healthy");
-    assert_eq!(
-        candidate
-            .availability()
-            .get(&rustx::capabilities::ToolSourceId::ManagedPython(
-                "healthy".into()
-            )),
-        Some(&rustx::capabilities::CapabilitySourceState::Ready),
-        "an unrelated managed source is unaffected: {:?}",
-        candidate.availability()
-    );
-
-    let snapshot = coordinator.commit(candidate).expect("commit");
-    let published = snapshot
-        .tool_registry()
-        .definitions()
-        .iter()
-        .map(|definition| definition.name.clone())
-        .collect::<Vec<_>>();
-    assert!(
-        published.contains(&"unrelated_native".to_owned()),
-        "the unrelated native capability survives the preparation failure: {published:?}"
-    );
-    assert!(
-        published.contains(&"ping".to_owned()),
-        "the unrelated managed capability survives the preparation failure: {published:?}"
-    );
-    assert!(
-        !published.iter().any(|name| name.contains("conflicting")),
-        "the failed source publishes nothing: {published:?}"
-    );
-
-    // And the surviving managed source is genuinely executable, not merely
-    // listed: the neighbouring failure did not poison its connection.
-    let pong = call_through_snapshot(
-        &workspace_root,
-        &healthy_id,
-        &snapshot,
-        "ping",
-        serde_json::json!({}),
-    )
-    .await;
-    assert_eq!(result_text(&pong), "pong");
+        .expect_err("selected source failure rejects the whole candidate");
+    assert!(matches!(
+        failure,
+        rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
+    ));
+    assert!(Arc::ptr_eq(&before, &coordinator.current_snapshot()));
 }
 
 /// A registry-composition placeholder: the unrelated native capability of

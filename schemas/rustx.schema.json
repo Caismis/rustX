@@ -27,21 +27,6 @@
             "string"
           ]
         },
-        "disabled_skills": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array"
-          ]
-        },
-        "extensions": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativeAgentExtensionsDocument"
-            }
-          ]
-        },
         "instructions": {
           "type": [
             "string"
@@ -54,25 +39,24 @@
             }
           ]
         },
-        "skills": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array"
+        "plugins": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginsLayer"
+            }
           ]
         },
-        "timeout_ms": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer"
+        "skills": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentSkillSelection"
+            }
           ]
         },
         "tools": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ToolSelectionDocument"
+              "$ref": "#/$defs/ToolsLayer"
             }
           ]
         },
@@ -82,13 +66,6 @@
           },
           "type": [
             "array"
-          ]
-        },
-        "worktree": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AgentWorktreeDocument"
-            }
           ]
         }
       },
@@ -114,6 +91,20 @@
       },
       "type": "object"
     },
+    "AgentSkillSelection": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AllTools"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "Prompt visibility within a frozen Skill catalog; never filesystem authority."
+    },
     "AgentStatusExtensionDocument": {
       "additionalProperties": false,
       "description": "The authored Agent Status extension.\n\n`enabled` composes the extension in or out of the runtime as a whole;\n`time` and `background` remain the two bounded status contributors, with\nexactly the semantics they had before the migration.",
@@ -126,7 +117,7 @@
           "description": "The Background contributor configuration."
         },
         "enabled": {
-          "default": true,
+          "default": false,
           "description": "Whether this composition includes the Agent Status extension at all.\n\nWith `false` the runtime composes no status engine: the Agent Loop\nemits no Agent Status and is otherwise a completely ordinary\n`ConversationRuntime`.",
           "type": "boolean"
         },
@@ -136,23 +127,6 @@
             "enabled": true
           },
           "description": "The Time contributor configuration."
-        }
-      },
-      "type": "object"
-    },
-    "AgentWorktreeDocument": {
-      "additionalProperties": false,
-      "description": "The resource representation of a named subagent's optional Git worktree\nisolation. An omitted or disabled value is the existing shared-workspace\nbehavior; there is no model-facing per-call override.\n\nIssue #188: when enabled, isolation runs the child from the committed\nparent `HEAD` snapshot. `require_clean_parent` defaults to `true`\n(strict): the parent source workspace must be clean, otherwise the child\nis rejected rather than silently dropping parent-local changes. Only an\nexplicit `\"require_clean_parent\": false` permits a dirty parent while the\nchild still receives exactly the committed snapshot.",
-      "properties": {
-        "enabled": {
-          "default": false,
-          "description": "Whether this named definition uses an isolated Git worktree.",
-          "type": "boolean"
-        },
-        "require_clean_parent": {
-          "default": true,
-          "description": "Whether acquisition rejects a dirty parent workspace/index.\n\nThis is the one authoritative strictness switch, normalized at the\nconfiguration boundary: it defaults to `true` whenever isolation is\nenabled, and an explicit `false` is the intentional opt-out that runs\nfrom the captured committed `HEAD` while excluding dirty parent bytes.",
-          "type": "boolean"
         }
       },
       "type": "object"
@@ -234,21 +208,6 @@
         }
       ]
     },
-    "AutomaticSkillSource": {
-      "description": "The only source identities `[skills].sources` may name.\n\n`explicit` is deliberately absent: explicit Skill paths are a launch\nauthority (`--skill`), not a scannable automatic root, so naming one here\nwould be a second way to spell the same thing.",
-      "oneOf": [
-        {
-          "const": "global",
-          "description": "`<home>/.agents/skills`.",
-          "type": "string"
-        },
-        {
-          "const": "workspace",
-          "description": "`<workspace>/.agents/skills`.",
-          "type": "string"
-        }
-      ]
-    },
     "BackgroundStatusConfig": {
       "additionalProperties": false,
       "description": "Configuration of the bounded Background status contributor.",
@@ -257,6 +216,144 @@
           "default": true,
           "description": "Whether Background participates in an available Agent Status opportunity.",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Capabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "input_modalities": {
+          "items": {
+            "$ref": "#/$defs/Modality"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "output_modalities": {
+          "items": {
+            "$ref": "#/$defs/Modality"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "reasoning": {
+          "type": "boolean"
+        },
+        "tool_calls": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "input_modalities",
+        "output_modalities",
+        "tool_calls",
+        "reasoning"
+      ],
+      "type": "object"
+    },
+    "ChatMaxTokensField": {
+      "description": "Which max-token field spelling a Chat Completions service accepts.\n\nThis is a real structural translation difference between\nOpenAI-compatible services, not a provider wire value: the two spellings\nare mutually exclusive and both are runtime-protected.",
+      "oneOf": [
+        {
+          "const": "max_completion_tokens",
+          "description": "The current `max_completion_tokens` field.",
+          "type": "string"
+        },
+        {
+          "const": "max_tokens",
+          "description": "The legacy `max_tokens` field.",
+          "type": "string"
+        }
+      ]
+    },
+    "ChatReasoningReplay": {
+      "description": "Assistant-message field used to replay canonical reasoning through an\nOpenAI-compatible Chat Completions dialect.",
+      "oneOf": [
+        {
+          "const": "reasoning",
+          "description": "vLLM and `OpenRouter`'s plaintext reasoning field.",
+          "type": "string"
+        },
+        {
+          "const": "reasoning_content",
+          "description": "`DeepSeek` V4, GLM, Qwen, and compatible preserved-thinking APIs.",
+          "type": "string"
+        },
+        {
+          "const": "omit",
+          "description": "Do not replay historical canonical reasoning to the provider.",
+          "type": "string"
+        }
+      ]
+    },
+    "ChatStreamUsage": {
+      "description": "Whether a Chat Completions service supports streaming usage options.",
+      "oneOf": [
+        {
+          "const": "supported",
+          "description": "`stream_options.include_usage` is supported and requested.",
+          "type": "string"
+        },
+        {
+          "const": "unsupported",
+          "description": "The service rejects `stream_options`; the field is omitted.",
+          "type": "string"
+        }
+      ]
+    },
+    "ChatToolProtocol": {
+      "description": "The in-band tool protocol a Chat Completions model speaks.\n\nThis is a real protocol difference between OpenAI-compatible services,\nnot a provider wire value. Most services emit tool calls only through the\nstructured `tool_calls` field. Some model families additionally have a\n*reserved in-band* tool syntax that the serving stack is supposed to parse\nout of the generated text; when that parse fails, the reserved markup\nleaks into ordinary content or reasoning and the request terminates as if\nthe model had simply answered.\n\nDeclaring the dialect is what allows the adapter to recognize such a leak\nas malformed tool intent instead of guessing from arbitrary text. Nothing\nis ever inferred from a provider name or a base URL hostname.",
+      "oneOf": [
+        {
+          "const": "native",
+          "description": "Tool calls exist only as structured `tool_calls`. Generated text is\nnever inspected for tool-protocol markup.",
+          "type": "string"
+        },
+        {
+          "const": "qwen_xml",
+          "description": "The Qwen XML tool dialect (`<tool_call>`, `<function=…>`,\n`<parameter=…>`), as served by vLLM and compatible stacks.",
+          "type": "string"
+        }
+      ]
+    },
+    "Compat": {
+      "additionalProperties": false,
+      "properties": {
+        "chat_max_tokens_field": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatMaxTokensField"
+            }
+          ]
+        },
+        "chat_reasoning_replay": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatReasoningReplay"
+            }
+          ]
+        },
+        "chat_stream_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatStreamUsage"
+            }
+          ]
+        },
+        "chat_tool_protocol": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatToolProtocol"
+            }
+          ]
+        },
+        "responses_storage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResponsesStorageMode"
+            }
+          ]
         }
       },
       "type": "object"
@@ -303,9 +400,8 @@
       },
       "type": "object"
     },
-    "EnvironmentReference": {
-      "description": "A validated reference, written as `$ENV_VAR` only in declared secret fields.",
-      "pattern": "^\\$[A-Za-z_][A-Za-z0-9_]*$",
+    "CredentialSource": {
+      "description": "The declared source of one provider credential.\n\nThe syntax is exactly two forms and is never extended implicitly: a\nliteral string, or `$ENV_VAR`.",
       "type": "string"
     },
     "ExecutionPolicyDocument": {
@@ -397,75 +493,76 @@
       },
       "type": "object"
     },
-    "McpAuthoring": {
-      "additionalProperties": false,
-      "description": "Secret-field presence is retained even for empty tables, so project authority\ncannot be widened by replacing an authored empty table with a default map.",
-      "properties": {
-        "args": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "command": {
-          "type": [
-            "string"
-          ]
-        },
-        "cwd": {
-          "type": [
-            "string"
-          ]
-        },
-        "enabled": {
-          "type": [
-            "boolean"
-          ]
-        },
-        "env": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": {},
-          "type": "object"
-        },
-        "headers": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": {},
-          "type": "object"
-        },
-        "type": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/McpTransportType"
-            }
-          ]
-        },
-        "url": {
-          "type": [
-            "string"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "McpTransportType": {
-      "description": "The transport an `mcpServers` entry selects explicitly.",
+    "Modality": {
+      "description": "One semantic content modality of a model capability set.",
       "oneOf": [
         {
-          "const": "http",
-          "description": "Streamable HTTP. This is the canonical spelling for a remote server.",
+          "const": "text",
+          "description": "Textual content.",
           "type": "string"
         },
         {
-          "const": "stdio",
-          "description": "A locally launched stdio server.",
+          "const": "image",
+          "description": "Image content.",
+          "type": "string"
+        },
+        {
+          "const": "file",
+          "description": "File/document content.",
           "type": "string"
         }
       ]
+    },
+    "Model": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "compat": {
+          "$ref": "#/$defs/Compat",
+          "default": {}
+        },
+        "context_window": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "max_output_tokens": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "protocol": {
+          "$ref": "#/$defs/ModelProtocol"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "reasoning": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Reasoning"
+            }
+          ]
+        },
+        "request_params": {
+          "$ref": "#/$defs/RequestParamsToml",
+          "default": {}
+        }
+      },
+      "required": [
+        "provider",
+        "id",
+        "protocol",
+        "context_window",
+        "max_output_tokens",
+        "capabilities"
+      ],
+      "type": "object"
     },
     "ModelLayer": {
       "additionalProperties": false,
@@ -544,43 +641,29 @@
         }
       ]
     },
-    "ModelRef": {
-      "description": "A fully qualified catalog model reference: `provider-id/model-id`.\n\nThe first `/` separates the provider from the model. The model ID itself\nmay contain additional `/` characters, as is common for Hugging Face\nidentities such as `Qwen/Qwen3`, but no model-ID segment may be empty.\n\nThis is the explicit model-identity domain of the runtime. Concatenated\nstrings never travel through the runtime in its place: a reference either\nresolves to exactly one catalog model or it fails.",
-      "type": "string"
-    },
-    "NativeAgentExtensionsDocument": {
-      "additionalProperties": false,
-      "description": "The closed authored composition surface of native Agent Extensions.\n\nEvery member is a concrete named extension in a closed record.\nUnknown extension names are rejected. Runtime TOML layers use the separate\n`snake_case` authoring boundary; resource and wire documents retain their\nown serialization contract.",
-      "properties": {
-        "agent_status": {
-          "$ref": "#/$defs/AgentStatusExtensionDocument",
-          "default": {
-            "background": {
-              "enabled": true
-            },
-            "enabled": false,
-            "time": {
-              "enabled": true
-            }
-          },
-          "description": "The Agent Status extension: optional provider-independent runtime\ncontext for an already-established model step."
+    "ModelProtocol": {
+      "description": "The model interaction protocol an adapter must speak.",
+      "oneOf": [
+        {
+          "const": "openai_chat_completions",
+          "description": "`OpenAI` Chat Completions API.",
+          "type": "string"
         },
-        "goal": {
-          "$ref": "#/$defs/GoalExtensionDocument",
-          "default": {
-            "enabled": false
-          },
-          "description": "Root-only persistent Goal pursuit, disabled by default."
+        {
+          "const": "openai_responses",
+          "description": "`OpenAI` Responses API.",
+          "type": "string"
         },
-        "todo": {
-          "$ref": "#/$defs/TodoExtensionDocument",
-          "default": {
-            "enabled": false
-          },
-          "description": "The Todo extension: the conversation-owned task list, its\nmodel-facing `todo` Tool, and its bounded status presentation\n(Issue #259)."
+        {
+          "const": "anthropic_messages",
+          "description": "`Anthropic` Messages API.",
+          "type": "string"
         }
-      },
-      "type": "object"
+      ]
+    },
+    "ModelRef": {
+      "description": "An authored Model identity. Its spelling has no provider or wire semantics.",
+      "type": "string"
     },
     "NativePolicyOverrideDocument": {
       "additionalProperties": false,
@@ -647,6 +730,85 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "PluginsLayer": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentStatusExtensionDocument"
+            }
+          ]
+        },
+        "goal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GoalExtensionDocument"
+            }
+          ]
+        },
+        "todo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TodoExtensionDocument"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Profile": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "request_params": {
+          "$ref": "#/$defs/RequestParamsToml",
+          "default": {}
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "Provider": {
+      "additionalProperties": false,
+      "properties": {
+        "api_key": {
+          "$ref": "#/$defs/CredentialSource",
+          "description": "A literal credential or an explicit $`ENV_VAR` reference. Never inferred."
+        },
+        "base_url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "base_url",
+        "api_key"
+      ],
+      "type": "object"
+    },
+    "Reasoning": {
+      "additionalProperties": false,
+      "properties": {
+        "default_profile": {
+          "$ref": "#/$defs/ReasoningProfileId"
+        },
+        "profiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Profile"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "default_profile",
+        "profiles"
+      ],
       "type": "object"
     },
     "ReasoningProfileId": {
@@ -721,19 +883,20 @@
       "description": "Opaque provider-native structured TOML. Strings, integers, finite floats, booleans, arrays and tables only; no dates, times, datetimes, non-finite floats or explicit null. Protected wire keys are checked during model resolution.",
       "type": "object"
     },
-    "SkillsLayer": {
-      "additionalProperties": false,
-      "properties": {
-        "sources": {
-          "items": {
-            "$ref": "#/$defs/AutomaticSkillSource"
-          },
-          "type": [
-            "array"
-          ]
+    "ResponsesStorageMode": {
+      "description": "How the `OpenAI` Responses protocol operates with provider storage.\n\nThis is continuation *structure*, not a wire value: Stored continues by\n`previous_response_id`, Stateless continues by preserved output items and\nrequires the encrypted-reasoning `include` value.",
+      "oneOf": [
+        {
+          "const": "stored",
+          "description": "Provider-side storage enabled (`store: true`).",
+          "type": "string"
+        },
+        {
+          "const": "stateless",
+          "description": "Zero provider retention (`store: false`).",
+          "type": "string"
         }
-      },
-      "type": "object"
+      ]
     },
     "SourceToolSelection": {
       "anyOf": [
@@ -897,7 +1060,7 @@
       "description": "The authored Todo extension (Issue #259).\n\nTodo is *one* capability with several faces, and `enabled` composes all\nof them together or none of them:\n\n```text\nenabled = true    conversation-owned ConversationTodoList authority\n                  the model-facing `todo` Tool\n                  the bounded read-only Todo status presentation\n                  the Runtime Client / TUI Todo projection\n\nenabled = false   none of the above for this runtime; canonical history\n                  keeps every Todo ToolCall/ToolResult it already holds\n```\n\nIt carries no contributor settings today. That is a statement about the\nextension, not a placeholder: the list's bounds, transitions, and\ndependency rules are owned by\n[`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are\nnot launch configuration.",
       "properties": {
         "enabled": {
-          "default": true,
+          "default": false,
           "description": "Whether this composition includes the Todo extension at all.",
           "type": "boolean"
         }
@@ -924,23 +1087,24 @@
       },
       "type": "object"
     },
-    "ToolSelectionDocument": {
+    "ToolsLayer": {
       "additionalProperties": false,
-      "description": "Shared Agent and Workflow Agent override selection. Extensions are composed\nby their native owner and never enter this ordinary capability vocabulary.",
       "properties": {
         "builtin": {
-          "default": [],
           "items": {
             "type": "string"
           },
-          "type": "array"
+          "type": [
+            "array"
+          ]
         },
         "sources": {
           "additionalProperties": {
             "$ref": "#/$defs/SourceToolSelection"
           },
-          "default": {},
-          "type": "object"
+          "type": [
+            "object"
+          ]
         }
       },
       "type": "object"
@@ -967,6 +1131,20 @@
         }
       ]
     },
+    "app_server": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AppServerPolicy"
+        }
+      ]
+    },
+    "approval_mode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ApprovalMode"
+        }
+      ]
+    },
     "context": {
       "anyOf": [
         {
@@ -982,9 +1160,9 @@
         "object"
       ]
     },
-    "mcp_servers": {
+    "mcp_tool_policies": {
       "additionalProperties": {
-        "$ref": "#/$defs/McpAuthoring"
+        "$ref": "#/$defs/InvocationPolicyDocument"
       },
       "type": [
         "object"
@@ -997,18 +1175,34 @@
         }
       ]
     },
+    "models": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Model"
+      },
+      "type": [
+        "object"
+      ]
+    },
+    "native_tools": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NativeToolsLayer"
+        }
+      ]
+    },
+    "providers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Provider"
+      },
+      "type": [
+        "object"
+      ]
+    },
     "schema_version": {
       "format": "uint32",
       "minimum": 0,
       "type": [
         "integer"
-      ]
-    },
-    "skills": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/SkillsLayer"
-        }
       ]
     },
     "subagents": {

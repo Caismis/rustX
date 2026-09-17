@@ -468,7 +468,11 @@ mod tests {
     use crate::tools::managed_output::ManagedToolOutput;
 
     fn store(root: &std::path::Path) -> ManagedToolOutput {
-        ManagedToolOutput::new(ConversationId::new("conv-output"), root).expect("store")
+        ManagedToolOutput::new(
+            ConversationId::new("conv_b4cee425-72b5-7705-895a-08669869c060"),
+            root,
+        )
+        .expect("store")
     }
 
     #[test]

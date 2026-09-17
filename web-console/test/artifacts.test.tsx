@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ArtifactResources, ARTIFACT_MAX_BYTES } from '../src/client/artifacts';
 import { Artifact, ArtifactContext } from '../src/app/components/Artifact';
 import { InputBar } from '../src/app/components/InputBar';
-import type { UploadedFile } from '../../protocol/app-server/v5';
+import type { UploadedFile } from '../../protocol/app-server/v6';
 import { Server } from './fixture';
 let server: Server;
 let sequence = 0;

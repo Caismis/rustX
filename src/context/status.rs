@@ -95,7 +95,7 @@ const DEFAULT_ENABLED: bool = true;
 /// represented by that composition, never by a configuration with everything
 /// switched off. The authored surface is
 /// [`AgentStatusExtensionDocument`](crate::extensions::AgentStatusExtensionDocument),
-/// under the closed launch-scoped `extensions` record.
+/// under the closed generation-owned `agent.plugins` record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
@@ -1838,7 +1838,9 @@ mod tests {
 
     fn background_snapshot(index: usize, detail: &str) -> BackgroundExecutionSnapshot {
         BackgroundExecutionSnapshot {
-            execution_id: ToolExecutionId::new(format!("exec-{index}")),
+            execution_id: ToolExecutionId::new(format!(
+                "exec_00000000-0000-7000-8000-{index:012x}"
+            )),
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             state: BackgroundLifecycle::Running,
@@ -1873,7 +1875,7 @@ mod tests {
 
     fn todo_list_with(build: impl FnOnce(&TodoWriter)) -> ConversationTodoList {
         let list = ConversationTodoList::new(crate::runtime::identity::ConversationId::new(
-            "agent-status-todos",
+            "conv_ab6090bc-32c7-79da-847b-e2ea6a3b00e6",
         ));
         let batch = list.open_batch().expect("Todo batch opens");
         let writer = batch.writer();
@@ -1986,7 +1988,9 @@ mod tests {
         crate::scripted_suites::common::ToolRuntimeFixture,
         ConversationBackgroundRegistry,
     ) {
-        let fixture = crate::scripted_suites::common::tool_runtime("agent-status-tests");
+        let fixture = crate::scripted_suites::common::tool_runtime(
+            "conv_56b655f2-8ebd-7134-9170-777ae2817ac0",
+        );
         let registry = fixture.background().clone();
         (fixture, registry)
     }
@@ -2223,7 +2227,9 @@ mod tests {
     /// while the live registry settles independently afterwards.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn live_background_mutation_after_capture_cannot_change_the_generation() {
-        let fixture = crate::scripted_suites::common::tool_runtime("agent-status-freeze");
+        let fixture = crate::scripted_suites::common::tool_runtime(
+            "conv_8e913d84-63e3-715a-ba7e-87c474308c20",
+        );
         let invocation = crate::tools::types::ToolInvocation {
             id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: crate::runtime::identity::ToolCallId::new("call-freeze"),
@@ -2302,7 +2308,9 @@ mod tests {
     fn typed_status_metadata_survives_durable_restart_and_surface_rebuild() {
         let root = tempfile::tempdir().expect("temporary store directory");
         let path = root.path().join("conversation.sqlite");
-        let conversation_id = crate::runtime::identity::ConversationId::new("status-restart");
+        let conversation_id = crate::runtime::identity::ConversationId::new(
+            "conv_1e940687-4b01-79c9-8d63-568aa6002b76",
+        );
         let generated_at = DateTime::from_timestamp(1_754_000_001, 0).expect("timestamp");
         let status = status_surface_message(
             "status-both",
@@ -2798,7 +2806,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[allow(clippy::too_many_lines)]
     async fn semantic_order_and_background_failure_isolation_are_deterministic() {
-        let fixture = crate::scripted_suites::common::tool_runtime("agent-status-order");
+        let fixture = crate::scripted_suites::common::tool_runtime(
+            "conv_a6446c40-6091-7ebb-af66-53eeb3a5e750",
+        );
         let invocation = crate::tools::types::ToolInvocation {
             id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: crate::runtime::identity::ToolCallId::new("call-1"),
@@ -2907,7 +2917,12 @@ mod tests {
             assert_eq!(surviving.sections[0].id.as_str(), "temporal");
         }
 
-        let execution_id = crate::runtime::identity::ToolExecutionId::new("exec_1");
+        let execution_id = registry
+            .all_snapshots()
+            .into_iter()
+            .next()
+            .unwrap()
+            .execution_id;
         release.send_replace(true);
         registry.wait_until_terminal(&execution_id).await;
     }
@@ -2956,7 +2971,7 @@ mod tests {
     #[test]
     fn todo_status_reads_only_the_committed_snapshot() {
         let list = ConversationTodoList::new(crate::runtime::identity::ConversationId::new(
-            "staged-todo-status",
+            "conv_eec76f02-9f57-77ff-8396-8037888d943a",
         ));
         let batch = list.open_batch().expect("Todo batch opens");
         let writer = batch.writer();
@@ -3015,7 +3030,9 @@ mod tests {
             latest_emission_origin: 0,
         };
         for todos in [
-            ConversationTodoList::new(crate::runtime::identity::ConversationId::new("empty")),
+            ConversationTodoList::new(crate::runtime::identity::ConversationId::new(
+                "conv_2e1cfa82-b035-726c-8bbd-ae632cea0705",
+            )),
             todo_list_with(|writer| {
                 let (task, _) = writer
                     .create(TodoCreate {

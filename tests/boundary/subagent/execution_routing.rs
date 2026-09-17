@@ -45,6 +45,10 @@ struct ScriptedChild {
 /// lifecycle, so resolution is already complete before it is involved.
 fn resolved(agent: &str) -> ResolvedSubagentSpec {
     ResolvedSubagentSpec {
+        environment: Vec::new(),
+        generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
+        skill_roots: Vec::new(),
+
         selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
         agent: SubagentName::parse(agent).expect("canonical name"),
         definition_digest: serde_json::from_value(serde_json::json!(
@@ -210,7 +214,7 @@ async fn subagent_start_returns_a_typed_subagent_execution_handle() {
     assert_eq!(
         value,
         serde_json::json!({
-            "execution": {"kind": "subagent", "id": "conv-162-subagent-1"},
+            "execution": {"kind": "subagent", "id": "conv_35227a88-2fb4-735f-ad8e-ec0b35ff2a42-subagent-1"},
             "state": "running",
             "agent": "explore",
         }),
@@ -421,7 +425,7 @@ async fn cross_conversation_ids_are_indistinguishable_from_unknown_ids() {
         "a foreign id is exactly an unknown id: {}",
         failure_message(&result)
     );
-    let unknown_id = SubagentId::new("conv-162-subagent-77");
+    let unknown_id = SubagentId::new("conv_35227a88-2fb4-735f-ad8e-ec0b35ff2a42-subagent-77");
     let unknown = run_execution(
         &fixture,
         serde_json::json!({
@@ -1265,9 +1269,19 @@ async fn list_merges_both_domains_in_the_deterministic_alternating_order() {
     assert_eq!(
         handles(&listing),
         vec![
-            ("tool", "exec_2".to_owned()),
+            (
+                "tool",
+                fixture.runtime.background().all_snapshots()[1]
+                    .execution_id
+                    .to_string()
+            ),
             ("subagent", second.subagent_id.to_string()),
-            ("tool", "exec_1".to_owned()),
+            (
+                "tool",
+                fixture.runtime.background().all_snapshots()[0]
+                    .execution_id
+                    .to_string()
+            ),
             ("subagent", first.subagent_id.to_string()),
         ],
         "tool, subagent, tool, subagent — each domain newest first"
@@ -1294,7 +1308,20 @@ async fn kind_filtering_isolates_the_two_domains() {
         json_content(&run_execution(&fixture, list(&serde_json::json!({"kind": "tool"}))).await);
     assert_eq!(
         handles(&tools),
-        vec![("tool", "exec_2".to_owned()), ("tool", "exec_1".to_owned())],
+        vec![
+            (
+                "tool",
+                fixture.runtime.background().all_snapshots()[1]
+                    .execution_id
+                    .to_string()
+            ),
+            (
+                "tool",
+                fixture.runtime.background().all_snapshots()[0]
+                    .execution_id
+                    .to_string()
+            )
+        ],
         "the tool filter reaches only the background registry"
     );
     assert_eq!(tools["matched"], 2, "the count excludes the other domain");
@@ -1322,7 +1349,7 @@ async fn foreign_conversation_executions_are_never_listed() {
     let _tools = dispatch_parking_pair(&fixture).await;
 
     // A second conversation with its own registries, wired to nothing.
-    let foreign_plane = subagent_plane_for("conv-180-foreign");
+    let foreign_plane = subagent_plane_for("conv_2d23b96f-34d7-77e1-9986-10663ab8ff93");
     let _foreign_child = stage_exit0(&foreign_plane);
     let foreign_child = start_subagent(&foreign_plane, "foreign child").await;
     let foreign_fixture = execution_fixture(Some(foreign_plane.registry.clone()));
@@ -1333,9 +1360,19 @@ async fn foreign_conversation_executions_are_never_listed() {
     assert_eq!(
         handles(&listing),
         vec![
-            ("tool", "exec_2".to_owned()),
+            (
+                "tool",
+                fixture.runtime.background().all_snapshots()[1]
+                    .execution_id
+                    .to_string()
+            ),
             ("subagent", mine.subagent_id.to_string()),
-            ("tool", "exec_1".to_owned()),
+            (
+                "tool",
+                fixture.runtime.background().all_snapshots()[0]
+                    .execution_id
+                    .to_string()
+            ),
         ]
     );
 
@@ -1890,7 +1927,7 @@ async fn steer_returns_the_minimal_control_acknowledgement() {
     assert_eq!(
         json_content(&result),
         serde_json::json!({
-            "execution": {"kind": "subagent", "id": "conv-162-subagent-1"},
+            "execution": {"kind": "subagent", "id": "conv_35227a88-2fb4-735f-ad8e-ec0b35ff2a42-subagent-1"},
             "state": "running",
             "accepted": true,
         }),
@@ -1990,14 +2027,14 @@ async fn steer_refusals_are_deterministic_and_bounded() {
         &fixture,
         serde_json::json!({
             "action": "steer",
-            "target": {"kind": "subagent", "id": "conv-162-subagent-99"},
+            "target": {"kind": "subagent", "id": "conv_35227a88-2fb4-735f-ad8e-ec0b35ff2a42-subagent-99"},
             "message": "nobody is listening",
         }),
     )
     .await;
     assert_eq!(
         failure_message(&unknown),
-        "unknown subagent execution conv-162-subagent-99"
+        "unknown subagent execution conv_35227a88-2fb4-735f-ad8e-ec0b35ff2a42-subagent-99"
     );
 
     // An empty or whitespace-only message is refused before any routing.
@@ -2116,7 +2153,7 @@ async fn cancellation_intent_and_steer_share_one_arbitration_boundary() {
     assert_eq!(
         json_content(&won),
         serde_json::json!({
-            "execution": {"kind": "subagent", "id": "conv-162-subagent-1"},
+            "execution": {"kind": "subagent", "id": "conv_35227a88-2fb4-735f-ad8e-ec0b35ff2a42-subagent-1"},
             "state": "running",
             "accepted": true,
         }),
@@ -2630,7 +2667,7 @@ async fn a_workflow_owned_child_keeps_its_cancellation_and_output_contract() {
 
     // Output-contract half: a second Workflow child, steered at and refused,
     // still settles with its validated structured output.
-    let other = subagent_plane_for("conv-193-workflow-output");
+    let other = subagent_plane_for("conv_7435ab6f-efae-7036-94fe-384e1faadf23");
     let mut child = stage_exit0(&other);
     let running = start_workflow_subagent(&other, "answering node").await;
     let fixture = execution_fixture(Some(other.registry.clone()));

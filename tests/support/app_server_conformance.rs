@@ -137,14 +137,7 @@ pub async fn representative_scenario(
     assert_eq!(snapshot_b.effective_approval_mode, ApprovalMode::Policy);
 
     let (changed_a, unchanged_b) = tokio::join!(
-        call(
-            driver,
-            3,
-            Method::ApprovalModeSet {
-                target: a.clone(),
-                mode: ApprovalMode::FullAccess
-            }
-        ),
+        call(driver, 3, Method::ConfigurationReload { target: a.clone() }),
         call(
             driver,
             4,
@@ -156,11 +149,7 @@ pub async fn representative_scenario(
     );
     assert!(matches!(
         changed_a,
-        MethodResult::ApprovalMode {
-            effective_approval_mode: ApprovalMode::FullAccess,
-            pending_approval_mode: None,
-            ..
-        }
+        MethodResult::ConfigurationReloaded { .. }
     ));
     let MethodResult::Snapshot { snapshot, .. } = unchanged_b else {
         panic!("snapshot B")
@@ -182,11 +171,7 @@ pub async fn representative_scenario(
     assert!(cursor > cursor_a);
     assert!(matches!(
         *event,
-        RuntimeClientEvent::ApprovalModeChanged {
-            effective_approval_mode: ApprovalMode::FullAccess,
-            pending_approval_mode: None,
-            ..
-        }
+        RuntimeClientEvent::ResourceGenerationUpdated { .. }
     ));
     let cursor_a = cursor;
 
@@ -228,36 +213,16 @@ pub async fn representative_scenario(
     assert!(next_offset.is_none());
 
     let (changed_a, changed_b) = tokio::join!(
-        call(
-            driver,
-            5,
-            Method::ApprovalModeSet {
-                target: a.clone(),
-                mode: ApprovalMode::Policy
-            }
-        ),
-        call(
-            driver,
-            6,
-            Method::ApprovalModeSet {
-                target: b.clone(),
-                mode: ApprovalMode::FullAccess
-            }
-        ),
+        call(driver, 5, Method::ConfigurationReload { target: a.clone() }),
+        call(driver, 6, Method::ConfigurationReload { target: b.clone() }),
     );
     assert!(matches!(
         changed_a,
-        MethodResult::ApprovalMode {
-            effective_approval_mode: ApprovalMode::Policy,
-            ..
-        }
+        MethodResult::ConfigurationReloaded { .. }
     ));
     assert!(matches!(
         changed_b,
-        MethodResult::ApprovalMode {
-            effective_approval_mode: ApprovalMode::FullAccess,
-            ..
-        }
+        MethodResult::ConfigurationReloaded { .. }
     ));
     let mut seen = std::collections::BTreeSet::new();
     for index in 0..2 {
@@ -275,23 +240,17 @@ pub async fn representative_scenario(
             panic!("routed event")
         };
         let (expected, before) = if target == a {
-            (ApprovalMode::Policy, cursor_a)
+            (3, cursor_a)
         } else {
             assert_eq!(target, b);
-            (ApprovalMode::FullAccess, cursor_b)
+            (2, cursor_b)
         };
         assert!(seen.insert(target.session_id));
         assert!(cursor > before);
-        let RuntimeClientEvent::ApprovalModeChanged {
-            effective_approval_mode,
-            pending_approval_mode,
-            ..
-        } = *event
-        else {
-            panic!("approval transition")
+        let RuntimeClientEvent::ResourceGenerationUpdated { resources, .. } = *event else {
+            panic!("configuration publication")
         };
-        assert_eq!(effective_approval_mode, expected);
-        assert_eq!(pending_approval_mode, None);
+        assert_eq!(resources.revision.get(), expected);
     }
 
     assert!(matches!(
@@ -331,8 +290,8 @@ pub async fn representative_scenario(
     assert_eq!(snapshot.conversation_id, a.conversation_id);
     assert_eq!(snapshot.effective_approval_mode, ApprovalMode::Policy);
     assert_eq!(
-        snapshot.approval_mode_revision,
-        snapshot_a.approval_mode_revision + 2
+        snapshot.resources.revision.get(),
+        snapshot_a.resources.revision.get() + 2
     );
     let MethodResult::Snapshot { snapshot, .. } = call(
         driver,
@@ -347,10 +306,10 @@ pub async fn representative_scenario(
         panic!("snapshot B")
     };
     assert_eq!(snapshot.conversation_id, b.conversation_id);
-    assert_eq!(snapshot.effective_approval_mode, ApprovalMode::FullAccess);
+    assert_eq!(snapshot.effective_approval_mode, ApprovalMode::Policy);
     assert_eq!(
-        snapshot.approval_mode_revision,
-        snapshot_b.approval_mode_revision + 1
+        snapshot.resources.revision.get(),
+        snapshot_b.resources.revision.get() + 1
     );
     call(
         driver,

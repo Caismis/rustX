@@ -153,7 +153,7 @@ fn page(store: &dyn ConversationStore) -> TracePage {
 fn trace_retries_share_one_native_step_and_reopen_identically() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("conversation.sqlite");
-    let id = ConversationId::new("trace-reopen");
+    let id = ConversationId::new("conv_b05f9cb7-dcec-7fa1-8fa9-2047ae76d95f");
     let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
     start(&store);
     let first = request(&store, 0);
@@ -237,7 +237,10 @@ fn trace_retries_share_one_native_step_and_reopen_identically() {
 
 #[test]
 fn trace_input_is_allowlisted_bounded_and_redacted() {
-    let store = SqliteConversationStore::in_memory(ConversationId::new("safe")).unwrap();
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_8b336994-4dd2-73fa-839e-32d1aeb1f763",
+    ))
+    .unwrap();
     start(&store);
     let req = request(&store, 0);
     failure(
@@ -279,7 +282,10 @@ fn trace_input_is_allowlisted_bounded_and_redacted() {
 
 #[test]
 fn trace_paging_and_read_cut_are_finite_and_independent() {
-    let store = SqliteConversationStore::in_memory(ConversationId::new("paging")).unwrap();
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_26ca59cb-e63e-7f7f-8903-10861c5839ba",
+    ))
+    .unwrap();
     start(&store);
     for retry in 0..40 {
         let req = request(&store, retry);
@@ -346,7 +352,10 @@ fn trace_paging_and_read_cut_are_finite_and_independent() {
 
 #[test]
 fn trace_missing_request_terminal_stays_incomplete_after_attempt_cancellation() {
-    let store = SqliteConversationStore::in_memory(ConversationId::new("cancel")).unwrap();
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_2374d917-94b7-7f4f-84ec-9587d2cf00ae",
+    ))
+    .unwrap();
     start(&store);
     request(&store, 0);
     append(
@@ -411,7 +420,10 @@ fn trace_attempt_terminal_vocabulary_does_not_infer_missing_outcomes() {
 
 #[test]
 fn trace_compaction_uses_the_next_boundary_even_far_back_in_history() {
-    let store = SqliteConversationStore::in_memory(ConversationId::new("compaction")).unwrap();
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_96847128-a59a-7bfa-8bf9-526873a32546",
+    ))
+    .unwrap();
     // Manual compaction has no native operation ID: no timing proximity join.
     for index in 0..140 {
         append(&store, E::CompactionStarted, index * 2);
@@ -432,7 +444,10 @@ fn trace_compaction_uses_the_next_boundary_even_far_back_in_history() {
 #[test]
 #[allow(clippy::too_many_lines)] // Complete controlled parallel execution scenario.
 fn trace_parallel_tool_completion_keeps_exact_call_order_and_certainty() {
-    let store = SqliteConversationStore::in_memory(ConversationId::new("tools")).unwrap();
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_f9d35d43-770d-7909-8a66-3e665e82ae1d",
+    ))
+    .unwrap();
     start(&store);
     let owner = crate::message::types::AssistantMessageBlock {
         id: MessageId::new("canonical-tool-owner"),
@@ -542,7 +557,10 @@ fn trace_live_labels_require_exact_runtime_identity_and_never_supply_timing() {
     use crate::runtime_client::projection::RuntimeClientProjection;
     use crate::runtime_client::snapshot::{CapabilityView, RuntimeClientBackgroundExecution};
     use crate::tools::background::BackgroundLifecycle;
-    let store = SqliteConversationStore::in_memory(ConversationId::new("live-trace")).unwrap();
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_da5c0fef-42f3-73f9-8f7f-b6878d9b0cbd",
+    ))
+    .unwrap();
     store.initialize(&[]).unwrap();
     start(&store);
     let mut snapshot = RuntimeClientProjection::new(
@@ -568,10 +586,12 @@ fn trace_live_labels_require_exact_runtime_identity_and_never_supply_timing() {
         .entries
         .remove(0);
     entry.kind = TraceKind::Background;
-    entry.native_id = Some("execution-a".into());
+    entry.native_id = Some("exec_db47f954-a31a-74a3-8706-22baacdc0747".into());
     snapshot.trace.entries = vec![entry];
     snapshot.background.push(RuntimeClientBackgroundExecution {
-        execution_id: crate::runtime::identity::ToolExecutionId::new("execution-b"),
+        execution_id: crate::runtime::identity::ToolExecutionId::new(
+            "exec_68344812-64a3-79bc-815f-6c3b32dfac91",
+        ),
         tool_id: ToolId::new("same-tool"),
         tool_name: "same-name".into(),
         state: BackgroundLifecycle::Running,
@@ -581,7 +601,7 @@ fn trace_live_labels_require_exact_runtime_identity_and_never_supply_timing() {
     repair_live(&mut snapshot);
     assert_eq!(snapshot.trace.entries[0].state, TraceState::Incomplete);
     snapshot.background[0].execution_id =
-        crate::runtime::identity::ToolExecutionId::new("execution-a");
+        crate::runtime::identity::ToolExecutionId::new("exec_db47f954-a31a-74a3-8706-22baacdc0747");
     repair_live(&mut snapshot);
     assert_eq!(snapshot.trace.entries[0].state, TraceState::Running);
     assert_eq!(snapshot.trace.entries[0].timing.duration_ms, None);
@@ -592,7 +612,10 @@ fn trace_live_labels_require_exact_runtime_identity_and_never_supply_timing() {
 
 #[test]
 fn trace_encoded_bound_accounts_for_escaped_strings_and_omitted_identities() {
-    let store = SqliteConversationStore::in_memory(ConversationId::new("encoded-bound")).unwrap();
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_480c9ce8-b0e2-70c4-882d-ae5878fe0801",
+    ))
+    .unwrap();
     start(&store);
     request(&store, 0);
     let mut entry = page(&store).entries.pop().unwrap();
@@ -629,8 +652,10 @@ fn trace_request_failure_preserves_native_cancellation_and_timeout_classes() {
         (ModelErrorKind::Cancelled, TraceState::Cancelled),
         (ModelErrorKind::Timeout, TraceState::TimedOut),
     ] {
-        let store =
-            SqliteConversationStore::in_memory(ConversationId::new("terminal-class")).unwrap();
+        let store = SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_05d689cd-d3ca-7d01-8056-d79aaff8d9da",
+        ))
+        .unwrap();
         start(&store);
         let req = request(&store, 0);
         failure(&store, &req, kind);
@@ -641,7 +666,10 @@ fn trace_request_failure_preserves_native_cancellation_and_timeout_classes() {
 #[test]
 fn trace_workflow_runs_join_exact_native_identity_not_definition_name() {
     use crate::runtime::workflow::{WorkflowId, WorkflowRunId};
-    let store = SqliteConversationStore::in_memory(ConversationId::new("workflow-trace")).unwrap();
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_141ff882-0973-7251-89c7-6389cfe2e736",
+    ))
+    .unwrap();
     let id = WorkflowId::parse("same-workflow").unwrap();
     let runs: Vec<_> = (1..=2)
         .map(|invocation| WorkflowRunId {
@@ -689,9 +717,12 @@ fn old_background_and_workflow_records_are_repaired_and_settle_by_identity() {
     use crate::runtime_client::projection::RuntimeClientProjection;
     use crate::runtime_client::snapshot::{CapabilityView, RuntimeClientBackgroundExecution};
     use crate::tools::background::BackgroundLifecycle;
-    let store = SqliteConversationStore::in_memory(ConversationId::new("long-running")).unwrap();
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_7cc9b826-cbd4-78d6-87f0-53569f654a7b",
+    ))
+    .unwrap();
     store.initialize(&[]).unwrap();
-    let execution = ToolExecutionId::new("old-background");
+    let execution = ToolExecutionId::new("exec_6600d36f-a2f9-7057-8735-85a8c316b8af");
     let workflow = WorkflowId::parse("old-workflow").unwrap();
     let run = WorkflowRunId {
         conversation_id: store.conversation_id().clone(),
@@ -841,7 +872,10 @@ fn old_background_and_workflow_records_are_repaired_and_settle_by_identity() {
 fn loaded_lifecycle_refresh_is_bounded_and_never_repeats_internal_request_input() {
     use crate::runtime_client::projection::RuntimeClientProjection;
     use crate::runtime_client::snapshot::CapabilityView;
-    let store = SqliteConversationStore::in_memory(ConversationId::new("refresh-bounds")).unwrap();
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_08e8fef2-9708-70e8-875e-0815ed73b267",
+    ))
+    .unwrap();
     store.initialize(&[]).unwrap();
     start(&store);
     request(&store, 0); // Oversized private prompt/schema/provider/MCP fields.
@@ -899,10 +933,14 @@ fn loaded_lifecycle_refresh_is_bounded_and_never_repeats_internal_request_input(
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn canonical_tool_artifacts_merge_by_identity_with_bounded_first_occurrence() {
     use crate::message::content::{FileReference, ImageReference};
     use crate::tools::types::{ToolExecutionResult, ToolResultContent};
-    let store = SqliteConversationStore::in_memory(ConversationId::new("artifact-tool")).unwrap();
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_ac56fc5d-a6f5-7885-8745-ac1fad19bb38",
+    ))
+    .unwrap();
     start(&store);
     let file = |id: &str| FileReference {
         artifact_id: ArtifactId::new(id),

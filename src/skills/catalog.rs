@@ -62,6 +62,7 @@ pub struct SkillCatalogEntry {
 /// model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillSnapshot {
+    roots: Vec<crate::skills::AutomaticSkillRoot>,
     packages: Vec<Arc<SkillPackage>>,
     catalog: Vec<SkillCatalogEntry>,
     bindings: Vec<SkillBinding>,
@@ -76,10 +77,12 @@ impl SkillSnapshot {
     /// materializer. No discovery, parsing, or body loading occurs here.
     pub(crate) fn from_frozen(
         mut entries: Vec<(SkillCatalogEntry, SkillBinding, SkillProvenance)>,
+        roots: Vec<crate::skills::AutomaticSkillRoot>,
     ) -> Self {
         entries.sort_by(|left, right| left.0.name.cmp(&right.0.name));
         let bindings: Vec<_> = entries.iter().map(|entry| entry.1.clone()).collect();
         Self {
+            roots,
             packages: Vec::new(), // children cannot delegate or rediscover packages
             catalog: entries.iter().map(|entry| entry.0.clone()).collect(),
             visible_bindings: bindings.clone(),
@@ -94,11 +97,14 @@ impl SkillSnapshot {
     #[must_use]
     pub fn from_discovery(outcome: SkillDiscoveryOutcome) -> Self {
         let SkillDiscoveryOutcome {
+            invalid: _,
+            roots,
             packages,
             provenance,
             diagnostics,
         } = outcome;
         Self {
+            roots,
             provenance,
             diagnostics,
             ..Self::new(packages.into_iter().map(Arc::new).collect())
@@ -130,7 +136,7 @@ impl SkillSnapshot {
     pub fn new(packages: Vec<Arc<SkillPackage>>) -> Self {
         let mut packages = packages;
         packages.sort_by(|left, right| left.name().cmp(right.name()));
-        let catalog = packages
+        let catalog: Vec<SkillCatalogEntry> = packages
             .iter()
             .filter(|package| !package.disable_model_invocation())
             .map(|package| SkillCatalogEntry {
@@ -164,6 +170,12 @@ impl SkillSnapshot {
             })
             .collect();
         Self {
+            roots: roots_from_entries(
+                catalog
+                    .iter()
+                    .zip(packages.iter())
+                    .map(|(entry, package)| (entry, package.source())),
+            ),
             packages,
             catalog,
             bindings,
@@ -171,6 +183,12 @@ impl SkillSnapshot {
             provenance,
             diagnostics: Vec::new(),
         }
+    }
+
+    /// Collection roots frozen with this generation.
+    #[must_use]
+    pub fn roots(&self) -> &[crate::skills::AutomaticSkillRoot] {
+        &self.roots
     }
 
     /// The accepted discovery packages, deterministically ordered by Skill name.
@@ -229,7 +247,8 @@ impl SkillSnapshot {
     /// [`Self::publication_equivalent`] for that decision.
     #[must_use]
     pub fn semantically_equivalent(&self, other: &Self) -> bool {
-        self.bindings == other.bindings
+        self.roots == other.roots
+            && self.bindings == other.bindings
             && self.visible_bindings == other.visible_bindings
             && self.catalog == other.catalog
             && self.locations() == other.locations()
@@ -269,54 +288,62 @@ impl SkillSnapshot {
     }
 }
 
-/// Renders the compact `## Skills` catalog deterministically.
-///
-/// Callers projecting to a model must first apply `admitted_skill_entries`.
-///
-/// The rendered form gives each Skill its canonical host `SKILL.md` location
-/// in deterministic sorted order. No `SKILL.md` body, supporting resource, or
-/// dependency metadata ever appears.
+fn roots_from_entries<'a>(
+    entries: impl Iterator<Item = (&'a SkillCatalogEntry, crate::skills::SkillSource)>,
+) -> Vec<crate::skills::AutomaticSkillRoot> {
+    let mut roots = std::collections::BTreeSet::new();
+    for (entry, source) in entries {
+        if let Some(root) = std::path::Path::new(&entry.location)
+            .parent()
+            .and_then(std::path::Path::parent)
+        {
+            roots.insert(crate::skills::AutomaticSkillRoot {
+                source,
+                root: root.to_owned(),
+            });
+        }
+    }
+    roots.into_iter().collect()
+}
+
+/// Compact metadata and collection roots enable progressive disclosure without
+/// enumerating absolute package paths. Selection controls prompt visibility only.
 #[must_use]
-pub fn render_skill_catalog(entries: &[SkillCatalogEntry]) -> String {
+pub fn render_skill_catalog(
+    entries: &[SkillCatalogEntry],
+    roots: &[crate::skills::AutomaticSkillRoot],
+) -> String {
+    use std::fmt::Write as _;
     let mut out = String::from(
-        "## Skills\n\n\
-         The following skills provide specialized instructions for specific tasks.\n\
-         Use the Read tool to load a skill when the task matches its description.\n\
-         When a skill file references a relative path, resolve it against the skill \
-         directory (the parent of its SKILL.md) and use that absolute path in tool \
-         commands.\n\n\
-         <available_skills>\n",
+        "## Skills\n\nSkill selection controls prompt visibility, not filesystem access. Use an available file-reading Tool to load <root>/<name>/SKILL.md when a description matches the task. Resolve package-relative references against that package directory. Workspace identities completely shadow User identities.\n\n",
     );
+    for (index, root) in roots.iter().enumerate() {
+        let label = match root.source {
+            crate::skills::SkillSource::User => "User Skill root",
+            crate::skills::SkillSource::Workspace => "Workspace Skill root",
+        };
+        let _ = writeln!(
+            out,
+            "{label} (root{index}): {}",
+            escape_catalog_text(&root.root.display().to_string())
+        );
+    }
+    out.push_str("\n<available_skills>\n");
     for entry in entries {
-        use std::fmt::Write as _;
         let name = escape_catalog_text(&entry.name);
         let description = escape_catalog_text(&entry.description);
-        let location = escape_catalog_text(&entry.location);
-        let _ = write!(
-            out,
-            "  <skill>\n    <name>{name}</name>\n    <description>{description}</description>\n    <location>{location}</location>\n  </skill>\n"
-        );
+        let root_index = roots.iter().position(|root| {
+            root.root.join(&entry.name).join("SKILL.md") == std::path::Path::new(&entry.location)
+        });
+        if let Some(index) = root_index {
+            let _ = writeln!(
+                out,
+                "  <skill><name>{name}</name><description>{description}</description><root>root{index}</root></skill>"
+            );
+        }
     }
     out.push_str("</available_skills>");
     out
-}
-
-/// The single lazy-Skill dependency projection for every execution domain.
-/// Package discovery and child Skill admission stay intact; only guidance
-/// requiring a model-callable native Read is hidden when Read is not admitted.
-pub(crate) fn admitted_skill_entries<'a>(
-    entries: &'a [SkillCatalogEntry],
-    tools: &crate::tools::executor::ToolRegistry,
-) -> &'a [SkillCatalogEntry] {
-    if tools.definitions().iter().any(|definition| {
-        definition.id.as_str() == crate::tools::native::READ_TOOL_ID
-            && definition.name == "read"
-            && definition.origin == crate::tools::types::ToolOrigin::Builtin
-    }) {
-        entries
-    } else {
-        &[]
-    }
 }
 
 /// Escapes text placed inside the compact XML-shaped catalog representation.
@@ -343,6 +370,9 @@ mod tests {
         diagnostics: Vec<SkillDiagnostic>,
     ) -> SkillSnapshot {
         SkillSnapshot::from_discovery(SkillDiscoveryOutcome {
+            invalid: Vec::new(),
+            roots: Vec::new(),
+
             packages: Vec::new(),
             provenance,
             diagnostics,
@@ -369,7 +399,7 @@ mod tests {
         // package. No binding, catalog entry, or location changes.
         let shadowing = snapshot(
             provenance(vec![ShadowedSkill {
-                source: SkillSource::Global,
+                source: SkillSource::User,
                 location: "/h/.agents/skills/foo/SKILL.md".to_owned(),
             }]),
             Vec::new(),

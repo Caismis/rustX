@@ -1,7 +1,7 @@
 //! Capability preparation and commit errors (M6).
 
 use crate::runtime::identity::CapabilityRevision;
-use crate::skills::{DependencyConflict, EnvironmentPreparationError, SkillDiscoveryError};
+use crate::skills::{DependencyConflict, EnvironmentPreparationError};
 
 /// A candidate capability preparation failure.
 ///
@@ -9,12 +9,6 @@ use crate::skills::{DependencyConflict, EnvironmentPreparationError, SkillDiscov
 /// current active revision remains authoritative.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapabilityPreparationError {
-    /// The **explicit** Skill launch authority is unusable (Issue #280): a
-    /// `--skill` path that does not exist, or more explicit paths than the
-    /// bound allows. A malformed *discovered* package is never this error:
-    /// it is excluded with a typed generation diagnostic while every
-    /// unrelated valid package still publishes.
-    SkillDiscovery(SkillDiscoveryError),
     /// The merged dependency declarations conflict across active Skills.
     DependencyConflict(DependencyConflict),
     /// The environment store is not disjoint from the model Workspace.
@@ -43,7 +37,6 @@ pub enum CapabilityPreparationError {
 impl core::fmt::Display for CapabilityPreparationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::SkillDiscovery(error) => write!(f, "skill discovery failed: {error}"),
             Self::DependencyConflict(conflict) => write!(f, "{conflict}"),
             Self::EnvironmentStoreOverlapsWorkspace { store_root } => write!(
                 f,
@@ -68,12 +61,6 @@ impl core::fmt::Display for CapabilityPreparationError {
 }
 
 impl std::error::Error for CapabilityPreparationError {}
-
-impl From<SkillDiscoveryError> for CapabilityPreparationError {
-    fn from(error: SkillDiscoveryError) -> Self {
-        Self::SkillDiscovery(error)
-    }
-}
 
 impl From<DependencyConflict> for CapabilityPreparationError {
     fn from(conflict: DependencyConflict) -> Self {
@@ -142,7 +129,7 @@ impl core::fmt::Display for CapabilityCommitError {
             ),
             Self::RuntimePublicationRequired => write!(
                 f,
-                "a live conversation runtime owns capability publication; use its resource reload boundary"
+                "a live conversation runtime owns capability publication; use its configuration reload boundary"
             ),
             Self::StaleMcpCandidate { server_id } => write!(
                 f,

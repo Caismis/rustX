@@ -133,7 +133,7 @@ fn scripted(
 }
 
 fn conversation() -> ConversationId {
-    ConversationId::new("conv-1")
+    ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18")
 }
 
 fn summary_id(generation: u64) -> MessageId {
@@ -1151,7 +1151,10 @@ fn no_edge_crosses_the_chosen_cut() {
     // were retired whole, so no edge can cross the replacement boundary.
     assert_eq!(
         active_ids(&history),
-        vec!["conv-1-summary-1".to_owned(), "u2".to_owned()]
+        vec![
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-summary-1".to_owned(),
+            "u2".to_owned()
+        ]
     );
     let _ = projection;
 }

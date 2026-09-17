@@ -230,7 +230,7 @@ fn fixture_with_selection(
                     .map(|name| format!("python:{name}"))
                     .chain(mcp_servers.keys().map(ToString::to_string)),
             ),
-            conversation_id: ConversationId::new("conv-python-tools"),
+            conversation_id: ConversationId::new("conv_55cd2a0a-89f8-7b8f-8367-c51bc097c9a6"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
@@ -303,6 +303,18 @@ fn assert_demo_connect_failed(candidate: &rustx::capabilities::PreparedCapabilit
         reason.contains("MCP discovery failed"),
         "the connect failure is the scripted stub's exec failure: {reason}"
     );
+}
+
+/// Explicit reload capture: the already-published candidate never rereads files itself.
+fn reread_demo(fixture: &Fixture) -> rustx::capabilities::CapabilityResourceInputs {
+    rustx::capabilities::CapabilityResourceInputs {
+        source_demand: common::source_demand(&fixture.workspace_root, ["python:demo"]),
+        base_tool_registry: Arc::new(ToolRegistry::new()),
+        agent_activation: crate::capabilities::AgentActivation::default(),
+        skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
+        mcp_servers: std::collections::BTreeMap::default(),
+        base_environment: ToolEnvironment::new(),
+    }
 }
 
 /// An unchanged package is prepared exactly once across repeated
@@ -387,7 +399,7 @@ async fn a_source_edit_prepares_anew_and_preserves_the_prior_state() {
     .expect("edit the live source");
     let candidate = fixture
         .coordinator
-        .prepare_candidate()
+        .prepare_candidate_with_inputs(reread_demo(&fixture))
         .await
         .expect("second prepare");
     assert_demo_connect_failed(&candidate);
@@ -443,7 +455,7 @@ async fn a_failed_build_preserves_the_prior_published_state() {
     .expect("edit the live source");
     let candidate = fixture
         .coordinator
-        .prepare_candidate()
+        .prepare_candidate_with_inputs(reread_demo(&fixture))
         .await
         .expect("a package failure never fails the candidate");
     let Some(CapabilitySourceState::Unavailable { reason }) =
@@ -523,8 +535,6 @@ async fn a_configured_python_identity_collision_is_an_internal_invariant_violati
         server_id,
         rustx::tools::mcp::McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: "/nonexistent/rustx-issue174-configured-server".to_owned(),
                 args: Vec::new(),
@@ -632,7 +642,7 @@ async fn a_requirements_edit_prepares_a_new_environment() {
     .expect("edit requirements");
     fixture
         .coordinator
-        .prepare_candidate()
+        .prepare_candidate_with_inputs(reread_demo(&fixture))
         .await
         .expect("second prepare");
     assert_eq!(
@@ -646,4 +656,67 @@ async fn a_requirements_edit_prepares_a_new_environment() {
         states.contains(state_v1),
         "the prior state is retained (no GC)"
     );
+}
+
+#[tokio::test]
+async fn child_source_admission_begins_python_preparation_using_the_frozen_package_capture() {
+    let fixture = fixture_with_selection(
+        &[
+            ("child-only", SERVER_V1),
+            ("unselected", "must never import"),
+        ],
+        std::collections::BTreeMap::new(),
+        &[],
+    );
+    let captured = crate::local_runtime::managed_python_resources::discover(
+        &fixture.workspace_root,
+        &fixture.workspace_root.join("absent-user-root"),
+    )
+    .unwrap();
+    let candidate = fixture.coordinator.prepare_candidate().await.unwrap();
+    let published = fixture.coordinator.commit(candidate).unwrap();
+    let resources = crate::runtime::resources::RuntimeResourceSnapshot::new(
+        crate::runtime::identity::RuntimeResourceRevision::new(1),
+        Vec::new(),
+        None,
+        crate::context::assembly::ContextAssembly::new(),
+        published.clone(),
+    )
+    .with_managed_python_catalog(captured);
+    assert!(fixture.runner.commands.lock().unwrap().is_empty());
+    // A later edit cannot replace the generation's captured child package.
+    std::fs::write(
+        fixture
+            .workspace_root
+            .join(".agents/tools/child-only/server.py"),
+        "invalid current source",
+    )
+    .unwrap();
+    let cancellation = crate::runtime::cancellation::CancellationSignal::new();
+    let admitted = fixture
+        .coordinator
+        .prepare_admitted_sources(
+            &resources,
+            [ToolSourceId::ManagedPython("child-only".into())]
+                .into_iter()
+                .collect(),
+            &cancellation,
+        )
+        .await
+        .unwrap();
+    assert_eq!(fixture.runner.lock_command_count(), 1);
+    assert_eq!(state_dirs(&fixture.store_root).len(), 1);
+    // The recorded backend deliberately refuses MCP execution after preparation.
+    // Its failure stays off-side and never changes the Root published capability.
+    assert!(matches!(
+        admitted
+            .availability()
+            .get(&ToolSourceId::ManagedPython("child-only".into())),
+        Some(CapabilitySourceState::Unavailable { .. })
+    ));
+    assert!(Arc::ptr_eq(
+        &published,
+        &fixture.coordinator.current_snapshot()
+    ));
+    admitted.retire_uncommitted().await;
 }

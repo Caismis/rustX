@@ -22,34 +22,36 @@ const MODELS: &str = r#"[providers.local]
 base_url = "http://127.0.0.1:9/v1"
 api_key = "$RUSTX_ISSUE88_KEY"
 
-[[providers.local.models]]
+[models."local/test-model"]
+provider = "local"
 id = "test-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
-[providers.local.models.capabilities]
+[models."local/test-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/test-model".compat]
 chat_reasoning_replay = "omit"
 
-[[providers.local.models]]
+[models."local/second-model"]
+provider = "local"
 id = "second-model"
 protocol = "openai_chat_completions"
 context_window = 32000
 max_output_tokens = 256
 
-[providers.local.models.capabilities]
+[models."local/second-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/second-model".compat]
 chat_reasoning_replay = "omit"
 "#;
 
@@ -68,19 +70,11 @@ model = "local/test-model"
 fn paths(root: &std::path::Path) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    std::fs::write(root.join("models.toml"), MODELS).expect("models");
-    std::fs::write(root.join("rustx.toml"), BOOTSTRAP).expect("rustx.toml");
+    std::fs::write(root.join("rustx.toml"), format!("{BOOTSTRAP}\n{MODELS}")).expect("rustx.toml");
     LaunchFixture {
-        models: root.join("models.toml"),
         config: root.join("rustx.toml"),
-        skill_paths: Vec::new(),
-        no_automatic_skills: false,
-        no_builtin_tools: false,
-        no_direct_tools: false,
         startup_session: StartupSession::Empty,
         session_name: None,
-        tools: None,
-        exclude_tools: Vec::new(),
         workspace,
         runtime_root: root.join("runtime"),
     }
@@ -346,7 +340,7 @@ fn use_session(
 ///
 /// The failure is the realistic one: a persisted Session records a
 /// Session-local model, and that model is later removed from
-/// `models.toml`. Selecting that Session is metadata-valid — the catalog
+/// `rustx.toml`. Selecting that Session is metadata-valid — the catalog
 /// knows the Session and the node — and only composition discovers the
 /// model is gone. Publishing the selection before composing would leave a
 /// process that never started having moved the active selection, so the
@@ -364,7 +358,11 @@ async fn a_failed_launch_leaves_the_catalog_and_the_active_selection_untouched()
     let first = (paths).compose(&dependencies).await.expect("first launch");
     let doomed_conversation = first.runtime().conversation_id().clone();
     drop(first);
-    let doomed_session = rustx::local_runtime::SessionId::new("session-1");
+    let doomed_session = SessionCatalog::open_existing(&runtime_root)
+        .unwrap()
+        .unwrap()
+        .persisted_session_ids()[0]
+        .clone();
     use_session(
         &runtime_root,
         &doomed_session,
@@ -375,10 +373,14 @@ async fn a_failed_launch_leaves_the_catalog_and_the_active_selection_untouched()
     // A second Session becomes the active one; the first is history.
     let second = (paths).compose(&dependencies).await.expect("second launch");
     drop(second);
-    let active_before = rustx::local_runtime::SessionId::new("session-2");
+    let active_before = SessionCatalog::open_existing(&runtime_root)
+        .unwrap()
+        .unwrap()
+        .persisted_session_ids()[1]
+        .clone();
     assert_ne!(active_before, doomed_session);
 
-    // The history Session records a model that `models.toml` no longer
+    // The history Session records a model that `rustx.toml` no longer
     // offers. Nothing about the catalog is invalid; only composition can
     // discover this.
     let mut document: serde_json::Value =
@@ -467,7 +469,11 @@ async fn a_failed_empty_launch_publishes_no_session() {
     let first = (paths).compose(&dependencies).await.expect("first launch");
     let used_conversation = first.runtime().conversation_id().clone();
     drop(first);
-    let used_session = rustx::local_runtime::SessionId::new("session-1");
+    let used_session = SessionCatalog::open_existing(&runtime_root)
+        .unwrap()
+        .unwrap()
+        .persisted_session_ids()[0]
+        .clone();
     use_session(
         &runtime_root,
         &used_session,

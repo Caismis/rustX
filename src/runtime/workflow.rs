@@ -146,7 +146,7 @@ pub(crate) fn test_instance(workflow: &str, node: &str) -> WorkflowNodeInstance 
         block: WorkflowBlockInstance {
             run: WorkflowRunId {
                 conversation_id: crate::runtime::identity::ConversationId::new(
-                    "test-workflow-conversation",
+                    "conv_47f0e826-cb00-7b0b-8ce4-af52ffdacf51",
                 ),
                 attempt_id: crate::runtime::identity::AttemptId::new("test-workflow-execution"),
                 invocation: 1,
@@ -790,10 +790,26 @@ impl WorkflowAdmissionDiagnostic {
 /// One immutable catalog; enabled identities are derived, never separately authored.
 #[derive(Debug, Clone, Default)]
 pub struct WorkflowCatalog {
+    pub(crate) locations: BTreeMap<WorkflowId, crate::runtime::resources::ResourceLocation>,
+    pub(crate) discovery_diagnostics: Vec<crate::runtime::resources::RuntimeResourceLoadError>,
     entries: BTreeMap<WorkflowId, WorkflowEntry>,
+    invalid: BTreeMap<WorkflowId, crate::runtime::resources::RuntimeResourceLoadError>,
 }
 
 impl WorkflowCatalog {
+    pub(crate) fn set_invalid(
+        &mut self,
+        invalid: BTreeMap<WorkflowId, crate::runtime::resources::RuntimeResourceLoadError>,
+    ) {
+        self.invalid = invalid;
+    }
+    #[must_use]
+    pub fn invalid(
+        &self,
+    ) -> &BTreeMap<WorkflowId, crate::runtime::resources::RuntimeResourceLoadError> {
+        &self.invalid
+    }
+
     /// Discovers structurally compiled sources. Admission is a separate candidate phase.
     ///
     /// # Errors
@@ -822,7 +838,12 @@ impl WorkflowCatalog {
                 return Err(WorkflowCatalogError::TooManyDefinitions);
             }
         }
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            locations: BTreeMap::new(),
+            invalid: BTreeMap::new(),
+            discovery_diagnostics: Vec::new(),
+        })
     }
 
     #[must_use]
@@ -3299,19 +3320,20 @@ mod tests {
 base_url = "http://127.0.0.1:9/v1"
 api_key = "test-only-secret"
 
-[[providers.local.models]]
+[models."local/model"]
+provider = "local"
 id = "model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
-[providers.local.models.capabilities]
+[models."local/model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/model".compat]
 chat_reasoning_replay = "omit"
 "#;
 
@@ -3331,7 +3353,7 @@ chat_reasoning_replay = "omit"
         let runtime_root = dir.path().join("subagents");
         std::fs::create_dir_all(&workspace).expect("workflow workspace");
         std::fs::create_dir_all(&runtime_root).expect("workflow runtime root");
-        let conversation_id = ConversationId::new("workflow-test-conversation");
+        let conversation_id = ConversationId::new("conv_fb777980-3e94-78c5-879a-296623a08f02");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
                 .expect("workflow store"),
@@ -3357,6 +3379,10 @@ chat_reasoning_replay = "omit"
             clock: Arc::new(SystemClock),
             monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
             spawn: SubagentSpawnPlan {
+                session_id: crate::runtime::identity::SessionId::new(
+                    "ses_01900000-0000-7000-8000-000000000001",
+                ),
+
                 program: std::path::PathBuf::from("/nonexistent/rustx"),
                 product_root: crate::runtime::local_storage::ProductRoot::create(
                     &runtime_root.clone(),
@@ -3477,13 +3503,12 @@ chat_reasoning_replay = "omit"
             .with_subagent_catalog(catalog)
             .with_workflow_catalog(workflow_catalog),
         );
-        crate::runtime::subagent::AttemptSubagentContext::new(
+        crate::runtime::subagent::AttemptSubagentContext::test_context(
             crate::runtime::identity::AttemptId::new("workflow-test-attempt"),
             resources,
             SessionModelConfig::of(model),
             models,
             ApprovalMode::Policy,
-            crate::extensions::NativeAgentExtensions::none(),
         )
     }
 

@@ -129,7 +129,6 @@ use super::projection::{RuntimeClientProjection, SubscriberPoll, background_view
 use super::snapshot::{
     RuntimeClientTranscriptCursor, RuntimeClientTranscriptPage, transcript_page_view,
 };
-use super::types::RuntimeClientRequest;
 use super::types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor, RuntimeClientError,
     RuntimeClientProtocolEvent, RuntimeClientResult, RuntimeClientSessionRequest,
@@ -361,7 +360,6 @@ pub(crate) struct ClientInner {
     /// Optional native product Session owner. Low-level conversation hosts
     /// intentionally leave this absent; the local product installs exactly
     /// one supervisor here.
-    defaults: Option<Arc<dyn super::settings::DefaultSettingsStore>>,
     session_control: Option<Arc<dyn RuntimeClientSessionControl>>,
     /// The one projection synchronization boundary.
     state: Arc<Mutex<ClientState>>,
@@ -905,13 +903,15 @@ impl ClientInner {
     }
 
     /// Atomically reloads one complete resource/capability generation.
-    pub(crate) async fn reload_resources(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+    pub(crate) async fn reload_configuration(
+        &self,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
         let reloaded = self
             .runtime
             .as_ref()
             .expect("a writable Runtime Client host has a runtime")
-            .reload_resources()
+            .reload_configuration()
             .await
             .map_err(|error| match error {
                 RuntimeResourceReloadError::Inactive => RuntimeClientError::InvalidState {
@@ -919,26 +919,15 @@ impl ClientInner {
                 },
                 RuntimeResourceReloadError::Shutdown => RuntimeClientError::RuntimeShutdown,
                 RuntimeResourceReloadError::Busy { reason } => {
-                    RuntimeClientError::ResourceReloadBusy {
-                        reason: reason.as_str().to_owned(),
-                    }
+                    RuntimeClientError::ConfigurationReloadBusy { reason }
                 }
                 RuntimeResourceReloadError::Failed { message } => {
-                    RuntimeClientError::RuntimeFailure {
-                        message: format!("runtime resource reload failed: {message}"),
+                    RuntimeClientError::ConfigurationReloadFailed {
+                        diagnostic: message.chars().take(2048).collect(),
                     }
                 }
-                RuntimeResourceReloadError::PostPublicationSettlementFailed {
-                    published,
-                    message,
-                } => RuntimeClientError::RuntimeFailure {
-                    message: format!(
-                        "runtime resource reload published resource revision {:?} and capability revision {:?}, but MCP retirement settlement is unproven: {message}",
-                        published.resource_revision, published.capability_revision
-                    ),
-                },
             })?;
-        Ok(RuntimeClientResult::ResourcesReloaded {
+        Ok(RuntimeClientResult::ConfigurationReloaded {
             resource_revision: reloaded.resource_revision.get(),
             capability_revision: reloaded.capability_revision,
         })
@@ -1309,13 +1298,23 @@ impl ClientInner {
         ))
     }
 
-    /// Reads the active capability projection (the one semantic
-    /// implementation shared with the snapshot).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RuntimeClientError::ProjectionExhausted`] once the
-    /// observation stream is over.
+    /// Read the loaded configuration through the native publication owner.
+    pub(crate) fn configuration(
+        &self,
+    ) -> Result<
+        crate::local_runtime::configuration::settings::EffectiveConfiguration,
+        RuntimeClientError,
+    > {
+        self.ensure_session_runtime_live()?;
+        self.runtime
+            .as_ref()
+            .and_then(super::super::runtime::conversation_runtime::ConversationRuntime::configuration_view)
+            .ok_or_else(|| RuntimeClientError::InvalidState {
+                message: "this attachment has no loaded Root configuration generation".into(),
+            })
+    }
+
+    /// Read the native capability projection.
     pub(crate) fn capability(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_session_runtime_live()?;
         let state = self.lock_state();
@@ -1388,78 +1387,6 @@ impl ClientInner {
         })
     }
 
-    /// Captures the requested native setting, then delegates a separate disk write.
-    /// The selected model or desired approval mode is read under the coordinator
-    /// lock before awaiting the writer; projection delivery is not part of this cut.
-    /// Existing attachment and Session fences apply before the capture.
-    pub(crate) async fn defaults_request(
-        &self,
-        request: RuntimeClientRequest,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        match request {
-            RuntimeClientRequest::DefaultsRead { scope, .. } => self.defaults_read(scope).await,
-            RuntimeClientRequest::DefaultSave {
-                scope,
-                expected_revision,
-                target,
-                ..
-            } => self.defaults_save(scope, expected_revision, target).await,
-            _ => unreachable!("bounded settings request"),
-        }
-    }
-
-    pub(crate) async fn defaults_read(
-        &self,
-        scope: super::settings::DefaultScope,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_writable_runtime()?;
-        let store = self
-            .defaults
-            .as_ref()
-            .ok_or_else(|| RuntimeClientError::InvalidState {
-                message: "this runtime has no user-default write authority".into(),
-            })?;
-        Ok(RuntimeClientResult::Defaults {
-            document: store.read(scope).await?,
-        })
-    }
-
-    pub(crate) async fn defaults_save(
-        &self,
-        scope: super::settings::DefaultScope,
-        expected_revision: String,
-        target: super::settings::DefaultTarget,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        use super::settings::{DefaultTarget, DefaultValue, ModelDefault};
-        self.ensure_writable_runtime()?;
-        let store = self
-            .defaults
-            .as_ref()
-            .ok_or_else(|| RuntimeClientError::InvalidState {
-                message: "this runtime has no user-default write authority".into(),
-            })?;
-        let runtime = self.runtime.as_ref().expect("writable runtime checked");
-        // Capture one native owner under its coordinator lock. No projection
-        // read, observation drain, or disk operation participates in this cut.
-        let value = match target {
-            DefaultTarget::ModelSelection => {
-                let config = runtime.model_view().configured;
-                DefaultValue::ModelSelection {
-                    selection: ModelDefault {
-                        model: config.model,
-                        reasoning_profile: config.reasoning_profile,
-                    },
-                }
-            }
-            DefaultTarget::ApprovalMode => DefaultValue::ApprovalMode {
-                mode: runtime.approval_mode_state().desired,
-            },
-        };
-        Ok(RuntimeClientResult::DefaultSaved {
-            result: store.save(scope, expected_revision, value).await?,
-        })
-    }
-
     /// Replaces the authoritative session model configuration through the
     /// conversation runtime.
     ///
@@ -1529,35 +1456,6 @@ impl ClientInner {
             })?;
         Ok(RuntimeClientResult::ModelSet {
             model: Box::new(view),
-        })
-    }
-
-    /// Requests the authoritative runtime `ApprovalMode` transition.
-    pub(crate) fn approval_mode_set(
-        &self,
-        mode: crate::runtime::ApprovalMode,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_writable_runtime()?;
-        let state = self.lock_state();
-        state.projection.snapshot_ref_checked()?;
-        drop(state);
-        let state = self
-            .runtime
-            .as_ref()
-            .expect("a writable Runtime Client host has a runtime")
-            .approval_mode_set(mode)
-            .map_err(|error| match error {
-                crate::runtime::ApprovalModeUpdateError::Inactive => {
-                    RuntimeClientError::ApprovalModeInactive
-                }
-                crate::runtime::ApprovalModeUpdateError::DurabilityFailed { message } => {
-                    RuntimeClientError::ApprovalModeDurabilityFailed { message }
-                }
-            })?;
-        Ok(RuntimeClientResult::ApprovalModeSet {
-            effective_approval_mode: state.effective,
-            pending_approval_mode: (state.effective != state.desired).then_some(state.desired),
-            revision: state.revision,
         })
     }
 
@@ -1836,7 +1734,7 @@ fn durable_projection(
         RuntimeClientProjection::new(conversation_id, messages, capabilities, None, replay_limit);
     projection.set_settings_evidence(super::settings::SettingsEvidence::HistoricalPartial);
     // No runtime stands behind a durable projection, so there is no
-    // authoritative Agent composition to project: `effective_extensions`
+    // authoritative Agent composition to project: `effective_plugins`
     // stays absent (Issue #256). It is deliberately *not* reconstructed from
     // the configuration document on disk today, from built-in defaults, or
     // from the Agent Status observations this journal replay does install —
@@ -1959,7 +1857,7 @@ impl RuntimeClientHost {
     /// headless observation bridge already exists over the runtime, or
     /// [`HostConstructionError::Durable`] when native durable bootstrap fails.
     pub fn new(config: RuntimeClientHostConfig) -> Result<Self, HostConstructionError> {
-        Self::construct(config, None, None, None)
+        Self::construct(config, None)
     }
 
     /// Creates a read-only Runtime Client host over a known conversation's
@@ -2005,7 +1903,6 @@ impl RuntimeClientHost {
             read_only: true,
             replay_limit,
             session_control: None,
-            defaults: None,
             state: Arc::new(Mutex::new(ClientState {
                 projection,
                 control_attachment: None,
@@ -2036,24 +1933,20 @@ impl RuntimeClientHost {
         config: RuntimeClientHostConfig,
         session_control: Arc<dyn RuntimeClientSessionControl>,
     ) -> Result<Self, HostConstructionError> {
-        Self::construct(config, Some(session_control), None, None)
+        Self::construct(config, Some(session_control))
     }
 
     /// Local composition supplies immutable resolver facts and its bounded disk writer.
-    pub(crate) fn new_with_settings(
+    pub(crate) fn new_with_control(
         config: RuntimeClientHostConfig,
         session_control: Option<Arc<dyn RuntimeClientSessionControl>>,
-        launch: Option<super::settings::LaunchSettings>,
-        defaults: Option<Arc<dyn super::settings::DefaultSettingsStore>>,
     ) -> Result<Self, HostConstructionError> {
-        Self::construct(config, session_control, launch, defaults)
+        Self::construct(config, session_control)
     }
 
     fn construct(
         config: RuntimeClientHostConfig,
         session_control: Option<Arc<dyn RuntimeClientSessionControl>>,
-        launch: Option<super::settings::LaunchSettings>,
-        defaults: Option<Arc<dyn super::settings::DefaultSettingsStore>>,
     ) -> Result<Self, HostConstructionError> {
         // ---- Ownership commit: the one-time binding claim. ----
         //
@@ -2118,7 +2011,6 @@ impl RuntimeClientHost {
             replay_limit,
         );
         projection.bootstrap(&seed);
-        projection.set_launch_settings(launch);
         // The effective native Agent Extension composition of the runtime
         // this host is bound to (Issue #256). It is read from the runtime's
         // own materialized extension owners, so a root host projects the
@@ -2126,11 +2018,9 @@ impl RuntimeClientHost {
         // subagent-child host projects the one its `ResolvedSubagentSpec`
         // carried — with no configuration document, resource generation, or
         // Agent Status observation anywhere on the path.
-        projection.set_effective_extensions(
-            super::settings::EffectiveNativeAgentExtensions::project(
-                &config.runtime.native_extensions(),
-            ),
-        );
+        projection.set_effective_plugins(super::settings::EffectivePlugins::project(
+            &config.runtime.native_extensions(),
+        ));
         if config.runtime.model_is_frozen() {
             projection.set_settings_evidence(super::settings::SettingsEvidence::FrozenChild);
         }
@@ -2142,7 +2032,6 @@ impl RuntimeClientHost {
             read_only: false,
             replay_limit,
             session_control,
-            defaults,
             state: Arc::new(Mutex::new(ClientState {
                 projection,
                 control_attachment: None,
@@ -2304,8 +2193,8 @@ impl RuntimeClientHost {
     ///
     /// Returns a typed busy result while an attempt, interaction, compaction,
     /// or another reload owns the semantic boundary.
-    pub async fn reload_resources(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.inner.reload_resources().await
+    pub async fn reload_configuration(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.inner.reload_configuration().await
     }
 
     /// Responds to one live native interaction through Runtime Client
@@ -2441,20 +2330,6 @@ impl RuntimeClientHost {
         config: SessionModelConfig,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.inner.model_set(config)
-    }
-
-    /// Requests the runtime `ApprovalMode` transition through the authoritative
-    /// runtime control plane.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed Runtime Client error when the runtime is inactive,
-    /// durably failed, or its projection is no longer serviceable.
-    pub fn approval_mode_set(
-        &self,
-        mode: crate::runtime::ApprovalMode,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.inner.approval_mode_set(mode)
     }
 
     /// Inspects one background execution through the authoritative
@@ -3158,7 +3033,7 @@ mod tests {
     ) -> (Arc<GatedAdapter>, HostFixture) {
         let adapter = Arc::new(GatedAdapter::new(scripts));
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-host");
+        let conversation_id = ConversationId::new("conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
@@ -3201,6 +3076,10 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 agent_activation: {
                     let mut activation = crate::capabilities::AgentActivation::default();
+                    activation.profile.skills =
+                        Some(crate::runtime::agent_profile::AgentSkillSelection::All);
+                    activation.profile.extensions =
+                        crate::scripted_suites::common::plugin_document(tool_runtime.extensions());
                     activation.profile.tools.builtin = tools
                         .definitions()
                         .into_iter()
@@ -3227,6 +3106,7 @@ mod tests {
         coordinator.commit(candidate).expect("commit candidate");
         let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
         let runtime = ConversationRuntime::new(RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter.clone()),
             approval_mode: crate::runtime::ApprovalMode::Policy,
@@ -3278,7 +3158,7 @@ mod tests {
     ) -> (Arc<GatedAdapter>, HostFixture) {
         let adapter = Arc::new(GatedAdapter::new(scripts));
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-host");
+        let conversation_id = ConversationId::new("conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
@@ -3324,6 +3204,7 @@ mod tests {
         let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
         let runtime = ConversationRuntime::with_probe(
             RuntimeConversationConfig {
+                explicit_model: true,
                 agent_id: AgentId::new("agent-a"),
                 model: scripted_session_model(adapter.clone()),
                 approval_mode: crate::runtime::ApprovalMode::Policy,
@@ -3457,7 +3338,7 @@ mod tests {
     }
 
     fn durable_history_fixture() -> DurableHistoryFixture {
-        let conversation_id = ConversationId::new("conversation-child-inspection");
+        let conversation_id = ConversationId::new("conv_8ae2de1c-f83b-7ff0-882f-98321c50d37d");
         let store = Arc::new(
             SqliteConversationStore::in_memory(conversation_id.clone()).expect("child store"),
         );
@@ -3731,7 +3612,7 @@ mod tests {
     /// observation stream.
     #[test]
     fn durable_attachment_resyncs_cancelled_child_after_runtime_disappears() {
-        let conversation_id = ConversationId::new("conversation-cancelled-child");
+        let conversation_id = ConversationId::new("conv_ef919f28-b766-7227-8980-3d65cbf34ff6");
         let store = Arc::new(
             SqliteConversationStore::in_memory(conversation_id.clone()).expect("child store"),
         );
@@ -3803,7 +3684,7 @@ mod tests {
     /// describes a prospective next launch.
     #[test]
     fn ext256_historical_inspection_reports_no_effective_extension_composition() {
-        let conversation_id = ConversationId::new("conversation-historical-extensions");
+        let conversation_id = ConversationId::new("conv_576d0fd2-f9b2-75ce-8187-0c2ca5bbfe62");
         let store = Arc::new(
             SqliteConversationStore::in_memory(conversation_id.clone()).expect("durable store"),
         );
@@ -3854,10 +3735,9 @@ mod tests {
             crate::runtime_client::settings::SettingsEvidence::HistoricalPartial
         );
         assert_eq!(
-            snapshot.effective_extensions, None,
+            snapshot.effective_plugins, None,
             "unavailable evidence is reported as unavailable, not reconstructed"
         );
-        assert_eq!(snapshot.launch_settings, None);
         assert_eq!(
             snapshot.messages.len(),
             2,
@@ -3867,7 +3747,7 @@ mod tests {
         // A durable resync is the other read path into this projection, and
         // it must stay just as honest.
         let (resynced, _) = host.snapshot().expect("durable resync");
-        assert_eq!(resynced.effective_extensions, None);
+        assert_eq!(resynced.effective_plugins, None);
         attachment.detach();
     }
 
@@ -3947,39 +3827,6 @@ mod tests {
         });
         assert_eq!(response.id.get(), 1, "request ids are attachment-scoped");
         assert!(response.error.is_none());
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn cfg238_default_save_requires_native_write_authority() {
-        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
-        let (control, _) = fixture
-            .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
-            .unwrap();
-        let request = || RuntimeClientRequest::DefaultSave {
-            id: super::super::types::RequestId::new(238),
-            scope: super::super::settings::DefaultScope::User,
-            expected_revision: "missing".into(),
-            target: super::super::settings::DefaultTarget::ModelSelection,
-        };
-        // Low-level and frozen-child compositions do not install a disk writer.
-        assert!(
-            matches!(control.handle_request_async(request()).await.error,
-            Some(RuntimeClientError::InvalidState { message }) if message == "this runtime has no user-default write authority")
-        );
-        let (observer, _) = fixture
-            .host
-            .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
-            .unwrap();
-        assert!(
-            matches!(observer.handle_request_async(request()).await.error,
-            Some(RuntimeClientError::InvalidState { message }) if message == "conversation inspection is read-only")
-        );
-        control.detach();
-        assert!(matches!(
-            control.handle_request_async(request()).await.error,
-            Some(RuntimeClientError::NotAttached)
-        ));
     }
 
     /// Read-only inspection attachments share the live projection without
@@ -4101,7 +3948,10 @@ mod tests {
             panic!("accepted result");
         };
         assert_eq!(inbound_sequence.get(), 1);
-        assert_eq!(message_id.as_str(), "conv-host-inbound-1");
+        assert_eq!(
+            message_id.as_str(),
+            "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1"
+        );
 
         // The attempt settles asynchronously; the subscription observes the
         // terminal settlement exactly once.
@@ -4301,7 +4151,7 @@ mod tests {
             provider_requests[3].messages.iter().any(|message| {
                 matches!(
                     message,
-                    crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id.as_str() == "conv-host-inbound-2"
+                    crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id.as_str() == "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-2"
                 )
             }),
             "the retry still observes the pending fresh inbound"
@@ -4410,19 +4260,21 @@ mod tests {
     /// runtime-side `submit_inbound` never reaches the catalog's
     /// classification authority; Session-lifecycle assertions must write
     /// through the catalog's own store.
+    fn source_session_id(root: impl AsRef<std::path::Path>) -> crate::local_runtime::SessionId {
+        // The fixture's first Session is chosen by catalog ordinal, not UUID order.
+        let catalog = SessionCatalog::open_existing(root.as_ref())
+            .unwrap()
+            .unwrap();
+        catalog.persisted_session_ids().into_iter().next().unwrap()
+    }
+
     fn accept_catalog_pending_inbound(catalog_root: &std::path::Path, text: &str) {
         let catalog = SessionCatalog::open_existing(catalog_root)
             .expect("open catalog")
             .expect("catalog exists");
         let (session_id, node, _) = catalog
-            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-            .map(|(node, state)| {
-                (
-                    crate::local_runtime::SessionId::new("session-1"),
-                    node,
-                    state,
-                )
-            })
+            .lineage(&source_session_id(catalog_root), None)
+            .map(|(node, state)| (source_session_id(catalog_root), node, state))
             .expect("active lineage");
         let store = SqliteConversationStore::open(
             node.conversation_id.clone(),
@@ -5031,7 +4883,10 @@ mod tests {
             .runtime
             .tool_runtime()
             .mailbox()
-            .enqueue(inbound_text("conv-host-async-2", "async after detach"))
+            .enqueue(inbound_text(
+                "conv_9ec557e9-8373-72d1-92d3-cf39a531c6cf",
+                "async after detach",
+            ))
             .expect("async enqueue");
         await_request_history_len(&fixture.host, 2).await;
         fixture.runtime.settlement_signal().notified().await;
@@ -5281,7 +5136,7 @@ mod tests {
         .expect("SKILL.md");
     }
 
-    /// A resource reload is one generation or nothing — in the snapshot the
+    /// A configuration reload is one generation or nothing — in the snapshot the
     /// projection folds *and* in the event stream a client folds. Every cut
     /// of both is checked, so a consumer can never see the new capability
     /// generation beside the retired resource generation.
@@ -5335,7 +5190,10 @@ mod tests {
 
         // A reload that genuinely moves both halves of the generation.
         write_probe_skill(&dir.path().join("workspace"), "generation-skill");
-        let reloaded = runtime.reload_resources().await.expect("resource reload");
+        let reloaded = runtime
+            .reload_configuration()
+            .await
+            .expect("configuration reload");
         assert!(
             reloaded.capability_revision > baseline.capabilities.revision,
             "the reload advanced the capability generation"
@@ -5401,6 +5259,7 @@ mod tests {
         let RuntimeClientEvent::ResourceGenerationUpdated {
             capabilities,
             resources,
+            ..
         } = &delivered[0].event
         else {
             panic!("the reload publishes its generation: {delivered:?}");
@@ -5521,7 +5380,7 @@ mod tests {
         runtime.settlement_signal().notified().await;
         write_probe_skill(&dir.path().join("workspace"), "lifetime-skill");
         runtime
-            .reload_resources()
+            .reload_configuration()
             .await
             .expect("the runtime owns capability publication");
 
@@ -5833,7 +5692,7 @@ mod tests {
         let reloading = fixture.runtime.clone();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let reload_task = tokio::spawn(async move {
-            let result = reloading.reload_resources().await;
+            let result = reloading.reload_configuration().await;
             done_tx.send(()).expect("the test still listens");
             result
         });
@@ -5874,7 +5733,7 @@ mod tests {
     }
 
     /// An inert package directory cannot change source readiness or the
-    /// executable revision. Resource reload still publishes its generation
+    /// executable revision. Configuration reload still publishes its generation
     /// event, and the folded client snapshot agrees with that event.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn inert_python_directory_does_not_change_executable_revision_or_source_readiness() {
@@ -5908,7 +5767,7 @@ mod tests {
         .expect("broken package source");
         let committed = fixture
             .runtime
-            .reload_resources()
+            .reload_configuration()
             .await
             .expect("an availability-only reload succeeds");
         assert_eq!(
@@ -5977,7 +5836,7 @@ mod tests {
         std::fs::write(&instructions, "project authority").expect("write AGENTS.md");
         let committed = fixture
             .runtime
-            .reload_resources()
+            .reload_configuration()
             .await
             .expect("the reload succeeds");
 
@@ -6408,7 +6267,7 @@ mod tests {
         assert!(
             after_snapshot.messages.iter().any(|message| matches!(
                 message,
-                MessageBlock::User(user) if user.id.as_str() == "conv-host-inbound-1"
+                MessageBlock::User(user) if user.id.as_str() == "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1"
             )),
             "the snapshot reflects the transition state"
         );
@@ -6535,7 +6394,9 @@ mod tests {
         // Unknown executions fail explicitly.
         let unknown = attachment.handle_request(RuntimeClientRequest::BackgroundStatus {
             id: crate::runtime_client::RequestId::new(2),
-            execution_id: crate::runtime::identity::ToolExecutionId::new("exec_99"),
+            execution_id: crate::runtime::identity::ToolExecutionId::new(
+                "exec_9f85dfef-c2b2-7a62-837d-620fed38822f",
+            ),
         });
         assert!(matches!(
             unknown.error,
@@ -6787,14 +6648,14 @@ mod tests {
             .expect("attach");
 
         let response = attachment
-            .handle_request_async(RuntimeClientRequest::ReloadResources {
+            .handle_request_async(RuntimeClientRequest::ReloadConfiguration {
                 id: crate::runtime_client::RequestId::new(1),
             })
             .await;
         assert!(response.error.is_none());
         assert!(matches!(
             response.result,
-            Some(RuntimeClientResult::ResourcesReloaded {
+            Some(RuntimeClientResult::ConfigurationReloaded {
                 resource_revision: 2,
                 capability_revision,
             }) if capability_revision == fixture.coordinator.current_snapshot().revision()
@@ -6991,7 +6852,10 @@ mod tests {
             .runtime
             .tool_runtime()
             .mailbox()
-            .enqueue(inbound_text("conv-host-async-1", "runtime"))
+            .enqueue(inbound_text(
+                "conv_15466ddf-043b-7e5a-9915-c32c837b38bc",
+                "runtime",
+            ))
             .expect("runtime enqueue");
         admission_gate.wait_entered();
         attachment.handle_request(RuntimeClientRequest::SubmitInbound {
@@ -7023,7 +6887,10 @@ mod tests {
             .collect();
         assert_eq!(
             inbound_ids,
-            vec!["conv-host-async-1", "conv-host-inbound-2"],
+            vec![
+                "conv_15466ddf-043b-7e5a-9915-c32c837b38bc",
+                "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-2"
+            ],
             "both producers sequence through one durable sequence domain in order"
         );
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
@@ -7088,7 +6955,10 @@ mod tests {
             .runtime
             .tool_runtime()
             .mailbox()
-            .enqueue(inbound_text("conv-host-async-2", "racing settlement"))
+            .enqueue(inbound_text(
+                "conv_9ec557e9-8373-72d1-92d3-cf39a531c6cf",
+                "racing settlement",
+            ))
             .expect("async enqueue");
 
         // Release the handoff: exactly one next attempt consumes the
@@ -7107,7 +6977,7 @@ mod tests {
         assert!(
             requests[1].messages.iter().any(|message| matches!(
                 message.as_canonical(),
-                Some(MessageBlock::User(user)) if user.id.as_str() == "conv-host-async-2"
+                Some(MessageBlock::User(user)) if user.id.as_str() == "conv_9ec557e9-8373-72d1-92d3-cf39a531c6cf"
             )),
             "the racing inbound was consumed exactly once by the next attempt"
         );
@@ -7226,7 +7096,10 @@ mod tests {
             .runtime
             .tool_runtime()
             .mailbox()
-            .enqueue(inbound_text("conv-host-async-2", "during batch"))
+            .enqueue(inbound_text(
+                "conv_9ec557e9-8373-72d1-92d3-cf39a531c6cf",
+                "during batch",
+            ))
             .expect("async enqueue");
 
         // Release both tools; the batch settles structurally, the safe
@@ -7264,7 +7137,7 @@ mod tests {
         assert!(
             requests[1].messages.iter().any(|message| matches!(
                 message.as_canonical(),
-                Some(MessageBlock::User(user)) if user.id.as_str() == "conv-host-async-2"
+                Some(MessageBlock::User(user)) if user.id.as_str() == "conv_9ec557e9-8373-72d1-92d3-cf39a531c6cf"
             )),
             "the drained inbound is the async one"
         );
@@ -7456,13 +7329,13 @@ mod tests {
         })
         .await;
 
-        // A resource reload lands mid-attempt: the runtime rejects it
+        // A configuration reload lands mid-attempt: the runtime rejects it
         // deterministically — the attempt's lease pins the revision.
         write_probe_skill(
             fixture.runtime.tool_runtime().workspace().root(),
             "mid-attempt-skill",
         );
-        let rejected = fixture.runtime.reload_resources().await;
+        let rejected = fixture.runtime.reload_configuration().await;
         assert!(
             matches!(
                 rejected,
@@ -7486,7 +7359,7 @@ mod tests {
         // projection observes the post-commit revision.
         let committed = fixture
             .runtime
-            .reload_resources()
+            .reload_configuration()
             .await
             .expect("reload after settlement");
         assert!(committed.capability_revision > revision_at_admission);
@@ -7523,7 +7396,7 @@ mod tests {
     ) -> (Arc<GatedAdapter>, HostFixture) {
         let adapter = Arc::new(GatedAdapter::new(scripts));
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-host");
+        let conversation_id = ConversationId::new("conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
@@ -7567,6 +7440,10 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 agent_activation: {
                     let mut activation = crate::capabilities::AgentActivation::default();
+                    activation.profile.skills =
+                        Some(crate::runtime::agent_profile::AgentSkillSelection::All);
+                    activation.profile.extensions =
+                        crate::scripted_suites::common::plugin_document(tool_runtime.extensions());
                     activation.profile.tools.builtin = tools
                         .definitions()
                         .into_iter()
@@ -7590,6 +7467,7 @@ mod tests {
         coordinator.commit(candidate).expect("commit");
         let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
         let runtime = ConversationRuntime::new(RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: crate::scripted_suites::support::model::scripted_session_model(adapter.clone()),
             approval_mode: crate::runtime::ApprovalMode::Policy,
@@ -7643,7 +7521,7 @@ mod tests {
     ) -> (Arc<GatedAdapter>, HostFixture) {
         let adapter = Arc::new(GatedAdapter::new(scripts));
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-host");
+        let conversation_id = ConversationId::new("conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
@@ -7689,6 +7567,7 @@ mod tests {
         let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
         let runtime = ConversationRuntime::with_probe(
             RuntimeConversationConfig {
+                explicit_model: true,
                 agent_id: AgentId::new("agent-a"),
                 model: crate::scripted_suites::support::model::scripted_session_model(
                     adapter.clone(),
@@ -7760,7 +7639,7 @@ mod tests {
             scripts,
             tools,
             probe,
-            ConversationId::new("conv-host"),
+            ConversationId::new("conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b"),
         )
         .await
     }
@@ -7806,6 +7685,10 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 agent_activation: {
                     let mut activation = crate::capabilities::AgentActivation::default();
+                    activation.profile.skills =
+                        Some(crate::runtime::agent_profile::AgentSkillSelection::All);
+                    activation.profile.extensions =
+                        crate::scripted_suites::common::plugin_document(tool_runtime.extensions());
                     activation.profile.tools.builtin = tools
                         .definitions()
                         .into_iter()
@@ -7829,6 +7712,7 @@ mod tests {
         coordinator.commit(candidate).expect("commit");
         let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
         let config = RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter.clone()),
             approval_mode: crate::runtime::ApprovalMode::Policy,
@@ -7883,13 +7767,6 @@ mod tests {
         tempfile::TempDir,
         CurrentRuntimeConfig,
     ) {
-        let (adapter, mut fixture) = runtime_only_fixture_with_conversation_id(
-            scripts,
-            ToolRegistry::new(),
-            probe,
-            ConversationId::new("conversation-1"),
-        )
-        .await;
         let catalog_root = tempfile::tempdir().expect("catalog root");
         let config = CurrentRuntimeConfig::from_toml_slice(
             br#"agent_id = "agent-a"
@@ -7915,9 +7792,20 @@ model = "scripted/scripted"
             },
         )
         .expect("catalog");
+        let (adapter, mut fixture) = runtime_only_fixture_with_conversation_id(
+            scripts,
+            ToolRegistry::new(),
+            probe,
+            catalog
+                .lineage(&source_session_id(&catalog_root), None)
+                .unwrap()
+                .0
+                .conversation_id,
+        )
+        .await;
         let supervisor = Arc::new(LocalSessionAttachment::new(
             catalog,
-            crate::local_runtime::SessionId::new("session-1"),
+            source_session_id(&catalog_root),
             SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
                 catalog_root.path().to_path_buf(),
             )),
@@ -7991,7 +7879,10 @@ model = "scripted/scripted"
                 catalog.persisted_session_ids().len(),
                 if post { 2 } else { 1 }
             );
-            assert_eq!(supervisor.current().await.unwrap().id.as_str(), "session-1");
+            assert_eq!(
+                supervisor.current().await.unwrap().id,
+                source_session_id(root.path())
+            );
             assert!(supervisor.new_session().await.is_ok());
         }
     }
@@ -8040,7 +7931,7 @@ model = "scripted/scripted"
         let source = SessionCatalog::open_existing(catalog_root.path())
             .expect("open source catalog")
             .expect("source catalog")
-            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+            .snapshot(&source_session_id(&catalog_root))
             .expect("source snapshot");
 
         supervisor.arm_catalog_write_fault_before_rename().await;
@@ -8065,7 +7956,7 @@ model = "scripted/scripted"
             .expect("reopen source");
         assert_eq!(
             reopened
-                .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+                .snapshot(&source_session_id(&catalog_root))
                 .expect("active source after failure")
                 .id,
             source.id
@@ -8117,7 +8008,7 @@ model = "scripted/scripted"
         let source = SessionCatalog::open_existing(catalog_root.path())
             .expect("open source catalog")
             .expect("source catalog")
-            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+            .snapshot(&source_session_id(&catalog_root))
             .expect("source snapshot");
 
         let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
@@ -8161,10 +8052,8 @@ model = "scripted/scripted"
         let reopened = SessionCatalog::open_existing(catalog_root.path())
             .expect("open fork")
             .expect("reopen fork");
-        let authoritative = reopened
-            .snapshot(&crate::local_runtime::SessionId::new(&session.id))
-            .expect("authoritative fork");
-        assert_eq!(authoritative.id.as_str(), session.id);
+        let authoritative = reopened.snapshot(&session.id).expect("authoritative fork");
+        assert_eq!(authoritative.id, session.id);
         assert_ne!(
             authoritative.active_conversation_id,
             source.active_conversation_id
@@ -8220,7 +8109,7 @@ model = "scripted/scripted"
         let source = SessionCatalog::open_existing(catalog_root.path())
             .expect("open source catalog")
             .expect("source catalog")
-            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+            .snapshot(&source_session_id(&catalog_root))
             .expect("source snapshot");
 
         supervisor.arm_catalog_write_fault_after_rename().await;
@@ -8251,17 +8140,17 @@ model = "scripted/scripted"
                 )
             ])
         );
-        assert_eq!(session.id, source.id.as_str());
-        assert_ne!(session.active_node, source.active_node.as_str());
+        assert_eq!(session.id, source.id);
+        assert_ne!(session.active_node, source.active_node);
 
         let reopened = SessionCatalog::open_existing(catalog_root.path())
             .expect("open tree")
             .expect("reopen tree");
         let authoritative = reopened
-            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+            .snapshot(&source_session_id(&catalog_root))
             .expect("authoritative tree node");
         assert_eq!(authoritative.id, source.id);
-        assert_eq!(authoritative.active_node.as_str(), session.active_node);
+        assert_eq!(authoritative.active_node, session.active_node);
         assert_eq!(authoritative.node_count, 2);
         let destination = catalog_conversation(
             catalog_root.path(),
@@ -8311,14 +8200,8 @@ model = "scripted/scripted"
             .expect("open catalog")
             .expect("reopen catalog");
         let (_, _, reopened_config) = reopened
-            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
-            .map(|(node, state)| {
-                (
-                    crate::local_runtime::SessionId::new("session-1"),
-                    node,
-                    state,
-                )
-            })
+            .lineage(&source_session_id(&catalog_root), None)
+            .map(|(node, state)| (source_session_id(&catalog_root), node, state))
             .expect("active lineage");
         assert_eq!(
             reopened_config.model,
@@ -8476,7 +8359,10 @@ model = "scripted/scripted"
         });
         match rejected {
             Err(HostConstructionError::RuntimeAlreadyActivated { conversation_id }) => {
-                assert_eq!(conversation_id.as_str(), "conv-host");
+                assert_eq!(
+                    conversation_id.as_str(),
+                    "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b"
+                );
             }
             _ => panic!("a post-activation host bind must fail typed"),
         }
@@ -8722,9 +8608,9 @@ model = "scripted/scripted"
         fixture.runtime.activate();
         let activated = fixture
             .runtime
-            .reload_resources()
+            .reload_configuration()
             .await
-            .expect("a runtime-owned resource reload succeeds after activation");
+            .expect("a runtime-owned configuration reload succeeds after activation");
         assert_eq!(
             activated.capability_revision.get(),
             2,
@@ -8868,7 +8754,7 @@ model = "scripted/scripted"
     ) -> OwnershipFixture {
         let adapter = Arc::new(GatedAdapter::new(scripts));
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-claim");
+        let conversation_id = ConversationId::new("conv_29ce21a0-54d0-7f99-88a0-dda036ee7dbc");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
@@ -8899,6 +8785,10 @@ model = "scripted/scripted"
                 workspace: tool_runtime.workspace().clone(),
                 agent_activation: {
                     let mut activation = crate::capabilities::AgentActivation::default();
+                    activation.profile.skills =
+                        Some(crate::runtime::agent_profile::AgentSkillSelection::All);
+                    activation.profile.extensions =
+                        crate::scripted_suites::common::plugin_document(tool_runtime.extensions());
                     activation.profile.tools.builtin = tools
                         .definitions()
                         .into_iter()
@@ -8931,6 +8821,7 @@ model = "scripted/scripted"
     /// The `RuntimeConversationConfig` over one ownership fixture.
     fn claim_config(fixture: &OwnershipFixture) -> RuntimeConversationConfig {
         RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-claim"),
             model: scripted_session_model(fixture.adapter.clone()),
             approval_mode: crate::runtime::ApprovalMode::Policy,
@@ -9006,7 +8897,7 @@ model = "scripted/scripted"
         assert_eq!(
             refused,
             ConversationRuntimeError::ToolRuntimeNotQuiescent {
-                conversation_id: ConversationId::new("conv-claim"),
+                conversation_id: ConversationId::new("conv_29ce21a0-54d0-7f99-88a0-dda036ee7dbc"),
             }
         );
 
@@ -9070,7 +8961,7 @@ model = "scripted/scripted"
         assert_eq!(
             refused,
             ConversationRuntimeError::ToolRuntimeNotQuiescent {
-                conversation_id: ConversationId::new("conv-claim"),
+                conversation_id: ConversationId::new("conv_29ce21a0-54d0-7f99-88a0-dda036ee7dbc"),
             }
         );
         assert!(!fixture.tool_runtime.is_conversation_runtime_bound());
@@ -9178,7 +9069,7 @@ model = "scripted/scripted"
         assert_eq!(
             refused,
             ConversationRuntimeError::ToolRuntimeNotQuiescent {
-                conversation_id: ConversationId::new("conv-claim"),
+                conversation_id: ConversationId::new("conv_29ce21a0-54d0-7f99-88a0-dda036ee7dbc"),
             }
         );
         assert!(!fixture.tool_runtime.is_conversation_runtime_bound());
@@ -9208,7 +9099,7 @@ model = "scripted/scripted"
     /// afterwards fails typed `ConversationInactive` — no record published,
     /// the prepared runner rolls back, and the runtime remains inert until
     /// `activate()`. Ordinary capability commits are independently rejected
-    /// because live publication belongs to resource reload; after activation,
+    /// because live publication belongs to configuration reload; after activation,
     /// a fresh background dispatch commits normally.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn runtime_claim_racing_the_background_commit_wins_and_commit_fails_inactive() {
@@ -9247,7 +9138,7 @@ model = "scripted/scripted"
         assert_eq!(
             refused,
             BackgroundDispatchError::ConversationInactive {
-                conversation_id: ConversationId::new("conv-claim"),
+                conversation_id: ConversationId::new("conv_29ce21a0-54d0-7f99-88a0-dda036ee7dbc"),
             }
         );
         assert!(
@@ -9309,7 +9200,7 @@ model = "scripted/scripted"
         assert_eq!(
             refused,
             ConversationRuntimeError::RuntimeAlreadyBound {
-                conversation_id: ConversationId::new("conv-claim"),
+                conversation_id: ConversationId::new("conv_29ce21a0-54d0-7f99-88a0-dda036ee7dbc"),
             }
         );
         assert!(
@@ -9397,7 +9288,7 @@ model = "scripted/scripted"
         assert_eq!(
             refused,
             BackgroundDispatchError::ConversationInactive {
-                conversation_id: ConversationId::new("conv-host"),
+                conversation_id: ConversationId::new("conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b"),
             }
         );
         assert!(
@@ -9450,16 +9341,10 @@ model = "scripted/scripted"
         };
         await_background_started(&mut started, "the post-transition runner starts").await;
 
-        let reloaded = fixture
-            .runtime
-            .reload_resources()
-            .await
-            .expect("a post-transition resource/capability reload succeeds");
-        assert_eq!(
-            reloaded.capability_revision.get(),
-            2,
-            "the first live capability revision, after the seeded startup one"
-        );
+        assert!(matches!(
+            fixture.runtime.reload_configuration().await,
+            Err(crate::runtime::RuntimeResourceReloadError::Busy { .. })
+        ));
 
         fixture
             .runtime
@@ -9480,6 +9365,15 @@ model = "scripted/scripted"
             BackgroundLifecycle::Succeeded,
             "the post-transition execution settles normally"
         );
+        // Background completion admits its notification Attempt; wait for its
+        // authoritative settlement before requesting the safe publication seam.
+        fixture.runtime.settlement_signal().notified().await;
+        let reloaded = fixture
+            .runtime
+            .reload_configuration()
+            .await
+            .expect("safe reload after settlement");
+        assert_eq!(reloaded.capability_revision.get(), 2);
     }
 
     /// The real-time ordered cross-subsystem regression: live capability
@@ -9489,30 +9383,19 @@ model = "scripted/scripted"
     ///
     /// The registry commit-boundary hook parks a background commit after it
     /// has already observed `Running` inside its critical section; a
-    /// resource reload that begins afterwards is parked at the capability
+    /// configuration reload that begins afterwards is parked at the capability
     /// publication boundary, then a second reload follows the background
     /// completion. The parks and task joins prove the real-time ordering with
     /// no timing assumptions.
     #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn runtime_semantic_commits_cannot_disagree_across_activation() {
-        let (_adapter, fixture) = runtime_only_fixture(
-            vec![one_turn_stop(), one_turn_stop()],
-            ToolRegistry::new(),
-            None,
-        )
-        .await;
+        let (_adapter, fixture) =
+            runtime_only_fixture(vec![one_turn_stop()], ToolRegistry::new(), None).await;
         let registry = fixture.runtime.tool_runtime().background().clone();
-        let coordinator = fixture.coordinator.clone();
         fixture.runtime.activate();
-
-        // Real resource generations for the two post-activation commits.
+        let before = fixture.runtime.runtime_resources();
         write_probe_skill(&fixture.workspace, "pdf");
-
-        // Prepare a background dispatch and park its commit at the
-        // registry ownership-commit boundary: the commit has already
-        // observed the shared lifecycle (Running) inside its critical
-        // section when the hook fires.
         let hook = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
         registry.install_commit_boundary_hook(hook.clone());
         let (tool, mut started, release) = ParkingBackgroundTool::new();
@@ -9523,7 +9406,7 @@ model = "scripted/scripted"
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
             )
-            .expect("prepare");
+            .unwrap();
         let commit_registry = registry.clone();
         let commit_task = tokio::task::spawn_blocking(move || {
             commit_registry.commit_dispatch(prepared, &CancellationSignal::new())
@@ -9532,66 +9415,36 @@ model = "scripted/scripted"
             let hook = hook.clone();
             tokio::task::spawn_blocking(move || hook.wait_entered())
                 .await
-                .expect("the background commit entered its boundary after observing Running");
+                .unwrap();
         }
-
-        // A resource reload that begins now — real-time after the background
-        // commit's lifecycle observation — owns both capability and resource
-        // publication. Park its capability half to make the ordering exact.
-        let capability_hook =
-            Arc::new(crate::capabilities::test_sync::CommitBoundaryHook::default());
-        coordinator.install_commit_boundary_hook(capability_hook.clone());
         let reload_runtime = fixture.runtime.clone();
-        let reload_task = tokio::spawn(async move { reload_runtime.reload_resources().await });
-        capability_hook.wait_entered();
-        capability_hook.proceed();
-        let committed = reload_task
-            .await
-            .expect("reload task")
-            .expect("the runtime-owned publication observes Running");
-        // Revision 1 is the seeded startup generation this fixture's
-        // composition-time commit published, so the first post-activation
-        // publication is revision 2.
-        assert_eq!(committed.capability_revision.get(), 2);
-
-        // The background commit completes successfully.
+        let reload_task = tokio::spawn(async move { reload_runtime.reload_configuration().await });
         {
             let hook = hook.clone();
             tokio::task::spawn_blocking(move || hook.proceed())
                 .await
-                .expect("the background commit boundary was released");
+                .unwrap();
         }
-        let outcome = commit_task
-            .await
-            .expect("commit outcome")
-            .expect("the background commit succeeds after observing Running");
-        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
-            panic!("accepted");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+            commit_task.await.unwrap().unwrap()
+        else {
+            panic!("accepted")
         };
         await_background_started(&mut started, "the runner starts").await;
-
-        // The old contradiction shape: B completed successfully, then C
-        // begins through a second resource publication.
-        write_probe_skill(&fixture.workspace, "docx");
-        let committed = fixture
-            .runtime
-            .reload_resources()
-            .await
-            .expect("a second resource publication remains live");
-        assert_eq!(committed.capability_revision.get(), 3);
-
-        // Settle the background execution cleanly.
+        assert!(matches!(
+            reload_task.await.unwrap(),
+            Err(crate::runtime::RuntimeResourceReloadError::Busy { .. })
+        ));
+        assert!(Arc::ptr_eq(&before, &fixture.runtime.runtime_resources()));
         release.send_replace(true);
-        let terminal = await_background_terminal(
-            &registry,
-            &execution_id,
-            "activation-order background execution",
-        )
-        .await;
+        let terminal =
+            await_background_terminal(&registry, &execution_id, "background execution").await;
+        assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+        fixture.runtime.settlement_signal().notified().await;
+        let published = fixture.runtime.reload_configuration().await.unwrap();
         assert_eq!(
-            terminal.state,
-            BackgroundLifecycle::Succeeded,
-            "the background execution settles normally"
+            published.resource_revision.get(),
+            before.revision().get() + 1
         );
     }
 
@@ -9954,7 +9807,10 @@ model = "scripted/scripted"
         });
         match rejected {
             Err(HostConstructionError::ObservationBridgeAlreadyInstalled { conversation_id }) => {
-                assert_eq!(conversation_id.as_str(), "conv-host");
+                assert_eq!(
+                    conversation_id.as_str(),
+                    "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b"
+                );
             }
             _ => panic!("the bridge conflict must fail typed"),
         }

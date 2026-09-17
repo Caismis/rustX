@@ -21,13 +21,12 @@
  * Options fall into three groups that are deliberately not mixed:
  *
  * - **Transport/mode**: `--binary` and `--connect` select the mode.
- * - **App Server process bindings** (`--user-settings`, `--models`,
+ * - **App Server process bindings** (`--config`,
  *   `--runtime-root`): these configure the *process*, so they are local-only.
  *   A remote App Server was launched by someone else and already has its own;
  *   accepting them against `--connect` would be a flag that pretends to
  *   configure a server it cannot reach.
- * - **Session settings** (`--workspace`, `--config`, `--model`, `--skill`, the tool
- *   and Skill switches): these are `session/create` inputs. A Session's cwd is
+ * - **Session settings** (`--workspace`, `--model`): these are `session/create` inputs. A Session's cwd is
  *   a Session selection, never the App Server's launch directory, and the two
  *   are never substituted for one another. In remote mode these paths are
  *   resolved by the server, on the server's filesystem.
@@ -44,16 +43,14 @@ import type { SessionSettings } from "./protocol/app-server.ts";
 
 export const USAGE = `usage:
   local self-hosted (spawns and owns an App Server child over stdio):
-    rustx-tui --binary <rustx> [--user-settings <settings.toml>] [--models <models.toml>] \\
+    rustx-tui --binary <rustx> [--config <absolute-rustx.toml>] \\
               [--runtime-root <dir>] [session options] [routing options]
 
   existing / remote App Server (WebSocket):
     rustx-tui --connect <ws://host:port> --token-file <path> --workspace <server-absolute-dir> [session options] [routing options]
 
   session options (applied to Sessions this launch creates; paths resolve on the App Server host):
-    [--workspace <dir>] [--config <rustx.toml>] [--model <provider/model>] [--name <text>]
-    [--skill <path>] [--no-automatic-skills] [--no-builtin-tools] [--no-direct-tools]
-    [--tools <a,b,c>] [--exclude-tools <a,b,c>]
+    [--workspace <dir>] [--model <model-identity>] [--name <text>]
 
   routing options (client focus only; never stops another Session):
     [--session <id> [--node <id>] | --resume]`;
@@ -102,8 +99,6 @@ const VALUE_FLAGS = [
   "--binary",
   "--connect",
   "--token-file",
-  "--user-settings",
-  "--models",
   "--runtime-root",
   "--workspace",
   "--config",
@@ -111,20 +106,14 @@ const VALUE_FLAGS = [
   "--name",
   "--session",
   "--node",
-  "--skill",
-  "--tools",
-  "--exclude-tools",
 ] as const;
 
 const BOOLEAN_FLAGS = [
   "--resume",
-  "--no-automatic-skills",
-  "--no-builtin-tools",
-  "--no-direct-tools",
 ] as const;
 
 /** Local-only because they bind sources of the App Server *process*. */
-const PROCESS_FLAGS = ["--user-settings", "--models", "--runtime-root"] as const;
+const PROCESS_FLAGS = ["--config", "--runtime-root"] as const;
 
 type ValueFlag = (typeof VALUE_FLAGS)[number];
 type BooleanFlag = (typeof BOOLEAN_FLAGS)[number];
@@ -138,7 +127,6 @@ type BooleanFlag = (typeof BOOLEAN_FLAGS)[number];
  */
 export function parseArguments(argv: readonly string[]): TuiArguments {
   const values = new Map<ValueFlag, string>();
-  const skillPaths: string[] = [];
   const booleans = new Set<BooleanFlag>();
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -152,16 +140,8 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
       if (value === undefined) {
         throw new ArgumentError(`argument ${valueFlag} requires a value`);
       }
-      if (valueFlag === "--skill") {
-        skillPaths.push(value);
-      } else {
-        if (values.has(valueFlag)) {
-          throw new ArgumentError(
-            `argument ${valueFlag} was supplied more than once`,
-          );
-        }
-        values.set(valueFlag, value);
-      }
+      if (values.has(valueFlag)) throw new ArgumentError(`argument ${valueFlag} was supplied more than once`);
+      values.set(valueFlag, value);
       index += 1;
       continue;
     }
@@ -222,22 +202,12 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
   }
 
   const model = values.get("--model");
-  const tools = values.get("--tools");
-  const excludeTools = values.get("--exclude-tools");
 
   return {
     mode,
     sessionSettings: {
       cwd,
-      config: values.get("--config") ?? null,
       model: model === undefined ? null : { model },
-      skill_paths: skillPaths,
-      no_automatic_skills: booleans.has("--no-automatic-skills"),
-      no_builtin_tools: booleans.has("--no-builtin-tools"),
-      no_direct_tools: booleans.has("--no-direct-tools"),
-      tools: tools === undefined ? null : splitList(tools),
-      exclude_tools:
-        excludeTools === undefined ? null : splitList(excludeTools),
     },
     sessionName: values.get("--name"),
     routing: { session, node, openSessionSelector: resume },
@@ -257,8 +227,7 @@ function localMode(
     kind: "local",
     binary,
     launch: {
-      userSettings: values.get("--user-settings"),
-      models: values.get("--models"),
+      config: values.get("--config"),
       runtimeRoot: values.get("--runtime-root"),
     },
   };
@@ -287,11 +256,4 @@ function remoteMode(
     );
   }
   return { kind: "remote", endpoint, tokenFile };
-}
-
-function splitList(value: string): string[] {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
 }

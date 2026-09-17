@@ -118,7 +118,7 @@ pub(super) fn state(messages: Vec<MessageBlock>) -> ConversationState {
 }
 
 pub(super) fn conversation() -> ConversationId {
-    ConversationId::new("conv-issue140")
+    ConversationId::new("conv_62182350-f355-74b7-831a-b7fbb94b6c2d")
 }
 
 /// Plans and prepares one compaction of the whole active prefix, returning

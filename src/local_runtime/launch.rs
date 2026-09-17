@@ -1,37 +1,21 @@
-//! Local CLI input translation and trust commands. Configuration semantics live
+//! Local CLI input translation and immutable process bindings. Configuration semantics live
 //! exclusively in `configuration::UserConfigManager`.
 use super::composition::StartupSession;
 use super::configuration::{
     AdmittedSessionConfig, ProspectiveSessionConfig, SessionConfigInput, SessionLocations,
-    UserConfigManager, UserConfigSources, absolute, bind_user_source_path, canonical_directory,
-    canonical_settings_source, present_on_disk,
+    UserConfigManager, UserConfigSources, absolute, canonical_directory, present_on_disk,
 };
 use super::diagnostics::LaunchFailure;
-use crate::bounded_file::read_bounded;
 use std::path::{Path, PathBuf};
 /// Raw user intent. Absence is preserved until resolution.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LaunchRequest {
-    pub models: Option<PathBuf>,
     pub config: Option<PathBuf>,
     pub workspace: Option<PathBuf>,
     pub runtime_root: Option<PathBuf>,
     pub model: Option<String>,
-    pub trust: Option<TrustAction>,
-    pub skill_paths: Vec<PathBuf>,
-    pub no_automatic_skills: bool,
-    pub no_builtin_tools: bool,
-    pub no_direct_tools: bool,
     pub startup_session: StartupSession,
     pub session_name: Option<String>,
-    pub tools: Option<Vec<String>>,
-    pub exclude_tools: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrustAction {
-    Grant,
-    Revoke,
 }
 
 /// Captured once; tests supply isolated snapshots without changing process globals.
@@ -40,59 +24,39 @@ pub struct HostEnvironment {
     pub launch_directory: PathBuf,
     /// The captured home directory.
     ///
-    /// This is the one owner of the `global` Skill source root
-    /// (`<home>/.agents/skills`, Issue #280). It is deliberately separate
-    /// from `config_directory`: the global Skill root is a user-owned
-    /// Agent-resource location, not rustX configuration state, and it is
-    /// never derived by shell-style string expansion at a use site.
+    /// User resources remain `<home>/rustx/.agents` even when --config
+    /// rebinds the User document. Runtime storage is a separate process binding.
     pub home_directory: PathBuf,
     pub config_directory: PathBuf,
     pub state_directory: PathBuf,
 }
 
 impl HostEnvironment {
-    /// Capture the supported Unix host paths. Relative XDG paths are errors.
+    /// Capture the supported Unix host paths.
     ///
     /// # Errors
     /// Fails if the launch directory or required absolute host paths are unavailable.
     pub fn capture() -> Result<Self, String> {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
-            .ok_or("HOME is required to locate user configuration and trust")?;
-        let config = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
-        let state = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from);
-        Self::from_paths(
-            std::env::current_dir().map_err(|e| e.to_string())?,
-            home,
-            config,
-            state,
-        )
+            .ok_or("HOME is required to locate user configuration and resources")?;
+
+        Self::from_paths(std::env::current_dir().map_err(|e| e.to_string())?, home)
     }
 
     /// Build an isolated host snapshot from explicit paths.
     ///
     /// # Errors
-    /// Rejects relative HOME or XDG roots.
+    /// Rejects relative HOME.
     #[allow(clippy::needless_pass_by_value)] // captured path inputs transfer together
-    pub fn from_paths(
-        launch_directory: PathBuf,
-        home: PathBuf,
-        config: Option<PathBuf>,
-        state: Option<PathBuf>,
-    ) -> Result<Self, String> {
-        if !home.is_absolute()
-            || config.as_ref().is_some_and(|p| !p.is_absolute())
-            || state.as_ref().is_some_and(|p| !p.is_absolute())
-        {
-            return Err("HOME, XDG_CONFIG_HOME and XDG_STATE_HOME must be absolute paths".into());
+    pub fn from_paths(launch_directory: PathBuf, home: PathBuf) -> Result<Self, String> {
+        if !home.is_absolute() {
+            return Err("HOME must be an absolute path".into());
         }
-        // Use the same XDG convention on Linux and macOS; no platform-dependent fallback chain.
         Ok(Self {
             launch_directory,
-            config_directory: config.unwrap_or_else(|| home.join(".config")).join("rustx"),
-            state_directory: state
-                .unwrap_or_else(|| home.join(".local/state"))
-                .join("rustx"),
+            config_directory: home.join("rustx"),
+            state_directory: home.join("rustx/runtime"),
             home_directory: home,
         })
     }
@@ -110,7 +74,6 @@ impl LaunchRequest {
         let launch = canonical_directory(&host.launch_directory)?;
         let manager = UserConfigManager::bootstrap(
             sources,
-            self.models.as_ref().map(|p| absolute(&launch, p)),
             self.runtime_root.as_ref().map(|p| absolute(&launch, p)),
         )?;
         Ok((manager, input))
@@ -120,6 +83,14 @@ impl LaunchRequest {
         &self,
         host: &HostEnvironment,
     ) -> Result<(UserConfigSources, SessionConfigInput), String> {
+        for (flag, path) in [
+            ("--config", self.config.as_ref()),
+            ("--runtime-root", self.runtime_root.as_ref()),
+        ] {
+            if path.is_some_and(|path| !path.is_absolute()) {
+                return Err(format!("{flag} requires an absolute process binding"));
+            }
+        }
         let launch = canonical_directory(&host.launch_directory)?;
         let cwd = match &self.workspace {
             Some(path) => canonical_directory(&absolute(&launch, path))?,
@@ -127,18 +98,14 @@ impl LaunchRequest {
         };
         let sources = UserConfigSources {
             home_directory: host.home_directory.clone(),
-            config_directory: host.config_directory.clone(),
-            state_directory: host.state_directory.clone(),
-            settings: host.config_directory.join("settings.toml"),
-            models: host.config_directory.join("models.toml"),
-            runtime_root: host
-                .state_directory
-                .join("workspaces")
-                .join(super::configuration::workspace_identity(&cwd)),
+            config_path: self.config.as_ref().map_or_else(
+                || host.config_directory.join("rustx.toml"),
+                |p| absolute(&launch, p),
+            ),
+            runtime_root: host.state_directory.clone(),
         };
         let input = SessionConfigInput {
             cwd,
-            config: self.config.as_ref().map(|p| absolute(&launch, p)),
             model: self
                 .model
                 .as_ref()
@@ -148,16 +115,6 @@ impl LaunchRequest {
                 })
                 .transpose()
                 .map_err(|e| e.to_string())?,
-            skill_paths: self
-                .skill_paths
-                .iter()
-                .map(|p| absolute(&launch, p))
-                .collect(),
-            no_automatic_skills: self.no_automatic_skills,
-            no_builtin_tools: self.no_builtin_tools,
-            no_direct_tools: self.no_direct_tools,
-            tools: self.tools.clone(),
-            exclude_tools: self.exclude_tools.clone(),
         };
         Ok((sources, input))
     }
@@ -188,37 +145,13 @@ pub fn resolve_locations(
 /// Resolve and admit CLI input through the shared Session configuration owner.
 /// # Errors
 /// Invalid configuration or resource authority prevents credential capture.
-/// Untrusted projects use only User/built-in and explicit Session sources.
+/// Workspace semantic units replace User units without trust gating.
 pub fn resolve(
     request: &LaunchRequest,
     host: &HostEnvironment,
 ) -> Result<AdmittedSessionConfig, String> {
     analyze(request, host)?.admit(crate::credentials::CredentialSnapshot::capture)
 }
-/// User-owned membership directories make grant/revoke atomic and independent per identity.
-///
-/// # Errors
-/// Rejects invalid workspace/store ownership and filesystem failures.
-pub fn change_trust(
-    request: &LaunchRequest,
-    host: &HostEnvironment,
-    action: TrustAction,
-) -> Result<(), String> {
-    #[cfg(test)]
-    super::static_effects::observe(super::static_effects::Effect::Trust);
-    let (locations, identity) = resolve_locations(request, host)?;
-    let sources = UserConfigSources {
-        home_directory: host.home_directory.clone(),
-        config_directory: host.config_directory.clone(),
-        state_directory: host.state_directory.clone(),
-        settings: host.config_directory.join("settings.toml"),
-        models: host.config_directory.join("models.toml"),
-        runtime_root: locations.runtime_root.clone(),
-    };
-    super::configuration::TrustEpoch::acquire(&sources, &locations.workspace, &identity)?
-        .change(action)
-}
-
 /// Resolve inspection state without loading models or project configuration.
 /// Only the host state-location member is relevant; runtime settings stay inert.
 ///
@@ -228,31 +161,7 @@ pub fn resolve_inspection_locations(
     request: &LaunchRequest,
     host: &HostEnvironment,
 ) -> Result<SessionLocations, String> {
-    let (mut locations, _) = resolve_locations(request, host)?;
-    let settings = canonical_settings_source(&host.config_directory.join("settings.toml"))?;
-    let authored = if request.runtime_root.is_none() && present_on_disk(&settings)? {
-        // Location-only inspection must not validate unrelated model/resource
-        // fields. This bounded projection grants no configuration authority.
-        #[derive(serde::Deserialize)]
-        struct StateLocation {
-            runtime_root: Option<PathBuf>,
-        }
-        let document: StateLocation = crate::toml_authoring::parse(&read_bounded(&settings)?)?;
-        document.runtime_root
-    } else {
-        None
-    };
-    let explicit = request
-        .runtime_root
-        .as_ref()
-        .map(|p| absolute(&host.launch_directory, p));
-    locations.runtime_root = bind_user_source_path(
-        &settings,
-        authored.as_deref(),
-        explicit.as_deref(),
-        &locations.runtime_root,
-    )?;
-    Ok(locations)
+    resolve_locations(request, host).map(|(locations, _)| locations)
 }
 
 pub(super) fn discover_workspace(launch: &Path) -> Result<PathBuf, String> {

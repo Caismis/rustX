@@ -1,31 +1,30 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Adapted provider cards and footer from ui-settings-models; see PROVENANCE.md. */
-import { RequestPolicy } from './RequestPolicy';
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted model request controls; see PROVENANCE.md. */
 import { useState } from 'react';
-import type { CatalogSettings, Model, ProviderDraft } from '../../../../protocol/app-server/v5';
+import type { Model, RuntimeLayer, SourceScope, ProviderWrite, ProviderView } from '../../../../protocol/app-server/v6';
+import { RequestPolicy } from './RequestPolicy';
+import { UnitForm, TextField, type SaveSource } from './controls';
 import { Button } from '../../presentation/primitives/Button';
 import css from './Settings.module.css';
 
-export function CatalogEditor({ catalog, disabled, change, save }: { catalog: CatalogSettings; disabled: boolean; change: (catalog: CatalogSettings) => void; save: () => void }) {
-  const [identity, setIdentity] = useState('');
-  const provider = (id: string, value: ProviderDraft) => change({ ...catalog, providers: { ...catalog.providers, [id]: value } });
-  return <fieldset disabled={disabled} className={css.catalog}><legend>User Provider / model catalog</legend>
-    <p className={css.hint}>{catalog.document}<br />Catalog revision: {catalog.revision}<br />Only the bound User catalog is writable. Binding path is process-owned.</p>
-    <p>Credential references only. Supply secret material outside the Web UI; existing secret values are never returned.</p>
-    {!Object.keys(catalog.providers).length && <p>No Providers configured. Add one to begin.</p>}
-    {Object.entries(catalog.providers).map(([id, item]) => <article className={css.card} key={id}><header><h3>{id}</h3><Button onClick={() => { const providers = { ...catalog.providers }; delete providers[id]; change({ ...catalog, providers }); }}>Delete Provider {id}</Button></header>
-      <label>Endpoint · {id}<input value={item.base_url} onChange={e => provider(id, { ...item, base_url: e.target.value })} /></label>
-      {item.credential.type === 'literal' ? <p>Native literal credential configured · retained without readback<Button onClick={() => provider(id, { ...item, credential: { type: 'environment', variable: '' } })}>Replace with environment reference</Button></p> : <label>Credential environment reference · {id}<input autoComplete="off" value={item.credential.variable} onChange={e => provider(id, { ...item, credential: { type: 'environment', variable: e.target.value } })} /></label>}
-      {item.models.map((model, index) => <ModelEditor key={index} model={model} change={next => provider(id, { ...item, models: item.models.map((old, i) => i === index ? next : old) })} remove={() => provider(id, { ...item, models: item.models.filter((_, i) => i !== index) })} />)}
-      <Button onClick={() => provider(id, { ...item, models: [...item.models, { id: '', protocol: 'openai_chat_completions', context_window: '0', max_output_tokens: 0, capabilities: { input_modalities: [], output_modalities: [], tool_calls: false, reasoning: false } }] })}>Add model to {id}</Button>
-    </article>)}
-    <div className={css.card}><label>New Provider identity<input value={identity} onChange={e => setIdentity(e.target.value)} /></label><Button disabled={!identity || identity in catalog.providers} onClick={() => { provider(identity, { base_url: '', credential: { type: 'environment', variable: '' }, models: [] }); setIdentity(''); }}>Add Provider</Button></div>
-    <div className={css.actions}><Button variant="primary" onClick={save}>{disabled ? 'Saving…' : 'Save User catalog'}</Button></div>
-    <p className={css.hint}>Rust validates the complete catalog before publication. Deleting the last Provider/model may be rejected by native catalog rules. New content applies to fresh / cold resolution; admitted attempts keep their frozen catalog.</p>
-  </fieldset>;
+const emptyModel = (): Model => ({ provider: '', id: '', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false } });
+export function CatalogEditor({ document, scope, revision, save }: { document: RuntimeLayer; scope: SourceScope; revision: string; save: SaveSource }) {
+  const [providerId, setProviderId] = useState(''), [modelId, setModelId] = useState('');
+  const [newProvider, setNewProvider] = useState(''), [newModel, setNewModel] = useState('');
+  return <section aria-label="Providers & Models"><h3>Providers & Models</h3>
+    <p>Each same-name Provider or Model is replaced as a complete object. Omitted fields use native defaults within that object.</p>
+    <h4>Providers</h4><table><thead><tr><th>Identity</th><th>Endpoint</th><th>Credential</th><th>Actions</th></tr></thead><tbody>{Object.entries(document.providers ?? {}).map(([id, provider]) => <tr key={id}><td>{id}</td><td>{provider.base_url}</td><td>{credentialLabel(provider)}</td><td><Button onClick={() => setProviderId(id)}>Edit Provider {id}</Button></td></tr>)}</tbody></table>
+    <div className={css.actions}><TextField label="New Provider identity" value={newProvider} change={setNewProvider} /><Button disabled={!newProvider || newProvider in (document.providers ?? {})} onClick={() => { setProviderId(newProvider); setNewProvider(''); }}>Add Provider</Button></div>
+    {providerId && <UnitForm<ProviderWrite> key={`provider:${providerId}`} title={`Provider ${providerId}`} initial={{ base_url: document.providers?.[providerId]?.base_url ?? '', credential: document.providers?.[providerId] ? { kind: 'retain' } : { kind: 'environment', variable: '' } }} revision={revision} save={save} mutation={authored => ({ kind: 'config', scope, mutation: { unit: 'provider', id: providerId, authored } })}>{(value, change) => <><TextField label="Endpoint" required value={value.base_url} change={base_url => change({ ...value, base_url })} /><label>Credential source<select value={value.credential.kind} onChange={e => change({ ...value, credential: e.target.value === 'retain' ? { kind: 'retain' } : e.target.value === 'environment' ? { kind: 'environment', variable: '' } : { kind: 'literal', value: '' } })}>{document.providers?.[providerId] && <option value="retain">Retain this scope's credential</option>}<option value="environment">Environment variable</option><option value="literal">Literal secret</option></select></label>{value.credential.kind === 'environment' && <TextField label="Environment variable" required value={value.credential.variable} change={variable => change({ ...value, credential: { kind: 'environment', variable } })} />}{value.credential.kind === 'literal' && <TextField label="New literal credential" secret required value={value.credential.value} change={secret => change({ ...value, credential: { kind: 'literal', value: secret } })} />}<p>Credentials are never inherited from a shadowed Provider or read back as resolved values.</p></>}</UnitForm>}
+    <h4>Models</h4><table><thead><tr><th>Identity</th><th>Provider</th><th>Wire model</th><th>Protocol</th><th>Actions</th></tr></thead><tbody>{Object.entries(document.models ?? {}).map(([id, model]) => <tr key={id}><td>{id}</td><td>{model.provider}</td><td>{model.id}</td><td>{model.protocol}</td><td><Button onClick={() => setModelId(id)}>Edit Model {id}</Button></td></tr>)}</tbody></table>
+    <div className={css.actions}><TextField label="New Model identity" value={newModel} change={setNewModel} /><Button disabled={!newModel || newModel in (document.models ?? {})} onClick={() => { setModelId(newModel); setNewModel(''); }}>Add Model</Button></div>
+    {modelId && <UnitForm<Model> key={`model:${modelId}`} title={`Model ${modelId}`} initial={document.models?.[modelId] ?? emptyModel()} revision={revision} save={save} mutation={authored => ({ kind: 'config', scope, mutation: { unit: 'model', id: modelId, authored } })}>{(model, change) => <ModelEditor model={model} change={change} />}</UnitForm>}
+  </section>;
 }
-function ModelEditor({ model, change, remove }: { model: Model; change: (value: Model) => void; remove: () => void }) {
+function credentialLabel(provider: ProviderView) { return provider.credential.type === 'environment' ? `Environment: ${provider.credential.variable}` : 'Literal secret (redacted)'; }
+export function ModelEditor({ model, change }: { model: Model; change: (value: Model) => void }) {
   return <details className={css.model} open><summary>{model.id || 'New model'}</summary><div className={css.grid}>
-    <label>Model identity<input value={model.id} onChange={e => change({ ...model, id: e.target.value })} /></label>
+    <label>Wire model identity<input value={model.id} onChange={e => change({ ...model, id: e.target.value })} /></label>
+    <label>Provider identity<input required value={model.provider} onChange={e => change({ ...model, provider: e.target.value })} /></label>
     <label>Protocol<select value={model.protocol} onChange={e => change({ ...model, protocol: e.target.value as Model['protocol'] })}>{(['openai_chat_completions', 'openai_responses', 'anthropic_messages'] as const).map(protocol => <option key={protocol}>{protocol}</option>)}</select></label>
     <label>Context window<input type="number" min="1" value={model.context_window} onChange={e => change({ ...model, context_window: e.target.value })} /></label>
     <label>Maximum output tokens<input type="number" min="1" value={model.max_output_tokens} onChange={e => change({ ...model, max_output_tokens: Number(e.target.value) })} /></label>
@@ -41,6 +40,6 @@ function ModelEditor({ model, change, remove }: { model: Model; change: (value: 
     <label>Chat stream usage<select value={model.compat?.chat_stream_usage ?? ''} onChange={e => change({ ...model, compat: { ...model.compat, chat_stream_usage: (e.target.value || null) as NonNullable<Model['compat']>['chat_stream_usage'] } })}><option value="">Unspecified</option><option value="supported">supported</option><option value="unsupported">unsupported</option></select></label>
     <label>Chat tool protocol<select value={model.compat?.chat_tool_protocol ?? ''} onChange={e => change({ ...model, compat: { ...model.compat, chat_tool_protocol: (e.target.value || null) as NonNullable<Model['compat']>['chat_tool_protocol'] } })}><option value="">Unspecified</option><option value="native">native</option><option value="qwen_xml">qwen_xml</option></select></label>
     <label>Responses storage<select value={model.compat?.responses_storage ?? ''} onChange={e => change({ ...model, compat: { ...model.compat, responses_storage: (e.target.value || null) as NonNullable<Model['compat']>['responses_storage'] } })}><option value="">Unspecified</option><option value="stateless">stateless</option><option value="stored">stored</option></select></label>
-    </details><Button onClick={remove}>Delete model {model.id}</Button></details>;
+    </details></details>;
 }
 function ProfileAdder({ add }: { add: (id: string) => void }) { const [id, setId] = useState(''); return <div className={css.actions}><input aria-label="New reasoning profile" value={id} onChange={e => setId(e.target.value)} /><Button disabled={!id} onClick={() => { add(id); setId(''); }}>Add profile</Button></div>; }

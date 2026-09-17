@@ -44,8 +44,6 @@ mod unix_tests {
         let server_id = rustx::runtime::identity::McpServerId::new("fixture");
         let binding = rustx::tools::mcp::McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -92,7 +90,9 @@ mod unix_tests {
             .expect("mutate definition");
         let executor = definitions[mutate_index].1.clone();
         let runtime_bundle = rustx::tools::runtime::ConversationToolRuntime::new(
-            rustx::runtime::identity::ConversationId::new("m7-mcp"),
+            rustx::runtime::identity::ConversationId::new(
+                "conv_82604547-044a-7009-8902-15c77d23bb06",
+            ),
             workspace_dir.path(),
             artifacts_dir.path(),
         )
@@ -274,8 +274,6 @@ mod unix_tests {
             }
             let binding = rustx::tools::mcp::McpServerBinding {
                 credentials: rustx::credentials::SourceCredentials::default(),
-                activation: rustx::capabilities::activation::SourceActivation::Enabled,
-                resource_workspace: None,
                 transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                     program: std::env::current_exe()
                         .expect("test executable")
@@ -306,7 +304,9 @@ mod unix_tests {
                 .expect("echo definition");
             let artifacts = tempfile::tempdir().expect("artifacts");
             let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::new(
-                rustx::runtime::identity::ConversationId::new(format!("mcp-{server_name}")),
+                rustx::runtime::identity::ConversationId::new(
+                    "conv_00000000-0000-7000-8000-000000000003",
+                ),
                 directory.path(),
                 artifacts.path(),
             )
@@ -430,8 +430,6 @@ mod unix_tests {
         let server_id = rustx::runtime::identity::McpServerId::new("mcp-background");
         let binding = rustx::tools::mcp::McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -470,7 +468,9 @@ mod unix_tests {
                 .expect("echo definition");
         let artifacts = tempfile::tempdir().expect("artifacts");
         let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::new(
-            rustx::runtime::identity::ConversationId::new("mcp-background-conversation"),
+            rustx::runtime::identity::ConversationId::new(
+                "conv_1e7f1310-fcd1-7f89-8b7a-a631a29b1e83",
+            ),
             directory.path(),
             artifacts.path(),
         )
@@ -590,8 +590,6 @@ mod unix_tests {
         let server_id = rustx::runtime::identity::McpServerId::new("http-fixture");
         let binding = rustx::tools::mcp::McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::StreamableHttp {
                 endpoint: format!("http://{address}/mcp"),
                 headers: std::collections::BTreeMap::new(),
@@ -618,7 +616,9 @@ mod unix_tests {
             .expect("HTTP mutate executor");
         let artifacts_dir = tempfile::tempdir().expect("artifacts");
         let runtime_bundle = rustx::tools::runtime::ConversationToolRuntime::new(
-            rustx::runtime::identity::ConversationId::new("m7-http"),
+            rustx::runtime::identity::ConversationId::new(
+                "conv_8b3a9e17-656d-7611-842f-61c6696c2101",
+            ),
             workspace_dir.path(),
             artifacts_dir.path(),
         )
@@ -759,8 +759,6 @@ mod unix_tests {
         let server_id = rustx::runtime::identity::McpServerId::new("paged-fixture");
         let binding = rustx::tools::mcp::McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -980,8 +978,6 @@ mod unix_tests {
         let server_id = rustx::runtime::identity::McpServerId::new("dangling-fixture");
         let binding = rustx::tools::mcp::McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -1025,7 +1021,7 @@ mod unix_tests {
     ) -> rustx::tools::types::ToolExecutionResult {
         let artifacts_dir = tempfile::tempdir().expect("artifacts");
         let bundle = rustx::tools::runtime::ConversationToolRuntime::new(
-            rustx::runtime::identity::ConversationId::new(conversation),
+            crate::common::identity::child_conversation_id(conversation),
             workspace_dir.path(),
             artifacts_dir.path(),
         )

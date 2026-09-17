@@ -16,7 +16,7 @@
 //! # Why this type exists
 //!
 //! [`SessionModelConfig`] is *desired configuration*, not a resolved model
-//! binding. Handing a child a `SessionModelConfig` plus a `models.toml`
+//! binding. Handing a child a `SessionModelConfig` plus a `rustx.toml`
 //! path makes the child re-resolve semantics against a **mutable** file:
 //! the catalog can change between the moment the parent admitted the
 //! invoking attempt and the moment the child composes, and the child would
@@ -29,7 +29,7 @@
 //! semantics across the process boundary. The child performs only
 //! **physical materialization**: it constructs the provider adapter from
 //! the frozen provider binding and the parent's privately transferred admitted
-//! credential. It never opens `models.toml` again or rebinds a changing host
+//! credential. It never opens `rustx.toml` again or rebinds a changing host
 //! environment to the parent's frozen destination.
 //!
 //! # What deliberately does not cross
@@ -116,6 +116,8 @@ pub struct FrozenModelInvocation {
     pub binding: FrozenProviderBinding,
     /// The fully qualified model reference.
     pub model: ModelRef,
+    /// Explicit wire model ID frozen at admission.
+    pub wire_model: String,
     /// The protocol the adapter must speak.
     pub protocol: ModelProtocol,
     /// The model's context window in tokens.
@@ -324,11 +326,12 @@ pub(crate) fn test_frozen_model_spec(model: ModelRef) -> FrozenModelSpec {
         primary: FrozenModelInvocation {
             binding: FrozenProviderBinding {
                 resolved_credential: Some(ResolvedCredential::new("test-only-secret")),
-                provider: model.provider().clone(),
+                provider: ProviderId::new("test"),
                 base_url: "http://127.0.0.1:9/v1".to_owned(),
                 credential: CredentialSource::Environment("RUSTX_TEST_FROZEN_KEY".to_owned()),
             },
             model,
+            wire_model: "test-model".into(),
             protocol: ModelProtocol::OpenAiChatCompletions,
             context_window: 128_000,
             model_max_output_tokens: 512,
@@ -381,20 +384,21 @@ mod tests {
 base_url = "http://127.0.0.1:9/v1"
 api_key = "$RUSTX_FROZEN_KEY"
 
-[[providers.local.models]]
+[models."local/m"]
+provider = "local"
 id = "m"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 request_params = { temperature = 0.25 }
 
-[providers.local.models.capabilities]
+[models."local/m".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/m".compat]
 chat_reasoning_replay = "omit"
 "#;
 

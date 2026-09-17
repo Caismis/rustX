@@ -50,19 +50,20 @@ mod unix_tests {
 base_url = "https://local.fixture.invalid/v1"
 api_key = "$RUSTX_ISSUE46_KEY"
 
-[[providers.local.models]]
+[models."local/composed-model"]
+provider = "local"
 id = "composed-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 
-[providers.local.models.capabilities]
+[models."local/composed-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/composed-model".compat]
 chat_reasoning_replay = "omit"
 "#;
 
@@ -73,8 +74,6 @@ chat_reasoning_replay = "omit"
         environment.insert(fixture::FIXTURE_MODE_ENV.to_owned(), "1".to_owned());
         McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -147,7 +146,7 @@ chat_reasoning_replay = "omit"
             .expect("the tool must be discovered");
         let artifacts_dir = tempfile::tempdir().expect("artifacts");
         let bundle = rustx::tools::runtime::ConversationToolRuntime::new(
-            rustx::runtime::identity::ConversationId::new(conversation),
+            crate::common::identity::child_conversation_id(conversation),
             workspace_dir.path(),
             artifacts_dir.path(),
         )
@@ -330,8 +329,6 @@ chat_reasoning_replay = "omit"
         let server_id = McpServerId::new("legacy-fixture");
         let binding = McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -506,8 +503,6 @@ chat_reasoning_replay = "omit"
         let server_id = McpServerId::new("legacy-invalid-request");
         let binding = McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -599,8 +594,6 @@ chat_reasoning_replay = "omit"
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
         let binding = McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -698,38 +691,33 @@ chat_reasoning_replay = "omit"
         let args = fixture::fixture_spawn_args(
             "mcp_runtime::unix_tests::a_named_map_entry_composes_into_exactly_one_runtime_server",
         );
-        let session = serde_json::json!({"agent_id": "agent-46", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192}, "mcp_servers": {
+        crate::launch_fixture::write_mcp(
+            &workspace,
+            &serde_json::json!({
                 "exa-local": {
-                    "enabled": true,
-                    "type": "stdio",
                     "command": program,
                     "args": args,
                     "env": {fixture::FIXTURE_MODE_ENV: "1"},
                 },
-            }, "mcp_tool_policies": {
+            }),
+        );
+        let session = serde_json::json!({"agent_id": "agent-46", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "mcp_tool_policies": {
                 "exa-local": {"execution": "background_only", "concurrency": "parallel"},
             }, "agent": {"model": {"model": "local/composed-model"}, "tools": {"sources": {"exa-local": "all"}}}});
-        let models_path = root.path().join("models.toml");
         let config_path = root.path().join("rustx.toml");
-        std::fs::write(&models_path, MODELS_TOML).expect("models.toml");
-        crate::launch_fixture::write_documents(
+        crate::launch_fixture::write_document(
             &config_path,
-            &toml::to_string_pretty(&session).unwrap(),
-            &["mcp_servers", "mcp_tool_policies"],
+            &format!(
+                "{}\n{MODELS_TOML}",
+                toml::to_string_pretty(&session).unwrap()
+            ),
         );
 
         let runtime = rustx::local_runtime::composition::LocalConversationRuntime::compose(
             &(LaunchFixture {
-                models: models_path,
                 config: config_path,
-                skill_paths: Vec::new(),
-                no_automatic_skills: false,
-                no_builtin_tools: false,
-                no_direct_tools: false,
                 startup_session: rustx::local_runtime::StartupSession::Empty,
                 session_name: None,
-                tools: None,
-                exclude_tools: Vec::new(),
                 workspace,
                 runtime_root: root.path().join("private"),
             })
@@ -818,8 +806,6 @@ chat_reasoning_replay = "omit"
             &McpServerId::new("http-fixture"),
             &McpServerBinding {
                 credentials: rustx::credentials::SourceCredentials::default(),
-                activation: rustx::capabilities::activation::SourceActivation::Enabled,
-                resource_workspace: None,
                 transport: McpTransportConfig::StreamableHttp {
                     endpoint: format!("http://{address}/mcp"),
                     headers: BTreeMap::new(),
@@ -872,8 +858,6 @@ chat_reasoning_replay = "omit"
     ) -> McpServerBinding {
         McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
-            activation: rustx::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -959,7 +943,9 @@ chat_reasoning_replay = "omit"
     ) -> rustx::tools::types::ToolExecutionResult {
         let artifacts_dir = tempfile::tempdir().expect("artifacts");
         let bundle = rustx::tools::runtime::ConversationToolRuntime::new(
-            rustx::runtime::identity::ConversationId::new("raw-fixture"),
+            rustx::runtime::identity::ConversationId::new(
+                "conv_01723a1e-9fec-76d5-82c0-24e3232a99e2",
+            ),
             workspace_dir.path(),
             artifacts_dir.path(),
         )
@@ -1122,7 +1108,7 @@ chat_reasoning_replay = "omit"
         let coordinator = rustx::capabilities::CapabilityCoordinator::new(
             rustx::capabilities::CapabilityCoordinatorConfig {
                 source_demand: rustx::capabilities::source::ToolSourceDemand::new([rustx::capabilities::ToolSourceId::Mcp(server_id.clone())], rustx::runtime::resources::ManagedPythonCatalog::default()),
-                conversation_id: rustx::runtime::identity::ConversationId::new("conv-raw-attribution"),
+                conversation_id: rustx::runtime::identity::ConversationId::new("conv_c90c2ce4-eb49-73e1-8376-16a2c1985b60"),
                 workspace: rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace"),
                 base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
                 extension_tools: rustx::extensions::ExtensionToolPlane::none(),
@@ -1142,37 +1128,19 @@ chat_reasoning_replay = "omit"
             },
         )
         .expect("coordinator");
-        let candidate = tokio::time::timeout(
+        let before = coordinator.current_snapshot();
+        let failure = tokio::time::timeout(
             std::time::Duration::from_mins(2),
             coordinator.prepare_candidate(),
         )
         .await
         .expect("protocol corruption must not hang capability preparation")
-        .expect("an isolated source failure must not fail the whole candidate");
-        let Some(rustx::capabilities::CapabilitySourceState::Unavailable { reason }) = candidate
-            .availability()
-            .get(&rustx::capabilities::ToolSourceId::Mcp(server_id))
-        else {
-            panic!(
-                "the corrupted server is unavailable on its own source: {:?}",
-                candidate.availability()
-            );
-        };
-        assert!(
-            reason.contains("MCP protocol violation") && reason.contains("raw-fixture"),
-            "the availability diagnostic is the bounded protocol failure: {reason}"
-        );
-        // No catalog is frozen from a connection that violated the
-        // protocol: the committed snapshot publishes no `echo` tool.
-        let snapshot = coordinator.commit(candidate).expect("commit");
-        assert!(
-            !snapshot
-                .tool_registry()
-                .definitions()
-                .iter()
-                .any(|definition| definition.name == "echo"),
-            "a violated connection freezes no catalog"
-        );
+        .expect_err("selected source failure rejects the whole candidate");
+        assert!(matches!(
+            failure,
+            rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
+        ));
+        assert!(Arc::ptr_eq(&before, &coordinator.current_snapshot()));
     }
 
     /// A structurally invalid MCP message emitted mid-`tools/call` leaves the
@@ -1346,8 +1314,6 @@ chat_reasoning_replay = "omit"
         fn binding(&self) -> McpServerBinding {
             McpServerBinding {
                 credentials: rustx::credentials::SourceCredentials::default(),
-                activation: rustx::capabilities::activation::SourceActivation::Enabled,
-                resource_workspace: None,
                 transport: McpTransportConfig::StreamableHttp {
                     endpoint: self.endpoint.clone(),
                     headers: BTreeMap::new(),

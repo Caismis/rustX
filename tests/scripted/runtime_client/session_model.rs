@@ -224,14 +224,16 @@ const ALPHA_CALL: ScriptedCall = ScriptedCall {
 async fn runtime(model: SessionModelState, policy: SessionContextPolicy) -> RuntimeClientHost {
     let mut tools = ToolRegistry::new();
     FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok")).register(&mut tools);
-    support::runtime_client_fixture::RuntimeClientFixture::builder("conv-42")
-        .tools(tools)
-        .session_model(model)
-        .context_policy(policy)
-        .build()
-        .await
-        .into_parts()
-        .1
+    support::runtime_client_fixture::RuntimeClientFixture::builder(
+        "conv_0a64f058-46a7-7f04-bbd7-363820db5389",
+    )
+    .tools(tools)
+    .session_model(model)
+    .context_policy(policy)
+    .build()
+    .await
+    .into_parts()
+    .1
 }
 
 /// The unconstrained context policy: no compaction is ever possible.

@@ -39,7 +39,7 @@ it('cold grouping and Workspace selection issue no attach, cancel, unload, setti
   expect(screen.getByText('Directory picker unavailable')).toBeTruthy();
   expect(screen.getAllByText('Durable · unloaded (list observation)')).toHaveLength(2);
   await act(async () => fireEvent.change(screen.getByLabelText('Choose Workspace'), { target: { value: 'wA' } }));
-  expect((screen.getByRole('button', { name: 'Workspace settings' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Workspace settings' }) as HTMLButtonElement).disabled).toBe(false);
   expect(methods()).toEqual(['initialize', 'session/list']);
   expect(host.resolveWorkspace).not.toHaveBeenCalled(); expect(server.loaded.size).toBe(0);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
@@ -48,13 +48,13 @@ it('cold grouping and Workspace selection issue no attach, cancel, unload, setti
   expect(server.loaded.has('A')).toBe(true);
   expect(methods()).not.toContain('session/unload'); expect(methods()).not.toContain('turn/cancel');
 });
-it('native untrusted and unknown fail closed independently of Host registration; names and unregister stay Host-owned', async () => {
-  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' }, project_trusted: false }));
+it('Workspace settings have no trust gate; names and unregister stay Host-owned', async () => {
+  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
   const host = await mount();
   await act(async () => fireEvent.change(screen.getByLabelText('Choose Workspace'), { target: { value: 'wA' } }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
-  expect(screen.getByText(/Untrusted project source/)).toBeTruthy();
-  expect((screen.getByRole('button', { name: 'Workspace settings' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByText(/Untrusted project source/)).toBeNull();
+  expect((screen.getByRole('button', { name: 'Workspace settings' }) as HTMLButtonElement).disabled).toBe(false);
   await act(async () => fireEvent.click(screen.getAllByText('Rename Workspace')[0]));
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Renamed A' } });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save name' })));
@@ -133,7 +133,7 @@ it('stale or unloaded snapshots cannot claim running work', () => {
 it('sidebar Fork uses the exact native boundary and late completion cannot undo Workspace focus', async () => {
   const boundary = { surface_revision: '37', message: { id: 'user-cut', kind: 'message' as const, source: 'human' as const, content: [{ type: 'text' as const, text: 'Fork this native boundary' }] } };
   server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: '37', boundaries: [boundary] }));
-  server.handlers.set('session/tree', () => ({ type: 'tree', nodes: [{ id: 'node-A', conversation_id: 'conversation-A', origin: { type: 'new' } }] }));
+  server.handlers.set('session/tree', () => ({ type: 'tree', nodes: [{ id: 'node-A', conversation_id: 'conversation-A', ordinal: '1', origin: { type: 'new' } }] }));
   server.handlers.set('session/fork', request => {
     if (request.method !== 'session/fork') throw new Error('wrong request');
     expect(request.params).toEqual({ session_id: 'A', node_id: 'node-A', surface_revision: '37', boundary: 'user-cut' });
@@ -169,9 +169,9 @@ it('late native rename completion cannot replace a newer metadata query', async 
   expect((screen.getByLabelText('Search Session metadata') as HTMLInputElement).value).toBe('new query');
 });
 
-it('registered authorization is checked from current native settings before exactly one cold attach, independent of trust', async () => {
+it('registered authorization is checked from current native settings before exactly one cold attach', async () => {
   const host = await mount();
-  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' }, project_trusted: false }));
+  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
   vi.mocked(host.classifyLocations).mockClear();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(host.classifyLocations).toHaveBeenCalledWith(['/workspace/A'], endpoint);
@@ -180,7 +180,7 @@ it('registered authorization is checked from current native settings before exac
   expect(sequence.filter(method => method === 'session/attach')).toHaveLength(1);
   expect(server.coldLoads.get('A')).toBe(1);
   expect((screen.getByLabelText('Choose Workspace') as HTMLSelectElement).value).toBe('wA');
-  expect(screen.getByText(/Untrusted project source/)).toBeTruthy();
+  expect(screen.queryByText(/Untrusted project source/)).toBeNull();
 });
 it('unregister retains authorization and permits ungrouped cold open without recreating registration', async () => {
   const host = hostFixture(); await host.removeWorkspace('wA'); await mount(host);
@@ -191,9 +191,9 @@ it('unregister retains authorization and permits ungrouped cold open without rec
   expect((await host.listWorkspaces()).workspaces.map(row => row.id)).toEqual(['wB']);
   expect(host.adoptWorkspace).not.toHaveBeenCalled();
 });
-it('stale authorized summary cannot authorize current outside cwd, even if native project trust is true', async () => {
+it('stale authorized summary cannot authorize current outside cwd', async () => {
   const host = await mount();
-  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' }, project_trusted: true }));
+  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(screen.getByRole('alert').textContent).toContain('not authorized');
   expect(screen.getByRole('button', { name: 'Open Session A' })).toBeTruthy();
@@ -204,7 +204,7 @@ it('stale authorized summary cannot authorize current outside cwd, even if nativ
 it('unauthorized saved tabs cannot cold attach on initial restoration or reconnect', async () => {
   const host = hostFixture();
   localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint, tabs: ['A'] }));
-  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' }, project_trusted: true }));
+  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={host} />); await server.connect(); });
   await act(async () => { server.client.disconnect(); await server.connect(); });
   expect(host.classifyLocations).toHaveBeenCalledWith(['/outside/roots'], endpoint);
@@ -215,7 +215,7 @@ it('toolbar cold resume and sidebar Fork share admission and refuse an unauthori
   await mount();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   await act(async () => server.client.release('A', true));
-  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' }, project_trusted: true }));
+  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
   const baseline = methods().filter(method => method === 'session/attach').length;
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Attach / cold resume' })));
   await act(async () => fireEvent.click(screen.getAllByText('Fork Session')[0]));
@@ -278,11 +278,11 @@ it('browser binding accepts the same URL normalization as Host routing', async (
 it('an already attached source cannot Fork a child after current cwd authorization is refused', async () => {
   const boundary = { surface_revision: '1', message: { id: 'cut', kind: 'message' as const, source: 'human' as const, content: [{ type: 'text' as const, text: 'Native Fork boundary' }] } };
   server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: '1', boundaries: [boundary] }));
-  server.handlers.set('session/tree', () => ({ type: 'tree', nodes: [{ id: 'node-A', conversation_id: 'conversation-A', origin: { type: 'new' } }] }));
+  server.handlers.set('session/tree', () => ({ type: 'tree', nodes: [{ id: 'node-A', conversation_id: 'conversation-A', ordinal: '1', origin: { type: 'new' } }] }));
   await mount();
   await act(async () => fireEvent.click(screen.getAllByText('Fork Session')[0]));
   const popup = screen.getByRole('dialog', { name: '/fork' });
-  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '1', settings: { cwd: '/outside/roots' }, project_trusted: true }));
+  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '1', settings: { cwd: '/outside/roots' } }));
   await act(async () => fireEvent.click(within(popup).getByRole('option', { name: /Native Fork boundary/ })));
   expect(methods()).not.toContain('session/fork');
   expect(server.loaded.has('A')).toBe(true); // No hot revocation/unload.

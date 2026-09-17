@@ -231,6 +231,7 @@ impl FixtureModel {
             inputs.push(serde_json::json!(modality));
         }
         let mut document = serde_json::json!({
+            "provider": provider,
             "id": model,
             "protocol": self.protocol,
             "contextWindow": self.context_window,
@@ -263,21 +264,23 @@ impl FixtureModel {
 #[must_use]
 pub fn fixture_catalog_document(models: &[FixtureModel]) -> ModelCatalogDocument {
     let mut providers = serde_json::Map::new();
+    let mut definitions = serde_json::Map::new();
     for model in models {
         let (provider, document) = model.parts();
-        let entry = providers.entry(provider.clone()).or_insert_with(|| {
+        providers.entry(provider.clone()).or_insert_with(|| {
             serde_json::json!({
                 "baseUrl": format!("https://{provider}.fixture.invalid/v1"),
                 "apiKey": format!("fixture-key-{provider}"),
-                "models": [],
             })
         });
-        entry["models"]
-            .as_array_mut()
-            .expect("models array")
-            .push(document);
+        assert!(
+            definitions
+                .insert(model.reference.clone(), document)
+                .is_none(),
+            "fixture model identities must be unique"
+        );
     }
-    serde_json::from_value(serde_json::json!({"providers": providers}))
+    serde_json::from_value(serde_json::json!({"providers": providers, "models": definitions}))
         .expect("the fixture catalog document is well formed")
 }
 

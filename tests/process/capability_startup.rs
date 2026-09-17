@@ -26,19 +26,20 @@ const MODELS_TOML: &str = r#"[providers.local]
 base_url = "https://local.fixture.invalid/v1"
 api_key = "$RUSTX_ISSUE81_KEY"
 
-[[providers.local.models]]
+[models."local/composed-model"]
+provider = "local"
 id = "composed-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 
-[providers.local.models.capabilities]
+[models."local/composed-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.local.models.compat]
+[models."local/composed-model".compat]
 chat_reasoning_replay = "omit"
 "#;
 
@@ -61,23 +62,14 @@ fn startup(root: &tempfile::TempDir, session: &str) -> (std::path::PathBuf, Laun
     let canonical = std::fs::canonicalize(root.path()).expect("canonical root");
     let workspace = canonical.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    let models_path = canonical.join("models.toml");
     let session_path = canonical.join("rustx.toml");
-    std::fs::write(&models_path, MODELS_TOML).expect("models.toml");
-    crate::launch_fixture::write_documents(&session_path, session, &["mcp_servers"]);
+    crate::launch_fixture::write_document(&session_path, &format!("{session}\n{MODELS_TOML}"));
     (
         canonical.clone(),
         LaunchFixture {
-            models: models_path,
             config: session_path,
-            skill_paths: Vec::new(),
-            no_automatic_skills: false,
-            no_builtin_tools: false,
-            no_direct_tools: false,
             startup_session: rustx::local_runtime::StartupSession::Empty,
             session_name: None,
-            tools: None,
-            exclude_tools: Vec::new(),
             workspace,
             runtime_root: canonical.join("private"),
         },
@@ -223,7 +215,7 @@ async fn prove_native_tool_executes(runtime: &LocalConversationRuntime) {
 /// composes, the package's Managed Python source is observably unavailable,
 /// the native tool plane is committed and really executes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
+async fn selected_invalid_python_refuses_composition_without_publication() {
     let root = tempfile::tempdir().expect("temp root");
     let (_canonical, paths) = startup(
         &root,
@@ -235,36 +227,14 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
     // and its `python:broken-tool` source becomes unavailable.
     write_broken_python_package(&paths.workspace, "broken-tool");
 
-    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
+    let failure = LocalConversationRuntime::compose(&paths.resolve(), &dependencies())
         .await
-        .expect("a broken Python package must not terminate composition");
-    let snapshot = attach_snapshot(&runtime);
-
-    let names = tool_names(&snapshot);
-    for expected in ["execution", "read", "write", "edit", "glob", "grep", "bash"] {
-        assert!(
-            names.contains(&expected),
-            "the native tool {expected} must survive the Python failure: {names:?}"
-        );
-    }
+        .expect_err("selected invalid package refuses startup");
     assert!(
-        !names.iter().any(|name| name.contains("broken")),
-        "no partially initialized Python server enters the committed registry: {names:?}"
+        format!("{failure:?}").contains("SourceUnavailable"),
+        "{failure:?}"
     );
-    assert!(matches!(
-        source_state(&snapshot, &python_source("broken-tool")),
-        Some(CapabilitySourceStateView::Unavailable)
-    ));
-    assert!(
-        runtime
-            .runtime()
-            .runtime_resources()
-            .managed_python_catalog()
-            .packages()
-            .keys()
-            .any(|id| id.to_string() == "python:broken-tool")
-    );
-    prove_native_tool_executes(&runtime).await;
+    assert!(!paths.runtime_root.join("sessions/catalog.json").exists());
 }
 
 /// Python store initialization itself fails (Issue #81 follow-up, revised
@@ -277,12 +247,12 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
 /// failure that previously escaped the optional boundary — deterministically,
 /// without permission bits.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn python_store_initialization_failure_is_isolated_from_runtime_startup() {
+async fn unselected_python_never_opens_its_unusable_store() {
     let root = tempfile::tempdir().expect("temp root");
     let (_, paths) = startup(
         &root,
         &format!(
-            "{SESSION_TOML}\n[agent.tools]\nbuiltin = [\"read\", \"bash\"]\n[agent.tools.sources]\n\"python:fixture-tool\" = \"all\"\n"
+            "{SESSION_TOML}\n[agent.tools]\nbuiltin = [\"read\", \"bash\"]\n[agent.tools.sources]\n\"python:fixture-tool\" = []\n"
         ),
     );
     // A valid Python package exists, so the failure cannot be attributed
@@ -290,8 +260,9 @@ async fn python_store_initialization_failure_is_isolated_from_runtime_startup() 
     write_python_package(&paths.workspace, "fixture-tool");
     // The deterministic filesystem conflict: a regular file where
     // `PythonToolStore` must create `python-tools/packages`.
-    let environments =
-        paths.environment_store_root_for(&ConversationId::new("conversation-standalone"));
+    let environments = paths.environment_store_root_for(&ConversationId::new(
+        "conv_9add3a87-aac5-73c8-8191-ffa50f4b3d32",
+    ));
     std::fs::create_dir_all(environments.join("python-tools")).expect("python store root");
     std::fs::write(
         environments.join("python-tools/packages"),
@@ -306,7 +277,7 @@ async fn python_store_initialization_failure_is_isolated_from_runtime_startup() 
 
     assert!(matches!(
         source_state(&snapshot, &python_source("fixture-tool")),
-        Some(CapabilitySourceStateView::Unavailable)
+        Some(CapabilitySourceStateView::Unprepared)
     ));
     assert!(
         runtime
@@ -357,7 +328,9 @@ fn base_only_capability_setup_is_structurally_independent_of_python_storage() {
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
             source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-            conversation_id: rustx::runtime::identity::ConversationId::new("conv-81-base-only"),
+            conversation_id: rustx::runtime::identity::ConversationId::new(
+                "conv_fa2fc056-2798-7038-84d0-90013802d6e3",
+            ),
             workspace: rustx::tools::Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
@@ -449,14 +422,16 @@ async fn core_and_base_plane_failures_remain_fatal() {
     // An *explicit* Skill launch path that does not exist stays fatal: it is
     // authored launch intent, not discovered content.
     let root = tempfile::tempdir().expect("temp root");
-    let (_canonical, mut paths) = startup(&root, SESSION_TOML);
-    paths.skill_paths = vec![root.path().join("absent-skill")];
-    assert!(
-        paths
-            .try_resolve()
-            .expect_err("a missing explicit Skill path is a launch error")
-            .contains("does not exist")
-    );
+    let (_canonical, paths) = startup(&root, SESSION_TOML);
+    std::fs::write(
+        paths.workspace.join("rustx.toml"),
+        "[agent]\nskills = ['absent-skill']",
+    )
+    .unwrap();
+    let error = paths
+        .try_resolve()
+        .expect_err("selected missing Skill refuses resolution");
+    assert!(error.to_lowercase().contains("skill"), "{error}");
 }
 
 /// MCP-level regressions driving the real self-spawned fixture servers.
@@ -472,22 +447,22 @@ mod mcp {
 
     /// A session with two stdio MCP servers: `good` (the real fixture) and
     /// `bad` (a program that does not exist).
-    fn session_with_two_servers(program: &str, args: &[String]) -> String {
-        toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192}, "mcp_servers": {
+    fn session_with_two_servers(root: &std::path::Path, program: &str, args: &[String]) -> String {
+        crate::launch_fixture::write_mcp(
+            &root.join("workspace"),
+            &serde_json::json!({
                 "good": {
-                    "enabled": true,
-                    "type": "stdio",
                     "command": program,
                     "args": args,
                     "env": {fixture::FIXTURE_MODE_ENV: "1"},
                 },
                 "bad": {
-                    "enabled": true,
-                    "type": "stdio",
                     "command": "/nonexistent/rustx-issue81-absent-server",
                     "args": [],
                 },
-            }, "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"good": "all", "bad": "all"}}}}))
+            }),
+        );
+        toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"good": "all", "bad": []}}}}))
         .unwrap()
     }
 
@@ -508,7 +483,7 @@ mod mcp {
         let args = fixture::fixture_spawn_args(
             "capability_startup::mcp::one_mcp_server_failure_never_suppresses_a_successful_one",
         );
-        let session = session_with_two_servers(&program, &args);
+        let session = session_with_two_servers(root.path(), &program, &args);
         let (_canonical, paths) = startup(&root, &session);
 
         let runtime = super::LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
@@ -538,13 +513,11 @@ mod mcp {
             "the successful server is ready: {:?}",
             snapshot.capabilities.sources
         );
-        let Some(CapabilitySourceStateView::Unavailable) = source_state(&snapshot, &bad) else {
-            panic!(
-                "the failing server is observably unavailable: {:?}",
-                snapshot.capabilities.sources
-            );
-        };
-
+        assert_eq!(
+            source_state(&snapshot, &bad),
+            Some(CapabilitySourceStateView::Unprepared),
+            "unselected bad definition is never connected"
+        );
         let names = tool_names(&snapshot);
         for expected in ["echo", "mutate", "slow"] {
             assert!(
@@ -575,10 +548,10 @@ mod mcp {
         let args = fixture::fixture_spawn_args(
             "capability_startup::mcp::no_shared_mcp_revision_is_unavailable_not_fatal",
         );
-        let session = toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192}, "mcp_servers": {
+        crate::launch_fixture::write_mcp(
+            &root.path().join("workspace"),
+            &serde_json::json!({
                 "alien": {
-                    "enabled": true,
-                    "type": "stdio",
                     "command": program,
                     "args": args,
                     "env": {
@@ -586,36 +559,22 @@ mod mcp {
                         PROTOCOL_VERSIONS_ENV: "1999-01-01",
                     },
                 },
-            }, "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"alien": "all"}}}}))
+            }),
+        );
+        let session = toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"alien": "all"}}}}))
         .unwrap();
         let (_canonical, paths) = startup(&root, &session);
 
-        let runtime = super::LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
+        let failure = super::LocalConversationRuntime::compose(&paths.resolve(), &dependencies())
             .await
-            .expect("an incompatible MCP server must not terminate composition");
-        let snapshot = attach_snapshot(&runtime);
-
-        let alien = CapabilitySourceDescriptor::Mcp {
-            server_id: rustx::runtime::identity::McpServerId::new("alien"),
-        };
-        let Some(CapabilitySourceStateView::Unavailable) = source_state(&snapshot, &alien) else {
-            panic!(
-                "the incompatible server is observably unavailable: {:?}",
-                snapshot.capabilities.sources
-            );
-        };
+            .expect_err("selected MCP failure refuses startup");
+        let diagnostic = format!("{failure:?}");
+        assert!(diagnostic.contains("SourceUnavailable"), "{diagnostic}");
+        assert!(diagnostic.len() < 4096, "external diagnostics stay bounded");
         assert!(
-            !serde_json::to_string(&snapshot.capabilities.sources)
-                .unwrap()
-                .contains("1999-01-01")
+            !paths.runtime_root.join("sessions/catalog.json").exists(),
+            "no partial runtime publication"
         );
-        let names = tool_names(&snapshot);
-        assert!(names.contains(&"bash"), "native tools survive: {names:?}");
-        assert!(
-            !names.contains(&"echo"),
-            "no tool of the incompatible server is committed: {names:?}"
-        );
-        prove_native_tool_executes(&runtime).await;
     }
 
     /// An external MCP peer can emit an arbitrarily large diagnostic
@@ -637,10 +596,19 @@ mod mcp {
         let args = fixture::fixture_spawn_args(
             "capability_startup::mcp::an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state",
         );
-        let session = toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192}, "mcp_servers": {
+        crate::launch_fixture::write_mcp(
+            &root.path().join("workspace"),
+            &serde_json::json!({
+                "exa": {
+                    "command": "/nonexistent/rustx-issue81-absent-server",
+                    "args": [],
+                },
+            }),
+        );
+        crate::launch_fixture::write_mcp(
+            &root.path().join("workspace"),
+            &serde_json::json!({
                 "loud": {
-                    "enabled": true,
-                    "type": "stdio",
                     "command": program,
                     "args": args,
                     "env": {
@@ -648,45 +616,22 @@ mod mcp {
                         fixture::LIST_TOOLS_ERROR_BYTES_ENV: "65536",
                     },
                 },
-            }, "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"loud": "all"}}}}))
+            }),
+        );
+        let session = toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"loud": "all"}}}}))
         .unwrap();
         let (_canonical, paths) = startup(&root, &session);
 
-        let runtime = super::LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
+        let failure = super::LocalConversationRuntime::compose(&paths.resolve(), &dependencies())
             .await
-            .expect("a loud MCP peer must not terminate composition");
-        let snapshot = attach_snapshot(&runtime);
-
-        let loud = CapabilitySourceDescriptor::Mcp {
-            server_id: rustx::runtime::identity::McpServerId::new("loud"),
-        };
-        let Some(CapabilitySourceStateView::Unavailable) = source_state(&snapshot, &loud) else {
-            panic!(
-                "the loud server is observably unavailable: {:?}",
-                snapshot.capabilities.sources
-            );
-        };
-        // External error payloads stay private; typed failure remains inspectable.
+            .expect_err("selected MCP failure refuses startup");
+        let diagnostic = format!("{failure:?}");
+        assert!(diagnostic.contains("SourceUnavailable"), "{diagnostic}");
+        assert!(diagnostic.len() < 4096, "external diagnostics stay bounded");
         assert!(
-            !serde_json::to_string(&snapshot.capabilities.sources)
-                .unwrap()
-                .contains("catalog unavailable")
+            !paths.runtime_root.join("sessions/catalog.json").exists(),
+            "no partial runtime publication"
         );
-        let authoritative = runtime.capability().availability();
-        let Some(rustx::capabilities::CapabilitySourceState::Unavailable {
-            reason: authoritative_reason,
-        }) = authoritative.get(&rustx::capabilities::ToolSourceId::Mcp(
-            rustx::runtime::identity::McpServerId::new("loud"),
-        ))
-        else {
-            panic!("the coordinator owns the unavailable state: {authoritative:?}");
-        };
-        assert!(
-            authoritative_reason.len() <= rustx::capabilities::CAPABILITY_FAILURE_REASON_MAX_BYTES
-        );
-        let names = tool_names(&snapshot);
-        assert!(names.contains(&"bash"), "native tools survive: {names:?}");
-        prove_native_tool_executes(&runtime).await;
     }
 }
 
@@ -758,27 +703,19 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
         "from fastmcp import FastMCP\nmcp = FastMCP('broken')\n",
     )
     .expect("server source without the required requirements.txt");
-    std::fs::write(root.path().join("models.toml"), MODELS_TOML).expect("models.toml");
     // ... and an MCP server whose program does not exist.
-    let session = serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192}, "mcp_servers": {
-            "exa": {
-                "enabled": true,
-                    "type": "stdio",
-                "command": "/nonexistent/rustx-issue81-absent-server",
-                "args": [],
-            },
-        }, "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"exa": "all", "python:broken-tool": "all"}}}});
-    crate::launch_fixture::write_documents(
+    let session = serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"exa": [], "python:broken-tool": []}}}});
+    crate::launch_fixture::write_document(
         &root.path().join("rustx.toml"),
-        &toml::to_string_pretty(&session).unwrap(),
-        &["mcp_servers"],
+        &format!(
+            "{}\n{MODELS_TOML}",
+            toml::to_string_pretty(&session).unwrap()
+        ),
     );
 
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustx"));
-    let home = super::runtime_process::grant(root.path(), &workspace);
+    let home = super::runtime_process::fixture_home(root.path());
     command
-        .arg("--models")
-        .arg(root.path().join("models.toml"))
         .arg("--config")
         .arg(root.path().join("rustx.toml"))
         .arg("--workspace")
@@ -814,25 +751,14 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
             "native tool {expected} must be in the initial snapshot: {names:?}"
         );
     }
-    assert!(
-        matches!(
-            source_state(&snapshot, &python_source("broken-tool")),
-            Some(CapabilitySourceStateView::Unavailable)
-        ),
-        "demanded malformed package is unavailable"
+    assert_eq!(
+        source_state(&snapshot, &python_source("broken-tool")),
+        Some(CapabilitySourceStateView::Unprepared)
     );
     let exa = CapabilitySourceDescriptor::Mcp {
         server_id: rustx::runtime::identity::McpServerId::new("exa"),
     };
-    assert!(
-        matches!(
-            source_state(&snapshot, &exa),
-            Some(CapabilitySourceStateView::Unavailable)
-        ),
-        "the unreachable MCP server is typed and observable: {:?}",
-        snapshot.capabilities.sources
-    );
-
+    assert_eq!(source_state(&snapshot, &exa), None);
     // The process keeps serving after the isolated failures.
     let response = process_request(&mut stdin, &mut stdout, 2, |id| {
         RuntimeClientRequest::ModelCatalogGet { id }

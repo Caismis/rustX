@@ -68,7 +68,7 @@ use tempfile::TempDir;
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const CONVERSATION: &str = "conv-fnd04";
+const CONVERSATION: &str = "conv_106bde62-e529-79cc-93cd-dd779b4ee2d1";
 
 fn fixed_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 24, 12, 0, 0)

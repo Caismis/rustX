@@ -1,5 +1,5 @@
 //! Structural authoring schemas derived from native document types.
-//! Cross-reference, trust, and execution semantics stay in native validators.
+//! Cross-reference and execution semantics stay in native validators.
 
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -10,24 +10,6 @@ use std::collections::BTreeMap;
 /// Only if an authoritative schema implementation produces non-serializable data.
 #[must_use]
 pub fn generate() -> BTreeMap<&'static str, Value> {
-    let settings = super::configuration::authoring_schema();
-    let mut project = settings.clone();
-    if let Some(properties) = project.get_mut("properties").and_then(Value::as_object_mut) {
-        for &field in super::configuration::USER_PATH_FIELDS
-            .iter()
-            .chain(super::configuration::HOST_POLICY_FIELDS)
-        {
-            properties.remove(field);
-        }
-    }
-    if let Some(properties) = project
-        .pointer_mut("/$defs/McpAuthoring/properties")
-        .and_then(Value::as_object_mut)
-    {
-        for &field in super::configuration::MCP_SECRET_FIELDS {
-            properties.remove(field);
-        }
-    }
     let mut schemas = BTreeMap::from([
         (
             "agent.schema.json",
@@ -35,12 +17,14 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
                 .expect("schema serializes"),
         ),
         (
-            "models.schema.json",
-            serde_json::to_value(schemars::schema_for!(crate::model::authoring::Catalog))
+            "rustx.schema.json",
+            super::configuration::authoring_schema(),
+        ),
+        (
+            "mcp.schema.json",
+            serde_json::to_value(schemars::schema_for!(super::mcp_resources::McpDocument))
                 .expect("schema serializes"),
         ),
-        ("settings.schema.json", settings),
-        ("rustx.schema.json", project),
         (
             "workflow.schema.json",
             serde_json::to_value(schemars::schema_for!(
@@ -52,10 +36,7 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
     for (name, schema) in &mut schemas {
         if matches!(
             *name,
-            "settings.schema.json"
-                | "rustx.schema.json"
-                | "models.schema.json"
-                | "agent.schema.json"
+            "rustx.schema.json" | "mcp.schema.json" | "agent.schema.json"
         ) {
             toml_domain(schema);
         }
@@ -204,7 +185,7 @@ mod tests {
     #[test]
     fn structured_request_parameter_schemas_are_recursive_objects() {
         for (name, schema) in super::generate() {
-            if name == "workflow.schema.json" {
+            if matches!(name, "workflow.schema.json" | "mcp.schema.json") {
                 continue;
             }
             assert!(!schema.to_string().contains("request_params_json"));

@@ -255,7 +255,7 @@ live response, or authorizes a tool from historical `Approved`.
 | `after:commit_compaction` | one `CompactionCompleted` | exactly the planned span replaced by its summary | historical prefix intact, summary appended | `compaction_surface_replace_is_atomic` |
 | project instructions and Skill catalog edited across the compaction | — | the post-compaction request still carries the loaded generation | no canonical project-instruction or Skill-guidance fact | `compaction_never_refreshes_resource_derived_authority` |
 
-Compaction is not a resource reload boundary: it does not discover, refresh,
+Compaction is not a configuration reload boundary: it does not discover, refresh,
 suppress, or remove resource-derived System authority, and the resource
 revision of the request after a committed compaction equals the one before it.
 
@@ -305,12 +305,12 @@ child, and only then is the boundary chosen — so the copied prefix genuinely
 carries the source's ownership identities as canonical text:
 
 ```text
-tool result      execution_id "exec_1", plus the source lineage's own private
-                 output path .../conversations/conversation-1/...
-tool result      subagent_id "conversation-1-subagent-1",
-                 child_agent_id "agent-conversation-1-subagent-1"
-user message     source = Agent { agent-conversation-1-subagent-1 }
-Agent Status ×2  "Background executions:\n- exec_1 | bash | running"
+tool result      execution_id "exec_<source-uuid-v7>", plus the source lineage's own private
+                 output path .../conversations/conv_<source-uuid-v7>/...
+tool result      subagent_id "conv_<source-uuid-v7>-subagent-1",
+                 child_agent_id "agent-conv_<source-uuid-v7>-subagent-1"
+user message     source = Agent { agent-conv_<source-uuid-v7>-subagent-1 }
+Agent Status ×2  "Background executions:\n- exec_<source-uuid-v7> | bash | running"
 ```
 
 The supervisor quiesces the old runtime *before* the publication, so the
@@ -322,8 +322,8 @@ with them.
 | --- | --- | --- | --- | --- |
 | `/fork` at a boundary after both ownership turns | four answered turns; one background ownership; one subagent ownership | the new lineage holds the exact prefix — both tool results, the child's own `UserSource::Agent` message, and both Agent Status footers — by value; its Journal is **empty**; recovery reports `NotStarted` / `PendingInboundOnly` with zero background and subagent ordinals | inheriting any ownership, ordinal watermark, attempt, or obligation; changing the source lineage | `a_forked_lineage_cuts_the_history_and_inherits_no_durable_ownership` |
 | `/branch` at the same boundary | the same | the same — a new node inside the active Session is a different catalog transaction with a different parent linkage, so it is proven separately | the same | `a_branched_lineage_cuts_the_history_and_inherits_no_durable_ownership` |
-| the cut lineage then answers a turn that starts **nothing** | a destination context naming `exec_1`, `conversation-1-subagent-1`, `agent-conversation-1-subagent-1`, the source's private output path, and two live-execution status footers | every copied `MessageId` is reissued; the attempt domain starts at that lineage's own ordinal zero; the newly composed Agent Status carries **no** background section while the copied ones still name `exec_1` | resolving, adopting, reattaching, or relaunching any copied identity; publishing a terminal — that is, spuriously cancelling — for work this lineage never owned | `a_cut_lineage_never_resolves_the_copied_source_identities` |
-| historical Agent Status naming a live execution, in the **same** lineage | a status message literally containing `Background executions: exec_1 \| bash \| …` | the historical status is retained **by value**; the status composed after the reopen contains no background section at all | reconstructing ownership from what history *says*; a second ownership commit; a second terminal | `historical_status_and_history_never_revive_background_ownership` |
+| the cut lineage then answers a turn that starts **nothing** | a destination context naming `exec_<source-uuid-v7>`, `conv_<source-uuid-v7>-subagent-1`, `agent-conv_<source-uuid-v7>-subagent-1`, the source's private output path, and two live-execution status footers | every copied `MessageId` is reissued; the attempt domain starts at that lineage's own ordinal zero; the newly composed Agent Status carries **no** background section while the copied ones still name `exec_<source-uuid-v7>` | resolving, adopting, reattaching, or relaunching any copied identity; publishing a terminal — that is, spuriously cancelling — for work this lineage never owned | `a_cut_lineage_never_resolves_the_copied_source_identities` |
+| historical Agent Status naming a live execution, in the **same** lineage | a status message literally containing `Background executions: exec_<source-uuid-v7> \| bash \| …` | the historical status is retained **by value**; the status composed after the reopen contains no background section at all | reconstructing ownership from what history *says*; a second ownership commit; a second terminal | `historical_status_and_history_never_revive_background_ownership` |
 
 The last two rows are the sharpest. Agent Status is a canonical message, so the
 text naming a live execution stays in the Ledger forever, survives a cut into a
@@ -359,8 +359,9 @@ after   a catalog naming the complete new lineage
 There is no third state — in particular no catalog entry pointing at a missing
 or partial database, which would be unrecoverable. `/fork` and `/branch` are
 proven separately because they are different catalog transactions that allocate
-from different identity domains (`session-2` / `conversation-2` versus a new
-node under `session-1` with `conversation-node-2`).
+a new Session and Conversation for a fork, versus a new Node and Conversation
+inside the original Session for a branch. All four durable identity domains
+use typed UUIDv7; catalog ordinals express lineage order.
 
 | Boundary | Durable before kill | Allowed after reopen | Forbidden | Test |
 | --- | --- | --- | --- | --- |

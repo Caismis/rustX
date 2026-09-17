@@ -332,9 +332,8 @@ use crate::runtime::request_history::RequestHistory;
 use crate::runtime::resources::{RuntimeResourceLoader, RuntimeResourceSnapshot};
 use crate::runtime::transcript_history::TranscriptHistory;
 use crate::runtime::types::{
-    ApprovalMode, ApprovalModeState, CancellationReason, ConversationLifecycle,
-    ConversationLifecycleState, DurabilityFailureCommit, DurabilityGate, DurableOperation,
-    RuntimeClock, SystemClock,
+    ApprovalMode, CancellationReason, ConversationLifecycle, ConversationLifecycleState,
+    DurabilityFailureCommit, DurabilityGate, DurableOperation, RuntimeClock, SystemClock,
 };
 use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundObserver};
 use crate::tools::runtime::ConversationToolRuntime;
@@ -602,6 +601,8 @@ pub struct ConversationContextConfig {
 /// conversation identity disagrees with the runtime it coordinates is
 /// therefore not representable, rather than rejected by an equality check.
 pub struct RuntimeConversationConfig {
+    /// Deliberate Session intent, distinct from the authored Root default.
+    pub explicit_model: bool,
     /// The agent executed by attempts of this runtime.
     pub agent_id: AgentId,
     /// The session's authoritative model state: the binding registry plus
@@ -657,6 +658,7 @@ pub struct RuntimeConversationConfig {
 /// second cancellation state machine and never decides a terminal outcome;
 /// [`AgentExecution`] remains the attempt execution/terminal authority.
 struct CurrentAttempt {
+    configuration: crate::local_runtime::configuration::settings::AdmittedConfiguration,
     /// The attempt identity.
     attempt_id: AttemptId,
     /// The attempt cancellation trigger observed by the loop.
@@ -776,7 +778,9 @@ struct AdmissionDurabilityCycle {
 
 /// The one synchronized coordinator state (the admission linearization
 /// owner).
+#[allow(clippy::struct_excessive_bools)] // Independent admission, lifecycle, and maintenance facts share one lock.
 struct CoordinatorState {
+    explicit_model: bool,
     /// The session's authoritative mutable model state.
     ///
     /// It lives under the *same* lock that owns attempt admission, so a
@@ -796,9 +800,7 @@ struct CoordinatorState {
     /// The effective mode frozen for the currently admitted attempt boundary.
     effective_approval_mode: ApprovalMode,
     /// The latest requested runtime control mode.
-    desired_approval_mode: ApprovalMode,
     /// Monotonic control-plane revision; idempotent requests do not advance it.
-    approval_mode_revision: u64,
     /// The one canonical conversation state, owned by the coordinator
     /// **only between attempts**.
     ///
@@ -1849,14 +1851,27 @@ impl RuntimeInner {
         model: &AttemptModelSnapshot,
         assembly: crate::context::ContextAssembly,
         model_timeout_policy: ModelTimeoutPolicy,
+        resources: &RuntimeResourceSnapshot,
     ) -> Result<ContextRuntime, crate::context::ContextError> {
-        let mut context = ContextRuntime::for_attempt_with_assembly(
-            self.context.policy,
-            Arc::clone(&self.context.estimator),
-            self.context
+        let configuration = resources.configuration();
+        let policy = configuration.map_or(self.context.policy, |generation| {
+            generation.config.context_policy()
+        });
+        let status_engine = match configuration {
+            Some(generation) => generation
+                .config
+                .extension_composition()
+                .agent_status_engine(Arc::new(crate::context::SystemClock)),
+            None => self
+                .context
                 .status_engine
                 .as_ref()
                 .map(AgentStatusEngine::for_attempt),
+        };
+        let mut context = ContextRuntime::for_attempt_with_assembly(
+            policy,
+            Arc::clone(&self.context.estimator),
+            status_engine,
             assembly,
             model,
             model_timeout_policy,
@@ -1866,43 +1881,6 @@ impl RuntimeInner {
             context.engine.set_upload_resolver(owner.clone());
         }
         Ok(context)
-    }
-
-    fn approval_mode_state(state: &CoordinatorState) -> ApprovalModeState {
-        ApprovalModeState {
-            effective: state.effective_approval_mode,
-            desired: state.desired_approval_mode,
-            revision: state.approval_mode_revision,
-        }
-    }
-
-    /// Reconciles the latest desired mode only after the current attempt has
-    /// fully crossed its terminal settlement boundary. This is deliberately
-    /// called while the coordinator lock is held and before the next
-    /// admission can freeze an effective mode.
-    fn reconcile_approval_mode(&self, state: &mut CoordinatorState) {
-        if state.current_attempt.is_some()
-            || state.effective_approval_mode == state.desired_approval_mode
-        {
-            return;
-        }
-        state.effective_approval_mode = state.desired_approval_mode;
-        state.approval_mode_revision = state.approval_mode_revision.saturating_add(1);
-        self.observe(ConversationObservation::ApprovalModeChanged {
-            effective: state.effective_approval_mode,
-            pending: None,
-            revision: state.approval_mode_revision,
-        });
-    }
-
-    fn observe_approval_mode(&self, state: &CoordinatorState) {
-        let pending = (state.effective_approval_mode != state.desired_approval_mode)
-            .then_some(state.desired_approval_mode);
-        self.observe(ConversationObservation::ApprovalModeChanged {
-            effective: state.effective_approval_mode,
-            pending,
-            revision: state.approval_mode_revision,
-        });
     }
 
     /// Publishes one semantic observation into the shared observation
@@ -2092,7 +2070,7 @@ impl RuntimeInner {
         // seeded fact: a client attaching before the first reload still sees
         // exactly which project instruction files the runtime loaded.
         let resources = Arc::clone(&state.resources);
-        let approval_mode = RuntimeInner::approval_mode_state(&state);
+        let approval_mode = state.effective_approval_mode;
         let observer: Arc<RuntimeObserver> = Arc::new(RuntimeObserver::new(self));
         // Interaction pending state is an ephemeral runtime observation, but
         // it still participates in the same bootstrap cut as every other
@@ -2315,6 +2293,7 @@ impl RuntimeInner {
                 &model,
                 resources.context_assembly().clone(),
                 model_timeout_policy,
+                &resources,
             )
             .expect("admission validated this model against the session context policy");
         let context_runtime = context_runtime.with_runtime_resources(&resources);
@@ -2339,17 +2318,12 @@ impl RuntimeInner {
                 .flatten()
                 .map(|models| {
                     crate::runtime::subagent::AttemptSubagentContext::new(
+                        self.capability.clone(),
                         attempt_id.clone(),
                         Arc::clone(&resources),
                         model_config,
                         models,
                         approval_mode,
-                        // The composition this runtime is actually executing
-                        // against (Issue #258). It is delegation *authority*
-                        // only: a child never inherits it, and it reaches a
-                        // frozen child specification only through an explicit
-                        // authorized invocation override.
-                        self.tool_runtime.extensions().clone(),
                     )
                 }),
             workflow_output: self.workflow_output.clone(),
@@ -2602,7 +2576,6 @@ impl RuntimeInner {
             {
                 state.current_attempt = None;
             }
-            self.reconcile_approval_mode(&mut state);
             self.settlement.notify_one();
             // Test-only gate: the conversation state is restored and the
             // current-attempt slot is cleared, but the next-admission
@@ -2758,7 +2731,12 @@ impl RuntimeInner {
                     self.admit_continuation(state);
                     return;
                 }
-                if let Some(goal) = self.tool_runtime.goal() {
+                if let Some(goal) = self.tool_runtime.goal().filter(|_| {
+                    state
+                        .resources
+                        .root_profile()
+                        .is_some_and(|profile| profile.extensions.goal().is_some())
+                }) {
                     let admission = self
                         .tool_runtime
                         .background()
@@ -2937,6 +2915,12 @@ impl RuntimeInner {
             let _ = cancellation.request_cancel(reason);
         }
         state.current_attempt = Some(CurrentAttempt {
+            configuration: crate::local_runtime::configuration::settings::AdmittedConfiguration {
+                attempt: attempt_id.clone(),
+                generation: state.resources.revision(),
+                model: state.model.view(),
+                resources: state.resources.inspection().clone(),
+            },
             attempt_id: attempt_id.clone(),
             cancellation: cancellation.clone(),
         });
@@ -2966,11 +2950,29 @@ impl RuntimeInner {
         // Freeze runtime execution policy at the same admission boundary as
         // the attempt's model snapshot. A later configuration change can
         // therefore affect only a future admitted attempt.
-        let model_timeout_policy = self.model_timeout_policy;
+        let model_timeout_policy =
+            state
+                .resources
+                .configuration()
+                .map_or(self.model_timeout_policy, |generation| {
+                    generation
+                        .config
+                        .timeout_policy()
+                        .expect("validated generation")
+                });
         // The tool execution-liveness policy freezes at the same boundary
         // (Issue #204): every foreground ToolCall of this attempt runs under
         // exactly this policy value.
-        let tool_deadline_policy = self.tool_deadline_policy;
+        let tool_deadline_policy =
+            state
+                .resources
+                .configuration()
+                .map_or(self.tool_deadline_policy, |generation| {
+                    generation
+                        .config
+                        .tool_deadline_policy()
+                        .expect("validated generation")
+                });
         let approval_mode = state.effective_approval_mode;
         let resources = state.resources.clone();
         let lease = self
@@ -3242,49 +3244,8 @@ impl ConversationRuntime {
         }
         // The one native Agent Extension composition invariant (Issue #259).
         //
-        // This runtime is the ownership-transfer boundary at which every facet
-        // of one frozen composition comes together, so it is where their
-        // coherence is *proved* rather than assumed:
-        //
-        // ```text
-        // NativeAgentExtensions              the conversation tool runtime's
-        //                                    stored frozen composition
-        //   |-- Todo state owner             tool_runtime.todos()
-        //   |-- Agent Status engine          context.status_engine
-        //   |-- configured extension plane   capability.extension_tool_plane_shape()
-        //   |-- ACTIVE extension authority   capability.current_snapshot()
-        //   |                                    .tool_registry()
-        //   `-- Runtime Client projection    native_extensions(), which reads
-        //                                    the stored composition directly
-        // ```
-        //
-        // The state facet cannot disagree — the tool runtime materializes its
-        // list *from* the stored composition — and the configured plane can
-        // only be derived from a materialized tool runtime, so neither is the
-        // primary defence. The remaining two are:
-        //
-        // 1. the **configured** plane catches a coordinator, or a status
-        //    engine, built for one composition and paired with a conversation
-        //    frozen on another;
-        //
-        // 2. the **active** capability generation catches the case the
-        //    configured plane structurally cannot see. A coordinator holds its
-        //    configured plane from construction, but `CapabilityCoordinator`
-        //    deliberately opens at revision zero with an empty executable
-        //    registry and publishes nothing until a prepared candidate is
-        //    committed. So "configured to publish `todo`" is not "the
-        //    currently executable generation carries `todo`": a coordinator
-        //    that was never prepared and committed would otherwise satisfy
-        //    every other facet while the Agent Loop could not dispatch the
-        //    Tool the model was told it has.
-        //
-        // The active snapshot is the execution authority; the configured plane
-        // is only an input to a future preparation. Both are required, and the
-        // comparison uses the exact canonical `ToolDefinition` each extension
-        // owns rather than a model-facing name, so a same-named MCP Tool
-        // cannot satisfy it. The identity knowledge stays in the extension
-        // owner: this boundary compares closed typed shapes and never names a
-        // Tool id.
+        // Domain state is Conversation-owned. Configuration selects Plugin
+        // capabilities; selected Tools must have real backing owners.
         let composition = config.tool_runtime.extensions();
         let materialized = crate::extensions::NativeAgentExtensions::from_materialized(
             config.context.status_engine.as_ref(),
@@ -3296,7 +3257,13 @@ impl ConversationRuntime {
         let active_plane = crate::extensions::ExtensionToolPlaneShape::of_published_registry(
             snapshot.tool_registry(),
         );
-        if &materialized != composition || configured_plane != required || active_plane != required
+        if (configured_plane.todo && materialized.todo().is_none())
+            || (configured_plane.goal && materialized.goal().is_none())
+            || configured_plane.invalid_goal
+            || active_plane != required
+            || (required.todo && materialized.todo().is_none())
+            || (required.goal && materialized.goal().is_none())
+            || materialized.agent_status() != composition.agent_status()
         {
             return Err(ConversationRuntimeError::ExtensionCompositionMismatch {
                 conversation_id,
@@ -3494,15 +3461,6 @@ impl ConversationRuntime {
         // so nothing can be admitted and nothing can be observed while the
         // optional Runtime Client host binds.
         //
-        // Identity recovery (Issue #12, M9a): the detached-execution ordinal
-        // is a durable identity domain exactly like the attempt ordinal, so
-        // the registry's process-local `exec_N` allocator is reseeded above
-        // every ordinal already in durable authority. The background plane is
-        // pristine and the runtime is inactive, so no dispatch can race this.
-        config
-            .tool_runtime
-            .background()
-            .restore_execution_sequence(recovery.highest_background_ordinal());
         // The subagent ordinal is the same kind of durable identity domain
         // (Issue #60): reseed above every ordinal already in durable
         // authority before any start can race this.
@@ -3554,13 +3512,12 @@ impl ConversationRuntime {
             recovery,
             executor,
             state: Mutex::new(CoordinatorState {
+                explicit_model: config.explicit_model,
                 model: config.model,
                 resources: config.resources,
                 mcp_settlement_failure: None,
                 resource_reload_in_progress: false,
                 effective_approval_mode: config.approval_mode,
-                desired_approval_mode: config.approval_mode,
-                approval_mode_revision: 0,
                 conversation: Some(conversation),
                 current_attempt: None,
                 manual_compaction: None,
@@ -3778,40 +3735,40 @@ impl ConversationRuntime {
         &self.inner.tool_runtime
     }
 
-    /// The shared current-runtime context plane of this composition.
-    ///
-    /// The context policy, the token estimator, and the Agent Status engine
-    /// template persist across attempts; each attempt derives its
-    /// [`ContextRuntime`](crate::context::ContextRuntime) from this plane
-    /// plus that attempt's frozen model snapshot.
+    /// Context inputs projected from one immutable published generation.
+    /// Admitted attempts retain their own captured resources and engine state.
     #[must_use]
-    pub fn context_config(&self) -> &ConversationContextConfig {
-        &self.inner.context
+    pub fn context_config(&self) -> ConversationContextConfig {
+        let resources = self.runtime_resources();
+        let configuration = resources.configuration();
+        ConversationContextConfig {
+            policy: configuration.map_or(self.inner.context.policy, |g| g.config.context_policy()),
+            estimator: Arc::clone(&self.inner.context.estimator),
+            status_engine: configuration.map_or_else(
+                || {
+                    self.inner
+                        .context
+                        .status_engine
+                        .as_ref()
+                        .map(AgentStatusEngine::for_attempt)
+                },
+                |g| {
+                    g.config
+                        .extension_composition()
+                        .agent_status_engine(Arc::new(crate::context::SystemClock))
+                },
+            ),
+        }
     }
 
-    /// The frozen native Agent Extension composition this runtime executes
-    /// against (Issue #256).
-    ///
-    /// This is the **one** source of the Runtime Client effective-extension
-    /// projection, for a root runtime and for a Subagent child alike. It
-    /// returns the single frozen composition the conversation tool runtime
-    /// stored when it materialized this composition's extension owners —
-    /// the same value the capability coordinator's extension Tool plane and
-    /// the Agent Status engine were proved against at construction (see
-    /// [`ConversationRuntimeError::ExtensionCompositionMismatch`]). So the
-    /// projection cannot disagree with the Tool Plane, or with the Todo state
-    /// the runtime actually owns, and there is no path from here to a
-    /// configuration document, a `ProspectiveSessionConfig`, a
-    /// `RuntimeResourceSnapshot`, an Agent Status observation, or the Event
-    /// Journal.
-    ///
-    /// Its lifetime is therefore the runtime's own: a resource reload
-    /// republishes resources without reaching this value, and only a new
-    /// launch (root) or a newly resolved child specification (child) can
-    /// produce a different one.
+    /// The closed Plugins selected by the published Root or admitted child profile.
+    /// Conversation-owned Plugin state is retained independently of this selection.
     #[must_use]
     pub fn native_extensions(&self) -> crate::extensions::NativeAgentExtensions {
-        self.inner.tool_runtime.extensions().clone()
+        self.runtime_resources().root_profile().map_or_else(
+            || self.inner.tool_runtime.extensions().clone(),
+            |profile| profile.extensions.clone(),
+        )
     }
 
     /// The one capability coordinator of this runtime.
@@ -4148,7 +4105,7 @@ impl ConversationRuntime {
     /// quiescent, or a bounded preparation/publication failure while retaining
     /// the complete previous generation.
     #[allow(clippy::too_many_lines)]
-    pub async fn reload_resources(
+    pub async fn reload_configuration(
         &self,
     ) -> Result<RuntimeResourceReloaded, RuntimeResourceReloadError> {
         let _reload_admission = {
@@ -4182,6 +4139,17 @@ impl ConversationRuntime {
                     reason: RuntimeResourceReloadBusyReason::Compaction,
                 });
             }
+            if self.inner.tool_runtime.background().configuration_busy()
+                || self
+                    .inner
+                    .subagents
+                    .as_ref()
+                    .is_some_and(crate::runtime::subagent::SubagentRegistry::configuration_busy)
+            {
+                return Err(RuntimeResourceReloadError::Busy {
+                    reason: RuntimeResourceReloadBusyReason::OwnedWork,
+                });
+            }
             state.resource_reload_in_progress = true;
             let Ok(admission) = self.inner.lifecycle.try_enter_running() else {
                 state.resource_reload_in_progress = false;
@@ -4212,6 +4180,35 @@ impl ConversationRuntime {
                     }
                     Ok(prepared) => {
                         let (capability_candidate, resource_data) = prepared.into_parts();
+                        // Resolve every fallible Session/model consequence before
+                        // capability publication. Explicit intent is read under
+                        // this same coordinator transaction.
+                        let next_model = if let Some(generation) = &resource_data.configuration {
+                            let selection = if state.explicit_model {
+                                state.model.config().clone()
+                            } else {
+                                generation.config.initial_model().clone()
+                            };
+                            match SessionModelState::new(generation.models.clone(), selection)
+                                .map_err(|error| error.to_string())
+                                .and_then(|model| {
+                                    validate_context_policy(
+                                        &generation.config.context_policy(),
+                                        &model.snapshot(),
+                                    )
+                                    .map_err(|error| error.message)?;
+                                    Ok(model)
+                                }) {
+                                Ok(model) => Some(model),
+                                Err(message) => {
+                                    reload_gate.clear(&mut state);
+                                    return Err(RuntimeResourceReloadError::Failed { message });
+                                }
+                            }
+                        } else {
+                            None
+                        };
+
                         match self.inner.capability.commit_runtime(
                             &self.inner.capability_publication,
                             capability_candidate,
@@ -4238,6 +4235,15 @@ impl ConversationRuntime {
                                     capability,
                                 ));
                                 let capability_revision = resources.capability_revision();
+                                if let Some(model) = next_model {
+                                    state.model = model;
+                                }
+                                if let Some(generation) = resources.configuration() {
+                                    if let Some(subagents) = &self.inner.subagents {
+                                        subagents.publish_configuration(&generation.config);
+                                    }
+                                    state.effective_approval_mode = generation.config.approval_mode;
+                                }
                                 state.resources = Arc::clone(&resources);
                                 // One observation carries the whole
                                 // generation: the resource snapshot and the
@@ -4264,6 +4270,8 @@ impl ConversationRuntime {
                                 // leaves the capability revision untouched,
                                 // so neither half implies the other.
                                 self.inner.observe(ConversationObservation::Resources {
+                                    model: Box::new(state.model.view()),
+                                    approval_mode: state.effective_approval_mode,
                                     snapshot: resources,
                                     availability,
                                 });
@@ -4286,16 +4294,51 @@ impl ConversationRuntime {
             }
         };
         self.inner.wake.notify.notify_one();
-        let settlement = self.inner.capability.settle_ready_mcp_runtimes().await;
-        match (outcome, settlement) {
-            (Ok(published), Err(failures)) => Err(
-                RuntimeResourceReloadError::PostPublicationSettlementFailed {
-                    published,
-                    message: failures.join("; "),
-                },
-            ),
-            (outcome, _) => outcome,
-        }
+        // Publication is already committed. Physical retirement failures have a
+        // separate runtime-health owner which fences admission and publishes
+        // its drain diagnostic; they cannot turn a committed reload into a
+        // failed candidate or imply that the previous generation is current.
+        let _ = self.inner.capability.settle_ready_mcp_runtimes().await;
+        outcome
+    }
+
+    /// Read configuration, Session intent and admitted work in one coherent cut.
+    #[must_use]
+    pub fn configuration_view(
+        &self,
+    ) -> Option<crate::local_runtime::configuration::settings::EffectiveConfiguration> {
+        let state = self.inner.lock_state();
+        let resources = &state.resources;
+        let generation = resources.configuration()?;
+        let config = &generation.config;
+        Some(
+            crate::local_runtime::configuration::settings::EffectiveConfiguration {
+                source_revisions: generation.source_revisions.clone(),
+                generation: resources.revision(),
+                document: generation.effective.clone(),
+                root_agent: config.agent.clone(),
+                context: config.context,
+                model_timeout: config.model_timeout_policy,
+                tool_deadline: config.tool_deadline_policy,
+                child_capacity: config.subagents.clone(),
+                approval_mode: state.effective_approval_mode,
+                provenance: generation.provenance.clone(),
+                resources: resources.inspection().clone(),
+                available_tools: resources
+                    .capability()
+                    .available_tools()
+                    .tools()
+                    .iter()
+                    .map(|tool| tool.definition.clone())
+                    .collect(),
+                session_model: state.explicit_model.then(|| state.model.view().configured),
+                effective_model: state.model.view(),
+                admitted_attempt: state
+                    .current_attempt
+                    .as_ref()
+                    .map(|attempt| attempt.configuration.clone()),
+            },
+        )
     }
 
     /// The complete generation future attempts currently acquire.
@@ -4325,6 +4368,7 @@ impl ConversationRuntime {
     /// Panics only if an idle coordinator has lost ownership of its sole
     /// conversation state, which would violate the runtime ownership
     /// invariant, or if the configured executor rejects the spawned task.
+    #[allow(clippy::too_many_lines)] // Admission and terminal settlement remain visible in one transaction.
     pub async fn compact_context(&self) -> Result<ManualCompactionOutcome, ManualCompactionError> {
         let completion = {
             let mut state = self.inner.lock_state();
@@ -4355,7 +4399,16 @@ impl ConversationRuntime {
                 .context_runtime_with_assembly(
                     &model,
                     resources.context_assembly().clone(),
-                    self.inner.model_timeout_policy,
+                    resources.configuration().map_or(
+                        self.inner.model_timeout_policy,
+                        |generation| {
+                            generation
+                                .config
+                                .timeout_policy()
+                                .expect("validated generation")
+                        },
+                    ),
+                    &resources,
                 )
                 .map_err(ManualCompactionError::Context)?;
             // Manual maintenance has no attempt lease, but it still freezes
@@ -4821,7 +4874,7 @@ impl ConversationRuntime {
         }
     }
 
-    /// Authoritative root Goal read. Disabled composition does not read durable Goal facts.
+    /// Authoritative Conversation Goal state, independent of model Plugin selection.
     ///
     /// # Errors
     /// Returns a durable Goal read failure.
@@ -4851,7 +4904,7 @@ impl ConversationRuntime {
             .inner
             .tool_runtime
             .goal()
-            .ok_or("Goal extension is disabled; enable extensions.goal.enabled and restart")?;
+            .ok_or("Goal state is unavailable")?;
         let write = match control {
             crate::goal::GoalControl::Show => {
                 return domain.view().map_err(|error| error.to_string());
@@ -4921,44 +4974,8 @@ impl ConversationRuntime {
 
     /// Reads the authoritative effective/desired `ApprovalMode` control state.
     #[must_use]
-    pub fn approval_mode_state(&self) -> ApprovalModeState {
-        RuntimeInner::approval_mode_state(&self.inner.lock_state())
-    }
-
-    /// Requests a runtime `ApprovalMode` transition.
-    ///
-    /// While an attempt is active, only `desired` changes; the active
-    /// attempt's effective mode remains frozen. Settlement reconciles the
-    /// latest desired mode before the next admission can freeze it.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ApprovalModeUpdateError::Inactive`] when the runtime has not
-    /// been activated, or [`ApprovalModeUpdateError::DurabilityFailed`] when
-    /// its durable authority is in the absorbing failed state.
-    pub fn approval_mode_set(
-        &self,
-        mode: ApprovalMode,
-    ) -> Result<ApprovalModeState, ApprovalModeUpdateError> {
-        let mut state = self.inner.lock_state();
-        if !self.inner.lifecycle.is_running() {
-            return Err(ApprovalModeUpdateError::Inactive);
-        }
-        if let Some(failure) = self.inner.durability_gate.failure() {
-            return Err(ApprovalModeUpdateError::DurabilityFailed {
-                message: failure.diagnostic,
-            });
-        }
-        if state.desired_approval_mode == mode {
-            return Ok(RuntimeInner::approval_mode_state(&state));
-        }
-        state.desired_approval_mode = mode;
-        state.approval_mode_revision = state.approval_mode_revision.saturating_add(1);
-        if state.current_attempt.is_none() {
-            state.effective_approval_mode = mode;
-        }
-        self.inner.observe_approval_mode(&state);
-        Ok(RuntimeInner::approval_mode_state(&state))
+    pub fn approval_mode(&self) -> ApprovalMode {
+        self.inner.lock_state().effective_approval_mode
     }
 
     /// Replaces the authoritative session model configuration.
@@ -5030,17 +5047,22 @@ impl ConversationRuntime {
         candidate
             .apply(config.clone())
             .map_err(|error| invalid_model(&error))?;
-        validate_context_policy(&self.inner.context.policy, &candidate.snapshot()).map_err(
-            |error| {
-                ModelUpdateError::InvalidConfiguration(format!(
-                    "the selected model cannot run under the session context policy: {}",
-                    error.message
-                ))
-            },
-        )?;
+        let context_policy = state
+            .resources
+            .configuration()
+            .map_or(self.inner.context.policy, |generation| {
+                generation.config.context_policy()
+            });
+        validate_context_policy(&context_policy, &candidate.snapshot()).map_err(|error| {
+            ModelUpdateError::InvalidConfiguration(format!(
+                "the selected model cannot run under the session context policy: {}",
+                error.message
+            ))
+        })?;
         persist(config)?;
         let view = candidate.view();
         state.model = candidate;
+        state.explicit_model = true;
         self.inner
             .observe(ConversationObservation::SessionModelChanged {
                 model: Box::new(view.clone()),
@@ -5587,7 +5609,7 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     /// The authoritative session model view.
     pub model: SessionModelView,
     /// The authoritative effective/desired `ApprovalMode` state at the cut.
-    pub approval_mode: ApprovalModeState,
+    pub approval_mode: ApprovalMode,
     /// The currently pending inbound items, in mailbox sequence order.
     pub inbound_pending: Vec<InboundItem>,
     /// The authoritative background execution records at the cut.
@@ -5747,15 +5769,20 @@ pub struct RuntimeResourceReloaded {
 }
 
 /// The semantic owner preventing a quiescent reload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum RuntimeResourceReloadBusyReason {
+    /// Accepted background or child work still owns the previous generation.
+    OwnedWork,
     /// An admitted attempt owns the conversation.
     Attempt,
     /// A pending Questionnaire/Approval interaction owns the session.
     Interaction,
     /// Manual context compaction owns the conversation.
     Compaction,
-    /// Another resource reload already owns the narrow admission gate.
+    /// Another configuration reload already owns the narrow admission gate.
     Reload,
 }
 
@@ -5764,6 +5791,7 @@ impl RuntimeResourceReloadBusyReason {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::OwnedWork => "owned_work",
             Self::Attempt => "attempt",
             Self::Interaction => "interaction",
             Self::Compaction => "compaction",
@@ -5778,12 +5806,13 @@ impl core::fmt::Display for RuntimeResourceReloadBusyReason {
             Self::Attempt => "an attempt is active",
             Self::Interaction => "a Questionnaire or Approval interaction is pending",
             Self::Compaction => "manual context compaction is active",
-            Self::Reload => "another resource reload is active",
+            Self::Reload => "another configuration reload is active",
+            Self::OwnedWork => "background or child work is active",
         })
     }
 }
 
-/// An explicit runtime resource reload refusal or failure.
+/// An explicit runtime configuration reload refusal or failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeResourceReloadError {
     /// The runtime is not activated.
@@ -5801,16 +5830,6 @@ pub enum RuntimeResourceReloadError {
         /// Bounded diagnostic.
         message: String,
     },
-    /// The capability/resource publication committed, but a superseded MCP
-    /// generation could not prove physical settlement. The new generation is
-    /// still the logical authority; the runtime is fenced into drain and
-    /// this is not a pre-publication reload failure.
-    PostPublicationSettlementFailed {
-        /// The logically committed resource/capability pair.
-        published: RuntimeResourceReloaded,
-        /// Authoritative physical-settlement diagnostics.
-        message: String,
-    },
 }
 
 impl core::fmt::Display for RuntimeResourceReloadError {
@@ -5820,13 +5839,8 @@ impl core::fmt::Display for RuntimeResourceReloadError {
             Self::Shutdown => formatter.write_str("the runtime is shutting down"),
             Self::Busy { reason } => write!(formatter, "runtime resources are busy: {reason}"),
             Self::Failed { message } => {
-                write!(formatter, "runtime resource reload failed: {message}")
+                write!(formatter, "runtime configuration reload failed: {message}")
             }
-            Self::PostPublicationSettlementFailed { published, message } => write!(
-                formatter,
-                "runtime resource reload published resource revision {:?} and capability revision {:?}, but MCP retirement settlement is unproven: {message}",
-                published.resource_revision, published.capability_revision,
-            ),
         }
     }
 }
@@ -6396,9 +6410,22 @@ impl ConversationRuntime {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    fn fixture_activation() -> crate::capabilities::AgentActivation {
+    fn fixture_activation(
+        runtime: &crate::tools::runtime::ConversationToolRuntime,
+    ) -> crate::capabilities::AgentActivation {
         let mut activation = crate::capabilities::AgentActivation::default();
-        activation.profile.tools.builtin.push("reload_proof".into());
+        activation.profile.extensions =
+            crate::scripted_suites::common::plugin_document(runtime.extensions());
+        activation.profile.skills = Some(crate::runtime::agent_profile::AgentSkillSelection::All);
+        activation
+    }
+
+    fn headless_activation() -> crate::capabilities::AgentActivation {
+        let mut activation = crate::capabilities::AgentActivation::default();
+        activation.profile.extensions = crate::scripted_suites::common::plugin_document(
+            &crate::extensions::NativeAgentExtensions::with_todo()
+                .and_agent_status(crate::context::AgentStatusConfig::default()),
+        );
         activation
     }
 
@@ -6407,6 +6434,10 @@ mod tests {
     /// supplies its already-frozen result.
     fn test_resolved_subagent(agent: &str) -> crate::runtime::subagent::ResolvedSubagentSpec {
         crate::runtime::subagent::ResolvedSubagentSpec {
+            environment: Vec::new(),
+            generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
+            skill_roots: Vec::new(),
+
             selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
             agent: crate::runtime::subagent::SubagentName::parse(agent).expect("canonical name"),
             definition_digest: serde_json::from_value(serde_json::json!(
@@ -6847,7 +6878,7 @@ mod tests {
         probe: Option<CoordinatorProbe>,
         options: HeadlessRuntimeOptions,
     ) -> (ConversationRuntime, Arc<FakeModel>) {
-        let conversation_id = ConversationId::new("conv-headless");
+        let conversation_id = ConversationId::new("conv_d9e0ddde-2c51-755b-8a4e-1932c402870e");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
@@ -6910,7 +6941,7 @@ mod tests {
                             builtin: selected_builtin,
                             sources: source_selection,
                         },
-                        ..fixture_activation().profile
+                        ..fixture_activation(&tool_runtime).profile
                     },
                     ..Default::default()
                 },
@@ -6951,6 +6982,7 @@ mod tests {
             .resource_loader
             .unwrap_or_else(|| test_resource_loader(&coordinator));
         let config = RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
@@ -7046,7 +7078,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                agent_activation: fixture_activation(),
+                agent_activation: fixture_activation(&tool_runtime),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -7060,6 +7092,7 @@ mod tests {
         let adapter: Arc<dyn ModelAdapter> = model.clone();
         let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
         let config = RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
@@ -7133,7 +7166,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                agent_activation: fixture_activation(),
+                agent_activation: fixture_activation(&tool_runtime),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -7151,6 +7184,10 @@ mod tests {
                 clock: Arc::new(crate::runtime::types::SystemClock),
                 monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
+                    session_id: crate::runtime::identity::SessionId::new(
+                        "ses_01900000-0000-7000-8000-000000000001",
+                    ),
+
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
                     product_root: crate::runtime::local_storage::ProductRoot::create(
                         &dir.path().join("subagents"),
@@ -7175,6 +7212,7 @@ mod tests {
         let model = Arc::new(FakeModel::new(Vec::new()));
         let adapter: Arc<dyn ModelAdapter> = model.clone();
         let config = RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
@@ -7255,7 +7293,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                agent_activation: fixture_activation(),
+                agent_activation: fixture_activation(&tool_runtime),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -7273,6 +7311,10 @@ mod tests {
                 clock: Arc::new(crate::runtime::types::SystemClock),
                 monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
+                    session_id: crate::runtime::identity::SessionId::new(
+                        "ses_01900000-0000-7000-8000-000000000001",
+                    ),
+
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
                     product_root: crate::runtime::local_storage::ProductRoot::create(
                         &dir.path().join("subagents"),
@@ -7297,6 +7339,7 @@ mod tests {
         let model = Arc::new(FakeModel::new(Vec::new()));
         let adapter: Arc<dyn ModelAdapter> = model.clone();
         let config = RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: runtime_agent.clone(),
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
@@ -7330,15 +7373,15 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-subagent-domain",
+                "conv_efeaf863-95c1-73d9-8623-5a766b1967be",
             ))
             .expect("in-memory store"),
         );
         let (_subagents, config) = subagent_runtime_config_with_registry(
             &dir,
-            "conv-subagent-domain",
+            "conv_efeaf863-95c1-73d9-8623-5a766b1967be",
             store,
-            &ConversationId::new("conv-other-domain"),
+            &ConversationId::new("conv_a2120f51-0e8e-7082-8caf-04e5d3e2a71d"),
             &AgentId::new("agent-a"),
             &AgentId::new("agent-a"),
         )
@@ -7350,8 +7393,8 @@ mod tests {
                 ConversationRuntimeError::SubagentOwnershipMismatch {
                     registry_conversation,
                     runtime_conversation,
-                } if registry_conversation == &ConversationId::new("conv-other-domain")
-                    && runtime_conversation == &ConversationId::new("conv-subagent-domain")
+                } if registry_conversation == &ConversationId::new("conv_a2120f51-0e8e-7082-8caf-04e5d3e2a71d")
+                    && runtime_conversation == &ConversationId::new("conv_efeaf863-95c1-73d9-8623-5a766b1967be")
             ),
             "the constructor names both ownership domains: {error}"
         );
@@ -7364,15 +7407,15 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-subagent-domain",
+                "conv_efeaf863-95c1-73d9-8623-5a766b1967be",
             ))
             .expect("in-memory store"),
         );
         let (_subagents, config) = subagent_runtime_config_with_registry(
             &dir,
-            "conv-subagent-domain",
+            "conv_efeaf863-95c1-73d9-8623-5a766b1967be",
             store,
-            &ConversationId::new("conv-subagent-domain"),
+            &ConversationId::new("conv_efeaf863-95c1-73d9-8623-5a766b1967be"),
             &AgentId::new("agent-other"),
             &AgentId::new("agent-a"),
         )
@@ -7395,15 +7438,15 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-subagent-pristine",
+                "conv_3e98d554-da03-7c85-899c-22164a246018",
             ))
             .expect("in-memory store"),
         );
         let (subagents, config) = subagent_runtime_config_with_registry(
             &dir,
-            "conv-subagent-pristine",
+            "conv_3e98d554-da03-7c85-899c-22164a246018",
             store.clone(),
-            &ConversationId::new("conv-subagent-pristine"),
+            &ConversationId::new("conv_3e98d554-da03-7c85-899c-22164a246018"),
             &AgentId::new("agent-a"),
             &AgentId::new("agent-a"),
         )
@@ -7471,15 +7514,15 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-subagent-pristine-ok",
+                "conv_77a234cd-423d-7899-862c-728e8960bb43",
             ))
             .expect("in-memory store"),
         );
         let (_subagents, config) = subagent_runtime_config_with_registry(
             &dir,
-            "conv-subagent-pristine-ok",
+            "conv_77a234cd-423d-7899-862c-728e8960bb43",
             store,
-            &ConversationId::new("conv-subagent-pristine-ok"),
+            &ConversationId::new("conv_77a234cd-423d-7899-862c-728e8960bb43"),
             &AgentId::new("agent-a"),
             &AgentId::new("agent-a"),
         )
@@ -7515,15 +7558,15 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-subagent-transfer-race",
+                "conv_ef4deea7-17ce-7f7c-8a2f-8b1cdf561c4b",
             ))
             .expect("in-memory store"),
         );
         let (subagents, config) = subagent_runtime_config_with_registry(
             &dir,
-            "conv-subagent-transfer-race",
+            "conv_ef4deea7-17ce-7f7c-8a2f-8b1cdf561c4b",
             store.clone(),
-            &ConversationId::new("conv-subagent-transfer-race"),
+            &ConversationId::new("conv_ef4deea7-17ce-7f7c-8a2f-8b1cdf561c4b"),
             &AgentId::new("agent-a"),
             &AgentId::new("agent-a"),
         )
@@ -7655,15 +7698,15 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-subagent-transfer-claim-first",
+                "conv_21809a09-ae58-7275-8747-47667d792339",
             ))
             .expect("in-memory store"),
         );
         let (subagents, config) = subagent_runtime_config_with_registry(
             &dir,
-            "conv-subagent-transfer-claim-first",
+            "conv_21809a09-ae58-7275-8747-47667d792339",
             store.clone(),
-            &ConversationId::new("conv-subagent-transfer-claim-first"),
+            &ConversationId::new("conv_21809a09-ae58-7275-8747-47667d792339"),
             &AgentId::new("agent-a"),
             &AgentId::new("agent-a"),
         )
@@ -7799,7 +7842,10 @@ mod tests {
             .runtime
             .submit_inbound(text_content("hello"))
             .expect("accepted");
-        assert_eq!(admission.message_id.as_str(), "conv-headless-inbound-1");
+        assert_eq!(
+            admission.message_id.as_str(),
+            "conv_d9e0ddde-2c51-755b-8a4e-1932c402870e-inbound-1"
+        );
         assert_eq!(admission.inbound_sequence.get(), 1);
 
         // The terminal settlement is observable through the runtime-owned
@@ -8101,7 +8147,9 @@ mod tests {
             Some(with_native_read(ToolRegistry::new())),
             None,
             HeadlessRuntimeOptions {
-                skill_discovery: crate::skills::SkillDiscoveryConfig::explicit(vec![skill]),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
+                    skill.parent().unwrap(),
+                ),
                 estimator: estimator(),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -8189,7 +8237,7 @@ mod tests {
             Err(ManualCompactionError::Busy)
         );
         assert!(matches!(
-            runtime.reload_resources().await,
+            runtime.reload_configuration().await,
             Err(super::RuntimeResourceReloadError::Busy {
                 reason: super::RuntimeResourceReloadBusyReason::Compaction
             })
@@ -8301,160 +8349,6 @@ mod tests {
         assert!(!runtime.has_current_attempt());
     }
 
-    /// `ApprovalMode` is a runtime control-plane value: busy changes coalesce
-    /// in `desired`, the active attempt keeps its admitted `effective` mode,
-    /// and settlement reconciles before the next admission can begin.
-    #[allow(clippy::too_many_lines)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn approval_mode_settlement_reconciliation_precedes_next_admission() {
-        use crate::model::event::ModelEvent;
-        use crate::model::finish::ModelFinishReason;
-
-        let (release_sender, release_receiver) = model_release();
-        let scripts = vec![
-            vec![
-                FakeStep::ParkUntilReleased(release_receiver),
-                FakeStep::Emit(ModelEvent::Completed {
-                    finish_reason: ModelFinishReason::Stop,
-                    usage: None,
-                }),
-            ],
-            one_turn_script(),
-        ];
-        let settlement_gate = Arc::new(super::Gate::default());
-        let probe = CoordinatorProbe {
-            settlement_gate: Some(settlement_gate.clone()),
-            ..CoordinatorProbe::default()
-        };
-        let dir = tempfile::tempdir().expect("temp dir");
-        let (runtime, model) = headless_runtime(&dir, scripts, None, Some(probe)).await;
-        let pending = Arc::new(PendingObservations::new());
-        runtime
-            .install_observation_bridge(pending.clone())
-            .expect("bridge install");
-        runtime.activate();
-
-        assert_eq!(
-            runtime.approval_mode_state(),
-            crate::runtime::ApprovalModeState {
-                effective: ApprovalMode::Policy,
-                desired: ApprovalMode::Policy,
-                revision: 0,
-            }
-        );
-
-        runtime
-            .submit_inbound(text_content("first"))
-            .expect("first inbound");
-        let mut parked = model.parked();
-        within_liveness_guard("first model park", parked.wait_for(|is_parked| *is_parked))
-            .await
-            .expect("model park watch remains open");
-        runtime
-            .submit_inbound(text_content("second"))
-            .expect("second inbound remains queued");
-
-        let full_access = runtime
-            .approval_mode_set(ApprovalMode::FullAccess)
-            .expect("FullAccess request");
-        assert_eq!(full_access.effective, ApprovalMode::Policy);
-        assert_eq!(full_access.desired, ApprovalMode::FullAccess);
-        assert_eq!(full_access.revision, 1);
-
-        let idempotent = runtime
-            .approval_mode_set(ApprovalMode::FullAccess)
-            .expect("idempotent FullAccess request");
-        assert_eq!(idempotent, full_access);
-
-        let coalesced_policy = runtime
-            .approval_mode_set(ApprovalMode::Policy)
-            .expect("intermediate Policy request");
-        assert_eq!(coalesced_policy.revision, 2);
-        assert_eq!(coalesced_policy.effective, ApprovalMode::Policy);
-        assert_eq!(coalesced_policy.desired, ApprovalMode::Policy);
-        let latest = runtime
-            .approval_mode_set(ApprovalMode::FullAccess)
-            .expect("latest FullAccess request");
-        assert_eq!(latest.revision, 3);
-        assert_eq!(latest.effective, ApprovalMode::Policy);
-        assert_eq!(latest.desired, ApprovalMode::FullAccess);
-
-        settlement_gate.arm();
-        release_sender.send(true).expect("release first model");
-        within_liveness_guard(
-            "settlement reconciliation gate",
-            tokio::task::spawn_blocking({
-                let settlement_gate = settlement_gate.clone();
-                move || settlement_gate.wait_entered()
-            }),
-        )
-        .await
-        .expect("settlement gate task");
-        runtime.settlement_signal().notified().await;
-
-        let before_next_admission = pending.drain();
-        assert!(before_next_admission.iter().any(|observation| matches!(
-            observation,
-            ConversationObservation::ApprovalModeChanged {
-                effective: ApprovalMode::FullAccess,
-                pending: None,
-                revision: 4,
-            }
-        )));
-        assert_eq!(
-            model.requests().len(),
-            1,
-            "the queued attempt cannot be admitted before reconciliation gate release"
-        );
-
-        settlement_gate.release();
-        let mut emitted = model.emitted();
-        within_liveness_guard(
-            "next model admission",
-            emitted.wait_for(|count| *count >= 4),
-        )
-        .await
-        .expect("model emission watch remains open");
-        assert_eq!(
-            runtime.approval_mode_state(),
-            crate::runtime::ApprovalModeState {
-                effective: ApprovalMode::FullAccess,
-                desired: ApprovalMode::FullAccess,
-                revision: 4,
-            }
-        );
-        let mut terminal_count = before_next_admission
-            .iter()
-            .filter(|observation| {
-                matches!(
-                    observation,
-                    ConversationObservation::Event { event, .. } if is_terminal_event(event)
-                )
-            })
-            .count();
-        let _observations = await_observation(&pending, |observation| {
-            if matches!(
-                observation,
-                ConversationObservation::Event { event, .. } if is_terminal_event(event)
-            ) {
-                terminal_count += 1;
-            }
-            terminal_count == 2
-        })
-        .await;
-        assert_eq!(terminal_count, 2);
-        runtime.settlement_signal().notified().await;
-        assert!(!runtime.has_current_attempt());
-        assert!(before_next_admission.iter().any(|observation| matches!(
-            observation,
-            ConversationObservation::ApprovalModeChanged {
-                effective: ApprovalMode::FullAccess,
-                pending: None,
-                revision: 4,
-            }
-        )));
-    }
-
     /// The mailbox and every full-store operation are derived from one
     /// `ConversationStoreBinding`. Two independent stores may happen to use
     /// the same `ConversationId`, but there is no production constructor that
@@ -8464,7 +8358,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn runtime_uses_one_durable_binding_without_snapshot_enumeration() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-one-binding");
+        let conversation_id = ConversationId::new("conv_e80836f4-9cfc-7703-834b-1d9831f9f8e5");
         let store_a = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
                 .expect("store A"),
@@ -8472,8 +8366,12 @@ mod tests {
         let store_b = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(conversation_id).expect("store B"),
         );
-        let (runtime, model) =
-            headless_runtime_over_store(&dir, "conv-one-binding", store_a.clone()).await;
+        let (runtime, model) = headless_runtime_over_store(
+            &dir,
+            "conv_e80836f4-9cfc-7703-834b-1d9831f9f8e5",
+            store_a.clone(),
+        )
+        .await;
         runtime.activate();
 
         let accepted = runtime
@@ -8699,7 +8597,9 @@ mod tests {
             .runtime
             .tool_runtime()
             .mailbox()
-            .enqueue(runtime_inbound_message("conv-headless-async-1"))
+            .enqueue(runtime_inbound_message(
+                "conv_2d631b33-df46-75b2-8fc6-0b2b4f2a77d4",
+            ))
             .expect("enqueue");
 
         // No client command: the runtime wake gate admits exactly one
@@ -8714,7 +8614,7 @@ mod tests {
         assert!(
             ledger.iter().any(|message| matches!(
                 message,
-                MessageBlock::User(user) if user.id.as_str() == "conv-headless-async-1"
+                MessageBlock::User(user) if user.id.as_str() == "conv_2d631b33-df46-75b2-8fc6-0b2b4f2a77d4"
             )),
             "the asynchronous inbound was consumed exactly once"
         );
@@ -8755,7 +8655,9 @@ mod tests {
             .runtime
             .tool_runtime()
             .mailbox()
-            .enqueue(runtime_inbound_message("conv-headless-async-1"))
+            .enqueue(runtime_inbound_message(
+                "conv_2d631b33-df46-75b2-8fc6-0b2b4f2a77d4",
+            ))
             .expect("async enqueue");
         gate.wait_entered();
 
@@ -8795,10 +8697,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(inbound[0], "conv-headless-async-1");
+        assert_eq!(inbound[0], "conv_2d631b33-df46-75b2-8fc6-0b2b4f2a77d4");
         // The client submit is the second item of the one durable sequence
         // domain, so its deterministic identity derives from sequence 2.
-        assert!(inbound.contains(&"conv-headless-inbound-2"));
+        assert!(inbound.contains(&"conv_d9e0ddde-2c51-755b-8a4e-1932c402870e-inbound-2"));
         // Exactly one finite drain was observed, carrying both messages in
         // mailbox order.
         let drained: Vec<_> = observations
@@ -8826,7 +8728,7 @@ mod tests {
         // any adoption.
         {
             let _tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
-                ConversationId::new("conv-headless"),
+                ConversationId::new("conv_d9e0ddde-2c51-755b-8a4e-1932c402870e"),
                 crate::tools::runtime::ConversationRuntimeConfig::new(&workspace, &artifacts)
                     .with_extensions(crate::extensions::NativeAgentExtensions::with_agent_status(
                         crate::context::AgentStatusConfig::default(),
@@ -8834,7 +8736,7 @@ mod tests {
             )
             .expect("tool runtime");
             let store = crate::durable::SqliteConversationStore::open(
-                ConversationId::new("conv-headless"),
+                ConversationId::new("conv_d9e0ddde-2c51-755b-8a4e-1932c402870e"),
                 &artifacts.join("conversation.sqlite"),
             )
             .map(Arc::new)
@@ -8870,7 +8772,7 @@ mod tests {
             .collect();
         assert_eq!(
             inbound,
-            vec!["conv-headless-inbound-1"],
+            vec!["conv_d9e0ddde-2c51-755b-8a4e-1932c402870e-inbound-1"],
             "the recovered pending item is adopted exactly once"
         );
         assert_eq!(model.requests().len(), 1, "one admitted attempt");
@@ -8965,7 +8867,7 @@ mod tests {
             "ordinary request admission never rediscovers runtime resources"
         );
 
-        let reloaded = runtime.reload_resources().await.expect("reload");
+        let reloaded = runtime.reload_configuration().await.expect("reload");
         assert_eq!(reloaded.resource_revision.get(), 2);
         assert_eq!(loader.prepare_count(), 1);
         runtime
@@ -9074,7 +8976,10 @@ mod tests {
         );
 
         loader.set_workflow_catalog(new_catalog);
-        let reloaded = runtime.reload_resources().await.expect("Workflow reload");
+        let reloaded = runtime
+            .reload_configuration()
+            .await
+            .expect("Workflow reload");
         assert_eq!(reloaded.resource_revision.get(), 2);
         assert_eq!(
             runtime
@@ -9088,7 +8993,7 @@ mod tests {
 
         loader.fail("candidate Workflow generation is invalid");
         assert!(matches!(
-            runtime.reload_resources().await,
+            runtime.reload_configuration().await,
             Err(super::RuntimeResourceReloadError::Failed { .. })
         ));
         assert_eq!(runtime.runtime_resources().revision().get(), 2);
@@ -9310,7 +9215,9 @@ mod tests {
             )),
             None,
             HeadlessRuntimeOptions {
-                skill_discovery: crate::skills::SkillDiscoveryConfig::explicit(vec![skill.clone()]),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
+                    skill.parent().unwrap(),
+                ),
                 initial_messages: vec![seed_user(
                     "old",
                     "old history that the overflow compaction retires: this seed carries enough \
@@ -9350,8 +9257,14 @@ mod tests {
                 "tool_generation_b",
                 "Tool generation B",
             )),
-            agent_activation: fixture_activation(),
-            skill_discovery: crate::skills::SkillDiscoveryConfig::explicit(vec![skill]),
+            agent_activation: {
+                let mut activation = fixture_activation(runtime.tool_runtime());
+                activation.profile.tools.builtin = vec!["tool_generation_b".into()];
+                activation
+            },
+            skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
+                skill.parent().unwrap(),
+            ),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: runtime.tool_runtime().environment().clone(),
         });
@@ -9475,8 +9388,14 @@ mod tests {
         loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
             source_demand: crate::capabilities::source::ToolSourceDemand::default(),
             base_tool_registry: Arc::new(with_native_read(registry)),
-            agent_activation: fixture_activation(),
-            skill_discovery: crate::skills::SkillDiscoveryConfig::explicit(vec![skill.clone()]),
+            agent_activation: {
+                let mut activation = fixture_activation(runtime.tool_runtime());
+                activation.profile.tools.builtin = vec!["reload_proof".into(), "read".into()];
+                activation
+            },
+            skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
+                skill.parent().unwrap(),
+            ),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: runtime.tool_runtime().environment().clone(),
         });
@@ -9515,7 +9434,7 @@ mod tests {
         assert!(before.tools.iter().all(|tool| tool.name != "reload_proof"));
         assert_eq!(loader.prepare_count(), 0);
 
-        let reloaded = runtime.reload_resources().await.expect("reload");
+        let reloaded = runtime.reload_configuration().await.expect("reload");
         assert_eq!(reloaded.resource_revision.get(), 2);
         assert_eq!(loader.prepare_count(), 1);
         runtime
@@ -9618,7 +9537,7 @@ mod tests {
         runtime.activate();
         let before = runtime.runtime_resources();
         assert!(matches!(
-            runtime.reload_resources().await,
+            runtime.reload_configuration().await,
             Err(super::RuntimeResourceReloadError::Failed { .. })
         ));
         let after = runtime.runtime_resources();
@@ -9632,7 +9551,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(
         clippy::too_many_lines,
-        reason = "one gated resource reload and retirement scenario"
+        reason = "one gated configuration reload and retirement scenario"
     )]
     async fn failed_reload_retires_candidate_mcp_runtime_after_project_failure() {
         use crate::tools::mcp::fixture::{
@@ -9654,8 +9573,6 @@ mod tests {
             }
             crate::tools::mcp::McpServerBinding {
                 credentials: crate::credentials::SourceCredentials::default(),
-                activation: crate::capabilities::activation::SourceActivation::Enabled,
-                resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: std::env::current_exe()
                         .expect("test executable")
@@ -9689,7 +9606,7 @@ mod tests {
                         )]
                         .into(),
                     },
-                    ..fixture_activation().profile
+                    ..headless_activation().profile
                 },
                 ..Default::default()
             },
@@ -9727,7 +9644,7 @@ mod tests {
             .expect("published MCP runtime");
 
         let reload_runtime = runtime.clone();
-        let reload = tokio::spawn(async move { reload_runtime.reload_resources().await });
+        let reload = tokio::spawn(async move { reload_runtime.reload_configuration().await });
         candidate_close.wait_entered().await;
         assert!(
             Arc::ptr_eq(&old_resources, &runtime.runtime_resources()),
@@ -9772,8 +9689,6 @@ mod tests {
         let test_name = "runtime::conversation_runtime::tests::preactivation_mcp_settlement_failure_is_replayed_and_fences_activation";
         let binding = crate::tools::mcp::McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
-            activation: crate::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -9854,8 +9769,6 @@ mod tests {
         let test_name = "runtime::conversation_runtime::tests::mcp_settlement_failure_wins_deterministic_activation_race";
         let binding = crate::tools::mcp::McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
-            activation: crate::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -9950,8 +9863,6 @@ mod tests {
         let test_name = "runtime::conversation_runtime::tests::mcp_settlement_failure_fences_after_activation_wins";
         let binding = crate::tools::mcp::McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
-            activation: crate::capabilities::activation::SourceActivation::Enabled,
-            resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -10043,8 +9954,6 @@ mod tests {
             }
             crate::tools::mcp::McpServerBinding {
                 credentials: crate::credentials::SourceCredentials::default(),
-                activation: crate::capabilities::activation::SourceActivation::Enabled,
-                resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: std::env::current_exe()
                         .expect("test executable")
@@ -10077,7 +9986,7 @@ mod tests {
                         )]
                         .into(),
                     },
-                    ..fixture_activation().profile
+                    ..headless_activation().profile
                 },
                 ..Default::default()
             },
@@ -10116,17 +10025,11 @@ mod tests {
         let old_close = Arc::new(CloseProbe::failing("retired A terminal state is unproven"));
         old_runtime.install_close_probe(old_close.clone());
 
-        let result = runtime.reload_resources().await;
-        let Err(super::RuntimeResourceReloadError::PostPublicationSettlementFailed {
-            published,
-            message,
-        }) = result
-        else {
-            panic!("a post-publication MCP failure must be typed: {result:?}");
-        };
+        let result = runtime.reload_configuration().await;
+        let published =
+            result.expect("publication succeeded; retirement failure is lifecycle health");
         assert_eq!(published.resource_revision.get(), 2);
         assert_eq!(published.capability_revision.get(), 2);
-        assert!(message.contains("retired A terminal state is unproven"));
         assert_eq!(
             runtime.runtime_resources().revision(),
             published.resource_revision
@@ -10190,8 +10093,6 @@ mod tests {
             }
             crate::tools::mcp::McpServerBinding {
                 credentials: crate::credentials::SourceCredentials::default(),
-                activation: crate::capabilities::activation::SourceActivation::Enabled,
-                resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: std::env::current_exe()
                         .expect("test executable")
@@ -10224,7 +10125,7 @@ mod tests {
                         )]
                         .into(),
                     },
-                    ..fixture_activation().profile
+                    ..headless_activation().profile
                 },
                 ..Default::default()
             },
@@ -10265,7 +10166,7 @@ mod tests {
         old_runtime.install_close_probe(old_close.clone());
 
         let reload_runtime = runtime.clone();
-        let reload = tokio::spawn(async move { reload_runtime.reload_resources().await });
+        let reload = tokio::spawn(async move { reload_runtime.reload_configuration().await });
         old_close.wait_before_failure_publication_entered().await;
         assert_eq!(
             runtime.runtime_resources().revision().get(),
@@ -10284,16 +10185,10 @@ mod tests {
 
         old_close.release_before_failure_publication();
         let result = reload.await.expect("reload task");
-        let Err(super::RuntimeResourceReloadError::PostPublicationSettlementFailed {
-            published,
-            message,
-        }) = result
-        else {
-            panic!("ready retirement failure must be reported post-publication: {result:?}");
-        };
+        let published =
+            result.expect("publication succeeded; retirement failure is lifecycle health");
         assert_eq!(published.resource_revision.get(), 2);
         assert_eq!(published.capability_revision.get(), 2);
-        assert!(message.contains("ready A terminal state is unproven"));
         assert!(!Arc::ptr_eq(&old_resources, &runtime.runtime_resources()));
         assert_eq!(
             runtime.inner.lifecycle.state(),
@@ -10331,8 +10226,6 @@ mod tests {
             }
             crate::tools::mcp::McpServerBinding {
                 credentials: crate::credentials::SourceCredentials::default(),
-                activation: crate::capabilities::activation::SourceActivation::Enabled,
-                resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: std::env::current_exe()
                         .expect("test executable")
@@ -10367,7 +10260,7 @@ mod tests {
                         )]
                         .into(),
                     },
-                    ..fixture_activation().profile
+                    ..headless_activation().profile
                 },
                 ..Default::default()
             },
@@ -10411,6 +10304,8 @@ mod tests {
             .mcp_leases()
             .expect("the admitted MCP generation remains dispatchable");
         drop(attempt);
+        // Retain a physical source lease independently of active work to exercise retirement.
+        let retained_source_lease = mcp_leases.try_clone().unwrap();
         let background_executor = Arc::new(ParkedMcpBackgroundExecutor {
             started: Arc::new(tokio::sync::Notify::new()),
             release: Arc::new(tokio::sync::Notify::new()),
@@ -10452,7 +10347,19 @@ mod tests {
         };
         background_executor.started.notified().await;
 
-        runtime.reload_resources().await.expect("reload A -> B");
+        let published = runtime.runtime_resources();
+        assert!(matches!(
+            runtime.reload_configuration().await,
+            Err(crate::runtime::RuntimeResourceReloadError::Busy { .. })
+        ));
+        assert!(Arc::ptr_eq(&published, &runtime.runtime_resources()));
+        background_executor.release.notify_one();
+        background.wait_until_settled(&execution_id).await;
+        runtime.settlement_signal().notified().await;
+        runtime
+            .reload_configuration()
+            .await
+            .expect("reload after admitted work settles");
         let runtime_b = runtime
             .inner
             .capability
@@ -10559,7 +10466,7 @@ mod tests {
         assert!(matches!(old_result.status, ToolExecutionStatus::Success));
 
         loader.set_capability_inputs(inputs(binding_c));
-        runtime.reload_resources().await.expect("reload B -> C");
+        runtime.reload_configuration().await.expect("reload B -> C");
         let runtime_c = runtime
             .inner
             .capability
@@ -10580,8 +10487,7 @@ mod tests {
             "new capability authority does not retain B-only tools"
         );
 
-        background_executor.release.notify_one();
-        background.wait_until_settled(&execution_id).await;
+        drop(retained_source_lease);
         tokio::time::timeout(std::time::Duration::from_mins(1), old_close.wait_entered())
             .await
             .expect("A closes after the background owner settles");
@@ -10614,8 +10520,6 @@ mod tests {
             }
             crate::tools::mcp::McpServerBinding {
                 credentials: crate::credentials::SourceCredentials::default(),
-                activation: crate::capabilities::activation::SourceActivation::Enabled,
-                resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: std::env::current_exe()
                         .expect("test executable")
@@ -10648,7 +10552,7 @@ mod tests {
                         )]
                         .into(),
                     },
-                    ..fixture_activation().profile
+                    ..headless_activation().profile
                 },
                 ..Default::default()
             },
@@ -10691,6 +10595,8 @@ mod tests {
         let attempt = runtime.inner.capability.acquire_attempt_lease();
         let mcp_leases = attempt.mcp_leases().expect("generation A lease authority");
         drop(attempt);
+        // Retain a physical source lease independently of active work to exercise retirement.
+        let retained_source_lease = mcp_leases.try_clone().unwrap();
         let background_executor = Arc::new(ParkedMcpBackgroundExecutor {
             started: Arc::new(tokio::sync::Notify::new()),
             release: Arc::new(tokio::sync::Notify::new()),
@@ -10732,16 +10638,27 @@ mod tests {
         };
         background_executor.started.notified().await;
 
-        runtime.reload_resources().await.expect("reload A -> B");
+        let published = runtime.runtime_resources();
+        assert!(matches!(
+            runtime.reload_configuration().await,
+            Err(crate::runtime::RuntimeResourceReloadError::Busy { .. })
+        ));
+        assert!(Arc::ptr_eq(&published, &runtime.runtime_resources()));
+        background_executor.release.notify_one();
+        background.wait_until_settled(&execution_id).await;
+        runtime.settlement_signal().notified().await;
+        runtime
+            .reload_configuration()
+            .await
+            .expect("reload after admitted work settles");
         assert_eq!(
             runtime.lifecycle_state(),
             ConversationLifecycleState::Running,
-            "B publication legitimately completes while A is held by the background owner"
+            "B publishes after background settlement while a retained physical A lease remains"
         );
         assert_eq!(runtime.inner.capability.pending_mcp_retirements(), 1);
 
-        background_executor.release.notify_one();
-        background.wait_until_settled(&execution_id).await;
+        drop(retained_source_lease);
         old_close.wait_entered().await;
         let settlement = runtime.inner.capability.settle_ready_mcp_runtimes().await;
         assert!(
@@ -10793,8 +10710,6 @@ mod tests {
             }
             crate::tools::mcp::McpServerBinding {
                 credentials: crate::credentials::SourceCredentials::default(),
-                activation: crate::capabilities::activation::SourceActivation::Enabled,
-                resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: std::env::current_exe()
                         .expect("test executable")
@@ -10922,7 +10837,7 @@ mod tests {
             .expect("inbound");
         parked.wait_for(|parked| *parked).await.expect("parked");
         assert!(matches!(
-            runtime.reload_resources().await,
+            runtime.reload_configuration().await,
             Err(super::RuntimeResourceReloadError::Busy {
                 reason: super::RuntimeResourceReloadBusyReason::Attempt
             })
@@ -10962,7 +10877,7 @@ mod tests {
         .await;
         runtime.activate();
         let reload_runtime = runtime.clone();
-        let reload = tokio::spawn(async move { reload_runtime.reload_resources().await });
+        let reload = tokio::spawn(async move { reload_runtime.reload_configuration().await });
         entered_rx
             .wait_for(|entered| *entered)
             .await
@@ -11022,7 +10937,7 @@ mod tests {
         .await;
         runtime.activate();
         let reload_runtime = runtime.clone();
-        let reload = tokio::spawn(async move { reload_runtime.reload_resources().await });
+        let reload = tokio::spawn(async move { reload_runtime.reload_configuration().await });
         entered_rx
             .wait_for(|entered| *entered)
             .await
@@ -11083,7 +10998,7 @@ mod tests {
     #[test]
     fn construction_validates_ownership() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-a");
+        let conversation_id = ConversationId::new("conv_bf9033a7-86e2-71aa-8314-b791ebfdbfec");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
@@ -11099,7 +11014,7 @@ mod tests {
             ),
         )
         .expect("tool runtime");
-        let other = ConversationId::new("conv-b");
+        let other = ConversationId::new("conv_449370cc-308b-7409-84bd-ff539142e4fb");
         let other_workspace = dir.path().join("workspace-other");
         std::fs::create_dir_all(&other_workspace).expect("other workspace");
         let other_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
@@ -11122,7 +11037,7 @@ mod tests {
                 workspace: other_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
                 extension_tools: other_runtime.extension_tool_plane(),
-                agent_activation: fixture_activation(),
+                agent_activation: fixture_activation(&tool_runtime),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: other_runtime.environment().clone(),
@@ -11131,6 +11046,7 @@ mod tests {
         )
         .expect("coordinator");
         let error = ConversationRuntime::new(RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
             approval_mode: ApprovalMode::Policy,
@@ -11171,7 +11087,7 @@ mod tests {
             "this test runs on a plain thread"
         );
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-no-tokio");
+        let conversation_id = ConversationId::new("conv_6d7e77c3-41c2-710b-8817-1134b3ee72c2");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         // This fixture's subject is the missing execution runtime, and it runs
@@ -11208,7 +11124,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                agent_activation: fixture_activation(),
+                agent_activation: fixture_activation(&tool_runtime),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -11217,6 +11133,7 @@ mod tests {
         )
         .expect("coordinator");
         let error = ConversationRuntime::new(RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
             approval_mode: ApprovalMode::Policy,
@@ -11385,7 +11302,7 @@ mod tests {
         let (snapshot, _) = host.snapshot().expect("pending snapshot");
         assert_eq!(snapshot.pending_interactions, vec![pending.clone()]);
         assert!(matches!(
-            runtime.reload_resources().await,
+            runtime.reload_configuration().await,
             Err(super::RuntimeResourceReloadError::Busy {
                 reason: super::RuntimeResourceReloadBusyReason::Interaction
             })
@@ -11720,7 +11637,7 @@ mod tests {
 
         assert!(
             matches!(
-                runtime.reload_resources().await,
+                runtime.reload_configuration().await,
                 Err(super::RuntimeResourceReloadError::Busy {
                     reason: super::RuntimeResourceReloadBusyReason::Interaction
                 })
@@ -11811,7 +11728,10 @@ mod tests {
 
         // Only now may a reload publish a new generation, and it affects a
         // later attempt only — the settled interaction is unchanged.
-        let reloaded = runtime.reload_resources().await.expect("reload after idle");
+        let reloaded = runtime
+            .reload_configuration()
+            .await
+            .expect("reload after idle");
         assert_eq!(reloaded.resource_revision, pinned_revision.next());
         assert_eq!(
             runtime.runtime_resources().revision(),
@@ -12485,7 +12405,7 @@ mod tests {
     }
 
     /// Lifecycle Draining remains the generic admission authority for an
-    /// explicit resource reload after MCP failure publication. The old
+    /// explicit configuration reload after MCP failure publication. The old
     /// generation stays the live resource authority and no reload gate is
     /// established.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -12497,7 +12417,7 @@ mod tests {
             .inner
             .fence_mcp_settlement_failure("reload MCP failure".to_owned());
         assert_eq!(
-            fixture.runtime.reload_resources().await,
+            fixture.runtime.reload_configuration().await,
             Err(super::RuntimeResourceReloadError::Shutdown)
         );
         assert!(Arc::ptr_eq(&before, &fixture.runtime.runtime_resources()));
@@ -12517,12 +12437,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-select-transient",
+                "conv_b49ab8ad-7952-716b-8f30-a0e5f0375fd7",
             ))
             .expect("in-memory store"),
         );
-        let (runtime, _model) =
-            headless_runtime_over_store(&dir, "conv-select-transient", store.clone()).await;
+        let (runtime, _model) = headless_runtime_over_store(
+            &dir,
+            "conv_b49ab8ad-7952-716b-8f30-a0e5f0375fd7",
+            store.clone(),
+        )
+        .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -12577,12 +12501,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-select-persistent",
+                "conv_2765079b-5cc3-7da8-81c2-537c52f240cc",
             ))
             .expect("in-memory store"),
         );
-        let (runtime, _model) =
-            headless_runtime_over_store(&dir, "conv-select-persistent", store.clone()).await;
+        let (runtime, _model) = headless_runtime_over_store(
+            &dir,
+            "conv_2765079b-5cc3-7da8-81c2-537c52f240cc",
+            store.clone(),
+        )
+        .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -12637,12 +12565,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-ops-independent",
+                "conv_b4d6ae75-9048-7504-8dad-c0ed48da2f01",
             ))
             .expect("in-memory store"),
         );
-        let (runtime, _model) =
-            headless_runtime_over_store(&dir, "conv-ops-independent", store.clone()).await;
+        let (runtime, _model) = headless_runtime_over_store(
+            &dir,
+            "conv_b4d6ae75-9048-7504-8dad-c0ed48da2f01",
+            store.clone(),
+        )
+        .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -12712,12 +12644,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-alternating-retry-cycle",
+                "conv_97aa4ab9-a684-7a4a-8846-b45621bf8052",
             ))
             .expect("in-memory store"),
         );
-        let (runtime, model) =
-            headless_runtime_over_store(&dir, "conv-alternating-retry-cycle", store.clone()).await;
+        let (runtime, model) = headless_runtime_over_store(
+            &dir,
+            "conv_97aa4ab9-a684-7a4a-8846-b45621bf8052",
+            store.clone(),
+        )
+        .await;
         let host = crate::runtime_client::RuntimeClientHost::new(
             crate::runtime_client::RuntimeClientHostConfig {
                 runtime: runtime.clone(),
@@ -12827,12 +12763,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-adopt-persistent",
+                "conv_51dc7c9c-4b76-7f38-861b-49d80370e1b8",
             ))
             .expect("in-memory store"),
         );
-        let (runtime, _model) =
-            headless_runtime_over_store(&dir, "conv-adopt-persistent", store.clone()).await;
+        let (runtime, _model) = headless_runtime_over_store(
+            &dir,
+            "conv_51dc7c9c-4b76-7f38-861b-49d80370e1b8",
+            store.clone(),
+        )
+        .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -12896,12 +12836,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-attempt-durable",
+                "conv_503e0440-6f7e-731a-8571-e29416cdf3d5",
             ))
             .expect("in-memory store"),
         );
-        let (runtime, model) =
-            headless_runtime_over_store(&dir, "conv-attempt-durable", store.clone()).await;
+        let (runtime, model) = headless_runtime_over_store(
+            &dir,
+            "conv_503e0440-6f7e-731a-8571-e29416cdf3d5",
+            store.clone(),
+        )
+        .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -12978,12 +12922,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-terminal-durable",
+                "conv_8a56d655-7b4e-7b7a-870c-20e586d7d16f",
             ))
             .expect("in-memory store"),
         );
-        let (runtime, model) =
-            headless_runtime_over_store(&dir, "conv-terminal-durable", store.clone()).await;
+        let (runtime, model) = headless_runtime_over_store(
+            &dir,
+            "conv_8a56d655-7b4e-7b7a-870c-20e586d7d16f",
+            store.clone(),
+        )
+        .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -13152,14 +13100,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-subagent-degrade",
+                "conv_fb18687a-681e-748a-85a6-401be78c689e",
             ))
             .expect("in-memory store"),
         );
         let admission_gate = Arc::new(super::Gate::default());
         let (runtime, _model, subagents) = headless_runtime_over_store_with_subagents(
             &dir,
-            "conv-subagent-degrade",
+            "conv_fb18687a-681e-748a-85a6-401be78c689e",
             store.clone(),
             Some(admission_gate.clone()),
         )
@@ -13399,14 +13347,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-subagent-failclosed",
+                "conv_95189f41-6174-741a-8c26-0134828bfe76",
             ))
             .expect("in-memory store"),
         );
         let admission_gate = Arc::new(super::Gate::default());
         let (runtime, _model, subagents) = headless_runtime_over_store_with_subagents(
             &dir,
-            "conv-subagent-failclosed",
+            "conv_95189f41-6174-741a-8c26-0134828bfe76",
             store.clone(),
             Some(admission_gate.clone()),
         )
@@ -13542,8 +13490,10 @@ mod tests {
         // No new durable ownership fact, no new Running record, no
         // Delegate: exactly the one owned child remains, its unresolved
         // candidate unchanged.
-        let rejected_id =
-            SubagentId::for_conversation(&ConversationId::new("conv-subagent-failclosed"), 2);
+        let rejected_id = SubagentId::for_conversation(
+            &ConversationId::new("conv_95189f41-6174-741a-8c26-0134828bfe76"),
+            2,
+        );
         let journal = store.read_events(None, 128).expect("events").events;
         assert!(
             !journal.iter().any(|envelope| matches!(
@@ -13635,13 +13585,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-subagent-owned-survives",
+                "conv_c26a9aad-2921-7350-8d5a-8668bfbc4ee9",
             ))
             .expect("in-memory store"),
         );
         let (runtime, _model, subagents) = headless_runtime_over_store_with_subagents(
             &dir,
-            "conv-subagent-owned-survives",
+            "conv_c26a9aad-2921-7350-8d5a-8668bfbc4ee9",
             store.clone(),
             None,
         )
@@ -13743,13 +13693,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-subagent-race-frontier",
+                "conv_aed9850e-213c-7f34-8a3f-fb60527fc81f",
             ))
             .expect("in-memory store"),
         );
         let (runtime, _model, subagents) = headless_runtime_over_store_with_subagents(
             &dir,
-            "conv-subagent-race-frontier",
+            "conv_aed9850e-213c-7f34-8a3f-fb60527fc81f",
             store.clone(),
             None,
         )
@@ -13907,12 +13857,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-bg-failclosed",
+                "conv_a2701eac-eb5d-78a0-8494-e6888fb54e26",
             ))
             .expect("in-memory store"),
         );
-        let (runtime, _model) =
-            headless_runtime_over_store(&dir, "conv-bg-failclosed", store.clone()).await;
+        let (runtime, _model) = headless_runtime_over_store(
+            &dir,
+            "conv_a2701eac-eb5d-78a0-8494-e6888fb54e26",
+            store.clone(),
+        )
+        .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -14000,12 +13954,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-bg-owned-survives",
+                "conv_e24a334b-c1b2-7efc-8376-f688cf4206bf",
             ))
             .expect("in-memory store"),
         );
-        let (runtime, _model) =
-            headless_runtime_over_store(&dir, "conv-bg-owned-survives", store.clone()).await;
+        let (runtime, _model) = headless_runtime_over_store(
+            &dir,
+            "conv_e24a334b-c1b2-7efc-8376-f688cf4206bf",
+            store.clone(),
+        )
+        .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -14077,12 +14035,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-bg-race-frontier",
+                "conv_80c3ae25-956f-72bf-8e7b-a38546997137",
             ))
             .expect("in-memory store"),
         );
-        let (runtime, _model) =
-            headless_runtime_over_store(&dir, "conv-bg-race-frontier", store.clone()).await;
+        let (runtime, _model) = headless_runtime_over_store(
+            &dir,
+            "conv_80c3ae25-956f-72bf-8e7b-a38546997137",
+            store.clone(),
+        )
+        .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -14236,16 +14198,21 @@ mod tests {
     /// the unresolved candidate stays retained and observable in the
     /// registry, and the runtime never claims false healthy progress.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
     async fn exhausted_background_publication_degrades_the_owning_runtime() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-bg-degrade",
+                "conv_829c626d-2692-7096-81f2-912d7383be41",
             ))
             .expect("in-memory store"),
         );
-        let (runtime, _model) =
-            headless_runtime_over_store(&dir, "conv-bg-degrade", store.clone()).await;
+        let (runtime, _model) = headless_runtime_over_store(
+            &dir,
+            "conv_829c626d-2692-7096-81f2-912d7383be41",
+            store.clone(),
+        )
+        .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -14369,14 +14336,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-subagent-single-authority",
+                "conv_042447de-8629-7a98-887b-c9fa571c7cc9",
             ))
             .expect("in-memory store"),
         );
         let admission_gate = Arc::new(super::Gate::default());
         let (runtime, _model, subagents) = headless_runtime_over_store_with_subagents(
             &dir,
-            "conv-subagent-single-authority",
+            "conv_042447de-8629-7a98-887b-c9fa571c7cc9",
             store.clone(),
             Some(admission_gate.clone()),
         )
@@ -14579,12 +14546,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-durability-absorbing",
+                "conv_ab84aa64-dcd1-7c9b-8c79-ca11323ae1a6",
             ))
             .expect("in-memory store"),
         );
-        let (runtime, _model) =
-            headless_runtime_over_store(&dir, "conv-durability-absorbing", store.clone()).await;
+        let (runtime, _model) = headless_runtime_over_store(
+            &dir,
+            "conv_ab84aa64-dcd1-7c9b-8c79-ca11323ae1a6",
+            store.clone(),
+        )
+        .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -15025,7 +14996,7 @@ mod tests {
         let (tool, mut started, _observed) = CauseProbeTool::new();
         let (registry, script) = cause_probe_registry_and_script(Arc::new(tool));
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-204-frozen-policy");
+        let conversation_id = ConversationId::new("conv_35fc42a3-4f04-7145-8c5b-1a37fc603ef5");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
@@ -15047,7 +15018,7 @@ mod tests {
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
                 agent_activation: {
-                    let mut activation = fixture_activation();
+                    let mut activation = fixture_activation(&tool_runtime);
                     activation.profile.tools.builtin = registry
                         .definitions()
                         .into_iter()
@@ -15071,6 +15042,7 @@ mod tests {
         let adapter: Arc<dyn ModelAdapter> = model.clone();
         let clock = Arc::new(crate::runtime::ManualMonotonicClock::new());
         let config = RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
@@ -15835,7 +15807,7 @@ mod tests {
         let (tool, mut started, mut cancel_observed, operation_dropped) = GuardViolationTool::new();
         let (registry, script) = cause_probe_registry_and_script(Arc::new(tool));
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-204-guard-drain");
+        let conversation_id = ConversationId::new("conv_b6f1eb3d-33f7-7829-864f-4b9d1335716d");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
@@ -15857,7 +15829,7 @@ mod tests {
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
                 agent_activation: {
-                    let mut activation = fixture_activation();
+                    let mut activation = fixture_activation(&tool_runtime);
                     activation.profile.tools.builtin = registry
                         .definitions()
                         .into_iter()
@@ -15881,6 +15853,7 @@ mod tests {
         let adapter: Arc<dyn ModelAdapter> = model.clone();
         let clock = Arc::new(crate::runtime::ManualMonotonicClock::new());
         let config = RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
@@ -16042,7 +16015,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-m9c-provider",
+                "conv_d2d949a2-cff1-7341-8c06-4df386858aaa",
             ))
             .expect("in-memory store"),
         );
@@ -16069,7 +16042,7 @@ mod tests {
         let drain_supervision = Arc::new(tokio::sync::Notify::new());
         let (runtime, _model) = headless_runtime_over_store_with_policy(
             &dir,
-            "conv-m9c-provider",
+            "conv_d2d949a2-cff1-7341-8c06-4df386858aaa",
             store.clone(),
             vec![script],
             Some(CoordinatorProbe {
@@ -16209,14 +16182,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-m9c-sibling",
+                "conv_d498b02e-ce4d-7e66-8b25-a4466a0e3a8b",
             ))
             .expect("in-memory store"),
         );
         let drain_supervision = Arc::new(tokio::sync::Notify::new());
         let (runtime, _model) = headless_runtime_over_store_with(
             &dir,
-            "conv-m9c-sibling",
+            "conv_d498b02e-ce4d-7e66-8b25-a4466a0e3a8b",
             store.clone(),
             vec![one_turn_script()],
             Some(CoordinatorProbe {
@@ -16354,7 +16327,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
-                "conv-m9c-abandon-order",
+                "conv_414701e8-d767-76d9-88db-c5d4e270cf81",
             ))
             .expect("in-memory store"),
         );
@@ -16364,7 +16337,7 @@ mod tests {
         let drain_supervision = Arc::new(tokio::sync::Notify::new());
         let (runtime, _model) = headless_runtime_over_store_with(
             &dir,
-            "conv-m9c-abandon-order",
+            "conv_414701e8-d767-76d9-88db-c5d4e270cf81",
             store.clone(),
             vec![one_turn_script()],
             Some(CoordinatorProbe {
@@ -16820,7 +16793,7 @@ mod tests {
         let drain_linearization = Arc::new(tokio::sync::Notify::new());
         let (runtime, _model) = runtime_with_model_probe_at(
             &dir,
-            "conv-m9c-background",
+            "conv_5955a0a5-829c-7229-b261-cf19b4990758",
             Vec::new(),
             vec![one_turn_script()],
             Some(CoordinatorProbe {
@@ -16958,7 +16931,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     async fn runtime_shutdown_waits_for_workflow_child_native_quiescence() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-workflow-drain");
+        let conversation_id = ConversationId::new("conv_0aca8719-5a71-735b-8721-8979eb90371a");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
                 .expect("store"),
@@ -17380,13 +17353,13 @@ mod tests {
         );
     }
 
-    /// Issue #144: a resource reload can never commit a new generation
+    /// Issue #144: a configuration reload can never commit a new generation
     /// underneath a live attempt, so an attempt's tool execution cannot
     /// observe a generation other than the one it was admitted with.
     ///
     /// The ordering is decided by the tool-start frontier and the typed
     /// refusal, not by timing: the attempt is provably parked inside its
-    /// tool batch when `reload_resources` returns `Busy { Attempt }`, and
+    /// tool batch when `reload_configuration` returns `Busy { Attempt }`, and
     /// the same reload succeeds only after the attempt has settled.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_reload_cannot_commit_a_new_generation_under_a_live_attempt() {
@@ -17461,7 +17434,7 @@ mod tests {
         // refused rather than publishing a generation the running attempt
         // would then be able to observe.
         assert!(matches!(
-            runtime.reload_resources().await,
+            runtime.reload_configuration().await,
             Err(super::RuntimeResourceReloadError::Busy {
                 reason: super::RuntimeResourceReloadBusyReason::Attempt
             })
@@ -17524,6 +17497,7 @@ mod tests {
                 model_timeout_policy: crate::model::ModelTimeoutPolicy,
             ) -> RuntimeConversationConfig {
                 RuntimeConversationConfig {
+                    explicit_model: true,
                     agent_id: AgentId::new("agent-timeout-construction"),
                     model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
                     approval_mode: ApprovalMode::Policy,
@@ -17552,7 +17526,7 @@ mod tests {
         }
 
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-timeout-construction");
+        let conversation_id = ConversationId::new("conv_7aeab4f1-ecc6-7d5d-85f7-f7c3015f36ee");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
@@ -17575,7 +17549,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                agent_activation: fixture_activation(),
+                agent_activation: fixture_activation(&tool_runtime),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -17645,6 +17619,7 @@ mod tests {
                 tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
             ) -> RuntimeConversationConfig {
                 RuntimeConversationConfig {
+                    explicit_model: true,
                     agent_id: AgentId::new("agent-tool-deadline-construction"),
                     model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
                     approval_mode: ApprovalMode::Policy,
@@ -17672,7 +17647,7 @@ mod tests {
         }
 
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-tool-deadline-construction");
+        let conversation_id = ConversationId::new("conv_b3920643-26f1-71a1-81eb-f19d0c413769");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
@@ -17695,7 +17670,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                agent_activation: fixture_activation(),
+                agent_activation: fixture_activation(&tool_runtime),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -17781,7 +17756,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                agent_activation: fixture_activation(),
+                agent_activation: fixture_activation(&tool_runtime),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -17795,6 +17770,7 @@ mod tests {
         let adapter: Arc<dyn ModelAdapter> = model.clone();
         let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
         let config = RuntimeConversationConfig {
+            explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
@@ -17897,7 +17873,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn incomplete_tool_tail_is_repaired_and_pending_remains_intact() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-recovery-tool");
+        let conversation_id = ConversationId::new("conv_6536aaf7-ead1-793b-883d-d1105c35ac07");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let artifacts = dir.path().join("artifacts");
@@ -17924,9 +17900,14 @@ mod tests {
                 .expect("accept pending");
         }
 
-        let runtime = runtime_at(&dir, "conv-recovery-tool", seed, vec![one_turn_script()])
-            .await
-            .expect("M9a repairs the incomplete tool turn instead of refusing it");
+        let runtime = runtime_at(
+            &dir,
+            "conv_6536aaf7-ead1-793b-883d-d1105c35ac07",
+            seed,
+            vec![one_turn_script()],
+        )
+        .await
+        .expect("M9a repairs the incomplete tool turn instead of refusing it");
         // The classification is Class D: no attempt ever entered durable
         // authority in this fixture, so nothing is terminalized — only the
         // structure is repaired.
@@ -17982,7 +17963,7 @@ mod tests {
         assert_eq!(pending[0].sequence.get(), 1);
         assert_eq!(
             pending[0].message_id.as_str(),
-            "conv-recovery-tool-inbound-1"
+            "conv_6536aaf7-ead1-793b-883d-d1105c35ac07-inbound-1"
         );
     }
 
@@ -17991,7 +17972,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn complete_tool_group_is_recoverable_and_admits_normally() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-recovery-complete");
+        let conversation_id = ConversationId::new("conv_47e0d303-9630-73a3-8913-fea76e160536");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let artifacts = dir.path().join("artifacts");
@@ -18013,7 +17994,7 @@ mod tests {
 
         let runtime = runtime_at(
             &dir,
-            "conv-recovery-complete",
+            "conv_47e0d303-9630-73a3-8913-fea76e160536",
             seed,
             vec![one_turn_script()],
         )
@@ -18040,7 +18021,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn durable_compaction_surface_reopens_as_one_state() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation_id = ConversationId::new("conv-recovery-compact");
+        let conversation_id = ConversationId::new("conv_b0652278-531a-725d-8621-2ecfe4f19ad7");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let artifacts = dir.path().join("artifacts");
@@ -18056,7 +18037,9 @@ mod tests {
             // transition: Ledger row, Surface Replace, checkpoint metadata,
             // and completion fact share one transaction.
             let summary = crate::message::types::UserMessageBlock {
-                id: crate::runtime::identity::MessageId::new("conv-recovery-compact-summary-1"),
+                id: crate::runtime::identity::MessageId::new(
+                    "conv_b0652278-531a-725d-8621-2ecfe4f19ad7-summary-1",
+                ),
                 content: text_content("earlier context"),
                 source: UserSource::Runtime,
                 kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
@@ -18082,9 +18065,14 @@ mod tests {
                 .expect("atomic compaction summary");
         }
 
-        let runtime = runtime_at(&dir, "conv-recovery-compact", seed, vec![one_turn_script()])
-            .await
-            .expect("durable summary history reopens");
+        let runtime = runtime_at(
+            &dir,
+            "conv_b0652278-531a-725d-8621-2ecfe4f19ad7",
+            seed,
+            vec![one_turn_script()],
+        )
+        .await
+        .expect("durable summary history reopens");
         let store = crate::durable::SqliteConversationStore::open(conversation_id, &store_path)
             .expect("reopen store");
         let head = store.load_head().expect("head");
@@ -18183,24 +18171,29 @@ mod tests {
     async fn recovered_pending_inbound_is_auto_admitted_with_zero_clients() {
         let dir = tempfile::tempdir().expect("temp dir");
         let mut accepted_id = None;
-        let store_path = seed_crash_prefix(&dir, "conv-m9a-pending", &[], |store, _| {
-            let accepted = store
-                .accept_inbound(crate::durable::inbox::InboundDraft {
-                    message_id: None,
-                    source: UserSource::Human,
-                    kind: InboundKind::Message,
-                    content: text_content("recovered work"),
-                    timestamp: fixed_time(),
-                    correlation: None,
-                })
-                .expect("accept");
-            accepted_id = Some(accepted.message_id);
-        });
+        let store_path = seed_crash_prefix(
+            &dir,
+            "conv_c68da6fc-963b-77c0-887f-620f3cbbc2cc",
+            &[],
+            |store, _| {
+                let accepted = store
+                    .accept_inbound(crate::durable::inbox::InboundDraft {
+                        message_id: None,
+                        source: UserSource::Human,
+                        kind: InboundKind::Message,
+                        content: text_content("recovered work"),
+                        timestamp: fixed_time(),
+                        correlation: None,
+                    })
+                    .expect("accept");
+                accepted_id = Some(accepted.message_id);
+            },
+        );
         let accepted_id = accepted_id.expect("accepted");
 
         let (runtime, model) = runtime_with_model_at(
             &dir,
-            "conv-m9a-pending",
+            "conv_c68da6fc-963b-77c0-887f-620f3cbbc2cc",
             Vec::new(),
             vec![one_turn_script()],
         )
@@ -18227,7 +18220,7 @@ mod tests {
         );
         assert_eq!(model.requests().len(), 1, "exactly one model turn ran");
         let store = crate::durable::SqliteConversationStore::open(
-            ConversationId::new("conv-m9a-pending"),
+            ConversationId::new("conv_c68da6fc-963b-77c0-887f-620f3cbbc2cc"),
             &store_path,
         )
         .expect("reopen");
@@ -18246,40 +18239,52 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn class_b_restart_continues_the_adopted_turn_without_duplicating_it() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let dead_attempt = AttemptId::for_conversation(&ConversationId::new("conv-m9a-classb"), 0);
+        let dead_attempt = AttemptId::for_conversation(
+            &ConversationId::new("conv_4b829d29-175d-72f9-8648-175183dc40d2"),
+            0,
+        );
         let dead = dead_attempt.clone();
         let mut adopted_id = None;
-        seed_crash_prefix(&dir, "conv-m9a-classb", &[], |store, conversation_id| {
-            let accepted = store
-                .accept_inbound(crate::durable::inbox::InboundDraft {
-                    message_id: None,
-                    source: UserSource::Human,
-                    kind: InboundKind::Message,
-                    content: text_content("answer me"),
-                    timestamp: fixed_time(),
-                    correlation: None,
-                })
-                .expect("accept");
-            adopt_accepted(store, &accepted);
-            adopted_id = Some(accepted.message_id);
-            store
-                .append_event(attempt_event(
-                    conversation_id,
-                    "attempt-started",
-                    &dead,
-                    crate::events::types::RuntimeEvent::AttemptStarted {
-                        attempt_id: dead.clone(),
-                    },
-                ))
-                .expect("attempt started");
-            // CRASH: no request start, no tool start.
-        });
+        seed_crash_prefix(
+            &dir,
+            "conv_4b829d29-175d-72f9-8648-175183dc40d2",
+            &[],
+            |store, conversation_id| {
+                let accepted = store
+                    .accept_inbound(crate::durable::inbox::InboundDraft {
+                        message_id: None,
+                        source: UserSource::Human,
+                        kind: InboundKind::Message,
+                        content: text_content("answer me"),
+                        timestamp: fixed_time(),
+                        correlation: None,
+                    })
+                    .expect("accept");
+                adopt_accepted(store, &accepted);
+                adopted_id = Some(accepted.message_id);
+                store
+                    .append_event(attempt_event(
+                        conversation_id,
+                        "attempt-started",
+                        &dead,
+                        crate::events::types::RuntimeEvent::AttemptStarted {
+                            attempt_id: dead.clone(),
+                        },
+                    ))
+                    .expect("attempt started");
+                // CRASH: no request start, no tool start.
+            },
+        );
         let adopted_id = adopted_id.expect("adopted");
 
-        let (runtime, model) =
-            runtime_with_model_at(&dir, "conv-m9a-classb", Vec::new(), vec![one_turn_script()])
-                .await
-                .expect("runtime recovers");
+        let (runtime, model) = runtime_with_model_at(
+            &dir,
+            "conv_4b829d29-175d-72f9-8648-175183dc40d2",
+            Vec::new(),
+            vec![one_turn_script()],
+        )
+        .await
+        .expect("runtime recovers");
         assert_eq!(
             runtime.recovery().attempt_class(),
             &crate::runtime::recovery::AttemptRecoveryClass::AdmittedWithoutExternalStart {
@@ -18359,7 +18364,10 @@ mod tests {
         // arbitration: preparation completed, nothing request-scoped
         // committed, no provider request exists.
         pre_start.await_park(1).await;
-        let attempt = AttemptId::for_conversation(&ConversationId::new("conv-headless"), 0);
+        let attempt = AttemptId::for_conversation(
+            &ConversationId::new("conv_d9e0ddde-2c51-755b-8a4e-1932c402870e"),
+            0,
+        );
         runtime
             .cancel_current_attempt(&attempt)
             .expect("the parked attempt is cancellable");
@@ -18567,7 +18575,10 @@ mod tests {
             "exactly one request-start fact exists before cancellation"
         );
 
-        let attempt = AttemptId::for_conversation(&ConversationId::new("conv-headless"), 0);
+        let attempt = AttemptId::for_conversation(
+            &ConversationId::new("conv_d9e0ddde-2c51-755b-8a4e-1932c402870e"),
+            0,
+        );
         runtime
             .cancel_current_attempt(&attempt)
             .expect("the in-flight attempt is cancellable");
@@ -18860,11 +18871,14 @@ mod tests {
     async fn class_b_recovery_uses_the_same_model_turn_start_gate() {
         use crate::agent::execution::test_sync::StartBoundaryPause;
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation = ConversationId::new("conv-m9b-classb");
+        let conversation = ConversationId::new("conv_2af196f9-fdf0-75af-85c5-b012b4f771a9");
         let dead_attempt = AttemptId::for_conversation(&conversation, 0);
         let dead = dead_attempt.clone();
-        let store_path =
-            seed_crash_prefix(&dir, "conv-m9b-classb", &[], |store, conversation_id| {
+        let store_path = seed_crash_prefix(
+            &dir,
+            "conv_2af196f9-fdf0-75af-85c5-b012b4f771a9",
+            &[],
+            |store, conversation_id| {
                 let accepted = store
                     .accept_inbound(crate::durable::inbox::InboundDraft {
                         message_id: None,
@@ -18887,12 +18901,13 @@ mod tests {
                     ))
                     .expect("attempt started");
                 // CRASH: no request start, no tool start.
-            });
+            },
+        );
         let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
         let mut pre_start = pre_start.expect("pre-start phase installed");
         let (runtime, model) = runtime_with_model_probe_at(
             &dir,
-            "conv-m9b-classb",
+            "conv_2af196f9-fdf0-75af-85c5-b012b4f771a9",
             vec![],
             vec![one_turn_script()],
             Some(CoordinatorProbe {
@@ -18971,71 +18986,82 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn class_c_restart_issues_no_provider_request_of_its_own() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation = ConversationId::new("conv-m9a-classc");
+        let conversation = ConversationId::new("conv_e4c44f69-7140-7c07-8660-a8791da60c71");
         let dead_attempt = AttemptId::for_conversation(&conversation, 0);
         let dead = dead_attempt.clone();
-        seed_crash_prefix(&dir, "conv-m9a-classc", &[], |store, conversation_id| {
-            let accepted = store
-                .accept_inbound(crate::durable::inbox::InboundDraft {
-                    message_id: None,
-                    source: UserSource::Human,
-                    kind: InboundKind::Message,
-                    content: text_content("ask the model"),
-                    timestamp: fixed_time(),
-                    correlation: None,
-                })
-                .expect("accept");
-            adopt_accepted(store, &accepted);
-            store
-                .append_event(attempt_event(
-                    conversation_id,
-                    "attempt-started",
-                    &dead,
-                    crate::events::types::RuntimeEvent::AttemptStarted {
+        seed_crash_prefix(
+            &dir,
+            "conv_e4c44f69-7140-7c07-8660-a8791da60c71",
+            &[],
+            |store, conversation_id| {
+                let accepted = store
+                    .accept_inbound(crate::durable::inbox::InboundDraft {
+                        message_id: None,
+                        source: UserSource::Human,
+                        kind: InboundKind::Message,
+                        content: text_content("ask the model"),
+                        timestamp: fixed_time(),
+                        correlation: None,
+                    })
+                    .expect("accept");
+                adopt_accepted(store, &accepted);
+                store
+                    .append_event(attempt_event(
+                        conversation_id,
+                        "attempt-started",
+                        &dead,
+                        crate::events::types::RuntimeEvent::AttemptStarted {
+                            attempt_id: dead.clone(),
+                        },
+                    ))
+                    .expect("attempt started");
+                let snapshot = crate::model::RequestSnapshot::new(
+                    crate::model::RequestIdentity {
                         attempt_id: dead.clone(),
+                        turn: crate::runtime::identity::TurnId::new("0"),
+                        retry_number: 0,
                     },
-                ))
-                .expect("attempt started");
-            let snapshot = crate::model::RequestSnapshot::new(
-                crate::model::RequestIdentity {
-                    attempt_id: dead.clone(),
-                    turn: crate::runtime::identity::TurnId::new("0"),
-                    retry_number: 0,
-                },
-                store.load_head().expect("head").revision,
-                "frozen prompt".to_owned(),
-                Vec::new(),
-                crate::runtime::RuntimeResourceRevision::new(1),
-                crate::model::ModelInvocationConfig {
-                    model: "model-before-restart".to_owned(),
-                    protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
-                    max_output_tokens: 64,
-                    request_params: crate::model::RequestParams::new(),
-                    capabilities: crate::model::catalog::ModelCapabilities::text_only(true, true),
-                    compat: crate::model::catalog::ModelCompat::default(),
-                },
-                64_000,
-                None,
-                false,
-                Vec::new(),
-                crate::runtime::identity::CapabilityRevision::new(1),
-                crate::context::ContextGeneration {
-                    id: 1,
-                    contributors: Vec::new(),
-                },
-                None,
-                Vec::new(),
-            );
-            store
-                .commit_model_turn_start(&[], &snapshot, fixed_time())
-                .expect("request start");
-            // CRASH: the provider may or may not have executed this request.
-        });
+                    store.load_head().expect("head").revision,
+                    "frozen prompt".to_owned(),
+                    Vec::new(),
+                    crate::runtime::RuntimeResourceRevision::new(1),
+                    crate::model::ModelInvocationConfig {
+                        model: "model-before-restart".to_owned(),
+                        protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
+                        max_output_tokens: 64,
+                        request_params: crate::model::RequestParams::new(),
+                        capabilities: crate::model::catalog::ModelCapabilities::text_only(
+                            true, true,
+                        ),
+                        compat: crate::model::catalog::ModelCompat::default(),
+                    },
+                    64_000,
+                    None,
+                    false,
+                    Vec::new(),
+                    crate::runtime::identity::CapabilityRevision::new(1),
+                    crate::context::ContextGeneration {
+                        id: 1,
+                        contributors: Vec::new(),
+                    },
+                    None,
+                    Vec::new(),
+                );
+                store
+                    .commit_model_turn_start(&[], &snapshot, fixed_time())
+                    .expect("request start");
+                // CRASH: the provider may or may not have executed this request.
+            },
+        );
 
-        let (runtime, model) =
-            runtime_with_model_at(&dir, "conv-m9a-classc", Vec::new(), vec![one_turn_script()])
-                .await
-                .expect("runtime recovers");
+        let (runtime, model) = runtime_with_model_at(
+            &dir,
+            "conv_e4c44f69-7140-7c07-8660-a8791da60c71",
+            Vec::new(),
+            vec![one_turn_script()],
+        )
+        .await
+        .expect("runtime recovers");
         assert!(matches!(
             runtime.recovery().attempt_class(),
             crate::runtime::recovery::AttemptRecoveryClass::IndeterminateExternalOutcome {
@@ -19077,73 +19103,84 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn class_e_restart_issues_no_replacement_request() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation = ConversationId::new("conv-m9a-classe");
+        let conversation = ConversationId::new("conv_0224cd71-1cda-74e4-8010-dad3ad2ce447");
         let dead_attempt = AttemptId::for_conversation(&conversation, 0);
         let dead = dead_attempt.clone();
-        seed_crash_prefix(&dir, "conv-m9a-classe", &[], |store, conversation_id| {
-            let accepted = store
-                .accept_inbound(crate::durable::inbox::InboundDraft {
-                    message_id: None,
-                    source: UserSource::Human,
-                    kind: InboundKind::Message,
-                    content: text_content("ask the model"),
-                    timestamp: fixed_time(),
-                    correlation: None,
-                })
-                .expect("accept");
-            adopt_accepted(store, &accepted);
-            store
-                .append_event(attempt_event(
-                    conversation_id,
-                    "attempt-started",
-                    &dead,
-                    crate::events::types::RuntimeEvent::AttemptStarted {
+        seed_crash_prefix(
+            &dir,
+            "conv_0224cd71-1cda-74e4-8010-dad3ad2ce447",
+            &[],
+            |store, conversation_id| {
+                let accepted = store
+                    .accept_inbound(crate::durable::inbox::InboundDraft {
+                        message_id: None,
+                        source: UserSource::Human,
+                        kind: InboundKind::Message,
+                        content: text_content("ask the model"),
+                        timestamp: fixed_time(),
+                        correlation: None,
+                    })
+                    .expect("accept");
+                adopt_accepted(store, &accepted);
+                store
+                    .append_event(attempt_event(
+                        conversation_id,
+                        "attempt-started",
+                        &dead,
+                        crate::events::types::RuntimeEvent::AttemptStarted {
+                            attempt_id: dead.clone(),
+                        },
+                    ))
+                    .expect("attempt started");
+                let snapshot = crate::model::RequestSnapshot::new(
+                    crate::model::RequestIdentity {
                         attempt_id: dead.clone(),
+                        turn: crate::runtime::identity::TurnId::new("0"),
+                        retry_number: 0,
                     },
-                ))
-                .expect("attempt started");
-            let snapshot = crate::model::RequestSnapshot::new(
-                crate::model::RequestIdentity {
-                    attempt_id: dead.clone(),
-                    turn: crate::runtime::identity::TurnId::new("0"),
-                    retry_number: 0,
-                },
-                store.load_head().expect("head").revision,
-                "frozen prompt".to_owned(),
-                Vec::new(),
-                crate::runtime::RuntimeResourceRevision::new(1),
-                crate::model::ModelInvocationConfig {
-                    model: "model-before-restart".to_owned(),
-                    protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
-                    max_output_tokens: 64,
-                    request_params: crate::model::RequestParams::new(),
-                    capabilities: crate::model::catalog::ModelCapabilities::text_only(true, true),
-                    compat: crate::model::catalog::ModelCompat::default(),
-                },
-                64_000,
-                None,
-                false,
-                Vec::new(),
-                crate::runtime::identity::CapabilityRevision::new(1),
-                crate::context::ContextGeneration {
-                    id: 1,
-                    contributors: Vec::new(),
-                },
-                None,
-                Vec::new(),
-            );
-            store
-                .commit_model_turn_start(&[], &snapshot, fixed_time())
-                .expect("request start");
-            append_completed_request(store, conversation_id, &dead, &snapshot.request_id);
-            // CRASH: the provider outcome is durably known, but the
-            // canonical Assistant message never committed.
-        });
+                    store.load_head().expect("head").revision,
+                    "frozen prompt".to_owned(),
+                    Vec::new(),
+                    crate::runtime::RuntimeResourceRevision::new(1),
+                    crate::model::ModelInvocationConfig {
+                        model: "model-before-restart".to_owned(),
+                        protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
+                        max_output_tokens: 64,
+                        request_params: crate::model::RequestParams::new(),
+                        capabilities: crate::model::catalog::ModelCapabilities::text_only(
+                            true, true,
+                        ),
+                        compat: crate::model::catalog::ModelCompat::default(),
+                    },
+                    64_000,
+                    None,
+                    false,
+                    Vec::new(),
+                    crate::runtime::identity::CapabilityRevision::new(1),
+                    crate::context::ContextGeneration {
+                        id: 1,
+                        contributors: Vec::new(),
+                    },
+                    None,
+                    Vec::new(),
+                );
+                store
+                    .commit_model_turn_start(&[], &snapshot, fixed_time())
+                    .expect("request start");
+                append_completed_request(store, conversation_id, &dead, &snapshot.request_id);
+                // CRASH: the provider outcome is durably known, but the
+                // canonical Assistant message never committed.
+            },
+        );
 
-        let (runtime, model) =
-            runtime_with_model_at(&dir, "conv-m9a-classe", Vec::new(), vec![one_turn_script()])
-                .await
-                .expect("runtime recovers");
+        let (runtime, model) = runtime_with_model_at(
+            &dir,
+            "conv_0224cd71-1cda-74e4-8010-dad3ad2ce447",
+            Vec::new(),
+            vec![one_turn_script()],
+        )
+        .await
+        .expect("runtime recovers");
         assert!(matches!(
             runtime.recovery().attempt_class(),
             crate::runtime::recovery::AttemptRecoveryClass::ExternalOutcomeKnown {
@@ -19178,41 +19215,46 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_restart_allocates_an_attempt_id_past_durable_history() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let conversation = ConversationId::new("conv-m9a-identity");
+        let conversation = ConversationId::new("conv_d739e286-16f6-783d-89be-a52ec3d0651f");
         let mut durable_attempts = Vec::new();
         for ordinal in 0..3 {
             durable_attempts.push(AttemptId::for_conversation(&conversation, ordinal));
         }
         let seeded = durable_attempts.clone();
-        let store_path = seed_crash_prefix(&dir, "conv-m9a-identity", &[], |store, id| {
-            for (ordinal, attempt) in seeded.iter().enumerate() {
-                store
-                    .append_event(attempt_event(
-                        id,
-                        &format!("started-{ordinal}"),
-                        attempt,
-                        crate::events::types::RuntimeEvent::AttemptStarted {
-                            attempt_id: attempt.clone(),
-                        },
-                    ))
-                    .expect("attempt started");
-                store
-                    .append_event(attempt_event(
-                        id,
-                        &format!("completed-{ordinal}"),
-                        attempt,
-                        crate::events::types::RuntimeEvent::AttemptCompleted {
-                            attempt_id: attempt.clone(),
-                            finish_reason: crate::model::finish::ModelFinishReason::Stop,
-                        },
-                    ))
-                    .expect("attempt completed");
-            }
-        });
+        let store_path = seed_crash_prefix(
+            &dir,
+            "conv_d739e286-16f6-783d-89be-a52ec3d0651f",
+            &[],
+            |store, id| {
+                for (ordinal, attempt) in seeded.iter().enumerate() {
+                    store
+                        .append_event(attempt_event(
+                            id,
+                            &format!("started-{ordinal}"),
+                            attempt,
+                            crate::events::types::RuntimeEvent::AttemptStarted {
+                                attempt_id: attempt.clone(),
+                            },
+                        ))
+                        .expect("attempt started");
+                    store
+                        .append_event(attempt_event(
+                            id,
+                            &format!("completed-{ordinal}"),
+                            attempt,
+                            crate::events::types::RuntimeEvent::AttemptCompleted {
+                                attempt_id: attempt.clone(),
+                                finish_reason: crate::model::finish::ModelFinishReason::Stop,
+                            },
+                        ))
+                        .expect("attempt completed");
+                }
+            },
+        );
 
         let runtime = runtime_at(
             &dir,
-            "conv-m9a-identity",
+            "conv_d739e286-16f6-783d-89be-a52ec3d0651f",
             Vec::new(),
             vec![one_turn_script()],
         )

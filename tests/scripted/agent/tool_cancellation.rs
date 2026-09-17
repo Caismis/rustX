@@ -43,7 +43,7 @@ use tokio::sync::watch;
 fn request(model: &Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {
         agent_id: AgentId::new("agent-136"),
-        conversation_id: ConversationId::new("conv-136"),
+        conversation_id: ConversationId::new("conv_2eb1f823-e1d7-7517-8ed5-2ca8d909b5bb"),
         attempt_id: AttemptId::new("attempt-136"),
         conversation: rustx::conversation::ConversationState::from_messages(vec![
             MessageBlock::User(UserMessageBlock {
@@ -182,7 +182,7 @@ async fn run_inner(
         crate::agent::execution::test_sync::ToolPhysicalSettlementPause,
     >,
 ) -> common::DurableExecutionAudit {
-    let tool_runtime = common::tool_runtime("conv-136");
+    let tool_runtime = common::tool_runtime("conv_2eb1f823-e1d7-7517-8ed5-2ca8d909b5bb");
     let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let publication = common::RecordingPublicationObserver::default();

@@ -62,7 +62,7 @@ async fn initialize(client: &impl AppServerConformanceDriver) {
         client,
         0,
         Method::Initialize(InitializeParams {
-            protocol_version: 5,
+            protocol_version: 6,
             client: ClientIdentity {
                 name: "transport".into(),
                 version: "1".into(),
@@ -292,7 +292,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         let mut request = "ws://localhost/".into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v5, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v6, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -640,7 +640,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         let mut request = url.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v5, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v6, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -701,12 +701,14 @@ impl tokio::io::AsyncWrite for ReplenishingWriter {
                     self.notifications <= transport::IN_FLIGHT_REQUESTS + 1,
                     "ready control request was starved by observations"
                 );
-                let mode = if self.notifications.is_multiple_of(2) {
-                    crate::runtime::ApprovalMode::Policy
-                } else {
-                    crate::runtime::ApprovalMode::FullAccess
-                };
-                self.native.approval_mode_set(mode).unwrap();
+                let mut selection = self.native.model_view().configured;
+                selection.request_params.insert(
+                    "temperature".into(),
+                    serde_json::json!(
+                        f64::from(u32::try_from(self.notifications).unwrap()) / 100.0
+                    ),
+                );
+                self.native.model_set(selection).unwrap();
             }
         }
         std::task::Poll::Ready(Ok(bytes.len()))
@@ -739,13 +741,12 @@ async fn ready_control_admission_does_not_wait_for_continuous_notifications() {
         // The ready backlog exceeds the fairness bound and is replenished by the
         // writer. Input is already in the pipe before the shared serve core is polled.
         for i in 0..64 {
-            native
-                .approval_mode_set(if i % 2 == 0 {
-                    crate::runtime::ApprovalMode::FullAccess
-                } else {
-                    crate::runtime::ApprovalMode::Policy
-                })
-                .unwrap();
+            let mut selection = native.model_view().configured;
+            selection.request_params.insert(
+                "temperature".into(),
+                serde_json::json!(f64::from(i) / 100.0),
+            );
+            native.model_set(selection).unwrap();
         }
         let (mut client, input) = tokio::io::duplex(4096);
         let request = Request {

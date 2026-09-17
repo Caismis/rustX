@@ -44,19 +44,20 @@ fn models_json(base_url: &str) -> String {
 base_url = "{base_url}"
 api_key = "$RUSTX_SUBAGENT_TEST_KEY"
 
-[[providers.fixture.models]]
+[models."fixture/subagent-model"]
+provider = "fixture"
 id = "subagent-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
-[providers.fixture.models.capabilities]
+[models."fixture/subagent-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 reasoning = false
 
-[providers.fixture.models.compat]
+[models."fixture/subagent-model".compat]
 chat_reasoning_replay = "omit"
 "#
     )
@@ -125,19 +126,16 @@ impl Process {
             "---\nname: conformance\ndescription: Issue 138 conformance skill.\n---\n\nUse the ordinary child runtime.\n",
         )
         .expect("skill manifest");
-        std::fs::write(root.join("models.toml"), models).expect("models.toml");
         let mut document: serde_json::Value =
             rustx::toml_authoring::parse(session.as_bytes()).unwrap();
         crate::launch_fixture::write_roles(&workspace, &mut document["subagents"]);
         std::fs::write(
             root.join("rustx.toml"),
-            toml::to_string_pretty(&document).unwrap(),
+            format!("{}\n{models}", toml::to_string_pretty(&document).unwrap()),
         )
         .expect("rustx.toml");
         let mut command = tokio::process::Command::new(binary());
         command
-            .arg("--models")
-            .arg(root.join("models.toml"))
             .arg("--config")
             .arg(root.join("rustx.toml"))
             .arg("--workspace")
@@ -145,7 +143,7 @@ impl Process {
             .arg("--runtime-root")
             .arg(root.join("private"))
             .env_clear()
-            .env("HOME", crate::launch_fixture::grant(root, &workspace))
+            .env("HOME", root.join("host"))
             .env("PATH", std::env::var("PATH").unwrap_or_default())
             .env("RUSTX_SUBAGENT_TEST_KEY", key)
             .stdin(Stdio::piped())
@@ -416,8 +414,10 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
         })
         .expect("the child request body");
     assert!(
-        first_child_request.contains("skills/conformance/SKILL.md"),
-        "the named child request uses the child-owned materialized Skill path: {first_child_request}"
+        first_child_request.contains("Workspace Skill root")
+            && first_child_request.contains("skills/workspace")
+            && first_child_request.contains("<name>conformance</name>"),
+        "the named child request uses the captured roots and progressive disclosure metadata: {first_child_request}"
     );
     // Count committed delegation proposals, not HTTP sends that a deadline
     // could interrupt. Together with the single owned child this proves the

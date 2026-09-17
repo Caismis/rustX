@@ -88,7 +88,7 @@ class ServerFixture {
   static create(prefix: string, providerUrl: string): ServerFixture {
     const fixture = TempFixture.create(prefix);
     const home = fixture.path("home");
-    mkdirSync(join(home, ".config", "rustx"), { recursive: true });
+    mkdirSync(join(home, "rustx"), { recursive: true });
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       HOME: home,
@@ -119,16 +119,11 @@ class ServerFixture {
     return new ServerFixture(fixture, home, env);
   }
 
-  /** A trusted workspace, ready to be a Session's cwd. */
+  /** A Workspace with an explicit Root profile, ready to be a Session's cwd. */
   workspace(name: string): string {
     const workspace = this.fixture.path(name);
     mkdirSync(workspace, { recursive: true });
-    const granted = spawnSync(
-      BINARY,
-      ["--workspace", workspace, "--trust", "grant"],
-      { env: this.env, encoding: "utf8" },
-    );
-    assert.equal(granted.status, 0, granted.stderr);
+    writeFileSync(join(workspace, "rustx.toml"), '[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "execution"]\n[agent.plugins.todo]\nenabled = true\n[agent.plugins.agent_status]\nenabled = true\n');
     return workspace;
   }
 
@@ -233,8 +228,8 @@ describe("local self-hosted mode: one owned App Server child over stdio", { skip
       assert.equal(host.childExit, undefined);
       assert.match(host.describe(), /owned App Server child \(pid \d+\)/);
 
-      const a = await openSession(host, server.settings("session-a"));
-      const b = await openSession(host, server.settings("session-b"));
+      const a = await openSession(host, server.settings("ses_fa57a52d-bf08-7902-9852-9730a3e99db6"));
+      const b = await openSession(host, server.settings("ses_e8de016f-bd70-782f-ad23-25e81df82550"));
 
       // Two Sessions, two distinct runtimes, one process. Nothing about the
       // second attachment replaced or restarted anything.

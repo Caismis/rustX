@@ -12,7 +12,7 @@
           "description": "The Background contributor configuration."
         },
         "enabled": {
-          "default": true,
+          "default": false,
           "description": "Whether this composition includes the Agent Status extension at all.\n\nWith `false` the runtime composes no status engine: the Agent Loop\nemits no Agent Status and is otherwise a completely ordinary\n`ConversationRuntime`.",
           "type": "boolean"
         },
@@ -134,9 +134,9 @@
       "additionalProperties": false,
       "description": "One invocation-scoped replacement of selected child capability\ndimensions.\n\nThe same value is produced by model-generated `subagent` arguments and by\ntrusted static Workflow program data. The launch boundary determines\nauthority; both share this vocabulary and the `AgentProfile` resolver.",
       "properties": {
-        "extensions": {
+        "plugins": {
           "$ref": "#/$defs/NativeAgentExtensionSelection",
-          "description": "The complete replacement native Agent Extension composition, when this\ndimension is overridden. Absent uses the definition's composition."
+          "description": "The complete replacement Plugin composition, when this\ndimension is overridden. Absent uses the definition's composition."
         },
         "skills": {
           "description": "The complete replacement Skill selection, when this dimension is\noverridden. Absent uses the definition's selection.",
@@ -180,7 +180,7 @@
       "description": "The authored Todo extension (Issue #259).\n\nTodo is *one* capability with several faces, and `enabled` composes all\nof them together or none of them:\n\n```text\nenabled = true    conversation-owned ConversationTodoList authority\n                  the model-facing `todo` Tool\n                  the bounded read-only Todo status presentation\n                  the Runtime Client / TUI Todo projection\n\nenabled = false   none of the above for this runtime; canonical history\n                  keeps every Todo ToolCall/ToolResult it already holds\n```\n\nIt carries no contributor settings today. That is a statement about the\nextension, not a placeholder: the list's bounds, transitions, and\ndependency rules are owned by\n[`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are\nnot launch configuration.",
       "properties": {
         "enabled": {
-          "default": true,
+          "default": false,
           "description": "Whether this composition includes the Todo extension at all.",
           "type": "boolean"
         }

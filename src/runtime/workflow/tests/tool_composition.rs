@@ -300,6 +300,10 @@ async fn fixed_admission_rejects_orchestration_background_and_composite_leaves()
         let mut leaf = definition();
         leaf.name = name.into();
         leaf.id = crate::runtime::identity::ToolId::new(format!("tool-{name}"));
+        if name == "execution" {
+            leaf.execution_policy = ToolExecutionPolicy::ForegroundOnly;
+            leaf.concurrency_policy = crate::tools::types::ToolConcurrencyPolicy::Sequential;
+        }
         if name == "background" {
             leaf.execution_policy = ToolExecutionPolicy::BackgroundOnly;
         }
