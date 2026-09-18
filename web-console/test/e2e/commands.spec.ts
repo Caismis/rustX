@@ -57,7 +57,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     phase = 'selecting exact historical Retry boundary';
     await page.getByRole('button', { name: 'Retry / Regenerate', exact: true }).click();
     await page.getByRole('dialog', { name: 'Retry / Regenerate', exact: true }).getByRole('option', { name: /Regenerate my uploaded note/ }).click();
-    phase = 'awaiting validated retry provider request (branch → unload → attach → turn/start)';
+    phase = 'awaiting validated retry provider request (branch → switchNode → attach → turn/start)';
     await test.step('native retry reaches the provider with validated editor content', async () => {
       // The gate is reached only after the real provider validates model, native
       // upload-bearing input and absence of old output. Its existing deadline is

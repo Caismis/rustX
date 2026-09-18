@@ -384,13 +384,23 @@ impl AppServerConnection {
             Method::SessionDelete {
                 session_id,
                 expected_target_revision,
-            } => self
-                .sessions
-                .delete_session(&session_id, &expected_target_revision)
-                .await
-                .map(deletion)
-                .map_err(session_error),
-            Method::SessionUnload { target } => {
+            } => {
+                let manager = self.host.manager().clone();
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                tokio::spawn(async move {
+                    let _request = request_owner;
+                    let result = manager
+                        .delete_session(&session_id, &expected_target_revision)
+                        .await
+                        .map(deletion)
+                        .map_err(manager_error);
+                    let _ = sender.send(result);
+                });
+                receiver
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))?
+            }
+            Method::SessionSwitchNode { target, node_id } => {
                 let route = self.route(&target)?;
                 let manager = self.host.manager().clone();
                 let routes = self.routes.clone();
@@ -399,15 +409,26 @@ impl AppServerConnection {
                 // Cleanup is server-owned even if the initiating caller goes away.
                 tokio::spawn(async move {
                     let _request = request_owner;
-                    let result = manager
-                        .unload_incarnation(&target.conversation_id, target.runtime_incarnation)
-                        .await
-                        .map_err(manager_error);
-                    // Every terminal result retires this exact external route,
-                    // including stale residency and fail-closed shutdown errors.
+                    let result = async {
+                        manager
+                            .unload_incarnation(&target.conversation_id, target.runtime_incarnation)
+                            .await
+                            .map_err(manager_error)?;
+                        manager
+                            .load(&target.session_id, Some(&node_id))
+                            .await
+                            .map_err(manager_error)?;
+                        let session = manager
+                            .session_controller()
+                            .read_session(&target.session_id)
+                            .await
+                            .map_err(session_error)?;
+                        Ok(MethodResult::Session { session })
+                    }
+                    .await;
                     release_route(&routes, &route);
                     changed.notify_one();
-                    let _ = sender.send(result.map(|()| MethodResult::Unloaded {}));
+                    let _ = sender.send(result);
                 });
                 receiver
                     .await
@@ -426,14 +447,7 @@ impl AppServerConnection {
                     .list_sessions(query.as_deref(), offset, limit)
                     .await
                     .map_err(session_error)?;
-                let resident = self.host.manager().diagnostics();
-                let residencies = page.sessions.iter().map(|session| {
-                    let state = resident.sessions.iter().find(|row| row.session_id == session.id)
-                        .map_or(crate::local_runtime::session_runtime_manager::ResidencyState::Unloaded, |row| row.residency);
-                    (session.id.clone(), state)
-                }).collect();
                 Ok(MethodResult::Sessions {
-                    residencies,
                     sessions: page.sessions,
                     next_offset: page.next_offset,
                 })
@@ -511,7 +525,20 @@ impl AppServerConnection {
                 Ok(deletion(self.sessions.delete_preview(&session_id).await))
             }
             Method::SessionRecoverDeletion { session_id } => {
-                Ok(deletion(self.sessions.recover_deletion(&session_id).await))
+                let manager = self.host.manager().clone();
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                tokio::spawn(async move {
+                    let _request = request_owner;
+                    let result = manager
+                        .recover_session_deletion(&session_id)
+                        .await
+                        .map(deletion)
+                        .map_err(manager_error);
+                    let _ = sender.send(result);
+                });
+                receiver
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))?
             }
             Method::SourcesRead { session_id } => {
                 let (projection, session_revision, session_selection) = self
@@ -1046,7 +1073,10 @@ fn manager_error(error: RuntimeManagerError) -> RpcError {
         RuntimeManagerError::ResidencyCapacity => domain(ErrorData::ResidencyCapacity),
         RuntimeManagerError::StaleIncarnation => domain(ErrorData::StaleRuntime),
         RuntimeManagerError::Client(error) => client_error(error),
-        _ => domain(ErrorData::OperationFailed),
+        RuntimeManagerError::TransitionFailed(detail) => {
+            rpc_error(-32000, &detail, Some(ErrorData::OperationFailed))
+        }
+        RuntimeManagerError::SessionAlreadyResident { .. } => domain(ErrorData::OperationFailed),
     }
 }
 fn session_error(error: crate::local_runtime::session::SessionError) -> RpcError {

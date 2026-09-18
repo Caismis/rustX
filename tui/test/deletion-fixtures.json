@@ -22,7 +22,7 @@
     "status": "blocked",
     "session_id": "ses_84097828-fc31-78c8-9292-10df48901a85",
     "reason": {
-      "kind": "in_use"
+      "kind": "resource_conflict"
     }
   },
   {

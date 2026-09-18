@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { EffectiveConfiguration, SourceSettings, SourceMutation, SourceScope } from '../../../../protocol/app-server/v7';
+import type { EffectiveConfiguration, SourceSettings, SourceMutation, SourceScope } from '../../../../protocol/app-server/v8';
 import { RpcFailure, isOutcomeUncertain, type AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { ResourceInventory } from './ResourceInventory';
@@ -77,7 +77,7 @@ function SettingsContent({ client, sessionId, onClose = () => {}, theme = 'light
       if (at !== epoch.current) return undefined;
       ++readSequence.current; // A read begun before this commit cannot replace its acknowledgement.
       setSource(result.projection);
-      setMessage('Source saved. The loaded runtime is unchanged; Reload publishes a new generation.');
+      setMessage('Source saved. Use Reload to apply it to this Session.');
       return sourceRevision(result.projection, mutation);
     } catch (cause) {
       if (at !== epoch.current) return undefined;
@@ -118,12 +118,12 @@ function SettingsContent({ client, sessionId, onClose = () => {}, theme = 'light
     <header><h2>{sections.find(([id]) => id === section)?.[1]}</h2><Button disabled={busy} onClick={() => void refresh(true).catch(() => { /* Current failures are reported inside the read fence. */ })}>Read current sources</Button></header>
     <div role="tablist" aria-label="Configuration scope" className={css.tabs} onKeyDown={navigateTabs}>{(['effective', 'user', 'workspace'] as const).map(value => <button key={value} role="tab" tabIndex={scope === value ? 0 : -1} aria-selected={scope === value} onClick={() => setScope(value)}>{value[0].toUpperCase() + value.slice(1)}</button>)}</div>
       <div className={css.content}>
-        <div className={css.generation}><span>Runtime generation {effective?.generation ?? source.loaded?.generation ?? 'not loaded'} · {source.loaded?.pending_reload ? 'Pending reload' : 'Sources unchanged'}</span><Button variant="primary" disabled={busy || !target} onClick={() => void reload()}>Reload</Button></div>
+        <div className={css.generation}><span>Runtime generation {effective?.generation ?? source.loaded?.generation ?? 'unavailable'} · {source.loaded?.pending_reload ? 'Pending reload' : 'Sources unchanged'}</span><Button variant="primary" disabled={busy || !target} onClick={() => void reload()}>Reload</Button></div>
         {transport.connection !== 'connected' && <p role="status">Connection {transport.connection}. Values are the last native observation; drafts are retained. Reconnect rereads authority without replaying mutations.</p>}
         {message && <p role="status">{message}</p>}{error && <p className={css.error} role="alert">{error}</p>}
 
         {selected && <><p className={css.hint}>{scope === 'user' ? 'User' : 'Workspace'} source: {selected.path}<br />Revision: {selected.revision}</p>{selected.diagnostic && <p role="alert">{selected.diagnostic}</p>}<p className={css.hint}>Edits contain authored intent only. Remove a unit to expose the lower scope; save an empty selection to select none.</p></>}
-        {scope === 'effective' ? effective ? <EffectiveView value={effective} source={source} section={section} /> : <p>Attach to a loaded Session to inspect its published configuration.</p> : <fieldset disabled={busy} className={css.editor}>
+        {scope === 'effective' ? effective ? <EffectiveView value={effective} source={source} section={section} /> : <p>Open a Session to inspect its published configuration.</p> : <fieldset disabled={busy} className={css.editor}>
           {section === 'catalog' && <CatalogEditor key={scope} document={selected?.authored ?? {}} scope={scope} revision={selected!.revision} save={save} />}
           {(section === 'general' || section === 'policies') && <RuntimeEditor key={`${scope}:${section}`} document={selected?.authored ?? {}} scope={scope} revision={selected!.revision} save={save} policyOnly={section === 'policies'} />}
           {section.startsWith('root-') && <RootEditor key={`${scope}:${section}`} document={selected?.authored ?? {}} scope={scope} revision={selected!.revision} save={save} section={section as RootSection} models={models} skillRoots={roots} />}

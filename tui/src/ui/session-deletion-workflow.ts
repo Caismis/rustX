@@ -7,8 +7,8 @@
  *
  * The uncertain-outcome rule applies here in full: a deletion whose response
  * was lost is reported as `unknown`, never as failed and never resent. Only the
- * server can say whether it committed, and the operator is offered the native
- * recovery capability instead of a silent retry.
+ * server can say whether it committed, and the operator must observe authoritative state before any
+ * committed cleanup recovery is offered.
  */
 import type { AppServerHost } from "../app-server/host.ts";
 import {
@@ -75,14 +75,23 @@ export class SessionDeletionWorkflow {
     this.#context = { ...context, ids: [...context.ids] };
     void this.#submit({ operation: "recover", sessionId: state.sessionId });
   }
-  canRecover(): boolean {
-    return this.#state.kind === "result" && ["committed_cleanup_pending", "committed_durability_uncertain", "unknown"].includes(this.#state.outcome.status);
+  /** Only a fresh server observation can promote unknown to cleanup authority. */
+  observeCommitted(result: SessionDeleteResult, context: DeletionContext): void {
+    if (!this.#live() || this.#state.kind === "pending" ||
+        (result.status !== "committed_cleanup_pending" && result.status !== "committed_durability_uncertain")) return;
+    this.#context = { ...context, ids: [...context.ids] };
+    this.#state = { kind: "result", outcome: result, sessionId: result.session_id };
+    this.#attention = true;
+    this.#publish();
   }
-  /** Closing a notice hides it, but cannot discard a native recovery capability. */
+  canRecover(): boolean {
+    return this.#state.kind === "result" && ["committed_cleanup_pending", "committed_durability_uncertain"].includes(this.#state.outcome.status);
+  }
+  /** Closing a notice preserves committed recovery or an unresolved observation. */
   dismiss(): void {
     if (this.#state.kind === "pending") return;
     this.#attention = false;
-    if (!this.canRecover()) this.#state = { kind: "idle" };
+    if (!this.canRecover() && !(this.#state.kind === "result" && this.#state.outcome.status === "unknown")) this.#state = { kind: "idle" };
   }
   /** A disposable preview attempt does not consume this attachment-owned obligation. */
   adoptFreshPreview(sessionId: string): void {

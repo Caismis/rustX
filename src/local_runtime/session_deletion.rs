@@ -85,28 +85,23 @@ pub enum WorkspaceBlockerState {
     BranchOnly,
 }
 
-/// An authoritative snapshot whose OS exclusion remains held until it is dropped.
-/// No cleanup or deletion methods are exposed by this foundational contract.
+/// Finite durable ownership inspection. Holds the ownership snapshot while
+/// deriving the target, but never excludes live Conversation allocations.
 #[derive(Debug)]
-pub struct SessionDeletionPreflight {
+pub struct DeletionTargetSnapshot {
     session_id: SessionId,
     nodes: Vec<SessionNode>,
     conversations: Vec<OwnedConversation>,
     workspace_blockers: Vec<WorkspaceBlocker>,
     revision: [u8; 32],
-    _targets: Vec<ConversationExclusion>,
     _authority: OwnershipSnapshot,
 }
 
-impl SessionDeletionPreflight {
-    /// Freeze ownership transitions, derive the target, then acquire exclusive
-    /// allocation guards in `ConversationId` order. The final target acquisition
-    /// linearizes exclusive authority. All guards remain held by the snapshot.
-    /// Live target access causes `WouldBlock`; unrelated runtimes remain usable.
-    ///
+impl DeletionTargetSnapshot {
+    /// Inspect a finite durable ownership target, including resident Sessions.
     /// # Errors
-    /// Missing or ambiguous ownership, invalid metadata and live access fail closed.
-    pub fn acquire(root: &Path, session_id: &SessionId) -> std::io::Result<Self> {
+    /// Missing or ambiguous ownership and invalid metadata fail closed.
+    pub fn inspect(root: &Path, session_id: &SessionId) -> std::io::Result<Self> {
         let authority = ProductRoot::existing(root)?;
         let freeze = authority.freeze_ownership()?;
         let catalog = SessionCatalog::read_under_guard(&authority)
@@ -192,10 +187,6 @@ impl SessionDeletionPreflight {
         blockers.sort_by(|a, b| {
             (&a.conversation_id, &a.resource_id).cmp(&(&b.conversation_id, &b.resource_id))
         });
-        let targets = conversations
-            .iter()
-            .map(|c| ConversationExclusion::acquire(&authority, &c.private_root))
-            .collect::<std::io::Result<Vec<_>>>()?;
         let revision =
             ownership_revision(&authority, session_id, &nodes, &conversations, &blockers)?;
         Ok(Self {
@@ -204,7 +195,6 @@ impl SessionDeletionPreflight {
             conversations,
             workspace_blockers: blockers,
             revision,
-            _targets: targets,
             _authority: freeze,
         })
     }
@@ -566,4 +556,24 @@ fn validate_handoff(
         return Err(invalid("foreign workspace handoff"));
     }
     Ok(())
+}
+
+/// Destructive allocation authority, acquired only after managed writers retire.
+#[derive(Debug)]
+pub struct DeletionExclusion {
+    _targets: Vec<ConversationExclusion>,
+}
+impl DeletionExclusion {
+    /// # Errors
+    /// Any remaining external allocation owner excludes destructive authority.
+    pub fn acquire(root: &Path, target: &DeletionTargetSnapshot) -> std::io::Result<Self> {
+        let root = ProductRoot::existing(root)?;
+        Ok(Self {
+            _targets: target
+                .conversations
+                .iter()
+                .map(|c| ConversationExclusion::acquire(&root, &c.private_root))
+                .collect::<std::io::Result<Vec<_>>>()?,
+        })
+    }
 }

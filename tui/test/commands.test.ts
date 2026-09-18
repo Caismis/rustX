@@ -138,8 +138,7 @@ describe("command registry", () => {
         "/resume",
         "/session",
         "/name",
-        "/unload",
-      "/clone",
+        "/clone",
         "/fork",
         "/tree",
         "/tools",
@@ -613,7 +612,7 @@ describe("CommandDispatcher", () => {
     const list = await nextRequest(h, "session/list");
     h.transport.respond(list.id, {
       type: "sessions",
-      residencies: {},
+
       sessions: [
         {
           id: "ses_84097828-fc31-78c8-9292-10df48901a85",
@@ -630,15 +629,6 @@ describe("CommandDispatcher", () => {
       ],
     });
 
-    const diagnostics = await nextRequest(h, "server/diagnostics");
-    h.transport.respond(diagnostics.id, { type: "diagnostics", snapshot: {
-      lifecycle: "Accepting", policy: {}, loaded: 0, loading: 0, unloading: 0,
-      active_roots: 0, external_attachments: 0, sessions: [], admission_refusals: {},
-      shutdown_failures: "0", shutdown_timeouts: "0", unload_failures: "0",
-      transport: { websocket_connections: 1, stdio_connections: 0, connection_refusals: "0",
-        delivery_failures: "0", max_message_bytes: 1048576, outbound_queue_messages: 32,
-        outbound_queue_bytes: 33554432, in_flight_requests: 16, write_deadline_ms: "10000" },
-    } });
     const outcome = await resuming;
     assert.equal(outcome.kind, "choose_session");
     if (outcome.kind === "choose_session") {
@@ -728,7 +718,7 @@ describe("CommandDispatcher", () => {
     }
     // Creating a Session replaces no process and stops nothing.
     const methods = h.transport.log.requests.map((request) => request.method);
-    assert.ok(!methods.includes("session/unload"));
+    assert.ok(!methods.includes("session/switchNode"));
     assert.ok(!methods.includes("turn/cancel"));
   });
 
@@ -1595,16 +1585,10 @@ describe("CLI arguments", () => {
   });
 });
 
-it("unload is an explicit background-Session command, never focus or delete", async () => {
+it("manual runtime unload is not a product command", async () => {
   const h = await harness();
-  const current = await h.dispatcher.submit("/unload session-1");
-  assert.equal(current.kind, "transient");
-  assert.equal(h.transport.log.count("session/unload"), 0);
-  let unloads = 0;
-  const background = { unload: async () => { unloads++; } } as unknown as AppServerSession;
-  h.host.attachment = (id) => id === "background" ? background : h.session;
   const result = await h.dispatcher.submit("/unload background");
   assert.equal(result.kind, "transient");
-  assert.equal(unloads, 1);
   assert.equal(h.transport.log.count("session/delete"), 0);
+  assert.equal(h.transport.log.count("session/unload"), 0);
 });

@@ -6,7 +6,7 @@ const variants = {
   preview: { status: "preview", preview: { session_id: target.session_id, name: null, target_revision: target.target_revision, owned_node_count: 1, owned_conversation_count: 2, owned_child_count: 1 } },
   deleted: { status: "deleted", session_id: target.session_id },
   stale: { status: "stale", session_id: target.session_id },
-  blocked: { status: "blocked", session_id: target.session_id, reason: { kind: "in_use" } },
+  blocked: { status: "blocked", session_id: target.session_id, reason: { kind: "resource_conflict" } },
   committed_cleanup_pending: { status: "committed_cleanup_pending", session_id: target.session_id },
   committed_durability_uncertain: { status: "committed_durability_uncertain", session_id: target.session_id },
   not_found: { status: "not_found", session_id: "ses_01900000-0000-7000-8000-000000000099" },
@@ -55,11 +55,11 @@ test("Rust and TypeScript use the same complete result fixtures", async () => {
 
 test("all blocker reasons and finalization uncertainty remain discriminated", () => {
   const reasons = [
-    { kind: "current_session" }, { kind: "in_use" },
+    { kind: "resource_conflict" },
     { kind: "workspace", resource_count: 1 },
     { kind: "invalid_ownership" },
   ] satisfies import("../src/protocol/app-server.ts").DeletionBlocker[];
-  assert.equal(new Set(reasons.map((r) => r.kind)).size, 4);
+  assert.equal(new Set(reasons.map((r) => r.kind)).size, 3);
   const final: SessionDeleteResult = { status: "committed_durability_uncertain", session_id: target.session_id };
   assert.equal(final.status, "committed_durability_uncertain");
 });

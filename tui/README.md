@@ -26,7 +26,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v7. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v8. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -155,7 +155,7 @@ saves alone leave the loaded generation unchanged.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v7)
+  -> initialize (App Server protocol v8)
   -> session/create or choose a durable Session
   -> session/attach (authoritative snapshot, cursor, subscription)
   -> interactive
@@ -165,8 +165,8 @@ bind stdio child or external WebSocket
 Changing Sessions only changes client focus; other attachments and running
 Sessions remain live in the same server process. Returning to a Session reads an
 authoritative snapshot and repairs its subscription. The server supports one live
-node per Session: selecting another node requires explicit **Unload and open
-node** confirmation. Native unload affects only that Session. A/B Session focus
+node per Session: selecting another node uses **Switch to this branch**
+confirmation. Native retirement is internal to that switch. A/B Session focus
 changes never unload either runtime. Fork/branch editor
 content remains transient until submitted. Tree and history pages have separate
 bounded continuations.
@@ -286,7 +286,6 @@ Sessions afterwards.
 - `/new` — create a new independent local Session.
 - `/resume [session-id]` — search persisted Sessions, or activate the given
   Session directly.
-- `/unload <session-id>` — explicitly unload an attached background Session through the server, for example before deleting it. Switch focus away first.
 - `/session` — show active Session metadata: name, id, node, conversation, and
   node count.
 - `/name [text]` — show the active Session's name, or give it one. Sessions
@@ -867,19 +866,30 @@ choice behavior applies to retained-workspace disposal.
 
 Deletion is permanent from rustX's perspective, including owned internal lineages
 and child conversations. Independent `/fork` and `/clone` Sessions and project
-files are preserved. The current Session is blocked: switch or use `/new` first.
-In-use Sessions or owned children must be released before deletion. Retained
+files are preserved. The current Session can be deleted directly; the server
+settles its runtime before durable deletion. Retained
 worktrees must be disposed explicitly through the existing subagent workspace
 action; Session deletion never disposes them automatically.
 
 A changed preview requires a fresh preview and another explicit confirmation.
 `CleanupPending` means the Session has been removed and cannot be resumed, but
 some local data still needs cleanup. Press **R** on the focused notice for one
-native recovery attempt. Durability uncertainty and unknown request outcomes are
-shown distinctly, with native list reconciliation and explicit recovery available;
-they are not reported as definite deletion failures. Closing a recovery notice
+native recovery attempt. Server-confirmed durability uncertainty also offers
+explicit recovery. An unknown outcome means the response was lost: reconnect or
+refresh authoritative Session state. It never offers **R retry native cleanup**
+or replays deletion merely because the outcome is unknown. Closing a recovery notice
 hides it without discarding its native recovery action; reopening `/resume`
 restores it. Resolve that action before starting another deletion.
+
+After an external-server reconnect, the TUI rereads deletion state before deciding
+whether to reattach. A server-confirmed committed cleanup/durability result is
+transferred into the new connection's deletion workflow, so **R** still recovers
+the original deleted Session even when it is absent from the fresh Session list.
+The deletion target is observed independently of focus: deleting historical B while
+A is focused preserves recovery for B and reattaches A normally. A live preview
+grants no cleanup authority; confirmed absence ends the obligation. Only when the
+deleted target was focused does its observation prevent reattachment of that focus.
+Neither reconnect nor the recovery action replays the original deletion.
 
 A failed Session-list refresh means visibility is unavailable, not that the list
 is empty. The native deletion result and any recovery action remain intact.
@@ -923,3 +933,8 @@ The TUI does not parse model XML or assume client filesystem paths exist remotel
 Fork/tree restoration retains ordered upload receipts with the exact draft text.
 The composer reports restored uploads and submits native receipts with the draft;
 it never assumes a source or client filesystem path exists on the target host.
+
+Deletion works directly for the focused Session after confirmation. The composer
+is disabled during deletion; completion focuses an existing Session or the empty
+Session selector. `/resume` implicitly ensures a runtime; there is no manual
+unload command and no ordinary residency status.

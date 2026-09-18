@@ -2,7 +2,7 @@
 
 The TUI is a projection/control client of App Server protocol 7. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v7.ts`](../protocol/app-server/v7.ts).
+[`protocol/app-server/v8.ts`](../protocol/app-server/v8.ts).
 
 `/settings` renders native effective/source/provenance/generation facts. `/reload`
 calls the single `configuration/reload` operation and reports success, failure or
@@ -18,3 +18,13 @@ it does not replay Save, Reload or other prior side effects.
 
 See [configuration](configuration.md) and [development](../DEVELOPMENT.md) for launch
 commands, and [the protocol](app-server-protocol.md) for transport/attachment semantics.
+
+## Durable Session lifecycle (v8)
+
+`/resume` opens a durable Session and implicitly ensures a compatible runtime.
+Closing a view only detaches. No manual unload command or ordinary residency
+status exists. Branch switching requests `session/switchNode`; retirement is
+manager-owned. Confirmed deletion supports the focused Session and disables
+control submission until authoritative settlement. Success focuses an existing
+Session or opens the empty selector, without automatically creating a Session.
+Lost deletion responses are never replayed; reconnection inspects native state.

@@ -32,9 +32,10 @@ export type Request1 =
       };
     }
   | {
-      method: 'session/unload';
+      method: 'session/switchNode';
       params: {
         target: AttachmentTarget;
+        node_id: SessionNodeId;
       };
     }
   | {
@@ -376,6 +377,7 @@ export type AttachmentId = string;
  * universal durable artifact identity.
  */
 export type ArtifactId = string;
+export type SessionNodeId = string;
 /**
  * Opaque Trace-only exclusive boundary. Valid only in its conversation.
  */
@@ -446,7 +448,6 @@ export type ToolExecutionId = string;
  * owned child.
  */
 export type SubagentId = string;
-export type SessionNodeId = string;
 /**
  * The identity of one exact historical Conversation Surface state.
  *
@@ -875,9 +876,6 @@ export type MethodResult =
       type: 'diagnostics';
     }
   | {
-      type: 'unloaded';
-    }
-  | {
       model: SessionModelView;
       type: 'model';
     }
@@ -942,13 +940,6 @@ export type MethodResult =
       type: 'session_summary';
     }
   | {
-      /**
-       * Point-in-time runtime observation for exactly this bounded catalog page.
-       * This never loads or attaches a Session.
-       */
-      residencies: {
-        [k: string]: ResidencyState;
-      };
       sessions: SessionSummary[];
       next_offset?: number | null;
       type: 'sessions';
@@ -1062,9 +1053,6 @@ export type PendingMutationOutcome =
 export type ServerLifecycle = 'Accepting' | 'Draining' | 'Terminated';
 /**
  * Residency only; execution and interaction state remain runtime-owned.
- *
- * This interface was referenced by `undefined`'s JSON-Schema definition
- * via the `patternProperty` "^ses_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$".
  */
 export type ResidencyState = 'Unloaded' | 'Loading' | 'Loaded' | 'Unloading';
 /**
@@ -1579,10 +1567,7 @@ export type RuntimeClientSessionDeletionResult =
  */
 export type RuntimeClientSessionDeletionBlocker =
   | {
-      kind: 'current_session';
-    }
-  | {
-      kind: 'in_use';
+      kind: 'resource_conflict';
     }
   | {
       resource_count: number;

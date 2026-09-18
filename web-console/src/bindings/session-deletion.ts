@@ -1,4 +1,4 @@
-import type { RuntimeClientSessionDeletionResult } from '../../../protocol/app-server/v7';
+import type { RuntimeClientSessionDeletionResult } from '../../../protocol/app-server/v8';
 
 /** Product copy must preserve committed, blocked and uncertain deletion outcomes. */
 export function sessionDeletionNotice(result: RuntimeClientSessionDeletionResult): string {
@@ -10,8 +10,7 @@ export function sessionDeletionNotice(result: RuntimeClientSessionDeletionResult
     case 'committed_durability_uncertain': return 'Deletion needs verification. Storage did not confirm durability. Check saved work and the recorded details before taking further action.';
     case 'blocked':
       switch (result.reason.kind) {
-        case 'current_session': return 'The current Session cannot be deleted. Select another Session before trying again.';
-        case 'in_use': return 'This Session is in use. Review Advanced Session controls before deleting.';
+        case 'resource_conflict': return 'An external resource owner prevents deletion. Inspect the ownership conflict before trying again.';
         case 'workspace': return 'Retained workspaces are blocking deletion. Review the affected workspaces and recorded details before trying again.';
         case 'invalid_ownership': return 'Saved ownership could not be verified. Inspect the recorded details before trying again.';
       }

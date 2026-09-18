@@ -61,30 +61,17 @@ impl LocalSessionAttachment {
     }
     /// # Errors
     /// Identity, storage and attachment failures are returned explicitly.
-    pub async fn deletion_preflight(
+    pub async fn inspect_deletion(
         &self,
         id: &SessionId,
-    ) -> std::io::Result<super::session_deletion::SessionDeletionPreflight> {
-        self.controller.catalog.lock().await.deletion_preflight(id)
+    ) -> std::io::Result<super::session_deletion::DeletionTargetSnapshot> {
+        self.controller.catalog.lock().await.inspect_deletion(id)
     }
     pub(crate) async fn delete_preview(
         &self,
         id: &SessionId,
     ) -> super::session::deletion::SessionDeleteResult {
         self.controller.delete_preview(id).await
-    }
-    pub(crate) async fn delete_session(
-        &self,
-        id: &SessionId,
-        revision: &str,
-    ) -> Result<super::session::deletion::SessionDeleteResult, SessionError> {
-        self.controller.delete_session(id, revision).await
-    }
-    pub(crate) async fn recover_deletion(
-        &self,
-        id: &SessionId,
-    ) -> super::session::deletion::SessionDeleteResult {
-        self.controller.recover_deletion(id).await
     }
     pub(crate) async fn commit_startup(
         &self,
@@ -351,26 +338,6 @@ impl RuntimeClientSessionControl for LocalSessionAttachment {
                     RuntimeClientResult::SessionDeletion {
                         result: project_session_deletion(
                             supervisor.delete_preview(&session_id).await,
-                        ),
-                    }
-                }
-                RuntimeClientSessionRequest::Delete {
-                    session_id,
-                    expected_target_revision,
-                } => RuntimeClientResult::SessionDeletion {
-                    result: project_session_deletion(
-                        supervisor
-                            .delete_session(&session_id, &expected_target_revision)
-                            .await
-                            .map_err(|_| RuntimeClientError::SessionFailure {
-                                message: "Session deletion failed before logical commit.".into(),
-                            })?,
-                    ),
-                },
-                RuntimeClientSessionRequest::DeleteRecover { session_id } => {
-                    RuntimeClientResult::SessionDeletion {
-                        result: project_session_deletion(
-                            supervisor.recover_deletion(&session_id).await,
                         ),
                     }
                 }
@@ -692,7 +659,7 @@ pub(crate) fn project_session_deletion(
         Native::Blocked { session_id, reason } => Wire::Blocked {
             session_id,
             reason: match reason {
-                Blocker::InUse => Reason::InUse,
+                Blocker::ResourceConflict => Reason::ResourceConflict,
                 Blocker::Workspace { resources } => Reason::Workspace {
                     resource_count: resources.len() as u64,
                 },

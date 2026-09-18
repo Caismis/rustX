@@ -59,7 +59,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await settings.getByRole('button', { name: 'Agents & Workflows', exact: true }).click();
     await settings.getByRole('button', { name: 'Remove workflows 1', exact: true }).click();
     await settings.getByRole('button', { name: 'Save Workflow allowlist', exact: true }).click();
-    await expect(settings.getByText(/Source saved. The loaded runtime/)).toBeVisible();
+    await expect(settings.getByText(/Source saved. Use Reload/)).toBeVisible();
     expect(readFileSync(workflowPath, 'utf8')).toBe(workflow);
     expect(readFileSync(agentPath, 'utf8')).toBe(agent);
     expect((await fixture.control('requests')).requests).toHaveLength(3);

@@ -1094,13 +1094,13 @@ async fn subagent_process_stack(alias_root: bool) {
     );
     if alias_root {
         use rustx::local_runtime::session::SessionCatalog;
-        use rustx::local_runtime::session_deletion::SessionDeletionPreflight;
+        use rustx::local_runtime::session_deletion::DeletionTargetSnapshot;
         use rustx::runtime::local_storage::ProductRoot;
         let alias = root.path().join("private");
         let product = ProductRoot::existing(&alias).unwrap();
         let catalog = SessionCatalog::open_existing(&alias).unwrap().unwrap();
         let session = catalog.persisted_session_ids()[0].clone();
-        let preflight = SessionDeletionPreflight::acquire(&alias, &session).unwrap();
+        let preflight = DeletionTargetSnapshot::inspect(&alias, &session).unwrap();
         assert_eq!(preflight.conversations().len(), 2);
         assert_eq!(
             preflight
@@ -1119,7 +1119,7 @@ async fn subagent_process_stack(alias_root: bool) {
         let revision = *preflight.ownership_revision();
         drop(preflight);
         assert_eq!(
-            *SessionDeletionPreflight::acquire(product.root(), &session)
+            *DeletionTargetSnapshot::inspect(product.root(), &session)
                 .unwrap()
                 .ownership_revision(),
             revision

@@ -2,7 +2,7 @@
 import { navigateTabs } from '../presentation/primitives/tabs';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { TraceEntry, TraceKind, TraceText } from '../../../protocol/app-server/v7';
+import type { TraceEntry, TraceKind, TraceText } from '../../../protocol/app-server/v8';
 import type { TraceCache } from '../client/trace';
 import { TRACE_LIMIT } from '../client/trace';
 import { Button } from '../presentation/primitives/Button';

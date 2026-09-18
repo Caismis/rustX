@@ -1,5 +1,4 @@
 import { closeSessionView } from './shell-actions';
-import { unloadSession } from './shell-actions';
 import { showInspector } from './shell-actions';
 import { chooseWorkspace, connectionAction, closeSettings } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
@@ -63,7 +62,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
     await settings.getByRole('button', { name: 'Model', exact: true }).click();
     await settings.getByRole('button', { name: 'Remove Root model', exact: true }).click();
-    await expect(settings.getByText(/Source saved. The loaded runtime/)).toBeVisible();
+    await expect(settings.getByText(/Source saved. Use Reload/)).toBeVisible();
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 
     await page.locator(`button[data-session-id="${idB}"]`).click(); await send('Use B while A runs');
@@ -142,9 +141,10 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     fixture.writeSettings('second-model');
     await page.locator(`button[data-session-id="${idA}"]`).click();
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
-    await unloadSession(page);
-    await expect(page.getByLabel('Session status').getByRole('button', { name: 'Open Session', exact: true })).toBeVisible();
-    await page.getByLabel('Session status').getByRole('button', { name: 'Open Session', exact: true }).click();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Reload', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Configuration published' })).toBeVisible();
+    await closeSettings(page);
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('second-model');
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
     await expect(page.getByLabel('Session location', { exact: true })).toContainText(fixture.workspaceA);
@@ -160,8 +160,6 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     expect(await page.locator('body').innerText()).not.toContain('fake-provider-only');
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.locator(`button[data-session-id="${idB}"]`).click();
-    await unloadSession(page);
-    await expect(page.getByLabel('Session status').getByRole('button', { name: 'Open Session', exact: true })).toBeVisible();
     await page.locator(`button[data-session-id="${idB}"]`).hover();
     await page.locator(`button[data-session-actions="${idB}"]`).click();
     await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();

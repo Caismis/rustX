@@ -1528,9 +1528,9 @@ describe("RustxTuiApp lifecycle", () => {
 });
 
 /** Real app routing with native operations held at explicit submission gates. */
-async function deletionAppHarness(overlapInitial = false) {
+async function deletionAppHarness(overlapInitial = false, currentTarget = false) {
   const state = { ...emptyPresentationState(sessionModel("alpha/model-a")), attempt: { ...attemptView(), phase: { type: "running" as const } } };
-  const session = fakeSession(state) as unknown as Record<string, unknown> & {
+  const session = fakeSession(state, currentTarget ? "old" : undefined) as unknown as Record<string, unknown> & {
     publishState(next: typeof state): void;
     publishSnapshot(): void;
   };
@@ -1672,7 +1672,7 @@ for (const takeover of ["HITL", "snapshot"] as const) {
 }
 
 for (const status of ["committed_cleanup_pending", "committed_durability_uncertain", "unknown"] as const) {
-  it(`execute ${status} remains recoverable across same-attachment snapshot invalidation`, async () => {
+  it(`execute ${status} remains observable across same-attachment snapshot invalidation`, async () => {
     const h = await deletionAppHarness();
     try {
       await h.resolvePreview(); await h.input("\t\r");
@@ -1684,7 +1684,7 @@ for (const status of ["committed_cleanup_pending", "committed_durability_uncerta
       assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
       assert.match(h.text(), status === "unknown" ? /outcome unknown/ : status === "committed_cleanup_pending" ? /removed and cannot be resumed/ : /durability is uncertain/);
       assert.doesNotMatch(h.text(), /delete failed|historical-target/);
-      await h.input("rr"); assert.deepEqual(h.recovers, ["old"]);
+      await h.input("rr"); assert.deepEqual(h.recovers, status === "unknown" ? [] : ["old"]);
       assert.equal(h.executes.length, 1); assert.equal(h.cancelled(), 0);
     } finally { await h.finish(); }
   });
@@ -1739,7 +1739,7 @@ it("stale settlement waits through HITL for fresh preview and a second explicit 
 });
 
 for (const outcome of [
-  { status: "blocked", session_id: "old", reason: { kind: "in_use" } },
+  { status: "blocked", session_id: "old", reason: { kind: "resource_conflict" } },
   { status: "committed_durability_uncertain", session_id: "old" },
   { status: "not_found", session_id: "old" },
 ] as const) it(`${outcome.status} settlement survives HITL and presents the native result afterward`, async () => {
@@ -1751,7 +1751,7 @@ for (const outcome of [
     assert.equal(h.surface(), approval);
     assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
     await h.input("\x1b[27u");
-    assert.match(h.text(), outcome.status === "blocked" ? /currently in use/ : outcome.status === "not_found" ? /absent from native authority/ : /durability is uncertain/);
+    assert.match(h.text(), outcome.status === "blocked" ? /external resource owner/ : outcome.status === "not_found" ? /absent from native authority/ : /durability is uncertain/);
     assert.doesNotMatch(h.text(), /delete failed/);
     if (outcome.status === "committed_durability_uncertain") {
       await h.input("rr"); assert.deepEqual(h.recovers, ["old"]);
@@ -1780,7 +1780,7 @@ it("a delayed initial resume response cannot resurrect a row after deletion reco
 
 
 for (const outcome of ["committed_cleanup_pending", "committed_durability_uncertain", "unknown"] as const) {
-  for (const empty of [false, true]) it(`${outcome}: reopening after failed reconciliation honors fresh ${empty ? "empty" : "matching"} authority and retains recovery`, async () => {
+  for (const empty of [false, true]) it(`${outcome}: reopening after failed reconciliation honors fresh ${empty ? "empty" : "matching"} authority and retains observation`, async () => {
     const h = await deletionAppHarness();
     try {
       await h.input("\x1b[27u"); // cancel the initial disposable preview
@@ -1800,7 +1800,8 @@ for (const outcome of ["committed_cleanup_pending", "committed_durability_uncert
       h.setList(async () => ({ sessions: empty ? [] : ["A", "C"].map((id) => ({ id, name: `histor-${id}`, updated_at: "today", cwd: "/server/work", active_node: id, active: false })) }));
       await h.input("/resume\r");
       assert.deepEqual(h.lists.at(-1), ["histor", 0]);
-      assert.match(h.text(), /R retry native cleanup/);
+      if (outcome === "unknown") assert.doesNotMatch(h.text(), /R retry native cleanup/);
+      else assert.match(h.text(), /R retry native cleanup/);
       await h.input("\x1b[27u");
       assert.doesNotMatch(h.text(), /visibility unavailable|historical-target/);
       if (empty) {
@@ -1810,7 +1811,7 @@ for (const outcome of ["committed_cleanup_pending", "committed_durability_uncert
       else { assert.match(h.text(), /histor-A/); assert.match(h.text(), /histor-C/); }
       // The retained action remains available on reopening even with no rows.
       await h.input("\x1b[27u"); await h.input("/resume\r"); await h.input("rr");
-      assert.deepEqual(h.recovers, ["old"]); assert.equal(h.executes.length, 1);
+      assert.deepEqual(h.recovers, outcome === "unknown" ? [] : ["old"]); assert.equal(h.executes.length, 1);
       assert.equal(h.cancelled(), 0);
     } finally { await h.finish(); }
   });
@@ -1972,3 +1973,167 @@ it("quitting while remote recovery is pending closes the late connection", async
   await waitForApplicationContinuation();
   assert.deepEqual(log, ["disconnect"]);
 });
+
+it("deleting the focused last Session disables submissions and opens the empty selector", async () => {
+  const h = await deletionAppHarness(false, true);
+  try {
+    await h.resolvePreview(); await h.input("\t\r");
+    assert.deepEqual(h.executes, [["old", "revision"]]);
+    h.absent(); h.execution.resolve({ status: "deleted", session_id: "old" });
+    await waitForApplicationContinuation();
+    await waitForApplicationContinuation();
+    assert.match(h.text(), /No Sessions available/);
+    assert.match(h.text(), /New Session/);
+    assert.equal(h.cancelled(), 0);
+    assert.equal(h.executes.length, 1);
+  } finally { await h.finish(); }
+});
+
+for (const status of ["committed_cleanup_pending", "committed_durability_uncertain", "preview", "not_found"] as const) {
+  it(`external reconnect transfers deletion observation ${status} across workflow replacement`, async () => {
+    let close!: (error: TransportClosedError) => void;
+    const execution = deferred<SessionDeleteResult>();
+    const observation = deferred<SessionDeleteResult>();
+    const recovery = deferred<SessionDeleteResult>();
+    const old = fakeSession(undefined, "A");
+    const attaches: string[] = [], executes: string[] = [], recovers: string[] = [], previews: string[] = [];
+    const row = (id: string): SessionSummaryView => ({ id, name: `Session ${id}`, active_node: id, updated_at: "today", cwd: "/server/work" });
+    const preview: SessionDeleteResult = { status: "preview", preview: {
+      session_id: "A", name: "Session A", target_revision: "revision", owned_node_count: 1,
+      owned_conversation_count: 1, owned_child_count: 0,
+    } };
+    const first = fakeHost({ ownership: "external", onClose: listener => { close = listener; }, catalog: {
+      listSessions: async () => ({ sessions: [row("A")] }),
+      previewSessionDeletion: async () => preview,
+      deleteSession: (id: string) => { executes.push(id); return execution.promise; },
+    } });
+    const second = fakeHost({ ownership: "external", attach: async id => { attaches.push(id); return fakeSession(undefined, id); }, catalog: {
+      listSessions: async () => ({ sessions: [row("B")] }),
+      previewSessionDeletion: (id: string) => { previews.push(id); return observation.promise; },
+      deleteSession: async () => { assert.fail("reconnect must never replay delete"); },
+      recoverSessionDeletion: (id: string) => { recovers.push(id); return recovery.promise; },
+    } });
+    const original = TUI.prototype.showOverlay;
+    const surfaces: Array<{ content: Parameters<TUI["showOverlay"]>[0]; visible: boolean }> = [];
+    TUI.prototype.showOverlay = function(content, options) {
+      const surface = { content, visible: true }; surfaces.push(surface);
+      const handle = original.call(this, content, options); const hide = handle.hide;
+      handle.hide = () => { surface.visible = false; hide(); }; return handle;
+    };
+    const text = () => surfaces.findLast(s => s.visible)?.content.render(120).map(plainText).join("\n") ?? "";
+    const app = new RustxTuiApp({ host: first, session: old, sessionSettings: SESSION_SETTINGS, reconnect: async () => second });
+    const running = app.run();
+    const input = async (data: string) => { process.stdin.emit("data", data); await waitForApplicationContinuation(); };
+    try {
+      await input("/resume\r"); await input("\x04"); await input("\t\r");
+      assert.deepEqual(executes, ["A"]);
+      const error = new TransportClosedError("input_eof", "delete reply lost");
+      Object.defineProperty(first.client, "closed", { value: error }); close(error);
+      execution.reject(new UncertainOutcomeError("session/delete", error));
+      await waitForApplicationContinuation();
+      assert.deepEqual(previews, ["A"]);
+      assert.deepEqual(recovers, [], "lost response is not cleanup authority");
+      observation.resolve(status === "preview" ? preview : { status, session_id: "A" });
+      await waitForApplicationContinuation();
+      await waitForApplicationContinuation();
+      assert.deepEqual(executes, ["A"]);
+      const committed = status === "committed_cleanup_pending" || status === "committed_durability_uncertain";
+      assert.deepEqual(attaches, status === "preview" ? ["A"] : []);
+      if (committed) {
+        assert.match(text(), /R retry native cleanup/);
+        assert.match(text(), status === "committed_cleanup_pending" ? /removed and cannot be resumed/ : /durability is uncertain/);
+        await input("rr");
+        assert.deepEqual(recovers, ["A"], "fresh workflow recovers A, never listed B");
+        recovery.resolve({ status: "deleted", session_id: "A" });
+        await waitForApplicationContinuation();
+      } else {
+        assert.doesNotMatch(text(), /R retry native cleanup/);
+        assert.deepEqual(recovers, []);
+      }
+      if (status !== "preview") {
+        assert.match(text(), /Session B/);
+        await input("\r");
+        assert.deepEqual(attaches, ["B"], "ordinary fresh Session navigation stays usable");
+      }
+      assert.deepEqual(executes, ["A"]);
+    } finally {
+      await app.quit(); await running; TUI.prototype.showOverlay = original;
+    }
+  });
+}
+
+for (const status of ["committed_cleanup_pending", "committed_durability_uncertain", "preview", "not_found"] as const) {
+  it(`external reconnect preserves historical B deletion ${status} while A stays focused across workflow replacement`, async () => {
+    let close!: (error: TransportClosedError) => void;
+    const execution = deferred<SessionDeleteResult>();
+    const observation = deferred<SessionDeleteResult>();
+    const recovery = deferred<SessionDeleteResult>();
+    const old = fakeSession(undefined, "A");
+    const attaches: string[] = [], executes: string[] = [], recovers: string[] = [], previews: string[] = [];
+    const row = (id: string): SessionSummaryView => ({ id, name: `Session ${id}`, active_node: id, updated_at: "today", cwd: "/server/work" });
+    const preview: SessionDeleteResult = { status: "preview", preview: {
+      session_id: "B", name: "Session B", target_revision: "revision", owned_node_count: 1,
+      owned_conversation_count: 1, owned_child_count: 0,
+    } };
+    const first = fakeHost({ ownership: "external", onClose: listener => { close = listener; }, catalog: {
+      listSessions: async () => ({ sessions: [row("B")] }),
+      previewSessionDeletion: async () => preview,
+      deleteSession: (id: string) => { executes.push(id); return execution.promise; },
+    } });
+    const second = fakeHost({ ownership: "external", attach: async id => { attaches.push(id); return fakeSession(undefined, id); }, catalog: {
+      listSessions: async () => ({ sessions: status === "preview" ? [row("B"), row("C")] : [row("C")] }),
+      previewSessionDeletion: (id: string) => { previews.push(id); return observation.promise; },
+      deleteSession: async () => { assert.fail("reconnect must never replay delete"); },
+      recoverSessionDeletion: (id: string) => { recovers.push(id); return recovery.promise; },
+    } });
+    const original = TUI.prototype.showOverlay;
+    const surfaces: Array<{ content: Parameters<TUI["showOverlay"]>[0]; visible: boolean }> = [];
+    TUI.prototype.showOverlay = function(content, options) {
+      const surface = { content, visible: true }; surfaces.push(surface);
+      const handle = original.call(this, content, options); const hide = handle.hide;
+      handle.hide = () => { surface.visible = false; hide(); }; return handle;
+    };
+    const text = () => surfaces.findLast(s => s.visible)?.content.render(120).map(plainText).join("\n") ?? "";
+    const app = new RustxTuiApp({ host: first, session: old, sessionSettings: SESSION_SETTINGS, reconnect: async () => second });
+    const running = app.run();
+    const input = async (data: string) => { process.stdin.emit("data", data); await waitForApplicationContinuation(); };
+    try {
+      await input("/resume\r"); await input("\x04"); await input("\t\r");
+      assert.deepEqual(executes, ["B"]);
+      const error = new TransportClosedError("input_eof", "delete reply lost");
+      Object.defineProperty(first.client, "closed", { value: error }); close(error);
+      execution.reject(new UncertainOutcomeError("session/delete", error));
+      await waitForApplicationContinuation();
+      assert.deepEqual(previews, ["B"]);
+      assert.deepEqual(recovers, [], "lost response is not cleanup authority");
+      observation.resolve(status === "preview" ? preview : { status, session_id: "B" });
+      await waitForApplicationContinuation();
+      await waitForApplicationContinuation();
+      assert.deepEqual(executes, ["B"]);
+      const committed = status === "committed_cleanup_pending" || status === "committed_durability_uncertain";
+      assert.deepEqual(attaches, ["A"]);
+      if (!committed) await input("/resume\r");
+      if (committed) {
+        await input("\x1b[27u\x1b[27u"); await input("/resume\r");
+        assert.match(text(), /R retry native cleanup/);
+        assert.match(text(), status === "committed_cleanup_pending" ? /removed and cannot be resumed/ : /durability is uncertain/);
+        await input("rr");
+        assert.deepEqual(recovers, ["B"], "historical recovery targets B, never focused A");
+        recovery.resolve({ status: "deleted", session_id: "B" });
+        await waitForApplicationContinuation();
+      } else {
+        assert.doesNotMatch(text(), /R retry native cleanup/);
+        assert.deepEqual(recovers, []);
+        if (status === "preview") assert.match(text(), /Session B/);
+      }
+      if (status !== "preview") {
+        assert.match(text(), /Session C/);
+        await input("\r");
+        assert.deepEqual(attaches, ["A", "C"], "ordinary fresh Session navigation stays usable");
+      }
+      assert.deepEqual(executes, ["B"]);
+    } finally {
+      await app.quit(); await running; TUI.prototype.showOverlay = original;
+    }
+  });
+}

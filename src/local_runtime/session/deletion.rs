@@ -66,7 +66,7 @@ pub(crate) struct SessionDeletePreview {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum DeletionBlocker {
-    InUse,
+    ResourceConflict,
     Workspace { resources: Vec<String> },
     InvalidOwnership { detail: String },
 }
@@ -180,7 +180,7 @@ impl CleanupWork {
 }
 
 impl SessionCatalog {
-    fn confirm_catalog_durability(&self) -> std::io::Result<()> {
+    pub(crate) fn confirm_catalog_durability(&self) -> std::io::Result<()> {
         File::open(&self.path)?.sync_all()?;
         super::sync_directory_ancestry(&self.root)
     }
@@ -201,7 +201,7 @@ impl SessionCatalog {
     fn preview_preflight(
         &self,
         id: &SessionId,
-    ) -> Result<super::super::session_deletion::SessionDeletionPreflight, SessionDeleteResult> {
+    ) -> Result<super::super::session_deletion::DeletionTargetSnapshot, SessionDeleteResult> {
         let blocked = |reason| SessionDeleteResult::Blocked {
             session_id: id.clone(),
             reason,
@@ -214,9 +214,9 @@ impl SessionCatalog {
                 session_id: id.clone(),
             });
         }
-        let preflight = self.deletion_preflight(id).map_err(|e| {
+        let preflight = self.inspect_deletion(id).map_err(|e| {
             blocked(if e.kind() == std::io::ErrorKind::WouldBlock {
-                DeletionBlocker::InUse
+                DeletionBlocker::ResourceConflict
             } else {
                 DeletionBlocker::InvalidOwnership {
                     detail: e.to_string(),
@@ -226,7 +226,7 @@ impl SessionCatalog {
         Ok(preflight)
     }
     fn workspace_blocked(
-        preflight: &super::super::session_deletion::SessionDeletionPreflight,
+        preflight: &super::super::session_deletion::DeletionTargetSnapshot,
     ) -> Option<SessionDeleteResult> {
         (!preflight.workspace_blockers().is_empty()).then(|| SessionDeleteResult::Blocked {
             session_id: preflight.session_id().clone(),
@@ -241,7 +241,7 @@ impl SessionCatalog {
     }
     fn snapshot_preflight(
         &self,
-        preflight: &super::super::session_deletion::SessionDeletionPreflight,
+        preflight: &super::super::session_deletion::DeletionTargetSnapshot,
     ) -> SessionDeletePreview {
         let scopes = preflight
             .conversations()
@@ -316,6 +316,24 @@ impl SessionCatalog {
             Ok(p) => p,
             Err(r) => return Ok(Err(r)),
         };
+        let exclusion = match super::super::session_deletion::DeletionExclusion::acquire(
+            self.product.root(),
+            &preflight,
+        ) {
+            Ok(exclusion) => exclusion,
+            Err(error) => {
+                return Ok(Err(SessionDeleteResult::Blocked {
+                    session_id: id.clone(),
+                    reason: if error.kind() == std::io::ErrorKind::WouldBlock {
+                        DeletionBlocker::ResourceConflict
+                    } else {
+                        DeletionBlocker::InvalidOwnership {
+                            detail: error.to_string(),
+                        }
+                    },
+                }));
+            }
+        };
         let preview = self.snapshot_preflight(&preflight);
         if preview.target_revision != revision {
             return Ok(Err(SessionDeleteResult::Stale {
@@ -349,6 +367,7 @@ impl SessionCatalog {
             }
             Err(e) => return Err(e),
         }
+        drop(exclusion);
         drop(preflight);
         #[cfg(test)]
         process_gate("logical_commit");

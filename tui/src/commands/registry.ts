@@ -50,7 +50,6 @@ export const COMMANDS: readonly CommandSpec[] = [
       "Show the active session's name, or give it one; a name is display metadata only.",
     argumentHint: "[text]",
   },
-  { name: "/unload", description: "Explicitly stop and unload an attached background Session through the server; durable history remains.", argumentHint: "<session-id>" },
   { name: "/clone", description: "Clone the committed conversation head into a new session." },
   {
     name: "/fork",

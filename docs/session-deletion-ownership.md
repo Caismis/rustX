@@ -5,11 +5,11 @@ Issue #254 establishes authority, not a deletion operation.
 | Resource | Authoritative owner / durable evidence | Cascade | Blocker | Shared/external | Restart |
 | --- | --- | --- | --- | --- | --- |
 | Session metadata and graph | SessionCatalog record, node membership | Record only; catalog is shared | No | Catalog file contains other Sessions | Yes |
-| Node lineage | Unique catalog node ConversationId + SQLite bound identity | Yes | Live access | No | Yes |
-| Node artifacts and managed output | Private node lineage allocation; tool runtime binds the same ConversationId | Yes | Live access | No | Yes |
-| Child lineage | Typed SubagentOwnershipCommitted in parent's durable store | Yes | Live access | No | Yes |
-| Child private execution roots | Exclusively allocated incarnation inside the child's semantic allocation | Yes | Live access | No | Yes |
-| Child inspection socket / liveness | Identity-derived routing; OS lock is liveness only | Disposable sidecars | Live access | Not ownership evidence | Marker survives, lock does not |
+| Node lineage | Unique catalog node ConversationId + SQLite bound identity | Yes | External access after managed retirement | No | Yes |
+| Node artifacts and managed output | Private node lineage allocation; tool runtime binds the same ConversationId | Yes | External access after managed retirement | No | Yes |
+| Child lineage | Typed SubagentOwnershipCommitted in parent's durable store | Yes | External access after managed retirement | No | Yes |
+| Child private execution roots | Exclusively allocated incarnation inside the child's semantic allocation | Yes | External access after managed retirement | No | Yes |
+| Child inspection socket / liveness | Identity-derived routing; OS lock is liveness only | Disposable sidecars | External access after managed retirement | Not ownership evidence | Marker survives, lock does not |
 | Subagent worktree / branch | Durable workspace ownership, terminal resource and disposal facts | Never implicit | Until fully disposed | User source may be present | Yes |
 | Workflow worktree / branch / candidate | Durable Workflow workspace ownership, settlement and disposal | Never implicit | Until fully disposed | User source may be present | Yes |
 | Environments / capability resources / caches | Runtime resource composition, independent of node artifacts | No | No | Shared | Yes |
@@ -29,8 +29,10 @@ root must not become an unconditional recursive deletion target.
 
 ## Final authority and exclusion contract
 
-`SessionDeletionPreflight::acquire` returns a finite native target, workspace
-blockers, a semantic ownership revision and retained OS exclusion. It never
+`DeletionTargetSnapshot::inspect` returns a finite native target, workspace
+blockers, and semantic ownership revision without destructive allocation exclusion.
+`DeletionExclusion::acquire` separately claims private allocations only after the
+runtime manager fences admission and proves writer retirement. It never
 traverses provenance, scans directories for ownership, or performs deletion.
 Catalog-wide unique ownership is checked; ambiguity, cycles, missing stores and
 unsafe identities fail closed. The Session graph stays above linear stores.
@@ -81,27 +83,30 @@ derives its workspace allocation from the composed Conversation access.
 1. Controller admission linearizes at acquisition of `.product-writer.lock`,
    before native catalog mutation/composition. Its lifetime is independent of a
    deletion preview.
-2. Preflight acquires `OwnershipSnapshot` before reading the catalog or durable
+2. Inspection acquires `OwnershipSnapshot` before reading the catalog or durable
    ownership facts. This freezes graph/blocker transitions and global uniqueness
    evidence throughout derivation, acquisition and snapshot lifetime.
 3. Under that freeze, derive the target and validate global unique ownership.
    Each journal traversal captures a finite high watermark before paging; later
    unrelated ordinary events cannot extend the traversal indefinitely.
    Unrelated ordinary activity is permitted and is not revision input.
-4. Acquire exclusive target allocation guards in ascending `ConversationId`
+4. For confirmed deletion only, after manager retirement proof, acquire exclusive
+   target allocation guards in ascending `ConversationId`
    order. The final successful acquisition is **exclusive deletion authority**.
    A live target Conversation, child, inspector or detached private writer makes
    acquisition fail. Partial acquisition is dropped without cleanup.
-5. Compute the canonical semantic revision while the freeze and target guards
-   remain held. Return those guards together with the snapshot. No detached
-   target list or copied token carries authority.
-6. Drop the snapshot to release all target locks and the ownership freeze.
+5. Inspection computes the canonical semantic revision under the ownership
+   freeze, without target guards. Final deletion holds both the snapshot and
+   destructive exclusion while revalidating the confirmed revision. A copied
+   token carries no destructive authority.
+6. Drop the inspection snapshot to release the ownership freeze. Separately
+   drop destructive exclusion to release target locks.
    Abnormal process death closes descriptors through OS semantics.
 
 All acquisitions are nonblocking. A writer already holding Conversation access
 must acquire the ownership-mutation guard before its SQLite transaction or
-catalog publication; conflict returns an error before mutation. Preflight takes
-root ownership freeze then sorted target locks. There is no blocking wait cycle,
+catalog publication; conflict returns an error before mutation. Inspection takes
+the root ownership freeze; confirmed deletion additionally takes sorted target locks. There is no blocking wait cycle,
 lock upgrade, release/reacquire gap, or deletion based on a pre-lock snapshot.
 Ownership-changing work is serialized for the bounded preflight lifetime;
 unrelated ordinary execution continues. Preview callers must drop the snapshot
@@ -151,17 +156,17 @@ Started alone does not change the final blocker semantics and is not added to
 `ownership_revision` or the preflight blocker projection. The spanning exclusion
 prevents observation of an in-flight live disposal; settled physical/disposal
 state remains the revision authority. The real WorkspaceManager path is covered
-by `deletion_preflight_first_excludes_workflow_destructive_admission_until_release`
+by `inspect_deletion_first_excludes_workflow_destructive_admission_until_release`
 and `deletion_workflow_disposal_first_excludes_preflight_through_physical_settlement`,
 using barriers before removal and between worktree and branch removal.
 `deletion_workspace_owner_excludes_preflight_without_store_lifecycle` additionally
 proves the local manager supplies spanning authority when its semantic store has
 no local lifecycle binding; no fake lock capability is implemented by the store.
 
-A live product controlling A can call `LocalSessionAttachment::deletion_preflight`
-for historical B without switching, detaching or restarting A. A's controller
-admission and Conversation access do not conflict with B's target locks.
-Unrelated live children likewise do not block B. Actual target access does.
+A live product controlling A can call `LocalSessionAttachment::inspect_deletion`
+for either A or B without switching, detaching or restarting A. Inspection
+retains no target allocation locks. At final deletion, independent target access
+blocks destructive exclusion; unrelated live children do not.
 
 Equivalent root spellings and symlinks resolve to the same inode; distinct roots
 are independent. Stable lock/allocation inodes must not be replaced by product
@@ -287,7 +292,7 @@ remain. The revised exclusion and semantic-token contracts are proved by:
 
 | Contract | Exact regression |
 | --- | --- |
-| Real live product A completes work while B preflight is retained; target A blocks | `active_session_a_executes_while_historical_b_preflight_retains_authority` (real provider emulator, Runtime Client, native product) |
+| Real live product A completes work while B inspection is retained; A inspection succeeds and destructive exclusion blocks | `active_session_a_executes_while_historical_b_preflight_retains_authority` (real provider emulator, Runtime Client, native product) |
 | Target child blocks; unrelated child does not | `deletion_target_child_access_blocks_but_unrelated_child_access_does_not` |
 | Target inspection blocks; stale marker reused | `deletion_live_inspection_blocks_and_stale_marker_is_reusable` |
 | Cross-process access/destructive conflict, SIGKILL release, aliases, distinct roots | `cross_process_target_conflicts_aliases_death_and_independent_roots` (**real subprocess**) |
@@ -344,4 +349,8 @@ execute reacquires them. Conversation admission checks catalog deletion authorit
 after acquiring its allocation lock. Cleanup begins only after file/parent-directory
 durability and runs outside the root freeze and supervisor catalog mutex.
 See [session-deletion-lifecycle.md](session-deletion-lifecycle.md) for commit points,
-uncertainty, recovery, allocator monotonicity, catalog generations, bounded public protocol 28 and test mapping.
+uncertainty, recovery, allocator monotonicity, catalog generations, bounded App Server protocol v8 and test mapping.
+
+Preview never retains `ConversationExclusion` while awaiting user confirmation.
+Final inspection remains under the ownership snapshot through exclusion acquisition,
+revision revalidation and catalog commit. Runtime residency alone is no blocker.

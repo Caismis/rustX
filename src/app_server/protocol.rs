@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v7 envelope and method vocabulary.
+//! Rust authority for the App Server v8 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 7;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -95,8 +95,11 @@ pub enum Method {
         target: AttachmentTarget,
         files: Vec<UploadBytes>,
     },
-    #[serde(rename = "session/unload")]
-    SessionUnload { target: AttachmentTarget },
+    #[serde(rename = "session/switchNode")]
+    SessionSwitchNode {
+        target: AttachmentTarget,
+        node_id: SessionNodeId,
+    },
     #[serde(rename = "session/trace")]
     Trace {
         target: AttachmentTarget,
@@ -388,7 +391,6 @@ pub enum MethodResult {
     Diagnostics {
         snapshot: crate::app_server::host::ServerDiagnostics,
     },
-    Unloaded {},
     Model {
         model: Box<crate::model::session::SessionModelView>,
     },
@@ -440,12 +442,6 @@ pub enum MethodResult {
         summary: crate::local_runtime::session::SessionSummary,
     },
     Sessions {
-        /// Point-in-time runtime observation for exactly this bounded catalog page.
-        /// This never loads or attaches a Session.
-        residencies: std::collections::BTreeMap<
-            crate::local_runtime::session::SessionId,
-            crate::local_runtime::session_runtime_manager::ResidencyState,
-        >,
         sessions: Vec<crate::local_runtime::session::SessionSummary>,
         next_offset: Option<usize>,
     },

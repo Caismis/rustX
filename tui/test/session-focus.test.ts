@@ -112,7 +112,7 @@ describe("multi-Session focus on one connection", () => {
     const methods = connected.transport.log.requests.map((m) => m.method);
     for (const forbidden of [
       "turn/cancel",
-      "session/unload",
+      "session/switchNode",
       "session/detach",
       "interaction/cancel",
       "interaction/respond",
@@ -233,20 +233,10 @@ describe("explicit release is a different operation from focus", () => {
     assert.equal(connected.host.attachment("ses_fa57a52d-bf08-7902-9852-9730a3e99db6"), undefined);
     const methods = connected.transport.log.requests.map((m) => m.method);
     assert.ok(!methods.includes("turn/cancel"));
-    assert.ok(!methods.includes("session/unload"));
+    assert.ok(!methods.includes("session/switchNode"));
   });
 
-  it("unload is an explicit product action, never a side effect of navigation", async () => {
-    const connected = await host();
-    const a = await focus(connected, "ses_fa57a52d-bf08-7902-9852-9730a3e99db6", 1);
-    const pending = a.unload();
-    const unload = (await connected.transport.log.awaitMethod("session/unload")).at(-1)!;
-    // The request carries the full four-domain target, so the server can
-    // refuse it for a superseded incarnation.
-    assert.deepEqual(paramsOf(unload, "session/unload").target, a.target);
-    connected.transport.respond(unload.id, { type: "unloaded" });
-    await pending;
-  });
+
 });
 
 describe("process ownership", () => {
@@ -260,7 +250,7 @@ describe("process ownership", () => {
     assert.ok(connected.host.client.closed, "only this client's socket ended");
     // Exiting a remote TUI must not ask the server to stop anything.
     const methods = connected.transport.log.requests.map((m) => m.method);
-    assert.ok(!methods.includes("session/unload"));
+    assert.ok(!methods.includes("session/switchNode"));
     assert.ok(!methods.includes("turn/cancel"));
     assert.ok(!methods.includes("session/detach"));
   });

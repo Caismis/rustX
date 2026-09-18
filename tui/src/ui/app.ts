@@ -74,6 +74,7 @@ import type { AppServerSession } from "../app-server/session.ts";
 import type {
   CatalogModelView,
   SessionSettings,
+  SessionDeleteResult,
   SessionSummaryView,
   SessionUserMessageBoundaryView,
   SessionView,
@@ -311,12 +312,25 @@ export class RustxTuiApp {
     this.#switching = true;
     const oldHost = this.#host;
     const focused = this.#session;
+    const deletion = this.#deletion.state;
+    const deletionTarget = "sessionId" in deletion ? deletion.sessionId : undefined;
     let replacement: AppServerHost | undefined;
     this.#showTransient("info", "reconnecting; unanswered mutations have unknown outcomes and will not be resent…");
     try {
       await oldHost.shutdown();
       replacement = await this.#reconnect();
-      const session = focused === undefined ? undefined : await replacement.attach(focused.sessionId, focused.nodeId);
+      let focus = focused;
+      let observedDeletion: SessionDeleteResult | undefined;
+      // A historical deletion target is independent of the currently focused Session.
+      if (deletionTarget !== undefined) {
+        const observed = await replacement.previewSessionDeletion(deletionTarget);
+        observedDeletion = observed;
+        if (focused?.sessionId === deletionTarget && (observed.status === 'deleted' || observed.status === 'not_found' || observed.status === 'committed_cleanup_pending' || observed.status === 'committed_durability_uncertain')) {
+          focus = undefined;
+          this.#showTransient('info', `Deletion observation: ${observed.status.replaceAll('_', ' ')}. No deletion was replayed.`);
+        }
+      }
+      const session = focus === undefined ? undefined : await replacement.attach(focus.sessionId, focus.nodeId);
       if (this.#quitting || this.#finished || this.#host !== oldHost) {
         await replacement.shutdown();
         return;
@@ -327,6 +341,13 @@ export class RustxTuiApp {
       this.#watchConnection();
       if (session !== undefined) this.#renderState(session.state);
       else if (this.#started) await this.#openResumeSelector();
+      // Rebinding creates a new connection-local workflow. Transfer only the
+      // authoritative committed value, retaining its original Session identity.
+      // Use the fresh selector context; a failed list read supplies no rows.
+      if (observedDeletion?.status === "committed_cleanup_pending" || observedDeletion?.status === "committed_durability_uncertain") {
+        this.#deletion.observeCommitted(observedDeletion,
+          this.#resumePresentation?.reconciliationContext() ?? { query: "", ids: [], index: 0, loaded: 0 });
+      }
       this.#showTransient("info", "reconnected from server state; no unanswered mutations were resent");
     } catch (error) {
       await replacement?.shutdown();
@@ -395,9 +416,13 @@ export class RustxTuiApp {
       // The server retired this attachment's residency. That is a statement
       // about observability, not a runtime outcome, and it is reported as one.
       if (this.#session !== session || this.#finished) return;
+      if (this.#deletion.state.kind === "pending" && this.#deletion.state.sessionId === session.sessionId) {
+        this.#editor.disableSubmit = true;
+        return;
+      }
       this.#showTransient(
         "error",
-        "this Session's runtime was unloaded; reopen it with /resume to attach again",
+        "This Session connection closed. Open the Session again to inspect its current state.",
       );
       this.#editor.disableSubmit = true;
     });
@@ -433,8 +458,8 @@ export class RustxTuiApp {
     if (changingNode && !confirmedNodeChange) {
       const confirmation = new ConfirmationView({
         title: "Change conversation node", subject: `Session ${sessionId}`,
-        confirmLabel: "Unload and open node", permanent: false,
-        warning: "The server supports one live node per Session. This explicitly unloads this Session's current runtime before opening the selected node. Other Sessions keep running.",
+        confirmLabel: "Switch to this branch", permanent: false,
+        warning: "Switching branches settles work on the current branch before opening the selected branch. Other Sessions keep running.",
         onConfirm: () => {
           this.#closeOverlay();
           void this.#focusSession(sessionId, nodeId, editorContent, notice, lease, true);
@@ -1149,6 +1174,26 @@ export class RustxTuiApp {
   /** HITL and any current popup keep focus; unresolved native outcomes wait here. */
   #syncDeletionPresentation(): void {
     const workflow = this.#deletion;
+    const deletionState = workflow?.state;
+    if (deletionState && 'sessionId' in deletionState && deletionState.sessionId === this.#session?.sessionId) {
+      if (deletionState.kind === "pending") {
+        this.#editor.disableSubmit = true;
+        this.#dispatcher.setSession(undefined);
+      } else if ((deletionState.kind === "needs_fresh_preview" || (deletionState.kind === "result" && deletionState.outcome.status === "blocked")) && !this.#session?.serverClosed) {
+        this.#dispatcher.setSession(this.#session);
+        this.#editor.disableSubmit = this.#host.client.closed !== undefined;
+      } else if (deletionState.kind === "result" && ["deleted", "not_found", "committed_cleanup_pending"].includes(deletionState.outcome.status)) {
+        const reconciliation = workflow.reconciliation;
+        const next = reconciliation.kind === "ready" ? reconciliation.page.sessions.find(row => row.id !== deletionState.sessionId) : undefined;
+        this.#session = undefined;
+        this.#bindSession(undefined);
+        this.#startup.clear(); this.#transcript.clear(); this.#activity.clear(); this.#todos.clear();
+        this.#loader.stop();
+        if (!next) void this.#openResumeSelector();
+        if (next) void this.#focusSession(next.id, undefined, undefined, undefined, this.#presentationLease());
+        return;
+      }
+    }
     if (workflow?.state.kind === "result" && workflow.state.outcome.status === "deleted" && !this.#resumePresentation) {
       workflow.dismiss();
       return;

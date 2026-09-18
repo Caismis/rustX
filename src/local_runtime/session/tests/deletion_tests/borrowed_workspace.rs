@@ -197,7 +197,7 @@ fn deletion_borrowed_workspace_crash_before_child_terminal_disposes_only_workflo
     else {
         panic!("child ownership");
     };
-    let target = SessionDeletionPreflight::acquire(root.path(), &session).unwrap();
+    let target = DeletionTargetSnapshot::inspect(root.path(), &session).unwrap();
     assert!(
         target
             .conversations()
@@ -264,7 +264,7 @@ fn deletion_borrowed_workspace_crash_before_child_terminal_disposes_only_workflo
             },
         },
     );
-    let partial = SessionDeletionPreflight::acquire(root.path(), &fixture.session).unwrap();
+    let partial = DeletionTargetSnapshot::inspect(root.path(), &fixture.session).unwrap();
     assert_eq!(partial.workspace_blockers().len(), 1);
     assert_eq!(
         partial.workspace_blockers()[0].state,
@@ -280,7 +280,7 @@ fn deletion_borrowed_workspace_crash_before_child_terminal_disposes_only_workflo
             settlement: WorkspaceDisposalSettlement::Disposed,
         },
     );
-    let disposed = SessionDeletionPreflight::acquire(root.path(), &fixture.session).unwrap();
+    let disposed = DeletionTargetSnapshot::inspect(root.path(), &fixture.session).unwrap();
     assert!(disposed.workspace_blockers().is_empty());
     assert_ne!(&partial_revision, disposed.ownership_revision());
     assert!(
@@ -313,7 +313,7 @@ fn deletion_borrowed_workspace_missing_workflow_owner_fails_closed() {
             ],
         )
         .unwrap();
-    assert!(SessionDeletionPreflight::acquire(root.path(), &fixture.session).is_err());
+    assert!(DeletionTargetSnapshot::inspect(root.path(), &fixture.session).is_err());
 }
 
 #[test]
@@ -327,7 +327,7 @@ fn deletion_borrowed_workspace_mismatched_workspace_fails_closed() {
         tree.physical_worktree_root = root.path().join("workspaces/worktrees/foreign");
         workspace.logical_workspace = tree.physical_worktree_root.clone();
     });
-    assert!(SessionDeletionPreflight::acquire(root.path(), &fixture.session).is_err());
+    assert!(DeletionTargetSnapshot::inspect(root.path(), &fixture.session).is_err());
 }
 
 #[test]
@@ -349,7 +349,7 @@ fn deletion_borrowed_workspace_foreign_or_invalid_run_fails_closed() {
         },
     ] {
         fixture.mutate_borrow(|workspace| workspace.borrowed_from = Some(run));
-        assert!(SessionDeletionPreflight::acquire(root.path(), &fixture.session).is_err());
+        assert!(DeletionTargetSnapshot::inspect(root.path(), &fixture.session).is_err());
     }
 }
 
@@ -360,7 +360,7 @@ fn deletion_borrowed_workspace_multiple_children_share_one_disposal_owner() {
     let before = revision(root.path(), &fixture.session);
     fixture.borrow(root.path(), 2);
     fixture.borrow(root.path(), 3);
-    let target = SessionDeletionPreflight::acquire(root.path(), &fixture.session).unwrap();
+    let target = DeletionTargetSnapshot::inspect(root.path(), &fixture.session).unwrap();
     assert_ne!(
         &before,
         target.ownership_revision(),
@@ -426,7 +426,7 @@ fn deletion_overridden_borrowers_keep_profile_identity_out_of_ownership_revision
     fixture.borrow_profile(root.path(), 1, profiles[0].as_str());
     let first = revision(root.path(), &fixture.session);
     fixture.borrow_profile(root.path(), 2, profiles[1].as_str());
-    let target = SessionDeletionPreflight::acquire(root.path(), &fixture.session).unwrap();
+    let target = DeletionTargetSnapshot::inspect(root.path(), &fixture.session).unwrap();
     assert_ne!(
         &first,
         target.ownership_revision(),

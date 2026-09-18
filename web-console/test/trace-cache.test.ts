@@ -64,7 +64,7 @@ it('reattachment in the same connection rejects the old page and duplicate load 
   await server.attached('A'); server.held.add('session/trace');
   const older = server.client.loadEarlierTrace('A'); await server.client.loadEarlierTrace('A');
   const request = await server.waitFor('session/trace', 1);
-  await server.client.release('A', false); await server.client.attach('A');
+  await server.client.release('A'); await server.client.attach('A');
   server.socket.success(request, { type: 'trace', page: { entries: [entry(9)] } }); await older;
   expect(server.client.getSnapshot().views.A.trace?.page.entries).toEqual([entry(10)]);
   expect(server.requests.filter(item => item.request.method === 'session/trace')).toHaveLength(1);

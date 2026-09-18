@@ -541,11 +541,11 @@ impl SessionCatalog {
             allocation: std::sync::Arc::new(allocation),
         })
     }
-    pub(crate) fn deletion_preflight(
+    pub(crate) fn inspect_deletion(
         &self,
         id: &SessionId,
-    ) -> std::io::Result<super::session_deletion::SessionDeletionPreflight> {
-        super::session_deletion::SessionDeletionPreflight::acquire(self.product.root(), id)
+    ) -> std::io::Result<super::session_deletion::DeletionTargetSnapshot> {
+        super::session_deletion::DeletionTargetSnapshot::inspect(self.product.root(), id)
     }
 
     fn inspect_store(

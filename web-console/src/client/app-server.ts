@@ -1,9 +1,9 @@
 import { TRACE_LIMIT, TRACE_PAGE_SIZE, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
 import type {
-  PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
+  RuntimeClientSessionDeletionResult, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v7';
+} from '../../../protocol/app-server/v8';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from './uploads';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, type TranscriptCache } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
@@ -16,13 +16,16 @@ export type InboundControlOutcome =
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'resynchronizing' | 'stale' | 'incompatible' | 'error';
 export interface SessionView {
+  deleting?: boolean;
+  deletionRecovery?: "committed_cleanup_pending" | "committed_durability_uncertain";
+  recoveringDeletion?: boolean;
   id: string;
   /** Last native catalog row, retained when the Sidebar reads a different page. */
   summary?: SessionSummary;
   // Local future-control intent; never inferred from an RPC acknowledgement.
   attachmentIntent: 'wanted' | 'released';
   // Last server observation, independent of focus and local intent.
-  attachment: 'detached' | 'attaching' | 'attached' | 'resynchronizing' | 'stale' | 'unloaded' | 'error';
+  attachment: 'detached' | 'attaching' | 'attached' | 'resynchronizing' | 'stale' | 'error';
   target?: AttachmentTarget;
   /** Exact native node explicitly opened by this view; retained across reconnect. */
   nodeId?: string;
@@ -69,7 +72,6 @@ export interface ClientView {
   capabilities?: ServerCapabilities;
   error?: string;
   sessions: readonly SessionSummary[];
-  sessionResidencies?: Record<string, import('../../../protocol/app-server/v7').ResidencyState>;
   nextOffset?: number | null;
   views: Readonly<Record<string, SessionView>>;
   uncertain: readonly UncertainOperation[];
@@ -135,7 +137,7 @@ export class AppServerClient {
   private refreshes = new Map<string, Promise<void>>();
   private dirty = new Set<string>();
   private resubscribe = new Set<string>();
-  private attachmentChanges = new Map<string, { kind: 'attach' | 'detach' | 'unload'; work: Promise<void> }>();
+  private attachmentChanges = new Map<string, { kind: 'attach' | 'detach' | 'switch'; work: Promise<void> }>();
   private attachmentChangeCount = 0;
   private attachmentEpochs = new Map<string, number>();
   private previewChecked = new Set<string>();
@@ -186,7 +188,7 @@ export class AppServerClient {
     const generation = this.state.generation;
     this.publish({ endpoint: url.href, connection: reconnect ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v7', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v8', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -204,12 +206,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 7, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 8, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 7 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v7 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (hello.protocol_version !== 8 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v8 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
@@ -218,6 +220,12 @@ export class AppServerClient {
       for (const id of Object.keys(this.state.views)) {
         if (!this.current(generation)) return;
         // Re-read current intent after every await; reconnect never creates intent.
+        if (this.state.views[id]?.deleting) {
+          const observed = await this.request({ method: 'session/deletePreview', params: { session_id: id } }, 'deletion');
+          if (!this.current(generation)) return;
+          this.settleDeletion(id, observed.result);
+          if (!this.state.views[id] || this.state.views[id].deletionRecovery) continue;
+        }
         if (this.state.views[id]?.attachmentIntent === 'wanted') await this.acquireAttachment(id).catch(() => {});
       }
       if (this.current(generation)) this.publish({ connection: 'connected' });
@@ -258,7 +266,7 @@ export class AppServerClient {
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
     this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view, history: undefined, target: undefined, submissions: undefined, inboundRequests: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
+        ...view, ...(view.recoveringDeletion ? { recoveringDeletion: false, deletionRecovery: undefined } : {}), history: undefined, target: undefined, submissions: undefined, inboundRequests: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
       }])),
     });
     oldSocket?.close();
@@ -266,6 +274,7 @@ export class AppServerClient {
   /** Correlation only. No call is ever retried. Every payload is a generated union. */
   async request<T extends MethodResult['type']>(operation: Request1, expected: T): Promise<Extract<MethodResult, { type: T }>> {
     if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new Error('Connect and initialize first.');
+    if ('target' in operation.params && this.state.views[operation.params.target.session_id]?.deleting && !READS.has(operation.method) && operation.method !== 'session/detach') throw new Error('Session deletion has disabled controls. Verify its outcome before continuing.');
     if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new Error('Artifact transfer capacity reached. Retry after current transfers finish.');
     if (this.pending.size >= 64) throw new Error('Client request capacity reached.');
     // Keep uncertain diagnostics finite without silently forgetting unresolved mutations.
@@ -349,7 +358,7 @@ export class AppServerClient {
     if (!sameTarget(view?.target, target)) return;
     if (value.method === 'session/closed') {
       this.retireAttachmentWork(target.session_id);
-      this.setSession(target.session_id, { attachment: 'stale', target: undefined, error: 'Attachment closed by server; reattach to inspect residency.' });
+      this.setSession(target.session_id, { attachment: 'stale', target: undefined, error: view.deleting ? undefined : 'Session connection closed. Open the Session to inspect its current state.' });
     } else {
       if (value.method === 'session/event' && value.params.event.type === 'pending_inbound_changed') {
         void this.rereadPending(target.session_id, () => this.current(generation) && sameTarget(this.state.views[target.session_id]?.target, target));
@@ -379,7 +388,7 @@ export class AppServerClient {
       });
       // Retain ordering fences only for metadata actually cached by this client.
       for (const id of this.summaryReads.keys()) if (!views[id] && !sessions.some(row => row.id === id)) this.summaryReads.delete(id);
-      this.publish({ sessions, sessionResidencies: result.residencies, nextOffset: result.next_offset, views });
+      this.publish({ sessions, nextOffset: result.next_offset, views });
     }
   }
   /** Cached values remain renderable across transport loss. Each attachment
@@ -445,20 +454,57 @@ export class AppServerClient {
   }
   async deleteSession(id: string, expectedRevision: string) {
     const generation = this.state.generation;
-    const result = await this.request({ method: 'session/delete', params: { session_id: id, expected_target_revision: expectedRevision } }, 'deletion');
+    if (this.state.views[id]?.deleting) throw new Error('Session deletion is already pending verification.');
+    this.setSession(id, { deleting: true, error: undefined });
+    const result = await this.request({ method: 'session/delete', params: { session_id: id, expected_target_revision: expectedRevision } }, 'deletion').catch(error => {
+      if (this.current(generation)) this.setSession(id, { error: String(error) });
+      throw error;
+    });
     if (!this.current(generation)) return;
-    if (result.result.status === 'deleted' || result.result.status === 'not_found') {
-      this.retireAttachmentWork(id);
-      this.attachmentEpochs.set(id, (this.attachmentEpochs.get(id) ?? 0) + 1);
-      const views = { ...this.state.views }; delete views[id];
-      this.publish({ views });
-    }
+    this.settleDeletion(id, result.result);
     await this.listSessions();
     if (this.current(generation)) return result.result;
   }
+  /** Explicit recovery requires a committed server observation, never just a lost reply. */
+  async recoverSessionDeletion(id: string) {
+    const view = this.state.views[id];
+    if (!view?.deletionRecovery || view.recoveringDeletion) throw new Error('Observe committed deletion state before recovery.');
+    const generation = this.state.generation;
+    this.setSession(id, { recoveringDeletion: true, error: undefined });
+    try {
+      const response = await this.request({ method: 'session/recoverDeletion', params: { session_id: id } }, 'deletion');
+      if (!this.current(generation)) return;
+      this.settleDeletion(id, response.result);
+      await this.listSessions();
+      if (this.current(generation)) return response.result;
+    } catch (error) {
+      if (this.current(generation)) this.setSession(id, {
+        recoveringDeletion: false, error: String(error),
+        ...(isOutcomeUncertain(error) ? { deletionRecovery: undefined } : {}),
+      });
+      throw error;
+    }
+  }
+  private settleDeletion(id: string, result: RuntimeClientSessionDeletionResult): void {
+    const committed = result.status === 'committed_cleanup_pending' || result.status === 'committed_durability_uncertain';
+    if (committed || result.status === 'deleted' || result.status === 'not_found') {
+      this.retireAttachmentWork(id);
+      this.attachmentEpochs.set(id, (this.attachmentEpochs.get(id) ?? 0) + 1);
+      if (committed) {
+        // Retain only a recovery obligation; this is not a resumable conversation.
+        this.setSession(id, { deleting: true, deletionRecovery: result.status,
+          recoveringDeletion: false, attachmentIntent: 'released', attachment: 'detached', target: undefined, snapshot: undefined, error: undefined });
+      } else {
+        const views = { ...this.state.views }; delete views[id]; this.publish({ views });
+      }
+    } else {
+      this.setSession(id, { deleting: false, deletionRecovery: undefined, recoveringDeletion: false, error: undefined });
+    }
+  }
   /** Explicit Open / Attach gesture. Visibility itself does not acquire a claim. */
   attach(id: string, nodeId?: string, navigationCurrent: () => boolean = () => true): Promise<void> {
-    if (nodeId && this.state.views[id]?.target && this.state.views[id]?.nodeId !== nodeId) return Promise.reject(new Error('Unload the resident Session before opening another node.'));
+    if (nodeId && this.state.views[id]?.target && this.state.views[id]?.nodeId !== nodeId) return Promise.reject(new Error('Use branch switching to open another node.'));
+    if (this.state.views[id]?.deleting) return Promise.reject(new Error('Verify the pending Session deletion before opening it.'));
     this.setSession(id, { attachmentIntent: 'wanted', ...(nodeId ? { nodeId } : {}) });
     return this.acquireAttachment(id, navigationCurrent);
   }
@@ -475,7 +521,7 @@ export class AppServerClient {
   }
   /** Serialize explicit attachment gestures, including close during attach and
    * reopen during release. This queue never retries and cannot cross generations. */
-  private changeAttachment(id: string, kind: 'attach' | 'detach' | 'unload', operation: (generation: number) => Promise<void>): Promise<void> {
+  private changeAttachment(id: string, kind: 'attach' | 'detach' | 'switch', operation: (generation: number) => Promise<void>): Promise<void> {
     const previous = this.attachmentChanges.get(id);
     // A newer Open has its own navigation/admission fence. Queue it behind the
     // preceding Open; if that one attached, the new gesture only refreshes it.
@@ -633,7 +679,7 @@ export class AppServerClient {
   }
   target(id: string) {
     const view = this.state.views[id];
-    if (!this.initialized || view?.attachment !== 'attached' || !view.target) throw new Error('Session is not authoritatively attached. Refresh or reconnect.');
+    if (view?.deleting || !this.initialized || view?.attachment !== 'attached' || !view.target) throw new Error('Session is not authoritatively attached. Refresh or reconnect.');
     return view.target;
   }
   /** Retain an observed tree identity as navigation intent, never infer it from
@@ -757,7 +803,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v7').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v8').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
@@ -821,35 +867,29 @@ export class AppServerClient {
       throw error;
     }
   }
-  /** Explicit detach/unload or closing a view relinquishes future-control intent
-   * immediately. Neither failure nor acknowledgement is allowed to reverse it. */
-  release(id: string, unload: boolean): Promise<void> {
+  /** Closing a view releases only this client relationship. */
+  release(id: string): Promise<void> {
     this.setSession(id, { attachmentIntent: 'released' });
-    return this.changeAttachment(id, unload ? 'unload' : 'detach', generation => this.performRelease(id, unload, generation));
-  }
-  private async performRelease(id: string, unload: boolean, generation: number) {
-    // A close may arrive before attach completes, while stale, or disconnected.
-    // Use an observed target if one exists; never attach just to release it.
-    const target = this.state.views[id]?.target;
-    if (!target) return;
-    const epoch = this.attachmentEpochs.get(id);
-    try {
-      await this.request({ method: unload ? 'session/unload' : 'session/detach', params: { target } }, unload ? 'unloaded' : 'detached');
-    } catch (error) {
-      // Every terminal native unload result retires its route, including errors.
-      // This says nothing about successful shutdown or final residency.
-      if (unload && error instanceof RpcFailure && this.current(generation) && this.attachmentEpochs.get(id) === epoch) {
+    return this.changeAttachment(id, 'detach', async generation => {
+      const target = this.state.views[id]?.target;
+      if (!target) return;
+      const epoch = this.attachmentEpochs.get(id);
+      await this.request({ method: 'session/detach', params: { target } }, 'detached');
+      if (this.current(generation) && this.attachmentEpochs.get(id) === epoch) {
         this.retireAttachmentWork(id);
-        this.setSession(id, { target: undefined, attachment: 'stale', error: String(error) });
+        this.setSession(id, { target: undefined, attachment: 'detached', error: undefined });
       }
-      throw error;
-    }
-    // Native unload may close the attachment before returning its acknowledgement.
-    // A new attach increments the epoch, so this acknowledgement cannot retire it.
-    if (this.current(generation) && this.attachmentEpochs.get(id) === epoch) {
-      this.retireAttachmentWork(id);
-      this.setSession(id, { target: undefined, attachment: unload ? 'unloaded' : 'detached', error: undefined });
-    }
+    });
+  }
+  switchNode(id: string, nodeId: string): Promise<void> {
+    const target = this.target(id);
+    return this.changeAttachment(id, 'switch', async generation => {
+      await this.request({ method: 'session/switchNode', params: { target, node_id: nodeId } }, 'session');
+      if (this.current(generation)) {
+        this.retireAttachmentWork(id);
+        this.setSession(id, { target: undefined, attachment: 'detached', nodeId, error: undefined });
+      }
+    });
   }
   private retireAttachmentWork(id: string) {
     this.previewChecked.delete(id);

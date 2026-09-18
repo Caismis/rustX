@@ -7,7 +7,7 @@ import { createWorkspaceSession, WorkspaceSessionNavigation } from '../workspace
 import { Trajectory } from './Trajectory';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
-import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../../protocol/app-server/v7';
+import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../../protocol/app-server/v8';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { NavigationEpoch } from './commands/native';
 import { available, commands } from './commands/registry';
@@ -64,7 +64,6 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [artifactPreview, setArtifactPreview] = useState<{ artifact: PreviewArtifact; resources: ArtifactResources }>();
   const [theme, setTheme] = useState(readTheme);
   useEffect(() => applyTheme(theme), [theme]);
@@ -92,12 +91,13 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
   const [sending, setSending] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<RuntimeClientSessionDeletePreview>();
 
-  const view = selected ? state.views[selected] : undefined;
+  const selectedView = selected ? state.views[selected] : undefined;
+  const view = selectedView?.deleting && !selectedView.target ? undefined : selectedView;
   const product = deriveSessionProductState(state, view);
   const artifacts = useMemo(() => selected && view?.target ? new ArtifactResources(client, selected) : undefined, [client, selected, view?.target, state.generation]);
   useEffect(() => () => artifacts?.dispose(), [artifacts]);
   const connected = state.connection === 'connected';
-  const attached = connected && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
+  const attached = !view?.deleting && connected && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
   const composerDisabled = !attached || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   const commandOpen = !!command && command.sessionId === selected && command.generation === state.generation && command.current();
   const invokeCommand = (request: CommandRequest | { id: 'new' }) => {
@@ -158,12 +158,12 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
     const remaining = openViews.filter(item => item !== id);
     setOpenViews(remaining);
     if (selected === id) focusSession(remaining[0]);
-    run(() => client.release(id, false));
+    run(() => client.release(id));
   };
   const closeAllViews = () => {
     const closing = [...openViews];
     setOpenViews([]); focusSession();
-    run(() => Promise.all(closing.map(id => client.release(id, false))));
+    run(() => Promise.all(closing.map(id => client.release(id))));
   };
   const createInWorkspace = (id: string) => {
     if (openViews.length >= 32) { setError('32 Session views are open. Close a view from its Sidebar Session actions, or use Sidebar View options → Close all views.'); return; }
@@ -224,26 +224,32 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
     </section>
       </Modal>
       {settingsOpen && <Settings key={view?.id} onConnection={() => setConnectionOpen(true)} client={client} sessionId={view?.id} onClose={() => setSettingsOpen(false)} theme={theme} setTheme={setTheme} />}
-      <Modal open={advancedOpen} title="Advanced Session controls" closeLabel="Close advanced controls" onClose={() => setAdvancedOpen(false)}>
-        <p>Unload this Session only when you need to release its runtime, delete a loaded Session, or open a different history node. Active work may stop. Opening it again resolves current configuration.</p>
-        <Button disabled={!attached} onClick={() => { setAdvancedOpen(false); if (view) run(() => client.release(view.id, true)); }}>Unload runtime</Button>
-      </Modal>
     </>}>
     {!view && <header className="console-header"><strong>rustX</strong><Button aria-label="Toggle Inspector" onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></header>}
+    {Object.values(state.views).filter(item => item.deletionRecovery).map(item => <section key={item.id} className="notice" aria-label={`Deletion recovery for ${sessionDisplayTitle(item.summary)}`}>
+      <p>{sessionDisplayTitle(item.summary)}: {item.deletionRecovery === 'committed_cleanup_pending' ? 'Session removed. Cleanup is still pending.' : 'Deletion durability needs verification.'}</p>
+      <Button disabled={!connected || item.recoveringDeletion} onClick={() => run(async () => {
+        const result = await client.recoverSessionDeletion(item.id);
+        if (result) setError(sessionDeletionNotice(result));
+      })}>{item.recoveringDeletion ? 'Recovering deletion…' : 'Retry deletion recovery'}</Button>
+    </section>)}
     {error && <div className="notice error" role="alert">{error}<Button size="sm" onClick={() => setError('')}>Dismiss notice</Button></div>}
     {state.uncertain.some(item => !item.sessionId) && <div className="notice" role="status">A global operation needs verification. Inspect Global / other Session diagnostics and check the affected work before trying again.</div>}
     {preview && <section className="delete-preview" aria-label="Confirm Session deletion"><h2>Delete {sessionDisplayTitle(state.sessions.find(session => session.id === preview.session_id) ?? state.views[preview.session_id]?.summary)}?</h2>
       <p>This permanently deletes the Session and its saved history.</p>
       <p>Saved conversations: {preview.owned_conversation_count} · History nodes: {preview.owned_node_count} · Child conversations: {preview.owned_child_count}</p>
-      <p>If this Session is in use, review Advanced Session controls before deleting.</p>
-      <div className="row"><Button onClick={() => setPreview(undefined)}>Keep Session</Button><Button variant="primary" disabled={!connected} onClick={() => run(async () => {
+      <p>Any active work will be settled before deletion.</p>
+      <div className="row"><Button onClick={() => setPreview(undefined)}>Keep Session</Button><Button variant="primary" disabled={!connected || !!state.views[preview.session_id]?.deleting} onClick={() => run(async () => {
         const generation = client.getSnapshot().generation;
         const current = navigation.capture();
         const result = await client.deleteSession(preview.session_id, preview.target_revision);
         if (generation !== client.getSnapshot().generation || !result) return;
-        if (result.status === 'deleted' || result.status === 'not_found') {
+        if (result.status === 'deleted' || result.status === 'not_found' || result.status === 'committed_cleanup_pending') {
           const remaining = openViews.filter(id => id !== preview.session_id); setOpenViews(value => value.filter(id => id !== preview.session_id));
-          if (current() && selected === preview.session_id) focusSession(remaining[0]);
+          if (current() && selected === preview.session_id) {
+            const next = remaining[0] ?? client.getSnapshot().sessions.find(session => session.id !== preview.session_id)?.id;
+            if (next) open(next); else focusSession();
+          }
         }
         setError(sessionDeletionNotice(result)); setPreview(undefined);
       })}>Confirm delete</Button></div>
@@ -252,8 +258,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
       <header className={agentCss.header}><div className={`${agentCss.titleRow} agent-title-row`}><div className={agentCss.titleCluster}><strong id="session-title" aria-label="Session title">{sessionDisplayTitle(state.sessions.find(session => session.id === view.id) ?? view.summary)}</strong><small aria-label="Session location" title={view.settings?.cwd}>{view.settings?.cwd ?? 'Location unavailable'}</small></div>
         <div className="row"><Menu open={sessionMenuOpen} onClose={() => setSessionMenuOpen(false)} align="end" autoFocus portal
           anchor={<Button aria-label="Session actions" aria-haspopup="menu" aria-expanded={sessionMenuOpen} onClick={() => setSessionMenuOpen(value => !value)}>•••</Button>}
-          items={[{ id: 'tree', label: 'Session tree', disabled: !attached || commandOpen || !lineageSwitchSafe(view) }, { id: 'advanced', label: 'Advanced Session controls' }]}
-          onSelect={id => { setSessionMenuOpen(false); if (id === 'tree') invokeCommand({ id: 'tree' }); else setAdvancedOpen(true); }} />
+          items={[{ id: 'tree', label: 'Session tree', disabled: !attached || commandOpen || !lineageSwitchSafe(view) }]}
+          onSelect={id => { setSessionMenuOpen(false); if (id === 'tree') invokeCommand({ id: 'tree' }); }} />
           <Button aria-label="Toggle Inspector" aria-expanded={inspectorOpen} onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></div>
       </div>
       <div className={agentCss.tabs} role="tablist" aria-label="Conversation view" onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <Button className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? 'Chat' : 'Trajectory'}</Button>)}</div>

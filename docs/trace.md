@@ -157,7 +157,7 @@ ID, Subagent ID, Workflow run ID and interaction ID, each ending in kind/sequenc
 where applicable. The finite query seam explicitly selects the appropriate index
 and performs one bounded equality/range seek per allowlisted event kind; tests
 inspect `EXPLAIN QUERY PLAN` for the actual reader SQL in both directions.
-SQLite schema 40, native Runtime Client version 39 and App Server version 6 are
+SQLite schema 40, native Runtime Client version 40 and App Server version 8 are
 independent version domains.
 
 ## Truthful timing and bounds

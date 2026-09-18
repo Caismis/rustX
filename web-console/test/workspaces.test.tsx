@@ -35,7 +35,7 @@ it('cold grouping and Workspace selection issue no attach, cancel, unload, setti
   expect(screen.queryByLabelText('Session cwd')).toBeNull();
   expect(screen.queryByRole('button', { name: 'Add Workspace' })).toBeNull();
   expect(host.listWorkspaces).toHaveBeenCalled();
-  expect(server.client.getSnapshot().sessionResidencies).toEqual({ A: 'Unloaded', B: 'Unloaded' });
+  expect(server.client.getSnapshot()).not.toHaveProperty('sessionResidencies');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace A' })));
   expect(screen.getByRole('button', { name: 'Settings' })).toBeTruthy();
   expect(methods()).toEqual(['initialize', 'session/list']);
@@ -102,7 +102,7 @@ it('late metadata searches cannot replace newer results or results after Workspa
   server.handlers.set('session/list', request => {
     if (request.method !== 'session/list') throw new Error('wrong request');
     const id = request.params.query!;
-    return { type: 'sessions', residencies: { [id]: 'Unloaded' }, sessions: [{ id, cwd: '/workspace/A', active_node: `node-${id}`, name: id, updated_at: '0' }] };
+    return { type: 'sessions', sessions: [{ id, cwd: '/workspace/A', active_node: `node-${id}`, name: id, updated_at: '0' }] };
   });
   fireEvent.change(screen.getByLabelText('Search Session metadata'), { target: { value: 'old' } });
   const old = await server.waitFor('session/list', 2);
@@ -128,7 +128,7 @@ it('late cold open cannot restore focus after Workspace navigation', async () =>
   expect(methods()).not.toContain('session/unload'); expect(methods()).not.toContain('turn/cancel');
 });
 it('stale or unloaded snapshots cannot claim running work', () => {
-  const view = { id: 'A', attachmentIntent: 'wanted' as const, attachment: 'unloaded' as const, snapshot: snapshot('A') };
+  const view = { id: 'A', attachmentIntent: 'wanted' as const, attachment: 'stale' as const, snapshot: snapshot('A') };
   expect(sessionObservation({ ...server.client.getSnapshot(), views: { A: view }, connection: 'connected' }, 'A')).toBe('Connection interrupted');
   expect(sessionObservation({ ...server.client.getSnapshot(), views: { A: view }, connection: 'disconnected' }, 'A')).toBe('Connection interrupted');
 });
@@ -218,14 +218,14 @@ it('unauthorized saved views cannot cold attach on initial restoration or reconn
 it('toolbar cold resume and sidebar Fork share admission and refuse an unauthorized current cwd', async () => {
   await mount();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
-  await act(async () => server.client.release('A', true));
+  await act(async () => server.client.release('A'));
   server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
   const baseline = methods().filter(method => method === 'session/attach').length;
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Fork session' })));
   expect(methods().filter(method => method === 'session/attach')).toHaveLength(baseline);
-  expect(methods()).not.toContain('session/fork'); expect(server.loaded.has('A')).toBe(false);
+  expect(methods()).not.toContain('session/fork'); expect(server.loaded.has('A')).toBe(true);
 });
 it.each(['navigation', 'connection'] as const)('late Host authorization cannot attach after superseding %s', async supersession => {
   const host = await mount(), gate = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
@@ -351,7 +351,7 @@ it('classification belongs to exactly the native summary page that requested it'
   const pending = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
   await mount(host);
   host.classifyLocations = vi.fn(() => pending.promise);
-  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [{ id: 'C', name: 'Fresh Session', cwd: '/workspace/B', active_node: 'c', updated_at: '2026-09-18T00:00:00Z' }], residencies: {} }));
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [{ id: 'C', name: 'Fresh Session', cwd: '/workspace/B', active_node: 'c', updated_at: '2026-09-18T00:00:00Z' }], }));
   await act(async () => { await server.client.listSessions(); });
   const groupContaining = () => screen.getByRole('button', { name: 'Open Fresh Session' }).closest('[data-workspace-group]')!.textContent;
   expect(groupContaining()).toContain('Ungrouped Sessions');

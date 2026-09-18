@@ -191,7 +191,7 @@ export class ResumeSelector implements PopupContent {
       if (state.outcome.status === "precommit_failure") {
         this.#state = { kind: "notice", text: "Session deletion failed before logical commit. Review a new preview to try again." };
       } else if (state.outcome.status === "unknown") {
-        this.#state = { kind: "notice", recoveryId: state.sessionId, text: "Deletion outcome unknown. Rechecking native Session visibility; this is not proof of failure. Press R for native recovery." };
+        this.#state = { kind: "notice", text: "Deletion outcome unknown. Reconnect or refresh Session state to verify what happened. The delete will not be replayed." };
       } else void this.#result(state.outcome, state.sessionId);
     }
     this.onChange?.();
@@ -203,6 +203,7 @@ export class ResumeSelector implements PopupContent {
     try {
       const result = await this.#client.previewSessionDeletion(id);
       if (!this.#alive() || serial !== this.#workflowSerial) return;
+      this.#workflow.observeCommitted(result, this.reconciliationContext());
       await this.#result(result, id);
       if (result.status === "not_found") await this.#rebuild(this.#anchor);
     } catch {
@@ -234,8 +235,7 @@ export class ResumeSelector implements PopupContent {
         break;
       case "blocked": {
         const reason = result.reason;
-        const text = reason.kind === "current_session" ? "The active Session cannot be deleted in this version. Switch Sessions or use /new first."
-          : reason.kind === "in_use" ? "The Session or an owned child is currently in use. Release it before trying again."
+        const text = reason.kind === "resource_conflict" ? "An external resource owner prevents deletion. Inspect the ownership conflict before trying again."
           : reason.kind === "workspace" ? `${reason.resource_count} retained workspace resources block deletion. Use the existing workspace/subagent disposal action explicitly first.`
           : "Native ownership could not be validated. The Session remains available; deletion is blocked.";
         this.#state = { kind: "notice", text };

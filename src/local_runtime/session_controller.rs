@@ -298,6 +298,19 @@ impl SessionController {
     ) -> Result<SessionAccess, SessionError> {
         self.catalog.lock().await.acquire_session(id, node)
     }
+    /// Resolve durable identity without taking allocation authority. The runtime
+    /// manager must register its flight before acquiring the selected allocation.
+    pub(crate) async fn resolve_session_target(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+    ) -> Result<SessionNode, SessionError> {
+        self.catalog
+            .lock()
+            .await
+            .lineage(id, node)
+            .map(|(node, _)| node)
+    }
     /// Explicit cold storage recovery for one Session's graph and owned children.
     /// Never performed by opening, listing or reading the catalog.
     /// # Errors
@@ -638,6 +651,8 @@ impl SessionController {
     }
     /// # Errors
     /// A pre-visibility catalog error leaves the Session live.
+    // Durable primitive: production callers must be SessionRuntimeManager after
+    // writer-absence proof. Direct callers in tests isolate catalog durability.
     pub(crate) async fn delete_session(
         &self,
         id: &SessionId,
@@ -649,7 +664,26 @@ impl SessionController {
         };
         Ok(self.clean_deletion(work).await)
     }
-    /// Retry only the existing frozen cleanup record, outside the metadata mutex.
+    /// Confirm an already observed absent identity after a possibly uncertain final rename.
+    /// Session identities are never reused; this grants no cleanup authority.
+    pub(crate) async fn confirm_deletion_absence(
+        &self,
+        id: &SessionId,
+    ) -> super::session::deletion::SessionDeleteResult {
+        use super::session::deletion::SessionDeleteResult;
+        match self.catalog.lock().await.confirm_catalog_durability() {
+            Ok(()) => SessionDeleteResult::NotFound {
+                session_id: id.clone(),
+            },
+            Err(error) => SessionDeleteResult::CommittedDurabilityUncertain {
+                session_id: id.clone(),
+                detail: error.to_string(),
+            },
+        }
+    }
+    /// Retry only an observed frozen cleanup record, outside the metadata mutex.
+    /// Public callers must first reconcile through `SessionRuntimeManager`. A racing
+    /// cleanup may already have finalized that record; recovery confirms absence.
     pub(crate) async fn recover_deletion(
         &self,
         id: &SessionId,
@@ -683,7 +717,7 @@ impl SessionController {
 #[cfg(test)]
 mod tests {
     use super::super::configuration::SessionConfigInput;
-    use super::super::session::deletion::{DeletionBlocker, SessionDeleteResult};
+    use super::super::session::deletion::SessionDeleteResult;
     use super::*;
     fn settings(path: &std::path::Path) -> SessionPersistentState {
         SessionPersistentState::from_input(&SessionConfigInput::new(path.to_path_buf()))
@@ -941,10 +975,7 @@ mod tests {
         let access_b = controller.acquire_session(&b.id, None).await.unwrap();
         assert!(matches!(
             controller.delete_preview(&a.id).await,
-            SessionDeleteResult::Blocked {
-                reason: DeletionBlocker::InUse,
-                ..
-            }
+            SessionDeleteResult::Preview { .. }
         ));
         drop(access_a);
         let SessionDeleteResult::Preview { preview } = controller.delete_preview(&a.id).await
@@ -1143,10 +1174,7 @@ mod tests {
         assert!(!fork.is_finished());
         assert!(matches!(
             controller.delete_preview(&a.id).await,
-            SessionDeleteResult::Blocked {
-                reason: DeletionBlocker::InUse,
-                ..
-            }
+            SessionDeleteResult::Preview { .. }
         ));
         controller
             .rename_session(&b.id, "B during copy")

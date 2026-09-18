@@ -4627,7 +4627,7 @@ The outermost layer exposes the runtime to humans and other systems:
 - Runtime command interface
 - Runtime projection/event streaming
 
-See [App Server protocol v7](app-server-protocol.md) for the method vocabulary,
+See [App Server protocol v8](app-server-protocol.md) for the method vocabulary,
 generated client schemas, connection multiplexing, weak attachment lifetime and
 headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
 local TUI-owned child and WebSocket for browser/remote/existing-server clients;
@@ -4652,7 +4652,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v7
+       App Server protocol v8
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4669,7 +4669,7 @@ point. Neither binding owns domain semantics. The existing `src/protocol` bounda
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
 The following version history describes the local Runtime Client stdio contract,
-which after #290 has no external client: `rustx-tui` speaks App Server v7, and
+which after #290 has no external client: `rustx-tui` speaks App Server v8, and
 `src/runtime_client` is an internal projection foundation the App Server reuses.
 App Server clients never negotiate or nest it. Its local version is
 `RUNTIME_CLIENT_PROTOCOL_VERSION`.
@@ -6933,7 +6933,7 @@ See [Session-owned workspace uploads](session-uploads.md) for receipt admission,
 
 ### Pending inbound mutation and committed claim receipts
 
-The exact pending controls described in [App Server protocol v7](app-server-protocol.md#exact-pending-inbound-controls-web-06)
+The exact pending controls described in [App Server protocol v8](app-server-protocol.md#exact-pending-inbound-controls-web-06)
 remain native `ConversationStore` transitions. Sequence + MessageId identify one
 occurrence, and a monotonic pending revision prevents lost updates. The durable
 mutation transaction and canonical adoption transaction are the only ownership

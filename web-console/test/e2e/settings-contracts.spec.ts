@@ -47,7 +47,7 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
       const form = settings.getByRole('form', { name: owner === 'Root' ? 'Root model' : 'Agent optional', exact: true });
       const save = async () => {
         await form.getByRole('button', { name: owner === 'Root' ? 'Save Root model' : 'Save Agent optional', exact: true }).click();
-        await expect(settings.getByText(/Source saved. The loaded runtime/)).toBeVisible();
+        await expect(settings.getByText(/Source saved. Use Reload/)).toBeVisible();
         await expect(form.getByRole('status')).toHaveText('Source saved. Reload separately to publish configuration.');
       };
       await form.getByRole('combobox', { name: 'Summary model', exact: true }).selectOption('summary-b');
@@ -104,7 +104,7 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
         await form.getByLabel('Working directory').fill(fixture.workspaceA);
       }
       await form.getByRole('button', { name: `Save MCP implicit-${transport}`, exact: true }).click();
-      await expect(settings.getByText(/Source saved. The loaded runtime/)).toBeVisible();
+      await expect(settings.getByText(/Source saved. Use Reload/)).toBeVisible();
       await expect(form.getByRole('status')).toHaveText('Source saved. Reload separately to publish configuration.');
     }
     const mcp = readFileSync(mcpFile, 'utf8');

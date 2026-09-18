@@ -375,7 +375,7 @@ job, and the Web Console has its own frozen-install/typecheck/test/build/browser
 | Approval/Questionnaire disconnect, fresh client and absent-client publication | Pending facts are read from the server, never recovered from a browser Promise/store |
 | Lost create/delete/turn replies | Transmitted side effects stay uncertain and are never replayed |
 | Lost interaction acknowledgement and A/B resolution | No fabricated settlement or blind resend; only the matching Session's authoritative absence removes controls/uncertainty |
-| Explicit detach/unload/cold attach | Lifetime controls issue native operations only on explicit calls |
+| Close view / Open Session | Client relationship changes issue detach/attach; runtime residency is implicit |
 | Close-before-unload reply and same-connection attachment replacement | Native reply order is accepted; old reads and unload acknowledgements cannot retire a newer target |
 | Native unload error | Route is retired without claiming successful shutdown or unloaded residency |
 | Response microtask after disconnect | Old request continuation cannot publish into a new connection |
@@ -1329,3 +1329,13 @@ remains separate from authorization, authorization remains separate from trust,
 and native Session cwd remains the sole durable authority. No Workspace authority
 was added to App Server. The adapter's finite exact roots, single metadata writer,
 and lack of OS sandbox/remote authentication remain its explicit boundaries.
+
+
+## SESSION-01 supersedes historical residency workflows
+
+App Server v8 removes public manual unload and list residency. Earlier recorded
+runs mentioning those operations describe superseded behavior, not current UX.
+Current flows: open/resume implicitly ensures residency; Close view detaches;
+branch switching owns replacement; confirmed deletion owns manager retirement.
+The focused Session can be deleted without switching first. Inspector retains
+attachment/incarnation observations, while server diagnostics own residency.

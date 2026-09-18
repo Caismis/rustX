@@ -170,7 +170,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":7,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":8,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -198,7 +198,7 @@ async fn app_server_websocket_real_process_shared_conformance_and_listener_survi
         replacement.send(INITIALIZE.into()).await.unwrap();
         assert_eq!(
             json_response(&mut replacement).await["result"]["protocol_version"],
-            7
+            8
         );
         kill(
             Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
@@ -224,12 +224,12 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
     bounded(async {
         let f = Fixture::new().await;
         let (mut child, url) = f.ws().await;
-        let old_offer = format!("rustx.app-server.v6, rustx-token.{}", driver::TOKEN);
+        let old_offer = format!("rustx.app-server.v7, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v7"),
+            Some("rustx.app-server.v8"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v7, rustx-token.wrong"),
+            Some("rustx.app-server.v8, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -959,7 +959,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
 }
 
 #[tokio::test]
-async fn app_server_current_sources_persisted_selection_and_targeted_cold_replacement() {
+async fn app_server_current_sources_and_persisted_selection_survive_process_reconstruction() {
     bounded(async {
         use rustx::app_server::protocol::*;
         let Some(provider) =
@@ -1031,24 +1031,8 @@ async fn app_server_current_sources_persisted_selection_and_targeted_cold_replac
         provider.await_gate("session-b-holding").await;
         provider.release_gate("session-a-holding").await;
         let before = settled(&client, &a).await;
-        result(&client, Method::SessionUnload { target: a.clone() }).await;
-        assert_eq!(diagnostics(&client).await.loaded, 1);
-        let Response::Failure(stale) =
-            rpc(&client, 9, Method::TurnCancel { target: a.clone() }).await
-        else {
-            panic!("obsolete target accepted")
-        };
-        assert_eq!(stale.error.data, Some(ErrorData::StaleAttachment));
-        let cold = attach(&client, a.session_id.clone(), 4).await;
-        assert_ne!(cold.runtime_incarnation, a.runtime_incarnation);
-        assert_eq!(cold.conversation_id, a.conversation_id);
-        let after = snapshot(&client, &cold).await;
-        assert!(after["effective_plugins"]["todo"].is_null());
-        assert_eq!(
-            after["model"]["configured"],
-            a_initial["model"]["configured"]
-        );
-        assert_eq!(after["messages"], before["messages"]);
+        // Composition reconstruction is a process-owner operation here. The
+        // internal manager suite proves targeted replacement independently.
         assert_eq!(
             snapshot(&client, &b).await["effective_plugins"],
             b_initial["effective_plugins"]
@@ -1059,7 +1043,22 @@ async fn app_server_current_sources_persisted_selection_and_targeted_cold_replac
         );
         provider.release_gate("session-b-holding").await;
         settled(&client, &b).await;
-        assert_eq!(diagnostics(&client).await.loaded, 2);
+        client.close().await;
+        terminate(&child);
+        assert!(child.wait().await.unwrap().success());
+        let (mut child, url) = f.ws().await;
+        let client = driver::websocket(&url).await;
+        initialize_client(&client).await;
+        let cold = attach(&client, a.session_id.clone(), 4).await;
+        assert_eq!(cold.conversation_id, a.conversation_id);
+        let after = snapshot(&client, &cold).await;
+        assert!(after["effective_plugins"]["todo"].is_null());
+        assert_eq!(
+            after["model"]["configured"],
+            a_initial["model"]["configured"]
+        );
+        assert_eq!(after["messages"], before["messages"]);
+        assert_eq!(diagnostics(&client).await.loaded, 1);
         let MethodResult::Settings {
             settings: persisted,
             ..
@@ -1207,9 +1206,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         source["agent"]["plugins"]["todo"]["enabled"] = false.into();
         std::fs::write(authored, toml::to_string_pretty(&source).unwrap()).unwrap();
         assert_eq!(snapshot(&recovered, &cold).await["effective_plugins"], after["effective_plugins"]);
-        result(&recovered, Method::SessionUnload { target: cold.clone() }).await;
-        let b_fresh = attach(&recovered, cold.session_id.clone(), 13).await;
-        assert_eq!(snapshot(&recovered, &b_fresh).await["model"], after["model"]);
+        assert_eq!(snapshot(&recovered, &cold).await["model"], after["model"]);
         assert_eq!(pb.requests().await.len(), 2, "source edits in A cannot trigger B replay");
         pa.release_gate("host-result").await;
         let completed = settled(&clients[0], &targets[0]).await;

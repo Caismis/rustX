@@ -101,63 +101,6 @@ async fn rejected(connection: &AppServerConnection, method: Method) -> ErrorData
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn failed_unload_reclaims_route_without_notification_polling() {
-    bounded(async {
-        let f = Fixture::new().await;
-        let connection = AppServerConnection::new(f.host.clone());
-        initialize(&connection).await;
-        let old = attach(&connection, &f, 0).await;
-        assert_eq!(connection.attachment_counts(), (1, 0));
-        let identity = f.manager.load(&old.session_id, None).await.unwrap();
-        identity
-            .inspect_runtime()
-            .unwrap()
-            .fail_residency_settlement();
-        assert_eq!(
-            rejected(
-                &connection,
-                Method::SessionUnload {
-                    target: old.clone()
-                }
-            )
-            .await,
-            ErrorData::OperationFailed
-        );
-        assert_eq!(
-            f.manager.residency(&old.conversation_id),
-            super::ResidencyState::Unloading
-        );
-        assert_eq!(connection.attachment_counts(), (0, 0));
-        assert_eq!(
-            rejected(
-                &connection,
-                Method::TurnStart {
-                    target: old,
-                    content: (input("never execute"))
-                        .into_iter()
-                        .map(|block| match block {
-                            crate::message::types::UserContentBlock::Text(text) =>
-                                crate::app_server::protocol::UserInputBlock::Text(text),
-                            _ => panic!("client fixtures must use text or issued receipts"),
-                        })
-                        .collect()
-                }
-            )
-            .await,
-            ErrorData::StaleAttachment
-        );
-        let next = attach(&connection, &f, 1).await;
-        assert_eq!(connection.attachment_counts(), (1, 0));
-        call(&connection, 1, Method::SessionUnload { target: next }).await;
-        assert_eq!(connection.attachment_counts(), (0, 0));
-        assert!(f.provider.request_bodies().is_empty());
-        // Failed native settlement deliberately retains fail-closed residency
-        // until process teardown; connection capacity is independent of it.
-    })
-    .await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn detach_during_unloading_needs_no_operation_lease() {
     bounded(async {
         let f = Fixture::new().await;
@@ -223,7 +166,7 @@ async fn stale_detach_cannot_remove_replacement_route() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn admitted_async_operation_drains_before_unload_releases_resources() {
+async fn admitted_async_operation_drains_before_delete_releases_resources() {
     bounded(async {
         use crate::local_runtime::session::deletion::SessionDeleteResult;
         use std::sync::Arc;
@@ -254,13 +197,16 @@ async fn admitted_async_operation_drains_before_unload_releases_resources() {
         });
         probe.before_operation.entered().await;
         let worker = connection.clone();
-        let unload_target = target.clone();
-        let unload = tokio::spawn(async move {
+        let MethodResult::Deletion { result: crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult::Preview { preview } } =
+            call(&connection, 199, Method::SessionDeletePreview { session_id: target.session_id.clone() }).await else { panic!("preview") };
+        let delete_target = target.clone();
+        let delete = tokio::spawn(async move {
             call(
                 &worker,
                 201,
-                Method::SessionUnload {
-                    target: unload_target,
+                Method::SessionDelete {
+                    session_id: delete_target.session_id,
+                    expected_target_revision: preview.target_revision,
                 },
             )
             .await
@@ -276,9 +222,14 @@ async fn admitted_async_operation_drains_before_unload_releases_resources() {
             super::ResidencyState::Unloading
         );
         assert!(
-            !unload.is_finished(),
+            !delete.is_finished(),
             "unload is waiting on the admitted operation, not the client"
         );
+        assert!(matches!(
+            call(&connection, 202, Method::SessionRecoverDeletion { session_id: target.session_id.clone() }).await,
+            MethodResult::Deletion { result: crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult::Preview { .. } }
+        ));
+        assert!(f.manager.registry.0.lock().unwrap().retiring_sessions.contains(&target.session_id));
         assert!(weak_runtime.upgrade().is_some());
         assert_eq!(
             rejected(
@@ -304,19 +255,18 @@ async fn admitted_async_operation_drains_before_unload_releases_resources() {
             MethodResult::EffectiveConfiguration { .. }
         ));
         assert!(matches!(
-            unload.await.unwrap(),
-            MethodResult::Unloaded { .. }
+            delete.await.unwrap(),
+            MethodResult::Deletion { .. }
         ));
         assert!(weak_host.upgrade().is_none());
         assert!(weak_runtime.upgrade().is_none());
-        assert_eq!(connection.attachment_counts(), (0, 0));
         assert!(f.provider.request_bodies().is_empty());
         assert!(
             matches!(
                 f.manager.sessions.delete_preview(&target.session_id).await,
-                SessionDeleteResult::Preview { .. }
+                SessionDeleteResult::NotFound { .. }
             ),
-            "allocation authority released with all passive client state retained"
+            "deletion committed after all admitted operations drained"
         );
         f.close().await;
     })
@@ -417,7 +367,7 @@ async fn attach_session(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn capacity_rejection_never_composes_and_unload_reclaims_without_notifications() {
+async fn attachment_capacity_rejection_never_composes_and_detach_reclaims_without_notifications() {
     bounded(async {
         let f = Fixture::new().await;
         let connection = AppServerConnection::new_with_attachment_limit_for_test(f.host.clone(), 2);
@@ -455,7 +405,7 @@ async fn capacity_rejection_never_composes_and_unload_reclaims_without_notificat
         assert_eq!(connection.attachment_counts(), (2, 0));
         assert_eq!(f.host.diagnostics().external_attachments, 2);
         for target in targets.drain(..1) {
-            call(&connection, 301, Method::SessionUnload { target }).await;
+            call(&connection, 301, Method::SessionDetach { target }).await;
         }
         assert_eq!(connection.attachment_counts(), (1, 0));
         assert_eq!(f.host.diagnostics().external_attachments, 1);
@@ -474,14 +424,14 @@ async fn capacity_rejection_never_composes_and_unload_reclaims_without_notificat
         );
         assert!(f.provider.request_bodies().is_empty());
         for target in targets {
-            call(&connection, 302, Method::SessionUnload { target }).await;
+            call(&connection, 302, Method::SessionDetach { target }).await;
         }
         assert_eq!(connection.attachment_counts(), (0, 0));
         assert_eq!(f.host.diagnostics().external_attachments, 0);
         for session in &sessions {
             assert_eq!(
                 f.manager.residency(&session.active_conversation_id),
-                super::ResidencyState::Unloaded
+                super::ResidencyState::Loaded
             );
         }
         connection.close();
@@ -614,7 +564,7 @@ async fn cancelled_attach_releases_reservation_but_not_manager_owned_load() {
             flight.clone()
         };
         probe.before_compose.release();
-        let resident = flight.wait().await.unwrap().unwrap();
+        let resident = flight.wait().await.operation_result().unwrap().unwrap();
         assert_eq!(
             f.manager.residency(resident.conversation_id()),
             super::ResidencyState::Loaded
@@ -700,10 +650,10 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let connection = AppServerConnection::new(f.host.clone());
         let before = connection.handle_json(r#"{"jsonrpc":"2.0","id":0,"method":"server/info","params":{}}"#).await.unwrap();
         assert!(matches!(before, Response::Failure(Failure { error: RpcError { data: Some(ErrorData::NotInitialized), .. }, .. })));
-        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":6,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
+        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":7,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 7, requested: 6 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 8, requested: 7 })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -745,11 +695,7 @@ async fn durable_session_operations_never_compose_a_runtime() {
             panic!("create");
         };
         let id = session.id;
-        let MethodResult::Sessions {
-            sessions,
-            residencies,
-            ..
-        } = call(
+        let MethodResult::Sessions { sessions, .. } = call(
             &connection,
             110,
             Method::SessionList {
@@ -766,7 +712,6 @@ async fn durable_session_operations_never_compose_a_runtime() {
             sessions.iter().find(|row| row.id == id).unwrap().cwd,
             f.workspaces[0]
         );
-        assert_eq!(residencies.get(&id), Some(&super::ResidencyState::Unloaded));
         let residency_before = f.manager.diagnostics();
         let MethodResult::SessionSummary { summary } = call(
             &connection,
@@ -1418,12 +1363,12 @@ async fn attach_snapshot_and_subscription_share_the_publication_cut() {
         call(
             &connection,
             82,
-            Method::SessionUnload {
+            Method::SessionDetach {
                 target: target.clone(),
             },
         )
         .await;
-        let replacement = f.manager.load(&target.session_id, None).await.unwrap();
+        let replacement = f.manager.replace(&target.session_id, None).await.unwrap();
         assert!(
             f.manager
                 .unload_incarnation(&target.conversation_id, target.runtime_incarnation)
@@ -1697,7 +1642,7 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
         call(
             &connection,
             802,
-            Method::SessionUnload {
+            Method::SessionDetach {
                 target: target.clone(),
             },
         )
@@ -2876,6 +2821,65 @@ async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_o
         assert!(projection.root_agent.tools.sources.is_empty());
         assert!(f.provider.request_bodies().is_empty());
         connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn another_connection_deletes_an_attached_idle_session_and_closes_its_route() {
+    bounded(async {
+        use crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult as Deleted;
+        let f = Fixture::new().await;
+        let viewer = AppServerConnection::new(f.host.clone());
+        let deleter = AppServerConnection::new(f.host.clone());
+        initialize(&viewer).await;
+        initialize(&deleter).await;
+        let target = attach(&viewer, &f, 0).await;
+        let MethodResult::Deletion {
+            result: Deleted::Preview { preview },
+        } = call(
+            &deleter,
+            900,
+            Method::SessionDeletePreview {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("attached preview")
+        };
+        let result = call(
+            &deleter,
+            901,
+            Method::SessionDelete {
+                session_id: target.session_id.clone(),
+                expected_target_revision: preview.target_revision,
+            },
+        )
+        .await;
+        assert!(matches!(
+            result,
+            MethodResult::Deletion {
+                result: Deleted::Deleted { .. }
+            }
+        ));
+        assert!(
+            !f.manager
+                .is_current(&target.conversation_id, target.runtime_incarnation)
+        );
+        assert!(f.manager.load(&target.session_id, None).await.is_err());
+        loop {
+            let notice = viewer.next_notification().await;
+            if matches!(notice.notification, NotificationMethod::Closed { .. }) {
+                break;
+            }
+        }
+        assert_eq!(viewer.attachment_counts(), (0, 0));
+        assert_eq!(
+            rejected(&viewer, Method::TurnCancel { target }).await,
+            ErrorData::StaleAttachment
+        );
         f.close().await;
     })
     .await;

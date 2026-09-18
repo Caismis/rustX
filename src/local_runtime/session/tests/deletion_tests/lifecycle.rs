@@ -57,7 +57,7 @@ fn deletion_preview_releases_guards_execute_reacquires_and_rejects_stale() {
             .commit_delete(&preview.session_id, &preview.target_revision)
             .unwrap(),
         Err(SessionDeleteResult::Blocked {
-            reason: DeletionBlocker::InUse,
+            reason: DeletionBlocker::ResourceConflict,
             ..
         })
     ));
@@ -389,41 +389,34 @@ fn deletion_rust_types_roundtrip_every_shared_protocol_result_and_reject_paths()
         assert_eq!(serde_json::to_value(result).unwrap(), fixture);
     }
     assert_eq!(statuses.len(), 7);
-    for request in [
-        RuntimeClientRequest::SessionDeletePreview {
-            id: RequestId::new(1),
-            session_id: crate::local_runtime::SessionId::new(
-                "ses_01900000-0000-7000-8000-000000000001",
-            ),
-        },
-        RuntimeClientRequest::SessionDelete {
-            id: RequestId::new(2),
-            session_id: crate::local_runtime::SessionId::new(
-                "ses_01900000-0000-7000-8000-000000000001",
-            ),
-            expected_target_revision: "a".repeat(64),
-        },
-        RuntimeClientRequest::SessionDeleteRecover {
-            id: RequestId::new(3),
-            session_id: crate::local_runtime::SessionId::new(
-                "ses_01900000-0000-7000-8000-000000000001",
-            ),
-        },
-    ] {
-        assert!(request.requires_async());
-        assert!(request.session_request().is_some());
-        assert_eq!(
-            request.is_mutating(),
-            request.method() != "session_delete_preview"
+    for method in ["session_delete", "session_delete_recover"] {
+        let mut request = serde_json::json!({
+            "method": method, "id": 1, "session_id": "ses_01900000-0000-7000-8000-000000000001"
+        });
+        if method == "session_delete" {
+            request["expected_target_revision"] = serde_json::json!("a".repeat(64));
+        }
+        assert!(
+            serde_json::from_value::<RuntimeClientRequest>(request).is_err(),
+            "obsolete native mutation must have no dispatch path"
         );
-        let mut value = serde_json::to_value(&request).unwrap();
-        assert_eq!(
-            serde_json::from_value::<RuntimeClientRequest>(value.clone()).unwrap(),
-            request
-        );
-        value["path"] = serde_json::json!("/untrusted");
-        assert!(serde_json::from_value::<RuntimeClientRequest>(value).is_err());
     }
+    let request = RuntimeClientRequest::SessionDeletePreview {
+        id: RequestId::new(1),
+        session_id: crate::local_runtime::SessionId::new(
+            "ses_01900000-0000-7000-8000-000000000001",
+        ),
+    };
+    assert!(request.requires_async());
+    assert!(request.session_request().is_some());
+    assert!(!request.is_mutating());
+    let mut value = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        serde_json::from_value::<RuntimeClientRequest>(value.clone()).unwrap(),
+        request
+    );
+    value["path"] = serde_json::json!("/untrusted");
+    assert!(serde_json::from_value::<RuntimeClientRequest>(value).is_err());
 }
 
 #[test]
@@ -772,7 +765,7 @@ fn deletion_live_ownership_cannot_claim_a_pending_frozen_child() {
     let store = store_for(&catalog, &active.id, &active.active_conversation_id);
     store.append_event(event).unwrap();
     drop(store);
-    let error = SessionDeletionPreflight::acquire(dir.path(), &active.id).unwrap_err();
+    let error = DeletionTargetSnapshot::inspect(dir.path(), &active.id).unwrap_err();
     assert!(error.to_string().contains("deleted Conversation identity"));
     assert_eq!(
         catalog.document.deletions[&preview.session_id].scopes,
@@ -1003,23 +996,15 @@ fn deletion_allocator_watermarks_advance_past_skipped_orphan_ids() {
 
 #[tokio::test]
 async fn deletion_stale_control_response_requires_a_new_preview_token() {
-    use crate::local_runtime::supervisor::LocalSessionAttachment;
-    use crate::runtime_client::host::RuntimeClientSessionControl;
+    // Deliberate durable-owner test: no live product runtime or mutation API.
+    use crate::local_runtime::session_controller::SessionController;
+    use crate::local_runtime::supervisor::project_session_deletion;
     use crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult as Wire;
-    use crate::runtime_client::types::{
-        RuntimeClientResult, RuntimeClientSessionRequest as Request,
-    };
     let (dir, catalog, initial) = fixture();
     let view = catalog.clone();
-    let supervisor = LocalSessionAttachment::new(catalog, initial.session_id.clone(), state(), 0);
-    let RuntimeClientResult::SessionDeletion {
-        result: Wire::Preview { preview: first },
-    } = supervisor
-        .handle(Request::DeletePreview {
-            session_id: initial.session_id.clone(),
-        })
-        .await
-        .unwrap()
+    let controller = SessionController::new(catalog);
+    let Wire::Preview { preview: first } =
+        project_session_deletion(controller.delete_preview(&initial.session_id).await)
     else {
         panic!("preview A")
     };
@@ -1027,49 +1012,34 @@ async fn deletion_stale_control_response_requires_a_new_preview_token() {
     let store = store_for(&view, &source.id, &source.active_conversation_id);
     child(dir.path(), &store, 2, false);
     drop(store);
-    // Real public Session-control calls: repeated execute(A) never returns B.
     for _ in 0..2 {
-        let RuntimeClientResult::SessionDeletion { result } = supervisor
-            .handle(Request::Delete {
-                session_id: source.id.clone(),
-                expected_target_revision: first.target_revision.clone(),
-            })
-            .await
-            .unwrap()
-        else {
-            panic!("deletion result")
-        };
-        let serialized = serde_json::to_value(result).unwrap();
+        let result = project_session_deletion(
+            controller
+                .delete_session(&source.id, &first.target_revision)
+                .await
+                .unwrap(),
+        );
         assert_eq!(
-            serialized,
-            serde_json::json!({"status": "stale", "session_id": source.id.as_str()})
+            serde_json::to_value(result).unwrap(),
+            serde_json::json!({"status":"stale", "session_id":source.id.as_str()})
         );
         assert!(reopen_catalog(dir.path()).document.deletions.is_empty());
     }
-    let RuntimeClientResult::SessionDeletion {
-        result: Wire::Preview { preview: fresh },
-    } = supervisor
-        .handle(Request::DeletePreview {
-            session_id: source.id.clone(),
-        })
-        .await
-        .unwrap()
+    let Wire::Preview { preview: fresh } =
+        project_session_deletion(controller.delete_preview(&source.id).await)
     else {
-        panic!("new preview B")
+        panic!("preview B")
     };
     assert_ne!(fresh.target_revision, first.target_revision);
     assert_eq!(fresh.owned_child_count, first.owned_child_count + 1);
     assert!(matches!(
-        supervisor
-            .handle(Request::Delete {
-                session_id: source.id.clone(),
-                expected_target_revision: fresh.target_revision,
-            })
-            .await
-            .unwrap(),
-        RuntimeClientResult::SessionDeletion {
-            result: Wire::Deleted { .. }
-        }
+        project_session_deletion(
+            controller
+                .delete_session(&source.id, &fresh.target_revision)
+                .await
+                .unwrap()
+        ),
+        Wire::Deleted { .. }
     ));
     assert_completed_absent(dir.path(), &source.id);
 }

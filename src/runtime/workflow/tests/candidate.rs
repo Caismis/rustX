@@ -628,7 +628,7 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
         .unwrap()
         .initialize(&[])
         .unwrap();
-    let target = crate::local_runtime::session_deletion::SessionDeletionPreflight::acquire(
+    let target = crate::local_runtime::session_deletion::DeletionTargetSnapshot::inspect(
         &plane.runtime_root,
         &session,
     )
