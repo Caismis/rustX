@@ -1,6 +1,6 @@
 # WEB-RESET-03 acceptance record
 
-Initial acceptance recorded 2026-09-18. Final repair validation is recorded separately below. Architecture: [Settings and native surfaces](SETTINGS-ARCHITECTURE.md).
+Final repair validation recorded 2026-09-18. Architecture: [Settings and native surfaces](SETTINGS-ARCHITECTURE.md).
 
 ## Repository and prerequisite
 
@@ -8,25 +8,28 @@ Initial acceptance recorded 2026-09-18. Final repair validation is recorded sepa
   `204f7ccc8fbaf4bc1b6842e02e8d0d68f19d5837`; left unchanged.
 - Isolated worktree: `/home/caismis/Documents/codes/rustX-issue-347`, branch
   `issue-347-harness-native`.
-- Fetched main/base: `146fa10f44ead5e70bd5584d1a2c6bc7cc81754f` (#349).
-- Reviewed full #347, merged #348/#349/#333, current generated schema, native
-  configuration/resource owners, client/recovery tests, provenance and all open PRs.
-- #352 remained the only open overlapping PR, at
-  `3d675b06ef6d174bbd84ff09f9903ac889d87116`. Its exact head is incorporated by
-  merge `77de2840`, preserving #349's deletion of the old Conversation component
-  and moving Goal Tool display labels into the current binding/ToolCard contract.
-  Native Goal changes in the branch come from this prerequisite, not a second
-  #347 lifecycle implementation. This PR depends on #352; if that head changes or
-  lands by squash, reconcile its resulting main history before merge.
-- The only additional Rust semantics introduced for #347 are the missing Root
-  identity/description source-mutation units through the existing native writer.
+- Initial review base: `146fa10f44ead5e70bd5584d1a2c6bc7cc81754f` (#349).
+- Final main/base: `58ec906aaaca314a2ed6db2f2d2adfbed6aa37ac`, the merge of #352.
+- #352 was reconciled independently from its published head, preserving the
+  Harness Agent architecture. Its final head `606d2e839886ca96df2035a104cbdf2a58d9f873`
+  passed all seven CI lanes and was merged before the final #357 rebase.
+  The unrelated dirty `/home/caismis/Documents/codes/rustX-issue-351` worktree
+  was left untouched.
+- #357 was rebuilt from its #347 commits onto that main. The old Goal merge and
+  duplicate Goal redesign are absent from the PR diff. GoalPhase and its Tool
+  display binding now come from main; no Goal runtime/lifecycle authority is
+  introduced here.
+- Native #347 changes are Root identity/description source units, plus acceptance
+  of the schema's omitted Agent text defaults while preserving native byte bounds.
+  Generated protocol changes belong to the Root units, not the Goal redesign.
 
 ## Validation commands and results
 
-Commands below ran in the isolated worktree. The host is Linux x86_64, Node
-24.20.0, pnpm 11.13.1, rustc 1.95.0. Rust used the existing build cache via
-`CARGO_TARGET_DIR=/home/caismis/Documents/codes/rustX/target`; an ignored `target`
-symlink lets the existing browser fixtures locate those binaries.
+The full matrix below passed **after** rebasing onto main `58ec906a`. Linux
+x86_64, Node 24.20.0, pnpm 11.13.1; Rust commands used
+`RUSTUP_TOOLCHAIN=1.98.1` to match CI. The existing native build cache is exposed
+through the ignored `target` symlink. Browser execution uses the repository's
+real App Server, Product Host and mandatory provider emulator.
 
 | Directory | Command | Result |
 | --- | --- | --- |
@@ -34,21 +37,16 @@ symlink lets the existing browser fixtures locate those binaries.
 | web-console | `corepack install` | Pass |
 | web-console | `pnpm install --frozen-lockfile` | Pass |
 | web-console | `pnpm typecheck` | Pass |
-| web-console | `pnpm test` | 327 passed, 25 files |
+| web-console | `pnpm test` | 340 passed, 25 files |
 | web-console | `pnpm check:provenance` | 103 source records and 100 production-package notices verified |
-| web-console | `node scripts/provenance.ts --reference /tmp/rustx-345-harness` | Pass against clean pinned upstream checkout |
-| web-console | `pnpm build` | Pass, source/license artifact check included |
-| web-console | `CONTAINER_ENGINE=podman pnpm test:e2e:update` | 4 reference suites passed; six new Settings references and four updated shell references reviewed |
-| web-console | `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh accessibility.spec.ts commands.spec.ts console.spec.ts settings.spec.ts uploads.spec.ts workflow.spec.ts chat.spec.ts` | 10 passed |
-| web-console | `CONTAINER_ENGINE=podman pnpm test:e2e` | 19 passed against the real App Server/provider emulator/Product Host; repeated after the clean-removal CAS fix |
-| web-console | `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh settings.spec.ts integrations.spec.ts workflow.spec.ts` | 3 passed with additional real-server review captures |
-| web-console | `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh composer.spec.ts` | 1 passed with responsive-layout evidence synchronization |
+| web-console | `node scripts/provenance.ts --reference /tmp/rustx-345-harness` | Pass against the clean pinned upstream checkout |
+| web-console | `pnpm build` | Pass, artifact provenance included |
+| web-console | `CONTAINER_ENGINE=podman pnpm test:e2e` | 20 passed; unchanged screenshot references pass |
 | protocol/app-server | `pnpm install --frozen-lockfile` | Pass |
-| protocol/app-server | `pnpm generate` | Pass; Rust-owned schema and generated TypeScript regenerated |
-| protocol/app-server | `pnpm check` | Pass; no generated schema/type/fixture drift |
+| protocol/app-server | `pnpm check` | Pass; invokes native generation, no schema/type/fixture drift |
 | protocol/app-server | `pnpm typecheck` | Pass |
 | dev | `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test` | Pass; 30 tests |
-| tui | `pnpm install --frozen-lockfile`, `pnpm typecheck`, `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | Pass; 778 tests |
+| tui | `pnpm install --frozen-lockfile`, `pnpm typecheck`, `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | Pass; 788 tests |
 | test-support/fake-provider | `uv sync --frozen`, `uv run --frozen pytest` | Pass; 51 tests |
 | repository | `cargo fmt --all -- --check` | Pass |
 | repository | `cargo clippy --all-targets --all-features -- -D warnings` | Pass |
@@ -56,24 +54,30 @@ symlink lets the existing browser fixtures locate those binaries.
 | repository | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2,853 passed; 1 existing ignored test |
 | repository | `cargo test --test contracts --test provider --all-features` | 27 + 166 passed; 5 existing opt-in live tests ignored |
 | repository | `cargo test --lib --all-features -- boundary_suites::` | 226 passed |
-| repository | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | 422 passed across all seven targets |
+| repository | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | 423 passed across all seven targets |
 | repository | `git diff --check` | Pass |
 
-The full native Linux CI commands above ran after the #352 reconciliation. No
-native source changed afterward. macOS execution belongs to its separate CI
-runner; this Linux host does not claim a macOS result. Existing Vite chunk-size
-and Node color-environment advisories are non-failing. No failure was waived.
+Focused repair commands also passed: `pnpm exec vitest run
+test/settings-units.test.tsx test/settings.test.tsx test/integrations.test.tsx`
+(44 cases), `cargo test --test cfg3_catalog named_agent` (3 cases), and
+`CONTAINER_ENGINE=podman bash scripts/browser-tests.sh settings-contracts.spec.ts`
+(1 real-server test). Full Rust/Web suites also passed on the reconstructed tree
+before the final rebase; those earlier runs are not substituted for the matrix above.
 
-During development, TypeScript caught a fixture missing native origin `base` and
-Testing Library options that belonged to Playwright; both were corrected. The
-first full browser run had nine failures from outdated textarea/Tab-order/raw
-Inspector assertions and duplicate diagnostic text rendering. The Inspector now
-has a readable native summary with explicitly disclosed JSON diagnostics; tests
-open that disclosure and preserve the same incarnation/lineage/interaction
-assertions. Scope tests use standard arrow-key tab navigation. All failed cases
-passed in the focused run and subsequent complete runs. Visual review also caught
-captures during transitions; evidence now waits for actual responsive geometry,
-with reduced motion and no ordering sleeps.
+Initial development browser runs exposed a label locator problem and the native
+non-empty Agent text check that contradicted the schema. Both were corrected;
+the new role-based browser flow and all final suites pass. An accidentally restarted
+browser runner was stopped and its port collision cleared before rerunning. The
+new #352 worktree's first Web typecheck required installing its TUI dependencies;
+its rerun passed. No semantic failure was waived. Vite's existing chunk-size and
+Node's color-environment advisories remain non-failing.
+
+#352 independently passed the same CI-equivalent local lanes, plus all seven
+GitHub CI jobs at its final head before merge. Its local counts were 301 Web,
+18 browser, 788 TUI, 2,852 Rust unit, 27 + 166 contract/provider, 226 in-crate and
+422 external boundary tests. The final rebased #357 CI status is linked from
+[PR #357](https://github.com/Caismis/rustX/pull/357), including macOS execution;
+this Linux host does not claim to execute macOS locally.
 
 ## Deterministic contract coverage
 
@@ -179,6 +183,6 @@ generated schema change is needed. Deterministic regressions now include:
   followed by explicit native publication. The new controls were manually reviewed
   in the real-server [Summary editor capture](../docs/images/web-reset-347/summary-model-complete.png).
 
-Final Git topology and validation results will be recorded after prerequisite
-reconciliation and the final rebase. The command table above records the original
-implementation run, not evidence for the final rebased head.
+Final self-review confirms no broad Goal runtime/protocol redesign remains in
+#357, no generated source was hand-edited, no browser configuration authority was
+introduced, and all four review findings have explicit regression coverage.

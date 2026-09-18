@@ -328,3 +328,9 @@ Every changed derived destination has an explicit treatment update and local has
 Upstream hashes remain immutable. Normal checks/builds read checked-in source only;
 `node scripts/provenance.ts --reference /tmp/rustx-345-harness` additionally audits
 against the clean pinned external checkout. No upstream synchronization was added.
+
+The PR #357 review repair keeps the same pins. `Settings.tsx` records symmetric
+read-result/error fencing, and `Integrations.tsx` records the new pure rustX MCP
+transport display adapter. Their reviewed local hashes/imports were updated
+explicitly. Shared Summary controls in `AgentEditor.tsx` and `bindings/mcp.ts`
+are rustX-authored; no additional Harness source or business authority was imported.
