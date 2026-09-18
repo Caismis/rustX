@@ -1,6 +1,6 @@
 # WEB-RESET-03 acceptance record
 
-Recorded 2026-09-18. Architecture: [Settings and native surfaces](SETTINGS-ARCHITECTURE.md).
+Initial acceptance recorded 2026-09-18. Final repair validation is recorded separately below. Architecture: [Settings and native surfaces](SETTINGS-ARCHITECTURE.md).
 
 ## Repository and prerequisite
 
@@ -80,7 +80,8 @@ with reduced motion and no ordering sleeps.
 - Effective/User/Workspace, read-only Effective, native provenance and published
   generation; User-only/restart-required process policy.
 - Complete Provider/Model create, edit, remove, redaction, reasoning profiles,
-  native request parameters, compatibility fields and Root model selection.
+  native request parameters, compatibility fields and primary Root model selection.
+  The review repair below adds the previously missing nested Summary contract.
 - Independent Root native/MCP/Python selections, all/none/exact, omission versus
   empty replacement, guidance, Skills, closed Plugins and delegation allowlists.
 - Complete independent Agent resource replacement, model inheritance, guidance,
@@ -92,7 +93,8 @@ with reduced motion and no ordering sleeps.
 - Save leaves the old generation published; Reload publishes coherent native
   state; failed/busy Reload retains old state. Lost Save/Reload replies and
   reconnect reread without replay. Deterministic overlapping-read tests prevent
-  obsolete observations from replacing newer reads/write acknowledgements.
+  obsolete successful observations from replacing newer reads/write acknowledgements.
+  The review repair also covers obsolete read rejections.
 - Native GoalPhase/Todo/Queue controls, current Subagent/Workflow/background
   projection, Trace history, managed artifact bounds/fences/URL cleanup, inert
   text preview and browser-local appearance.
@@ -146,3 +148,37 @@ one token/theme system and no old/new mode.
 The native authoring API has no Workflow-program, Skill-package or Python-source
 write operation. Their inventory/diagnostics and supported Root selection are
 implemented; no speculative editor, marketplace or lifecycle authority was added.
+
+## PR #357 review repair
+
+The repair preserves the Harness shell and native CFG3 ownership. Real-server
+validation exposed a native mismatch: the schema defaults omitted Agent text to
+empty, but definition construction rejected it. That native check now accepts
+the schema defaults while retaining byte bounds and all other validation. No
+generated schema change is needed. Deterministic regressions now include:
+
+- `settings-units.test.tsx`: both Root and named-Agent Summary identity changes
+  retain a named reasoning profile, explicit output limit and request params in the
+  exact replacement mutation. Nested edits, catalog defaults, intentional Session
+  replacement and returning to a minimally authored explicit selection are covered.
+- `integrations.test.tsx`: implicit HTTP and stdio project truthfully; opening
+  writes nothing. Ordinary edits retain headers/environment and omitted type;
+  intentional transport switching replaces the shape and clears old retained keys.
+  Pure helper coverage includes explicit-type precedence and empty editor state.
+- `settings-units.test.tsx`: omitted description, omitted instructions and both
+  omitted allow a valid form submission when Tools change; the exact complete
+  mutation does not fabricate missing text fields.
+- `settings.test.tsx`: deferred rejections from both effect reads and manual refresh
+  reads arrive after either a newer refresh or a successful write acknowledgement.
+  In all four cases, current data/revision survive and no stale alert commits.
+- `tests/cfg3_catalog.rs`: omitted Agent text remains valid through native discovery,
+  exact-revision complete-profile Tool edits and source rereads. Oversized profile
+  text still fails before any file is committed.
+- `settings-contracts.spec.ts`: real App Server Summary round trips for Root and
+  named Agents, optional Agent text, implicit MCP transport and retained secrets,
+  followed by explicit native publication. The new controls were manually reviewed
+  in the real-server [Summary editor capture](../docs/images/web-reset-347/summary-model-complete.png).
+
+Final Git topology and validation results will be recorded after prerequisite
+reconciliation and the final rebase. The command table above records the original
+implementation run, not evidence for the final rebased head.

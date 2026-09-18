@@ -52,15 +52,20 @@ function SettingsContent({ client, sessionId, onClose = () => {}, theme = 'light
     ]);
     return { source: authored.projection, effective: published?.projection };
   }, [client, sessionId, target]);
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (reportFailure = false) => {
     const at = epoch.current, sequence = ++readSequence.current;
-    const next = await read();
-    if (at === epoch.current && sequence === readSequence.current) { setSource(next.source); setEffective(next.effective); }
-    return next;
+    try {
+      const next = await read();
+      if (at === epoch.current && sequence === readSequence.current) { setSource(next.source); setEffective(next.effective); }
+      return next;
+    } catch (cause) {
+      if (reportFailure && at === epoch.current && sequence === readSequence.current) setError(nativeDiagnostic(cause));
+      throw cause;
+    }
   }, [read]);
   useEffect(() => {
     const at = ++epoch.current, sequence = ++readSequence.current;
-    void read().then(next => { if (epoch.current === at && sequence === readSequence.current) { setSource(next.source); setEffective(next.effective); } }).catch(cause => { if (epoch.current === at) setError(nativeDiagnostic(cause)); });
+    void read().then(next => { if (epoch.current === at && sequence === readSequence.current) { setSource(next.source); setEffective(next.effective); } }).catch(cause => { if (epoch.current === at && sequence === readSequence.current) setError(nativeDiagnostic(cause)); });
     return () => { ++epoch.current; };
   }, [read, transport.generation]);
   const save: SaveSource = async (mutation, expected_revision) => {
@@ -105,12 +110,12 @@ function SettingsContent({ client, sessionId, onClose = () => {}, theme = 'light
   };
   const frame = (children: import('react').ReactNode) => <SettingsPanel rows={[{ id: 'appearance', label: 'Appearance' }, ...sections.map(([id, label, group]) => ({ id, label, group }))]} activeId={section} onSelect={id => setSection(id as Section)} onClose={onClose} actions={onConnection && <Button onClick={onConnection}>Connection</Button>}>{children}</SettingsPanel>;
   if (section === 'appearance') return frame(<section className={css.settings}><h2>Appearance</h2><p className={css.hint}>Presentation preferences are saved in this browser. Runtime configuration remains native.</p><label>Theme<select aria-label="Theme" value={theme} onChange={event => setTheme?.(event.target.value as 'light' | 'dark')}><option value="light">Light</option><option value="dark">Dark</option></select></label></section>);
-  if (!source) return frame(<section className={css.settings} aria-label="Settings">{error ? <p role="alert">{error}</p> : <p role="status">{sessionId ? 'Loading configuration…' : 'Open a Session to inspect its native configuration.'}</p>}<Button onClick={() => void refresh().catch(cause => setError(nativeDiagnostic(cause)))}>Read current sources</Button></section>);
+  if (!source) return frame(<section className={css.settings} aria-label="Settings">{error ? <p role="alert">{error}</p> : <p role="status">{sessionId ? 'Loading configuration…' : 'Open a Session to inspect its native configuration.'}</p>}<Button onClick={() => void refresh(true).catch(() => { /* Current failures are reported inside the read fence. */ })}>Read current sources</Button></section>);
   const selected = scope === 'effective' ? undefined : source[scope];
   const models = [...new Set([...Object.keys(effective?.document.models ?? {}), ...Object.keys(source.user.authored?.models ?? {}), ...Object.keys(source.workspace.authored?.models ?? {})])];
   const roots = [`${source.user_resource_root}/skills`, `${source.workspace_resource_root}/skills`];
   return frame(<section className={css.settings} aria-label="Settings" aria-busy={busy}>
-    <header><h2>{sections.find(([id]) => id === section)?.[1]}</h2><Button disabled={busy} onClick={() => void refresh().catch(cause => setError(nativeDiagnostic(cause)))}>Read current sources</Button></header>
+    <header><h2>{sections.find(([id]) => id === section)?.[1]}</h2><Button disabled={busy} onClick={() => void refresh(true).catch(() => { /* Current failures are reported inside the read fence. */ })}>Read current sources</Button></header>
     <div role="tablist" aria-label="Configuration scope" className={css.tabs} onKeyDown={navigateTabs}>{(['effective', 'user', 'workspace'] as const).map(value => <button key={value} role="tab" tabIndex={scope === value ? 0 : -1} aria-selected={scope === value} onClick={() => setScope(value)}>{value[0].toUpperCase() + value.slice(1)}</button>)}</div>
       <div className={css.content}>
         <div className={css.generation}><span>Runtime generation {effective?.generation ?? source.loaded?.generation ?? 'not loaded'} · {source.loaded?.pending_reload ? 'Pending reload' : 'Sources unchanged'}</span><Button variant="primary" disabled={busy || !target} onClick={() => void reload()}>Reload</Button></div>

@@ -6,6 +6,7 @@ import { RootEditor } from '../src/app/settings/RootEditor';
 import { RuntimeEditor } from '../src/app/settings/RuntimeEditor';
 import { AgentEditor } from '../src/app/settings/AgentEditor';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
+import type { ModelLayer } from '../../protocol/app-server/v6';
 import type { SaveSource } from '../src/app/settings/controls';
 afterEach(cleanup);
 const save = () => vi.fn<SaveSource>().mockResolvedValue(undefined);
@@ -85,4 +86,53 @@ it('replaces Root model intent and project guidance as independent native units'
   fireEvent.change(guidance.getByRole('textbox', { name: 'Guidance files 1' }), { target: { value: 'REVIEW.md' } });
   fireEvent.click(guidance.getByRole('button', { name: 'Save Project guidance' }));
   await waitFor(() => expect(write.mock.calls.at(-1)?.[0]).toMatchObject({ mutation: { authored: { inherit: false, files: ['REVIEW.md'] } } }));
+});
+it.each(['Root', 'named Agent'] as const)('%s preserves and edits the complete explicit Summary Model independently', async owner => {
+  const write = save();
+  const summary = { mode: 'explicit' as const, model: 'summary-a', reasoning_profile: { mode: 'profile' as const, name: 'deep' }, max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
+  const model = { model: 'main', reasoning_profile: { mode: 'catalog_default' as const }, request_params: { temperature: .7 }, summary_model: summary };
+  const models = ['main', 'summary-a', 'summary-b'];
+  if (owner === 'Root') render(<RootEditor document={{ agent: { model } }} scope="workspace" revision="r1" save={write} section="root-model" models={models} skillRoots={[]} />);
+  else {
+    const source = cfg3Source();
+    source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
+    render(<AgentEditor source={source} scope="workspace" models={models} save={write} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Agent reviewer' }));
+  }
+  const commit = async (expected: ModelLayer) => {
+    const before = write.mock.calls.length;
+    const form = screen.getByRole('form', { name: owner === 'Root' ? 'Root model' : 'Agent reviewer' }) as HTMLFormElement;
+    expect(form.checkValidity()).toBe(true);
+    fireEvent.click(within(form).getByRole('button', { name: owner === 'Root' ? 'Save Root model' : 'Save Agent reviewer' }));
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(before + 1));
+    expect(write.mock.calls.at(-1)).toEqual([owner === 'Root'
+      ? { kind: 'config', scope: 'workspace', mutation: { unit: 'root_model', authored: expected } }
+      : { kind: 'agent', scope: 'workspace', name: 'reviewer', authored: { model: expected } }, 'r1']);
+  };
+  // Changing identity must not discard any nested authored intent.
+  fireEvent.change(screen.getByLabelText('Summary model'), { target: { value: 'summary-b' } });
+  await commit({ ...model, summary_model: { ...summary, model: 'summary-b' } });
+  const nested = within(screen.getByRole('group', { name: 'Explicit Summary Model settings' }));
+  fireEvent.change(nested.getByLabelText('Summary Profile identity'), { target: { value: 'quick' } });
+  fireEvent.change(nested.getByLabelText('Summary Output limit'), { target: { value: '1024' } });
+  fireEvent.change(nested.getByLabelText('temperature'), { target: { value: '0.4' } });
+  await commit({ ...model, summary_model: { ...summary, model: 'summary-b', reasoning_profile: { mode: 'profile', name: 'quick' }, max_output_tokens: { mode: 'limit', tokens: 1024 }, request_params: { temperature: .4 } } });
+  fireEvent.change(nested.getByLabelText('Summary Reasoning profile'), { target: { value: 'catalog_default' } });
+  fireEvent.change(nested.getByLabelText('Summary Output limit'), { target: { value: '' } });
+  await commit({ ...model, summary_model: { ...summary, model: 'summary-b', reasoning_profile: { mode: 'catalog_default' }, max_output_tokens: { mode: 'catalog_default' }, request_params: { temperature: .4 } } });
+  fireEvent.change(screen.getByLabelText('Summary model'), { target: { value: '' } });
+  await commit({ ...model, summary_model: { mode: 'session' } });
+  expect(screen.queryByRole('group', { name: 'Explicit Summary Model settings' })).toBeNull();
+  fireEvent.change(screen.getByLabelText('Summary model'), { target: { value: 'summary-a' } });
+  await commit({ ...model, summary_model: { mode: 'explicit', model: 'summary-a' } });
+});
+it.each([{}, { description: 'Review' }, { instructions: 'Inspect' }])('saves an Agent with optional profile text omitted: %j', async authored => {
+  const source = cfg3Source(), write = save();
+  source.agents = [{ name: 'optional', scope: 'workspace', source: { path: '/agent.toml', revision: 'optional-r1', authored } }];
+  render(<AgentEditor source={source} scope="workspace" models={[]} save={write} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Agent optional' }));
+  fireEvent.click(screen.getByLabelText('read'));
+  expect((screen.getByRole('form', { name: 'Agent optional' }) as HTMLFormElement).checkValidity()).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Save Agent optional' }));
+  await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'agent', scope: 'workspace', name: 'optional', authored: { ...authored, tools: { builtin: ['read'] } } }, 'optional-r1'));
 });

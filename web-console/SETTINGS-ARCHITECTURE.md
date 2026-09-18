@@ -26,7 +26,14 @@ is a union of names for input assistance, never a browser overlay or claim of
 availability. Provider/Model editors are separate detail views. Model replacement
 preserves the generated capabilities, reasoning profiles, request params and
 compatibility fields. Named Agents write complete independent profiles, including
-delegation fields; Rust validates scope applicability.
+delegation fields; Rust validates scope applicability. Description and instructions
+remain optional, including when replacing another part of an existing profile.
+Native definition construction accepts their schema defaults and enforces their
+existing byte bounds; the Web does not invent validation rules.
+Root and named-Agent model controls share the native independent explicit Summary
+selection (model, reasoning profile, output limit and request params). Changing its
+identity preserves the other authored fields; choosing Session deliberately replaces
+it with `{ mode: "session" }`. Rendering never materializes native defaults.
 
 ## Mutation and recovery
 
@@ -47,6 +54,8 @@ serialization is implemented in TypeScript.
 Lost Save/Reload replies and reconnect cause authoritative rereads, never replay.
 Connection/attachment epochs fence obsolete work, and a read sequence prevents an
 older overlapping read from replacing a newer observation or a write acknowledgement.
+Both success and rejection commit only within the same epoch and read sequence,
+including explicit refresh failures.
 A failed/busy Reload leaves the previous generation and native diagnostic visible.
 
 ## Coverage and native limits
@@ -62,7 +71,10 @@ contributor selectors preserve unspecified/default intent; the UI does not
 substitute `false` for a native default. Plugins remain the closed Rust set.
 
 Resource cards separate source ownership/shadowing, validity, preparation and
-Root selection. Invalid winners do not borrow a shadowed definition. Skills show
+Root selection. MCP transport badges/forms prefer an explicit type, then infer
+HTTP from a URL or stdio from a command. This display projection does not add a
+type or change retained headers/environment; an explicit transport switch replaces
+the transport-shaped draft. Invalid winners do not borrow a shadowed definition. Skills show
 native package provenance/diagnostics and explicitly describe prompt visibility,
 not filesystem permissions. Python/MCP preparation and Workflow admission status
 are native facts. Unprepared definitions are not probed by the browser.

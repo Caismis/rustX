@@ -6,13 +6,19 @@ import css from '../../presentation/settings/SettingsContent.module.css';
 import { RequestPolicy } from './RequestPolicy';
 import { CheckboxList, Toggle, OptionalBoolean, Names, nativeTools, Selection, TextField, UnitForm, type SaveSource } from './controls';
 
-export function ModelSelectionFields({ value, change, models }: { value: ModelLayer; change: (next: ModelLayer) => void; models: string[] }) {
-  return <><label>Model<select required value={value.model ?? ''} onChange={e => change({ ...value, model: e.target.value })}><option value="">Select model</option>{[...new Set([...models, ...(value.model ? [value.model] : [])])].map(id => <option key={id}>{id}</option>)}</select></label>
-    <label>Reasoning profile<select value={value.reasoning_profile?.mode ?? ''} onChange={e => change({ ...value, reasoning_profile: e.target.value === 'profile' ? { mode: 'profile', name: '' } : e.target.value === 'catalog_default' ? { mode: 'catalog_default' } : null })}><option value="">Domain default</option><option value="catalog_default">Catalog default</option><option value="profile">Named profile</option></select></label>
-    {value.reasoning_profile?.mode === 'profile' && <TextField label="Profile identity" required value={value.reasoning_profile.name} change={name => change({ ...value, reasoning_profile: { mode: 'profile', name } })} />}
-    <label>Output limit<input type="number" min="1" value={value.max_output_tokens?.mode === 'limit' ? value.max_output_tokens.tokens : ''} onChange={e => change({ ...value, max_output_tokens: e.target.value ? { mode: 'limit', tokens: Number(e.target.value) } : { mode: 'catalog_default' } })} /></label>
+function ModelRequestFields<T extends Pick<ModelLayer, 'reasoning_profile' | 'max_output_tokens' | 'request_params'>>({ value, change, prefix = '' }: { value: T; change: (next: T) => void; prefix?: string }) {
+  return <><label>{prefix}Reasoning profile<select value={value.reasoning_profile?.mode ?? ''} onChange={e => change({ ...value, reasoning_profile: e.target.value === 'profile' ? { mode: 'profile', name: '' } : e.target.value === 'catalog_default' ? { mode: 'catalog_default' } : null })}><option value="">Domain default</option><option value="catalog_default">Catalog default</option><option value="profile">Named profile</option></select></label>
+    {value.reasoning_profile?.mode === 'profile' && <TextField label={`${prefix}Profile identity`} required value={value.reasoning_profile.name} change={name => change({ ...value, reasoning_profile: { mode: 'profile', name } })} />}
+    <label>{prefix}Output limit<input type="number" min="1" value={value.max_output_tokens?.mode === 'limit' ? value.max_output_tokens.tokens : ''} onChange={e => change({ ...value, max_output_tokens: e.target.value ? { mode: 'limit', tokens: Number(e.target.value) } : { mode: 'catalog_default' } })} /></label>
     <RequestPolicy value={value.request_params ?? {}} change={request_params => change({ ...value, request_params })} />
-    <label>Summary model<select value={value.summary_model?.mode === 'explicit' ? value.summary_model.model : ''} onChange={e => change({ ...value, summary_model: e.target.value ? { mode: 'explicit', model: e.target.value } : { mode: 'session' } })}><option value="">Follow selected model</option>{[...new Set([...models, ...(value.summary_model?.mode === 'explicit' ? [value.summary_model.model] : [])])].map(id => <option key={id}>{id}</option>)}</select></label>
+  </>;
+}
+export function ModelSelectionFields({ value, change, models }: { value: ModelLayer; change: (next: ModelLayer) => void; models: string[] }) {
+  const summary = value.summary_model;
+  return <><label>Model<select required value={value.model ?? ''} onChange={e => change({ ...value, model: e.target.value })}><option value="">Select model</option>{[...new Set([...models, ...(value.model ? [value.model] : [])])].map(id => <option key={id}>{id}</option>)}</select></label>
+    <ModelRequestFields value={value} change={change} />
+    <label>Summary model<select value={summary?.mode === 'explicit' ? summary.model : ''} onChange={e => change({ ...value, summary_model: e.target.value ? { ...(summary?.mode === 'explicit' ? summary : {}), mode: 'explicit', model: e.target.value } : { mode: 'session' } })}><option value="">Follow selected model</option>{[...new Set([...models, ...(summary?.mode === 'explicit' ? [summary.model] : [])])].map(id => <option key={id}>{id}</option>)}</select></label>
+    {summary?.mode === 'explicit' && <fieldset><legend>Explicit Summary Model settings</legend><ModelRequestFields value={summary} prefix="Summary " change={summary_model => change({ ...value, summary_model })} /></fieldset>}
   </>;
 }
 export function SourceSelections({ value, change }: { value: Record<string, 'all' | string[]>; change: (value: Record<string, 'all' | string[]>) => void }) {
@@ -35,8 +41,8 @@ export function AgentEditor({ source, scope, models, save }: { source: SourceSet
     <div className={css.rows}>{agents.map(agent => <SettingsCard key={agent.name} title={agent.name} meta={<Badge>{scope}</Badge>} actions={<Button onClick={() => select(agent.name)}>Edit Agent {agent.name}</Button>}><p className={css.hint}>{agent.source.path}</p>{agent.source.diagnostic && <p role="alert">{agent.source.diagnostic}</p>}</SettingsCard>)}</div>
     <TextField label="New Agent identity" value={name} change={setName} /><Button disabled={!name || agents.some(agent => agent.name === name)} onClick={() => { select(name); setName(''); }}>Add Agent</Button>
     {selected && <UnitForm<AgentProfileDocument> key={selected} title={`Agent ${selected}`} initial={current?.source.authored ?? {}} revision={current?.source.revision ?? source.absent_resource_revision} mutation={authored => ({ kind: 'agent', scope, name: selected, authored })} save={save}>{(value, change) => <>
-      <TextField label="Description" required value={value.description} change={description => change({ ...value, description })} />
-      <label>Instructions<textarea required value={value.instructions ?? ''} onChange={e => change({ ...value, instructions: e.target.value })} /></label>
+      <TextField label="Description" value={value.description} change={description => change({ ...value, description })} />
+      <label>Instructions<textarea value={value.instructions ?? ''} onChange={e => change({ ...value, instructions: e.target.value })} /></label>
       <label><input type="checkbox" checked={!!value.model} onChange={e => change({ ...value, model: e.target.checked ? {} : null })} />Explicit child model</label>
       {value.model ? <ModelSelectionFields value={value.model} change={model => change({ ...value, model })} models={models} /> : <p>Inherit the invoking Attempt's already-frozen effective model.</p>}
       <CheckboxList label="Native Tools" values={nativeTools} selected={value.tools?.builtin ?? []} change={builtin => change({ ...value, tools: { ...value.tools, builtin } })} />

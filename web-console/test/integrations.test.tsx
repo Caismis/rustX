@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { mcpTransport } from '../src/bindings/mcp';
 import { Integrations } from '../src/app/settings/Integrations';
 import type { SaveSource } from '../src/app/settings/controls';
 import { cfg3Source } from './cfg3-data';
@@ -29,4 +30,38 @@ it('creates a Workspace definition without borrowing the User transport or crede
   expect((screen.getByLabelText('MCP command') as HTMLInputElement).value).toBe('');
   expect(screen.getByRole('group', { name: 'Retain existing header keys' }).querySelectorAll('input')).toHaveLength(0);
   expect(screen.queryByText(/trusted/i)).toBeNull();
+});
+it.each(['http', 'stdio'] as const)('projects implicit %s without rewriting transport or retained credentials', async transport => {
+  const source = cfg3Source(), save = vi.fn<SaveSource>().mockResolvedValue(undefined);
+  const authored = transport === 'http'
+    ? { definition: { url: 'https://remote.invalid/mcp', sensitive_headers: { 'X-Key': '$KEY' } }, retained_headers: ['Authorization'], retained_env: [] }
+    : { definition: { command: 'server', sensitive_env: { KEY: '$KEY' } }, retained_headers: [], retained_env: ['TOKEN'] };
+  source.workspace_mcp.authored = { inferred: authored };
+  const initial = structuredClone(authored);
+  render(<Integrations source={source} scope="workspace" save={save} />);
+  expect(screen.getByRole('article').textContent).toContain(transport);
+  fireEvent.click(screen.getByRole('button', { name: 'Edit MCP inferred' }));
+  expect((screen.getByLabelText('Transport') as HTMLSelectElement).value).toBe(transport);
+  expect(source.workspace_mcp.authored.inferred).toEqual(initial);
+  expect(save).not.toHaveBeenCalled();
+  if (transport === 'http') {
+    expect(screen.queryByLabelText('MCP command')).toBeNull();
+    fireEvent.change(screen.getByLabelText('MCP URL'), { target: { value: 'https://remote.invalid/edited' } });
+  } else {
+    expect(screen.queryByLabelText('MCP URL')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Working directory'), { target: { value: 'tools' } });
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'Save MCP inferred' }));
+  await waitFor(() => expect(save).toHaveBeenCalledWith({ kind: 'mcp', scope: 'workspace', id: 'inferred', authored: { ...initial, definition: { ...initial.definition, ...(transport === 'http' ? { url: 'https://remote.invalid/edited' } : { cwd: 'tools' }) } } }, 'mcp-2'));
+  const nextTransport = transport === 'http' ? 'stdio' : 'http';
+  fireEvent.change(screen.getByLabelText('Transport'), { target: { value: nextTransport } });
+  fireEvent.change(screen.getByLabelText(nextTransport === 'http' ? 'MCP URL' : 'MCP command'), { target: { value: nextTransport === 'http' ? 'https://new.invalid' : 'new-server' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save MCP inferred' }));
+  await waitFor(() => expect(save).toHaveBeenLastCalledWith({ kind: 'mcp', scope: 'workspace', id: 'inferred', authored: { definition: nextTransport === 'http' ? { type: 'http', url: 'https://new.invalid' } : { type: 'stdio', command: 'new-server', args: [] }, retained_env: [], retained_headers: [] } }, 'mcp-2'));
+});
+
+it('honors explicit MCP transport and keeps the new-definition default local', () => {
+  expect(mcpTransport(Object.freeze({ type: 'stdio', url: 'https://invalid-hybrid.test' }))).toBe('stdio');
+  expect(mcpTransport(Object.freeze({ type: 'http', command: 'invalid-hybrid' }))).toBe('http');
+  expect(mcpTransport(Object.freeze({}))).toBe('stdio');
 });

@@ -340,17 +340,12 @@ impl NamedAgentDefinition {
             agents,
             workflows,
         } = profile;
-        if description.trim().is_empty() {
-            return Err(NamedAgentDefinitionError::EmptyDescription { agent: name });
-        }
+        // AgentProfileDocument defaults omitted text to empty; bounds still apply.
         if description.len() > MAX_SUBAGENT_DESCRIPTION_BYTES {
             return Err(NamedAgentDefinitionError::DescriptionOversized {
                 agent: name,
                 bytes: description.len(),
             });
-        }
-        if instructions.trim().is_empty() {
-            return Err(NamedAgentDefinitionError::EmptyInstructions { agent: name });
         }
         if instructions.len() > MAX_SUBAGENT_INSTRUCTIONS_BYTES {
             return Err(NamedAgentDefinitionError::InstructionsOversized {
@@ -511,22 +506,12 @@ pub const CHILD_UNSAFE_BUILTIN_TOOLS: [&str; 1] = [crate::tools::executor::EXECU
 /// A definition-level validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NamedAgentDefinitionError {
-    /// The routing description is empty.
-    EmptyDescription {
-        /// The offending agent.
-        agent: SubagentName,
-    },
     /// The routing description exceeds its bound.
     DescriptionOversized {
         /// The offending agent.
         agent: SubagentName,
         /// The offending byte length.
         bytes: usize,
-    },
-    /// The instruction document is empty.
-    EmptyInstructions {
-        /// The offending agent.
-        agent: SubagentName,
     },
     /// The instruction document exceeds its bound.
     InstructionsOversized {
@@ -563,17 +548,10 @@ pub enum NamedAgentDefinitionError {
 impl core::fmt::Display for NamedAgentDefinitionError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::EmptyDescription { agent } => {
-                write!(formatter, "subagent {agent:?} has an empty description")
-            }
             Self::DescriptionOversized { agent, bytes } => write!(
                 formatter,
                 "subagent {agent:?} description exceeds the \
                  {MAX_SUBAGENT_DESCRIPTION_BYTES}-byte bound ({bytes} bytes)"
-            ),
-            Self::EmptyInstructions { agent } => write!(
-                formatter,
-                "subagent {agent:?} instructions document is empty"
             ),
             Self::InstructionsOversized { agent, bytes } => write!(
                 formatter,

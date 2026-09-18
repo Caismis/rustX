@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Settings } from '../src/app/settings/Settings';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
 import { cfg3Client, cfg3Session } from './cfg3-fixture';
@@ -230,4 +230,38 @@ it('preserves the original revision when removing an otherwise clean unit confli
   fireEvent.click(screen.getByRole('button', { name: 'Remove Native Tools' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { mutation: { authored: null } } } });
+});
+it.each([
+  ['effect', 'refresh'], ['effect', 'write'], ['refresh', 'refresh'], ['refresh', 'write'],
+] as const)('fences an obsolete %s read rejection after a newer %s', async (readKind, successor) => {
+  let rejectRead!: (error: Error) => void;
+  const pending = new Promise<import('../../protocol/app-server/v6').MethodResult>((_, reject) => { rejectRead = reject; });
+  let reads = 0;
+  const subject = cfg3Client(async op => {
+    if (op.method === 'configuration/sourcesRead' && ++reads === 2) return pending;
+  });
+  const ui = render(<Settings client={subject.client} sessionId={cfg3Session} />);
+  await screen.findByText('server-frozen-model');
+  fireEvent.click(screen.getByRole('tab', { name: 'Workspace' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+  if (readKind === 'effect') {
+    const snapshot = { ...subject.state, generation: 2 };
+    subject.client.getSnapshot = () => snapshot;
+    ui.rerender(<Settings client={subject.client} sessionId={cfg3Session} />);
+  } else fireEvent.click(screen.getByRole('button', { name: 'Read current sources' }));
+  await waitFor(() => expect(reads).toBe(2));
+  if (successor === 'refresh') {
+    subject.source.workspace.revision = 'new-authority';
+    fireEvent.click(screen.getByRole('button', { name: 'Read current sources' }));
+  } else {
+    fireEvent.click(screen.getByLabelText('read'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+    await screen.findByText(/Source saved. The loaded runtime/);
+  }
+  const revision = successor === 'refresh' ? 'new-authority' : 'saved-2';
+  await screen.findByText(new RegExp(`Revision: ${revision}`));
+  await act(async () => { rejectRead(new Error('obsolete read failed')); await pending.catch(() => {}); });
+  expect(screen.getByText(new RegExp(`Revision: ${revision}`))).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(document.body.textContent).not.toContain('obsolete read failed');
 });

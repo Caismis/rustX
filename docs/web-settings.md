@@ -18,6 +18,10 @@ MCP, Python and Skill selections have all/exact/none controls. Skill guidance ex
 prompt visibility and displays absolute collection roots. Plugins default off.
 Named-Agent editing writes the complete resource profile, including its independent
 Tools/Skills/Plugins, delegation lists, model inheritance, timeout and worktree settings.
+Description and instructions remain optional. Root and named-Agent explicit Summary
+Models each support independent model, reasoning profile, output limit and request
+parameters. Changing Summary identity preserves its other authored fields; choosing
+the Session/default option intentionally removes the explicit Summary settings.
 General also edits the native Root identity and description semantic units.
 
 **Save** submits a native typed semantic-unit mutation with the exact source revision.
@@ -31,6 +35,8 @@ Reconnect also reads current state rather than resending old actions.
 Python, Skill and Workflow resource inventories do not imply full source editors.
 Full Workflow program, Skill-package and Python-source editing are outside this
 Settings scope. MCP definitions and named-Agent profiles have structured editors.
+MCP transport may be implicit: a URL shows the HTTP editor and a command shows
+stdio. Ordinary edits preserve that authored omission and retained credentials.
 
 ## Browser evidence
 
