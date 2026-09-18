@@ -1238,6 +1238,15 @@ fn named_agent_optional_text_survives_independent_complete_profile_edits() {
             .source;
         let mut profile = source.authored.clone().unwrap();
         let original_text = (profile.description.clone(), profile.instructions.clone());
+        let projected = serde_json::to_value(&profile).unwrap();
+        assert_eq!(
+            projected.get("description").is_some(),
+            !original_text.0.is_empty()
+        );
+        assert_eq!(
+            projected.get("instructions").is_some(),
+            !original_text.1.is_empty()
+        );
         profile.tools.builtin = vec!["read".into()];
         let saved = owner
             .write_source_settings(
@@ -1264,5 +1273,14 @@ fn named_agent_optional_text_survives_independent_complete_profile_edits() {
             (&original_text.0, &original_text.1)
         );
         assert_eq!(saved_profile.tools.builtin, ["read"]);
+        let saved_text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            saved_text.contains("description ="),
+            !original_text.0.is_empty()
+        );
+        assert_eq!(
+            saved_text.contains("instructions ="),
+            !original_text.1.is_empty()
+        );
     }
 }

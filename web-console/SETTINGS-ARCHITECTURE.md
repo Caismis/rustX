@@ -29,7 +29,9 @@ compatibility fields. Named Agents write complete independent profiles, includin
 delegation fields; Rust validates scope applicability. Description and instructions
 remain optional, including when replacing another part of an existing profile.
 Native definition construction accepts their schema defaults and enforces their
-existing byte bounds; the Web does not invent validation rules.
+existing byte bounds; the Web does not invent validation rules. Native source
+projections and serialization omit empty text defaults, so an independent profile
+edit does not materialize description/instructions in the outgoing mutation.
 Root and named-Agent model controls share the native independent explicit Summary
 selection (model, reasoning profile, output limit and request params). Changing its
 identity preserves the other authored fields; choosing Session deliberately replaces

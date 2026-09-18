@@ -18,7 +18,8 @@ MCP, Python and Skill selections have all/exact/none controls. Skill guidance ex
 prompt visibility and displays absolute collection roots. Plugins default off.
 Named-Agent editing writes the complete resource profile, including its independent
 Tools/Skills/Plugins, delegation lists, model inheritance, timeout and worktree settings.
-Description and instructions remain optional. Root and named-Agent explicit Summary
+Description and instructions remain optional; native projection and serialization
+keep empty defaults omitted during unrelated profile edits. Root and named-Agent explicit Summary
 Models each support independent model, reasoning profile, output limit and request
 parameters. Changing Summary identity preserves its other authored fields; choosing
 the Session/default option intentionally removes the explicit Summary settings.

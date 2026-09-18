@@ -3541,7 +3541,8 @@ export interface AgentProfileDocument {
   agents?: SubagentName[];
   workflows?: WorkflowId[];
   /**
-   * The bounded model-facing routing description.
+   * The bounded model-facing routing description. Empty defaults stay omitted
+   * in native source projections and complete-resource serialization.
    */
   description?: string;
   /**

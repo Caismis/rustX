@@ -21,7 +21,8 @@ Final repair validation recorded 2026-09-18. Architecture: [Settings and native 
   introduced here.
 - Native #347 changes are Root identity/description source units, plus acceptance
   of the schema's omitted Agent text defaults while preserving native byte bounds.
-  Generated protocol changes belong to the Root units, not the Goal redesign.
+  Generated protocol changes belong to the Root units and native Agent text
+  projection metadata, not the Goal redesign.
 
 ## Validation commands and results
 
@@ -43,11 +44,13 @@ real App Server, Product Host and mandatory provider emulator.
 | web-console | `pnpm build` | Pass, artifact provenance included |
 | web-console | `CONTAINER_ENGINE=podman pnpm test:e2e` | 20 passed; unchanged screenshot references pass |
 | protocol/app-server | `pnpm install --frozen-lockfile` | Pass |
+| protocol/app-server | `pnpm generate` | Pass; regenerated native Agent projection metadata |
 | protocol/app-server | `pnpm check` | Pass; invokes native generation, no schema/type/fixture drift |
 | protocol/app-server | `pnpm typecheck` | Pass |
 | dev | `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test` | Pass; 30 tests |
 | tui | `pnpm install --frozen-lockfile`, `pnpm typecheck`, `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | Pass; 788 tests |
 | test-support/fake-provider | `uv sync --frozen`, `uv run --frozen pytest` | Pass; 51 tests |
+| repository | `cargo run --example generate_schemas` | Pass; regenerated native Agent schema |
 | repository | `cargo fmt --all -- --check` | Pass |
 | repository | `cargo clippy --all-targets --all-features -- -D warnings` | Pass |
 | repository | `cargo build --bins` | Pass |
@@ -65,8 +68,10 @@ test/settings-units.test.tsx test/settings.test.tsx test/integrations.test.tsx`
 before the final rebase; those earlier runs are not substituted for the matrix above.
 
 Initial development browser runs exposed a label locator problem and the native
-non-empty Agent text check that contradicted the schema. Both were corrected;
-the new role-based browser flow and all final suites pass. An accidentally restarted
+non-empty Agent text check that contradicted the schema. Both were corrected. A strengthened wire assertion then caught native projection
+materializing empty text defaults; native serialization now omits them and the
+actual request/TOML assertions pass. The role-based browser flow and all final
+suites pass. An accidentally restarted
 browser runner was stopped and its port collision cleared before rerunning. The
 new #352 worktree's first Web typecheck required installing its TUI dependencies;
 its rerun passed. No semantic failure was waived. Vite's existing chunk-size and
@@ -158,8 +163,9 @@ implemented; no speculative editor, marketplace or lifecycle authority was added
 The repair preserves the Harness shell and native CFG3 ownership. Real-server
 validation exposed a native mismatch: the schema defaults omitted Agent text to
 empty, but definition construction rejected it. That native check now accepts
-the schema defaults while retaining byte bounds and all other validation. No
-generated schema change is needed. Deterministic regressions now include:
+the native defaults while retaining byte bounds and all other validation. Native
+projection/serialization also omits empty defaults. Schema and protocol metadata
+were regenerated from those Rust attributes. Deterministic regressions now include:
 
 - `settings-units.test.tsx`: both Root and named-Agent Summary identity changes
   retain a named reasoning profile, explicit output limit and request params in the
@@ -176,10 +182,12 @@ generated schema change is needed. Deterministic regressions now include:
   reads arrive after either a newer refresh or a successful write acknowledgement.
   In all four cases, current data/revision survive and no stale alert commits.
 - `tests/cfg3_catalog.rs`: omitted Agent text remains valid through native discovery,
-  exact-revision complete-profile Tool edits and source rereads. Oversized profile
+  exact-revision complete-profile Tool edits and source rereads. Projection JSON
+  and serialized TOML do not materialize omitted empty defaults. Oversized profile
   text still fails before any file is committed.
 - `settings-contracts.spec.ts`: real App Server Summary round trips for Root and
-  named Agents, optional Agent text, implicit MCP transport and retained secrets,
+  named Agents, optional Agent text (including actual outgoing mutation omission),
+  implicit MCP transport and retained secrets,
   followed by explicit native publication. The new controls were manually reviewed
   in the real-server [Summary editor capture](../docs/images/web-reset-347/summary-model-complete.png).
 

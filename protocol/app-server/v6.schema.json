@@ -4522,14 +4522,12 @@
           "default": []
         },
         "description": {
-          "description": "The bounded model-facing routing description.",
-          "type": "string",
-          "default": ""
+          "description": "The bounded model-facing routing description. Empty defaults stay omitted\nin native source projections and complete-resource serialization.",
+          "type": "string"
         },
         "instructions": {
           "description": "Explicit primary Agent instructions authored as TOML data.",
-          "type": "string",
-          "default": ""
+          "type": "string"
         },
         "model": {
           "description": "The explicit model this agent runs on. Omit to inherit the invoking\nattempt's frozen effective model configuration.",

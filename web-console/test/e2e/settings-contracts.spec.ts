@@ -4,11 +4,13 @@ import { join } from 'node:path';
 import { chooseWorkspace } from './shell-actions';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
+import { wireProbe } from './wire-probe';
 
 // Real native source fixtures: the browser only edits the generated projection.
 test('Summary selections round-trip and implicit MCP/optional Agent sources remain editable', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const fixture = await startDogfood();
+  const wire = await wireProbe(page);
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const summary = 'summary_model = { mode = "explicit", model = "summary-a", reasoning_profile = { mode = "profile", name = "deep" }, max_output_tokens = { mode = "limit", tokens = 2048 }, request_params = { temperature = 0.2 } }\n';
   const model = '[model]\nmodel = "fixture/console-model"\n' + summary;
@@ -57,6 +59,13 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
       await save();
       const sourceFile = owner === 'Root' ? join(fixture.workspaceA, 'rustx.toml') : join(fixture.workspaceA, '.agents/agents/optional.toml');
       const preserved = readFileSync(sourceFile, 'utf8');
+      if (owner === 'Agent') {
+        const request = wire.requests.filter(request => request.method === 'configuration/sourceWrite').at(-1);
+        if (request?.method !== 'configuration/sourceWrite' || request.params.mutation.kind !== 'agent') throw new Error('Expected native Agent write');
+        expect(request.params.mutation.authored).not.toHaveProperty('description');
+        expect(request.params.mutation.authored).not.toHaveProperty('instructions');
+        expect(preserved).not.toMatch(/^(description|instructions)\s*=/m);
+      }
       for (const fact of ['summary-b', 'deep', '2048', '0.2']) expect(preserved).toContain(fact);
       // Acknowledge then reread: clean forms follow the native source, not old drafts.
       await settings.getByRole('button', { name: 'Read current sources' }).click();
