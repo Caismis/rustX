@@ -30,13 +30,6 @@ export async function showInspector(page: Page) {
   if (!await panel.getByLabel('Native diagnostic JSON').isVisible()) await details.click();
 }
 
-export async function unloadSession(page: Page) {
-  await page.getByRole('button', { name: 'Session actions', exact: true }).click();
-  await page.getByRole('menuitem', { name: 'Advanced Session controls' }).click();
-  await page.getByRole('dialog', { name: 'Advanced Session controls' }).getByRole('button', { name: 'Unload runtime' }).click();
-  await expect(page.getByLabel('Session status').getByRole('button', { name: 'Open Session', exact: true })).toBeVisible();
-}
-
 export async function sessionTree(page: Page) {
   await page.getByRole('button', { name: 'Session actions', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Session tree', exact: true }).click();

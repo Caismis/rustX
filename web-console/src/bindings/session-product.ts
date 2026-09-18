@@ -12,6 +12,14 @@ export interface SessionProductState {
 /** Pure display projection. Stale snapshots never imply current execution or
  * settlement. Recovery only names an existing client operation; no replay. */
 export function deriveSessionProductState(state: Pick<ClientView, 'connection' | 'uncertain'>, view?: SessionView, sessionId = view?.id): SessionProductState {
+  if (view?.deleting) {
+    if (view.error || state.uncertain.some(item => item.sessionId === sessionId)) return {
+      status: 'uncertain', label: 'Deletion needs verification', severity: 'warning',
+      detail: view.error ?? 'The delete response was lost. Reconnect to read its outcome; deletion will not be retried.',
+      recovery: ['connecting', 'reconnecting', 'resynchronizing'].includes(state.connection) ? undefined : { action: 'connect', label: 'Reconnect to verify' },
+    };
+    return { status: 'stopping', label: 'Deleting Session…', severity: 'quiet' };
+  }
   const connecting = ['connecting', 'reconnecting', 'resynchronizing'].includes(state.connection);
   const recovery: SessionProductState['recovery'] = connecting ? undefined
     : state.connection === 'incompatible' ? { action: 'connection-settings', label: 'Connection settings' }

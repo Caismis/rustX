@@ -232,7 +232,7 @@ export class AppServerHost {
     const existing = this.#sessions.get(sessionId);
     if (existing !== undefined && !existing.released && !existing.serverClosed) {
       if (nodeId === undefined || nodeId === existing.nodeId) return existing;
-      throw new Error("changing a Session node requires explicit unload confirmation");
+      throw new Error("use branch switching to open a different Session node");
     }
     const session = await AppServerSession.attach(this.client, sessionId, nodeId);
     this.#sessions.set(sessionId, session);
@@ -246,11 +246,11 @@ export class AppServerHost {
     return session;
   }
 
-  /** User-confirmed node change: native unload settles this Session only. */
+  /** User-confirmed branch switch; the manager owns native retirement. */
   async openNode(sessionId: SessionId, nodeId: SessionNodeId): Promise<AppServerSession> {
     const existing = this.#sessions.get(sessionId);
     if (existing !== undefined && !existing.released && !existing.serverClosed) {
-      await existing.unload();
+      await existing.switchNode(nodeId);
       this.#sessions.delete(sessionId);
     }
     return this.attach(sessionId, nodeId);
@@ -299,13 +299,8 @@ export class AppServerHost {
       },
       "sessions",
     );
-    const diagnostics = await this.client.call("server/diagnostics", {}, "diagnostics");
-    const residency = new Map(diagnostics.snapshot.sessions.map((entry) => [entry.session_id, entry]));
     return {
-      sessions: page.sessions.map((session) => ({ ...session,
-        residency: residency.get(session.id)?.residency ?? "Unloaded",
-        activeRoot: residency.get(session.id)?.active_root ?? false,
-      })),
+      sessions: page.sessions,
       nextOffset: page.next_offset ?? undefined,
     };
   }
@@ -416,6 +411,7 @@ export class AppServerHost {
     sessionId: SessionId,
     expectedTargetRevision: string,
   ): Promise<SessionDeleteResult> {
+    this.client.setSessionDeleting(sessionId, true);
     const deleted = await this.client.call(
       "session/delete",
       {
@@ -424,6 +420,7 @@ export class AppServerHost {
       },
       "deletion",
     );
+    if (deleted.result.status === 'stale' || deleted.result.status === 'blocked') this.client.setSessionDeleting(sessionId, false);
     return deleted.result;
   }
 

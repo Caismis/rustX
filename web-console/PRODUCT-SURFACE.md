@@ -39,9 +39,9 @@ Failure remains retryable, without polling, mutation replay or LLM naming.
 | Generation / revision / CAS | Developer Inspector | Configuration and domain evidence | Exact fencing evidence; Settings keeps authoring conflicts |
 | Connection generation | Developer Inspector | Protocol section | Socket fencing detail |
 | Resync | Recovery | Conditional Retry connection | Existing refresh operation when observation is unavailable |
-| Attach / cold resume | Recovery | Conditional Open Session; normal open remains internal | Existing admission and attach contract |
+| Open Session | Navigation / recovery | Opens the durable Session and acquires its client relationship | Residency is implicit in native admission |
 | Detach | Remove | Remove standalone button; closing a view retains client release | Redundant lifecycle chrome |
-| Unload runtime | Settings / advanced | Only explicit advanced lifecycle action if needed by native lineage/deletion | Destructive runtime lifetime is not normal header navigation |
+| Session deletion / branch switching | Product action | Confirm delete or switch branch | Runtime retirement is internal to the manager |
 | Cancellation state | Recovery | Stopping; uncertainty remains Needs verification | Request is not settlement |
 | Uncertain-operation evidence | Developer Inspector | Exact request and reconciliation evidence | Ordinary notice remains actionable without raw IDs |
 | Durability failure | Recovery | Visible storage failure; exact evidence in Inspector | Never imply durable success |

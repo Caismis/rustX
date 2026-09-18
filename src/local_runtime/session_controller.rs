@@ -683,7 +683,7 @@ impl SessionController {
 #[cfg(test)]
 mod tests {
     use super::super::configuration::SessionConfigInput;
-    use super::super::session::deletion::{DeletionBlocker, SessionDeleteResult};
+    use super::super::session::deletion::SessionDeleteResult;
     use super::*;
     fn settings(path: &std::path::Path) -> SessionPersistentState {
         SessionPersistentState::from_input(&SessionConfigInput::new(path.to_path_buf()))
@@ -941,10 +941,7 @@ mod tests {
         let access_b = controller.acquire_session(&b.id, None).await.unwrap();
         assert!(matches!(
             controller.delete_preview(&a.id).await,
-            SessionDeleteResult::Blocked {
-                reason: DeletionBlocker::InUse,
-                ..
-            }
+            SessionDeleteResult::Preview { .. }
         ));
         drop(access_a);
         let SessionDeleteResult::Preview { preview } = controller.delete_preview(&a.id).await
@@ -1143,10 +1140,7 @@ mod tests {
         assert!(!fork.is_finished());
         assert!(matches!(
             controller.delete_preview(&a.id).await,
-            SessionDeleteResult::Blocked {
-                reason: DeletionBlocker::InUse,
-                ..
-            }
+            SessionDeleteResult::Preview { .. }
         ));
         controller
             .rename_session(&b.id, "B during copy")

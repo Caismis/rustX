@@ -47,7 +47,7 @@ root. This is process-local ownership, not a multi-process lease design.
 
 ## State and synchronization
 
-Absence from the registry represents `Unloaded`. Entries are `Loading(flight)`,
+Absence from the internal registry represents no resident runtime (`Unloaded` in diagnostics). This is never a durable Session status. Entries are `Loading(flight)`,
 `Loaded(ResidentRuntime)`, or `Unloading(retained runtime, flight)`. There is no
 Running/Idle/Waiting mirror. Replacement uses the same `Unloading -> Loading`
 transition after quiescence, with one shared operation result across the handoff.
@@ -173,12 +173,13 @@ The App Server protocol binds attachment controls to this incarnation identity.
 
 ## Allocation and deletion
 
-Native shared allocation access and destructive exclusion remain the only
-load/delete authority. Load-first holds allocation even while resolution or
-composition is blocked; deletion preflight/commit rejects in-use ownership.
-Delete-first commits removal before physical cleanup; acquisition fails closed
-even while the files still exist. The manager has no deleted flag or deletion
-lock. No catalog mutex remains held for runtime residency.
+The manager Session fence linearizes deletion against runtime admission, including
+composition already in flight. Deletion joins native retirement before requesting
+destructive allocation exclusion from the catalog owner. Inspection itself permits
+resident writers. Any remaining independent allocation owner is a resource conflict.
+The catalog commits removal before physical cleanup; subsequent allocation access
+rejects removed membership even while files remain. No catalog mutex remains held
+for runtime residency.
 
 ## Client lifetime and scope
 
@@ -219,3 +220,29 @@ both unload and replacement, while the new incarnation's client can read its hos
 A separate replacement test parks new composition after old shutdown, verifies
 that the Session claim still rejects another node, and injects a composition panic.
 The terminal guard clears both indexes, allowing the other node to load.
+
+## Session deletion admission (#359)
+
+Session existence is durable product state. Attachment is a client relationship.
+Residency is an internal process resource lifecycle. Opening a Session reuses or
+composes a runtime; closing a view only detaches. Clients never manage unload.
+
+`SessionRuntimeManager::delete_session` inserts the Session identity into
+`retiring_sessions` under the registry mutex. This is the deletion admission
+linearization point, including when `by_session` has no Conversation entry.
+Load and replacement claims consult that same fence. Operation leases and attach
+pins consult it under the same mutex. Operations admitted first drain normally;
+operations arriving after the fence cannot enter the old runtime.
+
+A Loading flight that completes after fencing activates under the existing native
+boundary, but its terminal owner installs Unloading instead of publishing Loaded
+or a usable identity. The original flight completes only after native shutdown
+and projection drain. Replacement uses the same publication rule. Idle eviction
+and deletion join the same retirement flight. No global lock spans shutdown.
+
+Only proven retirement permits destructive exclusion and catalog deletion.
+Unproven shutdown retains its composition, allocation, counted Unloading slot,
+and Session admission fence. Cancellation never reopens that fence. Safe stale
+confirmation/resource rejection after proven retirement can release admission;
+durability uncertainty retains the fence. Catalog authority prevents deleted
+identities from reopening after successful deletion.

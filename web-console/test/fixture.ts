@@ -1,5 +1,5 @@
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v7';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v8';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
 
@@ -69,10 +69,10 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 7;
+  version = 8;
   capabilities = capabilities;
   client = new AppServerClient((_url, protocols) => {
-    if (protocols[0] !== 'rustx.app-server.v7' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    if (protocols[0] !== 'rustx.app-server.v8' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   });
@@ -139,7 +139,7 @@ export class Server {
       case 'initialize': result = { type: 'initialized', protocol_version: this.version, capabilities: this.capabilities }; break;
       case 'server/info': result = { type: 'server_info', capabilities: this.capabilities }; break;
       case 'session/summary': result = { type: 'session_summary', summary: this.summary(request.params.session_id) }; break;
-      case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', residencies: Object.fromEntries([...this.snapshots.keys()].map(id => [id, this.loaded.has(id) ? 'Loaded' : 'Unloaded'])), sessions: [...this.snapshots.keys()].map(id => this.summary(id)).filter(row => !request.params.query || [row.id, row.name, row.preview].some(text => text?.toLowerCase().includes(request.params.query!.toLowerCase()))).slice(request.params.offset, request.params.offset + request.params.limit) }; break;
+      case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', sessions: [...this.snapshots.keys()].map(id => this.summary(id)).filter(row => !request.params.query || [row.id, row.name, row.preview].some(text => text?.toLowerCase().includes(request.params.query!.toLowerCase()))).slice(request.params.offset, request.params.offset + request.params.limit) }; break;
       case 'session/attach': {
         this.reservations.get(socket)?.delete(id);
         if (!this.loaded.has(id)) { this.loaded.add(id); this.coldLoads.set(id, (this.coldLoads.get(id) ?? 0) + 1); }
@@ -155,7 +155,7 @@ export class Server {
       case 'session/snapshot': result = { type: 'snapshot', snapshot: this.snapshots.get(id)!, cursor: String(this.cursor) }; break;
       case 'session/subscribe': result = { type: 'subscribed', after_cursor: request.params.after_cursor }; break;
       case 'session/detach': this.targets.get(socket)!.delete(id); result = { type: 'detached' }; break;
-      case 'session/unload': this.targets.get(socket)!.delete(id); this.loaded.delete(id); result = { type: 'unloaded' }; break;
+      case 'session/switchNode': this.targets.get(socket)!.delete(id); this.loaded.delete(id); result = { type: 'session', session: { id, node_count: 1, active_node: request.params.node_id, active_conversation_id: `conv-${id}`, created_at: '0', updated_at: '0' } }; break;
       case 'turn/start': case 'turn/steer': result = { type: 'inbound_accepted', message_id: 'accepted-user', inbound_sequence: '1' }; break;
       case 'turn/cancel': result = { type: 'cancellation_accepted', attempt_id: 'attempt-A' }; break;
       case 'goal/control': {

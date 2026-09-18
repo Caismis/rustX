@@ -57,7 +57,7 @@ fn deletion_preview_releases_guards_execute_reacquires_and_rejects_stale() {
             .commit_delete(&preview.session_id, &preview.target_revision)
             .unwrap(),
         Err(SessionDeleteResult::Blocked {
-            reason: DeletionBlocker::InUse,
+            reason: DeletionBlocker::ResourceConflict,
             ..
         })
     ));
@@ -772,7 +772,7 @@ fn deletion_live_ownership_cannot_claim_a_pending_frozen_child() {
     let store = store_for(&catalog, &active.id, &active.active_conversation_id);
     store.append_event(event).unwrap();
     drop(store);
-    let error = SessionDeletionPreflight::acquire(dir.path(), &active.id).unwrap_err();
+    let error = DeletionTargetSnapshot::inspect(dir.path(), &active.id).unwrap_err();
     assert!(error.to_string().contains("deleted Conversation identity"));
     assert_eq!(
         catalog.document.deletions[&preview.session_id].scopes,

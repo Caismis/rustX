@@ -56,6 +56,7 @@ pub(super) struct Probe {
     pub(super) unloads_joined: watch::Sender<usize>,
     pub(super) panic_once: std::sync::atomic::AtomicBool,
     pub(super) before_compose: AsyncGate,
+    pub(super) after_delete_fence: AsyncGate,
     pub(super) before_shutdown: AsyncGate,
     pub(super) before_operation: AsyncGate,
     pub(super) draining_operations: watch::Sender<bool>,
@@ -71,6 +72,7 @@ impl Default for Probe {
             unloads_joined: watch::channel(0).0,
             panic_once: std::sync::atomic::AtomicBool::new(false),
             before_compose: AsyncGate::default(),
+            after_delete_fence: AsyncGate::default(),
             before_shutdown: AsyncGate::default(),
             before_operation: AsyncGate::default(),
             draining_operations: watch::channel(false).0,
@@ -680,67 +682,185 @@ async fn replacement_failure_is_unloaded_and_retryable_but_shutdown_failure_reta
     .await;
 }
 
+async fn deletion_revision(f: &Fixture, index: usize) -> String {
+    let crate::local_runtime::session::deletion::SessionDeleteResult::Preview { preview } = f
+        .manager
+        .sessions
+        .delete_preview(&f.sessions[index].id)
+        .await
+    else {
+        panic!("preview")
+    };
+    preview.target_revision
+}
+fn delete_task(
+    f: &Fixture,
+    index: usize,
+    revision: String,
+) -> tokio::task::JoinHandle<
+    Result<crate::local_runtime::session::deletion::SessionDeleteResult, RuntimeManagerError>,
+> {
+    let manager = f.manager.clone();
+    let id = f.sessions[index].id.clone();
+    tokio::spawn(async move { manager.delete_session(&id, &revision).await })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn allocation_load_winner_blocks_delete_and_delete_winner_rejects_composition() {
+async fn deletion_fence_prevents_loading_publication_and_isolates_other_sessions() {
     bounded(async {
-        use crate::local_runtime::session::deletion::{DeletionBlocker, SessionDeleteResult};
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
         let f = Fixture::new().await;
         let id = f.id(0).await;
         let probe = f.manager.probe(&id);
+        let revision = deletion_revision(&f, 0).await;
         probe.before_compose.arm();
-        let SessionDeleteResult::Preview {
-            preview: before_load,
-        } = f.manager.sessions.delete_preview(&f.sessions[0].id).await
-        else {
-            panic!("unloaded")
-        };
         let load = f.load(0);
         probe.before_compose.entered().await;
-        assert!(matches!(
-            f.manager
-                .sessions
-                .delete_session(&f.sessions[0].id, &before_load.target_revision)
-                .await
-                .unwrap(),
-            SessionDeleteResult::Blocked {
-                reason: DeletionBlocker::InUse,
-                ..
-            }
-        ));
-        assert!(matches!(
-            f.manager.sessions.delete_preview(&f.sessions[0].id).await,
-            SessionDeleteResult::Blocked {
-                reason: DeletionBlocker::InUse,
-                ..
-            }
-        ));
+        // Joining callers hold no redundant allocation across retirement.
+        let joined_load = f.load(0);
+        probe.joined(2).await;
+        // Preview remains available while a load owns its allocation.
+        assert_eq!(deletion_revision(&f, 0).await, revision);
+        probe.after_delete_fence.arm();
+        let delete = delete_task(&f, 0, revision);
+        probe.after_delete_fence.entered().await;
+        assert!(f.load(0).await.unwrap().is_err());
+        let other = f.load(1).await.unwrap().unwrap();
+        assert!(other.client().validate().is_ok());
         probe.before_compose.release();
-        let loaded = load.await.unwrap().unwrap();
+        probe.after_delete_fence.release();
+        assert!(load.await.unwrap().is_err());
+        assert!(joined_load.await.unwrap().is_err());
         assert!(matches!(
-            f.manager.sessions.delete_preview(&f.sessions[0].id).await,
-            SessionDeleteResult::Blocked {
-                reason: DeletionBlocker::InUse,
-                ..
-            }
-        ));
-        f.manager.unload(&id).await.unwrap();
-        assert!(loaded.inspect_runtime().is_none());
-        let SessionDeleteResult::Preview { preview } =
-            f.manager.sessions.delete_preview(&f.sessions[0].id).await
-        else {
-            panic!("unload released allocation")
-        };
-        assert!(matches!(
-            f.manager
-                .sessions
-                .delete_session(&f.sessions[0].id, &preview.target_revision)
-                .await
-                .unwrap(),
+            delete.await.unwrap().unwrap(),
             SessionDeleteResult::Deleted { .. }
         ));
-        assert!(f.load(0).await.unwrap().is_err());
         assert_eq!(probe.compositions.load(Ordering::SeqCst), 1);
-        f.load(1).await.unwrap().unwrap();
+        assert!(other.client().validate().is_ok());
+        assert!(f.load(0).await.unwrap().is_err());
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deletion_fence_rejects_late_operation_attach_and_replacement() {
+    bounded(async {
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
+        let f = Fixture::new().await;
+        let runtime = f.load(0).await.unwrap().unwrap();
+        let revision = deletion_revision(&f, 0).await;
+        let probe = f.manager.probe(runtime.conversation_id());
+        probe.after_delete_fence.arm();
+        let delete = delete_task(&f, 0, revision);
+        probe.after_delete_fence.entered().await;
+        assert!(
+            runtime
+                .client()
+                .submit_inbound(input("never admitted"))
+                .is_err()
+        );
+        assert!(runtime.client().attach().is_err());
+        assert!(replace_task(&f, 0).await.unwrap().is_err());
+        assert!(f.load(0).await.unwrap().is_err());
+        probe.after_delete_fence.release();
+        assert!(matches!(
+            delete.await.unwrap().unwrap(),
+            SessionDeleteResult::Deleted { .. }
+        ));
+        assert!(runtime.inspect_runtime().is_none());
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deletion_joins_replacement_without_publishing_its_candidate() {
+    bounded(async {
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
+        let f = Fixture::new().await;
+        let old = f.load(0).await.unwrap().unwrap();
+        let revision = deletion_revision(&f, 0).await;
+        let probe = f.manager.probe(old.conversation_id());
+        probe.before_shutdown.arm();
+        let replace = replace_task(&f, 0);
+        probe.before_shutdown.entered().await;
+        probe.after_delete_fence.arm();
+        let delete = delete_task(&f, 0, revision);
+        probe.after_delete_fence.entered().await;
+        probe.before_shutdown.release();
+        probe.after_delete_fence.release();
+        assert!(replace.await.unwrap().is_err());
+        assert!(matches!(
+            delete.await.unwrap().unwrap(),
+            SessionDeleteResult::Deleted { .. }
+        ));
+        assert!(old.inspect_runtime().is_none());
+        assert!(f.load(0).await.unwrap().is_err());
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deletion_retirement_failure_retains_writer_slot_and_session_fence() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let runtime = f.load(0).await.unwrap().unwrap();
+        let revision = deletion_revision(&f, 0).await;
+        runtime
+            .inspect_runtime()
+            .unwrap()
+            .fail_residency_settlement();
+        let result = f.manager.delete_session(&f.sessions[0].id, &revision).await;
+        assert!(result.is_err());
+        assert!(
+            f.manager
+                .sessions
+                .read_session(&f.sessions[0].id)
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            f.manager.residency(runtime.conversation_id()),
+            ResidencyState::Unloading
+        );
+        assert!(runtime.inspect_runtime().is_some());
+        assert!(f.load(0).await.unwrap().is_err());
+        assert!(replace_task(&f, 0).await.unwrap().is_err());
+        assert_eq!(f.manager.diagnostics().unloading, 1);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deletion_settles_an_active_native_attempt() {
+    bounded(async {
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
+        let f = Fixture::new().await;
+        let runtime = f.load(0).await.unwrap().unwrap();
+        runtime.client().submit_inbound(input("request-A")).unwrap();
+        f.gates[0].wait_entered().await;
+        let revision = deletion_revision(&f, 0).await;
+        let live = runtime.inspect_runtime().unwrap();
+        let weak = live.weak_inner();
+        let arrival = Arc::new(tokio::sync::Notify::new());
+        let drained = Arc::new(tokio::sync::Notify::new());
+        live.install_drain_signals(arrival.clone(), drained.clone());
+        drop(live);
+        let result = f
+            .manager
+            .delete_session(&f.sessions[0].id, &revision)
+            .await
+            .unwrap();
+        // Native coordinator Running -> Draining, not a catalog-only shortcut.
+        arrival.notified().await;
+        drained.notified().await;
+        assert!(matches!(result, SessionDeleteResult::Deleted { .. }));
+        assert!(weak.upgrade().is_none());
+        assert!(runtime.inspect_runtime().is_none());
+        f.gates[0].release();
         f.close().await;
     })
     .await;
@@ -1312,6 +1432,30 @@ async fn session_claim_survives_replacement_handoff_and_clears_on_failed_loading
             .await
             .unwrap();
         f.manager.unload(second.conversation_id()).await.unwrap();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deletion_fences_absent_session_before_a_new_load_claim() {
+    bounded(async {
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
+        let f = Fixture::new().await;
+        let id = f.id(0).await;
+        let revision = deletion_revision(&f, 0).await;
+        let probe = f.manager.probe(&id);
+        probe.after_delete_fence.arm();
+        let delete = delete_task(&f, 0, revision);
+        probe.after_delete_fence.entered().await;
+        assert!(f.load(0).await.unwrap().is_err());
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 0);
+        assert!(f.load(1).await.unwrap().is_ok());
+        probe.after_delete_fence.release();
+        assert!(matches!(
+            delete.await.unwrap().unwrap(),
+            SessionDeleteResult::Deleted { .. }
+        ));
         f.close().await;
     })
     .await;

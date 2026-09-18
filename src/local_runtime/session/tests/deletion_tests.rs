@@ -3,7 +3,7 @@ mod lifecycle;
 mod workflow_disposal;
 
 use super::*;
-use crate::local_runtime::session_deletion::SessionDeletionPreflight;
+use crate::local_runtime::session_deletion::DeletionTargetSnapshot;
 use crate::runtime::identity::{AgentId, SubagentId};
 use crate::runtime::workspace::{GitWorktreeSnapshot, WorkspaceIsolation, WorkspaceSnapshot};
 
@@ -142,7 +142,7 @@ fn deletion_tree_membership_excludes_independent_fork_clone_and_shared_resources
     ] {
         std::fs::create_dir(directory.path().join(class)).unwrap();
     }
-    let preflight = SessionDeletionPreflight::acquire(directory.path(), &session).unwrap();
+    let preflight = DeletionTargetSnapshot::inspect(directory.path(), &session).unwrap();
     assert_eq!(preflight.nodes().len(), 3);
     assert_eq!(
         preflight
@@ -161,12 +161,12 @@ fn deletion_tree_membership_excludes_independent_fork_clone_and_shared_resources
                 .join(session.as_str()),
         )
     }));
-    assert!(SessionDeletionPreflight::acquire(directory.path(), &session).is_err());
+    assert!(DeletionTargetSnapshot::inspect(directory.path(), &session).is_err());
     let revision = *preflight.ownership_revision();
     drop(preflight);
     assert_eq!(
         &revision,
-        SessionDeletionPreflight::acquire(directory.path(), &session)
+        DeletionTargetSnapshot::inspect(directory.path(), &session)
             .unwrap()
             .ownership_revision()
     );
@@ -204,7 +204,7 @@ fn deletion_nested_durable_children_restart_and_workspace_blocker() {
         .initialize(&[])
         .unwrap();
     drop((catalog, parent, child_store));
-    let preflight = SessionDeletionPreflight::acquire(directory.path(), &session).unwrap();
+    let preflight = DeletionTargetSnapshot::inspect(directory.path(), &session).unwrap();
     assert_eq!(
         preflight
             .conversations()
@@ -241,7 +241,7 @@ fn deletion_unknown_and_missing_lookup_never_creates_state() {
     );
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     assert!(
-        SessionDeletionPreflight::acquire(
+        DeletionTargetSnapshot::inspect(
             directory.path(),
             &SessionId::new("ses_b23a6a84-39c0-7de5-8158-93e7c90c1e32")
         )
@@ -256,7 +256,7 @@ fn deletion_unknown_and_missing_lookup_never_creates_state() {
     let database = catalog.database_path(&session, &node.conversation_id);
     std::fs::remove_dir_all(database.parent().unwrap()).unwrap();
     let before = std::fs::read(directory.path().join("sessions/catalog.json")).unwrap();
-    assert!(SessionDeletionPreflight::acquire(directory.path(), &session).is_err());
+    assert!(DeletionTargetSnapshot::inspect(directory.path(), &session).is_err());
     assert!(!database.parent().unwrap().exists());
     assert_eq!(
         before,
@@ -283,7 +283,7 @@ fn deletion_tampered_catalog_and_symlink_escape_fail_closed() {
     let outside = tempfile::tempdir().unwrap();
     std::fs::rename(database.parent().unwrap(), outside.path().join("lineage")).unwrap();
     std::os::unix::fs::symlink(outside.path().join("lineage"), database.parent().unwrap()).unwrap();
-    assert!(SessionDeletionPreflight::acquire(directory.path(), &session).is_err());
+    assert!(DeletionTargetSnapshot::inspect(directory.path(), &session).is_err());
     assert!(outside.path().join("lineage/conversation.sqlite").exists());
     std::fs::remove_file(database.parent().unwrap()).unwrap();
     std::fs::rename(outside.path().join("lineage"), database.parent().unwrap()).unwrap();
@@ -293,7 +293,7 @@ fn deletion_tampered_catalog_and_symlink_escape_fail_closed() {
     doc["sessions"][session.as_str()]["nodes"][node.id.as_str()]["conversation_id"] =
         serde_json::json!("../../escape");
     std::fs::write(catalog_path, serde_json::to_vec(&doc).unwrap()).unwrap();
-    assert!(SessionDeletionPreflight::acquire(directory.path(), &session).is_err());
+    assert!(DeletionTargetSnapshot::inspect(directory.path(), &session).is_err());
 }
 
 #[test]
@@ -317,7 +317,7 @@ fn deletion_live_inspection_blocks_and_stale_marker_is_reusable() {
     )
     .unwrap();
     assert_eq!(
-        SessionDeletionPreflight::acquire(directory.path(), &session)
+        destructive_target(directory.path(), &session)
             .unwrap_err()
             .kind(),
         std::io::ErrorKind::WouldBlock
@@ -327,7 +327,7 @@ fn deletion_live_inspection_blocks_and_stale_marker_is_reusable() {
         crate::local_runtime::live_inspection::probe_liveness(&path).unwrap(),
         Some(false)
     );
-    drop(SessionDeletionPreflight::acquire(directory.path(), &session).unwrap());
+    drop(destructive_target(directory.path(), &session).unwrap());
     let _next = crate::local_runtime::live_inspection::LiveConversationInspectionLease::acquire(
         directory.path(),
         &session,
@@ -404,14 +404,14 @@ fn deletion_cross_process_parent_death_preserves_nested_ownership() {
         }
     }
     let catalog = SessionCatalog::open_existing(root.path()).unwrap().unwrap();
-    assert!(SessionDeletionPreflight::acquire(root.path(), &first_session(&catalog)).is_err());
+    assert!(destructive_target(root.path(), &first_session(&catalog)).is_err());
     process.kill().unwrap();
     process.wait().unwrap();
-    let preflight =
-        SessionDeletionPreflight::acquire(root.path(), &first_session(&catalog)).unwrap();
-    assert_eq!(preflight.conversations().len(), 3);
+    let preflight = destructive_target(root.path(), &first_session(&catalog)).unwrap();
+    assert_eq!(preflight.0.conversations().len(), 3);
     assert_eq!(
         preflight
+            .0
             .conversations()
             .iter()
             .filter(|c| c.parent_conversation.is_some())
@@ -449,7 +449,7 @@ fn deletion_duplicate_and_cyclic_child_identity_fail_closed() {
         Utc::now(),
     );
     child_store.append_event(event.clone()).unwrap();
-    assert!(SessionDeletionPreflight::acquire(root.path(), &session).is_err());
+    assert!(DeletionTargetSnapshot::inspect(root.path(), &session).is_err());
     // Simulate a tampered durable child reference without following or creating it.
     let path = crate::runtime::subagent::child_conversation_store_path(root.path(), &session, &id);
     drop(child_store);
@@ -469,7 +469,7 @@ fn deletion_duplicate_and_cyclic_child_identity_fail_closed() {
             [serde_json::to_string(&value).unwrap()],
         )
         .unwrap();
-    assert!(SessionDeletionPreflight::acquire(root.path(), &session).is_err());
+    assert!(DeletionTargetSnapshot::inspect(root.path(), &session).is_err());
     assert!(!root.path().join("outside").exists());
 }
 
@@ -505,7 +505,7 @@ fn deletion_hot_journal_reads_are_nonmutating_and_startup_recovers_owned_stores(
     let journal = database.with_file_name("conversation.sqlite-journal");
     let before = std::fs::read(&database).unwrap();
     let journal_before = std::fs::read(&journal).unwrap();
-    assert!(SessionDeletionPreflight::acquire(root.path(), &first_session(&catalog)).is_err());
+    assert!(DeletionTargetSnapshot::inspect(root.path(), &first_session(&catalog)).is_err());
     assert_eq!(before, std::fs::read(&database).unwrap());
     assert_eq!(journal_before, std::fs::read(&journal).unwrap());
     let writer = std::sync::Arc::new(
@@ -516,7 +516,7 @@ fn deletion_hot_journal_reads_are_nonmutating_and_startup_recovers_owned_stores(
         .recover_session_storage(&first_session(&catalog), &writer)
         .unwrap();
     drop((catalog, writer));
-    let preflight = SessionDeletionPreflight::acquire(root.path(), &session.id).unwrap();
+    let preflight = DeletionTargetSnapshot::inspect(root.path(), &session.id).unwrap();
     assert_eq!(preflight.conversations().len(), 3);
 }
 
@@ -547,13 +547,13 @@ fn deletion_wal_metadata_is_rejected_before_sqlite_can_create_sidecars() {
         before_names,
         [std::ffi::OsString::from("conversation.sqlite")]
     );
-    assert!(SessionDeletionPreflight::acquire(root.path(), &session).is_err());
+    assert!(DeletionTargetSnapshot::inspect(root.path(), &session).is_err());
     assert_eq!(before_names, entries());
     assert_eq!(before, std::fs::read(database).unwrap());
 }
 
 fn revision(root: &std::path::Path, session: &SessionId) -> [u8; 32] {
-    *SessionDeletionPreflight::acquire(root, session)
+    *DeletionTargetSnapshot::inspect(root, session)
         .unwrap()
         .ownership_revision()
 }
@@ -712,7 +712,7 @@ fn deletion_revision_tracks_retained_and_partial_and_complete_disposal() {
     let parent = store_for(&catalog, &session, &node.conversation_id);
     let initial = revision(root.path(), &session);
     child(root.path(), &parent, 1, true);
-    let preflight = SessionDeletionPreflight::acquire(root.path(), &session).unwrap();
+    let preflight = DeletionTargetSnapshot::inspect(root.path(), &session).unwrap();
     let retained = *preflight.ownership_revision();
     assert_ne!(initial, retained);
     let workspace = &preflight.workspace_blockers()[0].workspace;
@@ -769,7 +769,7 @@ fn deletion_revision_tracks_retained_and_partial_and_complete_disposal() {
             ),
         )
         .unwrap();
-    let disposed = SessionDeletionPreflight::acquire(root.path(), &session).unwrap();
+    let disposed = DeletionTargetSnapshot::inspect(root.path(), &session).unwrap();
     assert!(disposed.workspace_blockers().is_empty());
     assert_ne!(
         &branch_only,
@@ -804,7 +804,7 @@ fn deletion_target_child_access_blocks_but_unrelated_child_access_does_not() {
         .unwrap(),
     )
     .unwrap();
-    assert!(SessionDeletionPreflight::acquire(root.path(), &target).is_ok());
+    assert!(destructive_target(root.path(), &target).is_ok());
     let target_access = ConversationAccess::existing(
         &identity,
         crate::runtime::subagent::child_conversation_store_path(
@@ -817,13 +817,11 @@ fn deletion_target_child_access_blocks_but_unrelated_child_access_does_not() {
     )
     .unwrap();
     assert_eq!(
-        SessionDeletionPreflight::acquire(root.path(), &target)
-            .unwrap_err()
-            .kind(),
+        destructive_target(root.path(), &target).unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
     );
     drop(target_access);
-    assert!(SessionDeletionPreflight::acquire(root.path(), &target).is_ok());
+    assert!(destructive_target(root.path(), &target).is_ok());
 }
 
 #[test]
@@ -854,7 +852,7 @@ fn deletion_snapshot_freezes_native_ownership_commits_but_not_ordinary_events() 
     );
     let store =
         store_for(&catalog, &other.session_id, &other.conversation_id).with_lifecycle(access);
-    let snapshot = SessionDeletionPreflight::acquire(root.path(), &target).unwrap();
+    let snapshot = DeletionTargetSnapshot::inspect(root.path(), &target).unwrap();
     activity(&store, 42);
     let id = SubagentId::for_conversation(&other.conversation_id, 1);
     let event = crate::runtime::subagent::ownership_event(
@@ -911,7 +909,7 @@ fn deletion_cross_session_child_claim_is_ambiguous_not_a_revision_change() {
     );
     other_store.append_event(event).unwrap();
     assert!(
-        SessionDeletionPreflight::acquire(root.path(), &target).is_err(),
+        DeletionTargetSnapshot::inspect(root.path(), &target).is_err(),
         "a foreign ownership claim must fail closed, not merely yield a different token"
     );
 }
@@ -946,14 +944,14 @@ fn deletion_detached_private_stores_and_writers_retain_target_access() {
         .unwrap();
     drop(access);
     drop(artifacts);
-    assert!(SessionDeletionPreflight::acquire(root.path(), &session).is_err());
+    assert!(destructive_target(root.path(), &session).is_err());
     drop(output);
     assert!(
-        SessionDeletionPreflight::acquire(root.path(), &session).is_err(),
+        destructive_target(root.path(), &session).is_err(),
         "the streaming writer independently retains target access"
     );
     drop(writer);
-    assert!(SessionDeletionPreflight::acquire(root.path(), &session).is_ok());
+    assert!(destructive_target(root.path(), &session).is_ok());
 }
 
 #[test]
@@ -973,7 +971,7 @@ fn deletion_target_process_gate() {
         Box::new(ConversationAccess::existing(&root, database.parent().unwrap()).unwrap())
     } else {
         Box::new(
-            SessionDeletionPreflight::acquire(
+            destructive_target(
                 root.root(),
                 &SessionId::new(std::env::var("RUSTX_260_TARGET_SESSION").unwrap()),
             )
@@ -1040,12 +1038,12 @@ fn deletion_cross_process_target_child_unrelated_child_and_destructive_conflict(
             }
         }
         process.stdout = Some(output.into_inner());
-        let result = SessionDeletionPreflight::acquire(root.path(), &target);
+        let result = destructive_target(root.path(), &target);
         if blocks {
             assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
         } else {
             assert_eq!(
-                result.unwrap().conversations().len(),
+                result.unwrap().0.conversations().len(),
                 2,
                 "unrelated live child does not block complete B scope"
             );
@@ -1053,7 +1051,7 @@ fn deletion_cross_process_target_child_unrelated_child_and_destructive_conflict(
         process.kill().unwrap();
         process.wait().unwrap();
         assert!(
-            SessionDeletionPreflight::acquire(root.path(), &target).is_ok(),
+            destructive_target(root.path(), &target).is_ok(),
             "kernel authority is released after process death"
         );
     }
@@ -1084,14 +1082,12 @@ fn deletion_alias_startup_authors_one_canonical_session_allocation() {
     assert!(database.starts_with(identity.root()));
     let access = ConversationAccess::existing(&identity, database.parent().unwrap()).unwrap();
     assert_eq!(
-        SessionDeletionPreflight::acquire(&alias, &session)
-            .unwrap_err()
-            .kind(),
+        destructive_target(&alias, &session).unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
     );
     drop(access);
-    let preflight = SessionDeletionPreflight::acquire(&alias, &session).unwrap();
-    assert_eq!(preflight.conversations()[0].database, database);
+    let preflight = destructive_target(&alias, &session).unwrap();
+    assert_eq!(preflight.0.conversations()[0].database, database);
     assert!(
         ConversationAccess::existing(
             &ProductRoot::existing(&alias).unwrap(),
@@ -1099,14 +1095,30 @@ fn deletion_alias_startup_authors_one_canonical_session_allocation() {
         )
         .is_err()
     );
-    let revision = *preflight.ownership_revision();
+    let revision = *preflight.0.ownership_revision();
     drop(preflight);
     assert_eq!(
-        *SessionDeletionPreflight::acquire(&real, &session)
+        *destructive_target(&real, &session)
             .unwrap()
+            .0
             .ownership_revision(),
         revision
     );
     drop(controller);
     assert!(ProductController::acquire(&real).is_ok());
+}
+
+// Inspection alone permits live allocations. Destructive tests explicitly
+// acquire the separate exclusion and retain both authorities through the check.
+fn destructive_target(
+    root: &std::path::Path,
+    session: &SessionId,
+) -> std::io::Result<(
+    DeletionTargetSnapshot,
+    crate::local_runtime::session_deletion::DeletionExclusion,
+)> {
+    let target = DeletionTargetSnapshot::inspect(root, session)?;
+    let exclusion =
+        crate::local_runtime::session_deletion::DeletionExclusion::acquire(root, &target)?;
+    Ok((target, exclusion))
 }

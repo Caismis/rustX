@@ -103,8 +103,8 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(APP_SERVER_PROTOCOL_VERSION, 7);
-    assert.equal(params.protocol_version, 7);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 8);
+    assert.equal(params.protocol_version, 8);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
     assert.equal(transport.log.count("initialize"), 1);
@@ -140,7 +140,7 @@ describe("initialization", () => {
       protocol_version: 6,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 6, this client speaks 7/);
+    await assert.rejects(pending, /negotiated protocol 6, this client speaks 8/);
   });
 });
 
@@ -160,7 +160,7 @@ describe("request correlation", () => {
 
     // Answer the *second* request first. Correlation is by id and nothing
     // else, so neither promise may take the other's result.
-    transport.respond(list.id, { type: "sessions", sessions: [], residencies: {}, next_offset: null });
+    transport.respond(list.id, { type: "sessions", sessions: [], next_offset: null });
     transport.respond(info.id, { type: "server_info", capabilities: CAPABILITIES });
 
     assert.equal((await second).type, "sessions");
@@ -550,7 +550,7 @@ describe("attachment release", () => {
     // shutdown, no interaction settlement.
     const methods = transport.log.requests.map((message) => message.method);
     assert.ok(!methods.includes("turn/cancel"));
-    assert.ok(!methods.includes("session/unload"));
+    assert.ok(!methods.includes("session/switchNode"));
     assert.ok(!methods.includes("interaction/cancel"));
     assert.equal(session.released, true);
   });

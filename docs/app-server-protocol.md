@@ -1,6 +1,6 @@
-# App Server protocol v7
+# App Server protocol v8
 
-App Server v7 identifies one complete mandatory vocabulary, including exact
+App Server v8 identifies one complete mandatory vocabulary, including exact
 `session/summary`. v6 initialization and WebSocket admission are rejected; there
 is no downgrade or compatibility path.
 
@@ -107,13 +107,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v7",
+  "rustx.app-server.v8",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v7` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v8` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -231,7 +231,8 @@ explicitly rejected as an invalid request before any action occurs.
 | `session/fork`, `session/branch` | Exact native Surface revision and optional user-message boundary; fork without a boundary clones the revision into an independent Session |
 | `session/deletePreview`, `session/delete`, `session/recoverDeletion` | Native revision-confirmed deletion/recovery; no client-supplied cleanup workset |
 | `session/attach`, `session/detach` | Load/reuse a runtime and acquire/release its external control attachment |
-| `session/unload` | Explicit incarnation-checked native shutdown/unload; waits for settlement, preserves durable Session state |
+| `session/switchNode` | Switch to a selected branch; manager owns retirement and composition |
+| `session/restart` | Reconstruct the current branch from current composition configuration |
 | `session/snapshot`, `session/subscribe`, `session/transcript`, `session/boundaries` | Authoritative projection, bounded replay, durable transcript and revision-bound user-message pages |
 | `turn/start`, `turn/steer`, `turn/cancel` | Native inbound and attempt-cancellation owners; acceptance is not terminal execution |
 | `interaction/respond`, `interaction/cancel` | Originating runtime/coordinator, including routed child interactions |
@@ -280,7 +281,7 @@ None of these are projection cursors or aliases for each other.
 
 After exact attachment routing, the manager admits every live-runtime read or
 control operation under its registry lock, requiring the same Loaded incarnation
-and incrementing its in-flight count. Explicit unload compares that incarnation
+and incrementing its in-flight count. Internal retirement compares that incarnation
 and claims `Loaded -> Unloading` under **the same lock**. There is one ordering:
 an operation admitted first may finish; an unload claim first rejects the
 operation as `StaleRuntime`, without invoking its native owner. No control path
@@ -299,19 +300,15 @@ subordinate to registry residency, not a second runtime state machine.
 it acquires no runtime operation lease and works even during `Unloading` or after
 residency ends. It does not cancel execution, settle interactions, or unload.
 
-After exact local route validation, every terminal `session/unload` manager result
-removes the exact initiating route and releases its attachment capacity **before
-returning**, even if the requester stops polling. Errors remain errors: native
-shutdown failure still leaves residency fail-closed in `Unloading`, and stale
-incarnations still fail explicitly. Its response is the initiating request's
-authoritative terminal acknowledgement. Notification consumption is not a
-resource-release point; there is no synthetic durable closed-event queue. An
-already waiting observer may receive `session/closed` for the old target, but
-cannot remove a newly installed route.
+Session deletion fences manager admission before coordinating native shutdown.
+Every old route becomes unusable at that fence; native `session/closed` observation
+retires subscriptions. Other connections cannot publish a replacement writer.
+A retirement error does not imply absence: unproven writers remain counted and
+fenced. Attachment cleanup does not grant durable deletion authority.
 
 ## Attachment and observation lifetime
 
-Protocol v7 admits at most one writable external controller per resident
+Protocol v8 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -390,8 +387,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v7.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v7.ts`: TypeScript generated from that schema using pinned
+- `v8.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v8.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -579,8 +576,9 @@ issue does not migrate the TUI.
 `diagnostics` result contains lifecycle, configured policy, loaded/loading/
 unloading counts, native active-root count, external attachment counts, per-
 Session resident identities and operation counts, typed refusal counters,
-unload/shutdown failures/timeouts, and transport budgets/counts. The Session list
-contains reserved/resident slots; absent Sessions are unloaded. `idle_for_ms`
+unload/shutdown failures/timeouts, and transport budgets/counts. This diagnostic Session inventory
+contains reserved/resident slots; absence only means no process-local residency.
+The ordinary `session/list` response contains durable Session information only. `idle_for_ms`
 and `idle_remaining_ms` are relative, conservative scan facts, not lifecycle
 authority. Aggregation happens upward in AppServerHost: manager diagnostics
 contain only residency/native samples, transport diagnostics contain physical
@@ -656,7 +654,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v7; no compatibility path is provided.
+This remains mandatory protocol v8; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -686,7 +684,7 @@ The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 39 carries this vocabulary;
 version 38 clients are rejected by strict negotiation. This remains mandatory
-App Server protocol v7, with no compatibility field and no activation mode.
+App Server protocol v8, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
 `Paused` and `Blocked` offer Resume, and there is no separate Play/arm control
@@ -701,7 +699,7 @@ boundary.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v7 includes `inbound/edit { target, expected, text }` and
+Protocol v8 includes `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and controller attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -787,9 +785,8 @@ After canonical first-user-message observation, only successful exact reads comp
 preview convergence (including `preview: null`); failed reads remain retryable.
 
 `session/list` now includes `SessionSummary.cwd`, projected by the native catalog
-from `SessionPersistentState`, and `residencies`, a native manager observation for
-exactly the returned page. The existing bounded pagination/query semantics remain;
-neither field loads a runtime. This avoids a second Session-to-Workspace database.
+from `SessionPersistentState`. The bounded page contains durable facts only;
+residency remains in `server/diagnostics`. Listing never loads a runtime. This avoids a second Session-to-Workspace database.
 
 Workspace registration, rename and order remain Product Host metadata. They do
 not rewrite Session state. Switching Workspace does not unload or cancel a
@@ -878,3 +875,16 @@ the loaded runtime fact. Neither field introduces a Session approval override.
 independent Root metadata scalars through the same revision/CAS, validation,
 serialization and Save-versus-Reload boundary as `instructions`. `null` removes
 the authored unit in that scope. Clients never write whole config documents.
+
+## Breaking v8 Session lifecycle transition
+
+Initialization requires exactly v8 and WebSocket requires `rustx.app-server.v8`.
+The previous version is rejected without fallback. Rust DTOs generate `v8.ts`,
+`v8.schema.json`, and the serialized fixtures; only the current version is kept.
+Manual runtime unload is absent from the public method/result vocabulary.
+Session lists have no residency field. Deletion blockers have no current-Session
+or ordinary-residency case: external allocation exclusion is `resource_conflict`.
+Preview works while attached or executing, without destructive guards. Confirmed
+delete owns manager fencing/retirement, destructive exclusion, revision validation,
+durable commit, and cleanup. Existing stale-confirmation and durability outcomes
+remain authoritative. Close view continues to use `session/detach` only.

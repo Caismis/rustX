@@ -5,7 +5,7 @@ import { sessionDisplayTitle } from '../src/bindings/session-title';
 import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
-import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v7';
+import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v8';
 
 let server: Server;
 beforeEach(() => { server = new Server(); localStorage.clear(); });
@@ -24,8 +24,7 @@ it.each([
   [{ status: 'stale', session_id: 'private-id' }, 'new deletion confirmation'],
   [{ status: 'committed_cleanup_pending', session_id: 'private-id' }, 'committed, but cleanup is still pending'],
   [{ status: 'committed_durability_uncertain', session_id: 'private-id' }, 'Deletion needs verification'],
-  [{ status: 'blocked', session_id: 'private-id', reason: { kind: 'in_use' } }, 'Advanced Session controls'],
-  [{ status: 'blocked', session_id: 'private-id', reason: { kind: 'current_session' } }, 'Select another Session'],
+  [{ status: 'blocked', session_id: 'private-id', reason: { kind: 'resource_conflict' } }, 'external resource owner'],
   [{ status: 'blocked', session_id: 'private-id', reason: { kind: 'workspace', resource_count: 2 } }, 'Retained workspaces'],
   [{ status: 'blocked', session_id: 'private-id', reason: { kind: 'invalid_ownership' } }, 'could not be verified'],
 ] as const)('preserves the native deletion outcome without raw DTOs: %j', (result, copy) => {
@@ -126,7 +125,7 @@ it('a summary begun before canonical history cannot complete its later preview c
 
 it.each(['rpc', 'socket'] as const)('failed exact first-message read stays retryable off-page after reconnect: %s', async failure => {
   server.summaries.set('A', { name: null, preview: null });
-  server.handlers.set('session/list', () => ({ type: 'sessions', residencies: { B: 'Unloaded' }, sessions: [server.summary('B')] }));
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [server.summary('B')] }));
   await mount(['A']);
   const reads = () => methods().filter(method => method === 'session/summary').length;
   expect(reads()).toBe(1); // Exact off-page empty metadata, before canonical work.
@@ -174,7 +173,7 @@ it.each(['rpc', 'socket'] as const)('failed exact first-message read stays retry
 it.each([false, true])('repairs off-page cached metadata on reconnect (completed file-only preview: %s)', async fileOnly => {
   server.summaries.set('A', { name: fileOnly ? null : 'Old name', preview: null });
   if (fileOnly) server.snapshots.set('A', canonicalUser(null));
-  server.handlers.set('session/list', () => ({ type: 'sessions', residencies: { B: 'Unloaded' }, sessions: [server.summary('B')] }));
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [server.summary('B')] }));
   await mount(['A']);
   const reads = () => methods().filter(method => method === 'session/summary').length;
   expect(reads()).toBe(1);
@@ -215,7 +214,7 @@ it('reopen repairs metadata on the same connection after an older-epoch read set
   const oldRead = server.client.readSessionSummary('A').catch(() => {});
   const oldRequest = await server.waitFor('session/summary', 2);
   server.commit(oldRequest);
-  await act(async () => server.client.release('A', false));
+  await act(async () => server.client.release('A'));
   server.summaries.set('A', { name: 'Reopened name' });
   let reopened!: Promise<void>;
   await act(async () => { reopened = server.client.attach('A'); });
@@ -319,7 +318,7 @@ it('restores an explicitly named empty Session outside the current catalog page'
   server.handlers.set('session/list', request => {
     if (request.method !== 'session/list') throw new Error('wrong method');
     const id = 'A';
-    return { type: 'sessions', residencies: { [id]: 'Unloaded' }, sessions: [server.summary(id)] };
+    return { type: 'sessions', sessions: [server.summary(id)] };
   });
   server.summaries.set('B', { name: 'Named empty Session' });
   await mount(['B']);
@@ -485,4 +484,25 @@ it('reviewing a notice restores capacity at the 64-diagnostic limit without repl
   await server.waitFor('session/name', 65);
   await act(async () => { server.socket.close(); await next; });
   expect(methods().filter(method => method === 'session/name')).toHaveLength(65);
+});
+
+it.each([true, false])('focused deletion fences controls and selects an existing Session only when available: %s', async another => {
+  if (!another) server.snapshots.delete('B');
+  server.handlers.set('session/deletePreview', () => ({ type: 'deletion', result: { status: 'preview', preview: { session_id: 'A', target_revision: 'confirmed', owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } } }));
+  server.handlers.set('session/delete', () => {
+    server.snapshots.delete('A');
+    return { type: 'deletion', result: { status: 'deleted', session_id: 'A' } };
+  });
+  await mount(['A']);
+  server.held.add('session/delete');
+  fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Session' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' })));
+  expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).disabled).toBe(true);
+  const request = await server.waitFor('session/delete', 1);
+  await act(async () => server.reply(request));
+  if (another) expect(screen.getByLabelText('Session title').textContent).toBe('Session B');
+  else expect(screen.queryByLabelText('Session title')).toBeNull();
+  expect(methods().filter(method => method === 'session/create')).toHaveLength(0);
+  expect(methods().filter(method => method === 'session/delete')).toHaveLength(1);
 });

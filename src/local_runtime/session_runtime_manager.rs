@@ -112,6 +112,7 @@ impl Flight {
 #[derive(Debug)]
 pub struct ManagedRuntime {
     conversation: ConversationId,
+    node: SessionNodeId,
     incarnation: RuntimeIncarnationId,
     workspace_identity: String,
     resident: Weak<ResidentRuntime>,
@@ -264,7 +265,9 @@ impl ManagedRuntimeClient {
         let Some(Entry::Loaded(resident)) = state.entries.get(&identity.conversation) else {
             return Err(RuntimeManagerError::StaleIncarnation);
         };
-        if resident.identity.incarnation != identity.incarnation {
+        if state.fenced(&identity.conversation)
+            || resident.identity.incarnation != identity.incarnation
+        {
             return Err(RuntimeManagerError::StaleIncarnation);
         }
         // Same lock as Loaded -> Unloading: no late increment is possible.
@@ -344,7 +347,8 @@ impl ManagedRuntimeClient {
             .upgrade()
             .ok_or(RuntimeManagerError::StaleIncarnation)?;
         let state = registry.0.lock().expect("registry mutex");
-        if !matches!(state.entries.get(&runtime.identity.conversation), Some(Entry::Loaded(current)) if Arc::ptr_eq(current, runtime))
+        if state.fenced(&runtime.identity.conversation)
+            || !matches!(state.entries.get(&runtime.identity.conversation), Some(Entry::Loaded(current)) if Arc::ptr_eq(current, runtime))
         {
             return Err(RuntimeManagerError::StaleIncarnation);
         }
@@ -375,7 +379,9 @@ impl ManagedRuntimeClient {
             .registry
             .upgrade()
             .ok_or(RuntimeManagerError::StaleIncarnation)?;
-        let current = matches!(registry.0.lock().expect("registry mutex").entries.get(&runtime.conversation),
+        let state = registry.0.lock().expect("registry mutex");
+        let current = !state.fenced(&runtime.conversation)
+            && matches!(state.entries.get(&runtime.conversation),
             Some(Entry::Loaded(resident)) if resident.identity.incarnation == runtime.incarnation);
         if current {
             runtime
@@ -458,12 +464,20 @@ struct RegistryState {
     // Ownership index only, not a second state machine. Covers every entry,
     // including replacement handoff and failed (unproven) shutdown.
     by_session: HashMap<SessionId, ConversationId>,
+    // Session admission fencing shares every registry transition, including absence.
+    retiring_sessions: std::collections::HashSet<SessionId>,
     #[cfg(test)]
     probes: HashMap<ConversationId, Arc<tests::Probe>>,
     #[cfg(test)]
     reaper_waiting: Option<watch::Sender<u64>>,
 }
 impl RegistryState {
+    fn fenced(&self, id: &ConversationId) -> bool {
+        self.by_session
+            .iter()
+            .any(|(session, resident)| resident == id && self.retiring_sessions.contains(session))
+    }
+
     fn refuse(&mut self, reason: &str) {
         let count = self.refusals.entry(reason.into()).or_default();
         *count = count.saturating_add(1);
@@ -481,6 +495,9 @@ impl RegistryState {
         session: &SessionId,
         conversation: &ConversationId,
     ) -> Result<(), RuntimeManagerError> {
+        if self.retiring_sessions.contains(session) {
+            return Err(error("Session retirement has fenced runtime admission"));
+        }
         if let Some(resident) = self.by_session.get(session)
             && resident != conversation
         {
@@ -796,6 +813,7 @@ impl SessionRuntimeManager {
                 policy,
                 entries: HashMap::new(),
                 by_session: HashMap::new(),
+                retiring_sessions: std::collections::HashSet::new(),
                 refusals: std::collections::BTreeMap::default(),
                 unload_failures: 0,
                 #[cfg(test)]
@@ -969,9 +987,57 @@ impl SessionRuntimeManager {
     /// # Panics
     /// Panics if an internal residency mutex was poisoned.
     pub fn is_current(&self, id: &ConversationId, incarnation: RuntimeIncarnationId) -> bool {
-        matches!(self.registry.0.lock().expect("registry mutex").entries.get(id),
+        let registry = self.registry.0.lock().expect("registry mutex");
+        !registry.fenced(id)
+            && matches!(registry.entries.get(id),
             Some(Entry::Loaded(runtime)) if runtime.identity.incarnation == incarnation)
     }
+    /// Fence runtime admission, prove native writer retirement, then ask the
+    /// durable owner to validate and commit the confirmed deletion target.
+    /// Cancellation and uncertain retirement leave admission closed.
+    pub(crate) async fn delete_session(
+        &self,
+        session: &SessionId,
+        revision: &str,
+    ) -> Result<super::session::deletion::SessionDeleteResult, RuntimeManagerError> {
+        let resident = {
+            let mut registry = self.registry.0.lock().expect("registry mutex");
+            if !registry.retiring_sessions.insert(session.clone()) {
+                return Err(error("Session retirement already owns admission"));
+            }
+            registry.by_session.get(session).cloned()
+        };
+        #[cfg(test)]
+        if let Ok(snapshot) = self.sessions.read_session(session).await {
+            self.probe(&snapshot.active_conversation_id)
+                .after_delete_fence
+                .park()
+                .await;
+        }
+        if let Some(id) = resident {
+            self.unload(&id).await?;
+        }
+        // A successful unload is proof, not a timeout. Only now may catalog
+        // deletion acquire destructive Conversation exclusion.
+        let result = self
+            .sessions
+            .delete_session(session, revision)
+            .await
+            .map_err(error);
+        if !matches!(
+            result,
+            Ok(super::session::deletion::SessionDeleteResult::CommittedDurabilityUncertain { .. })
+        ) {
+            self.registry
+                .0
+                .lock()
+                .expect("registry mutex")
+                .retiring_sessions
+                .remove(session);
+        }
+        result
+    }
+
     /// Warm loads reuse the current incarnation. Loads racing unload wait for
     /// its terminal result, then cold load; failed unload remains a closed slot.
     /// # Errors
@@ -1000,6 +1066,9 @@ impl SessionRuntimeManager {
                 match registry.entries.get(&id) {
                     Some(Entry::Loaded(runtime)) => return Ok(runtime.identity.clone()),
                     Some(Entry::Loading(flight) | Entry::Unloading { flight, .. }) => {
+                        // The flight owns allocation access. A waiter must not
+                        // retain a redundant handle across retirement proof.
+                        drop(access);
                         flight.clone()
                     }
                     None => {
@@ -1020,6 +1089,11 @@ impl SessionRuntimeManager {
             #[cfg(test)]
             self.probe(&id_for_probe).joined.send_modify(|n| *n += 1);
             if let Some(runtime) = flight.wait().await? {
+                self.registry
+                    .0
+                    .lock()
+                    .expect("registry mutex")
+                    .check_session(session, runtime.conversation_id())?;
                 return Ok(runtime);
             }
         }
@@ -1114,6 +1188,7 @@ impl SessionRuntimeManager {
             activity: AtomicU64::new(0),
             idle: Mutex::new(None),
             identity: Arc::new(ManagedRuntime {
+                node: access.node.id,
                 conversation: access.node.conversation_id,
                 incarnation,
                 workspace_identity: identity,
@@ -1211,6 +1286,35 @@ impl SessionRuntimeManager {
         session: &SessionId,
         node: Option<&SessionNodeId>,
     ) -> Result<Arc<ManagedRuntime>, RuntimeManagerError> {
+        self.replace_expected(session, node, None).await
+    }
+    /// Reconstruct exactly the addressed branch using current configuration.
+    pub(crate) async fn restart(
+        &self,
+        session: &SessionId,
+        conversation: &ConversationId,
+        incarnation: RuntimeIncarnationId,
+    ) -> Result<Arc<ManagedRuntime>, RuntimeManagerError> {
+        let node = {
+            let registry = self.registry.0.lock().expect("registry mutex");
+            registry.check_session(session, conversation)?;
+            let Some(Entry::Loaded(runtime)) = registry.entries.get(conversation) else {
+                return Err(RuntimeManagerError::StaleIncarnation);
+            };
+            if runtime.identity.incarnation != incarnation {
+                return Err(RuntimeManagerError::StaleIncarnation);
+            }
+            runtime.identity.node.clone()
+        };
+        self.replace_expected(session, Some(&node), Some(incarnation))
+            .await
+    }
+    async fn replace_expected(
+        &self,
+        session: &SessionId,
+        node: Option<&SessionNodeId>,
+        expected: Option<RuntimeIncarnationId>,
+    ) -> Result<Arc<ManagedRuntime>, RuntimeManagerError> {
         loop {
             let access = self
                 .sessions
@@ -1221,6 +1325,12 @@ impl SessionRuntimeManager {
             let (flight, claimed) = {
                 let mut registry = self.registry.0.lock().expect("registry mutex");
                 registry.check_session(session, &id)?;
+                if let Some(expected) = expected
+                    && !matches!(registry.entries.get(&id), Some(Entry::Loaded(runtime)) if runtime.identity.incarnation == expected)
+                {
+                    return Err(RuntimeManagerError::StaleIncarnation);
+                }
+
                 match registry.entries.get(&id) {
                     None => {
                         registry.reserve()?;
@@ -1233,6 +1343,7 @@ impl SessionRuntimeManager {
                         (flight, true)
                     }
                     Some(Entry::Loading(flight) | Entry::Unloading { flight, .. }) => {
+                        drop(access);
                         (flight.clone(), false)
                     }
                     Some(Entry::Loaded(runtime)) => {
@@ -1334,6 +1445,7 @@ impl SessionRuntimeManager {
 /// it. Failed Loading is removed; failed Unloading retains the closed old writer.
 /// There is no permanent abandoned Loading entry and no fabricated rollback.
 struct TerminalGuard {
+    owner: SessionRuntimeManager,
     registry: Arc<RuntimeRegistry>,
     id: ConversationId,
     flight: Arc<Flight>,
@@ -1343,6 +1455,7 @@ struct TerminalGuard {
 impl TerminalGuard {
     fn new(owner: &SessionRuntimeManager, id: ConversationId, flight: Arc<Flight>) -> Self {
         Self {
+            owner: owner.clone(),
             registry: owner.registry.clone(),
             id,
             flight,
@@ -1365,20 +1478,44 @@ impl TerminalGuard {
                 .expect("composition")
                 .activate();
         }
-        self.publish(result);
+        if let Ok(Some(runtime)) = &result {
+            let mut registry = self.registry.0.lock().expect("registry mutex");
+            if registry.fenced(&self.id) {
+                // Never publish a usable incarnation after deletion wins. The
+                // original Loading flight now completes only after native drain.
+                registry.entries.insert(
+                    self.id.clone(),
+                    Entry::Unloading {
+                        _runtime: runtime.clone(),
+                        flight: self.flight.clone(),
+                    },
+                );
+                self.owner.spawn_unload(
+                    self.id.clone(),
+                    runtime.clone(),
+                    self.flight.clone(),
+                    None,
+                );
+                self.finished = true;
+                return;
+            }
+            // Publication must share the fence check's lock.
+            registry
+                .entries
+                .insert(self.id.clone(), Entry::Loaded(runtime.clone()));
+            self.flight
+                .result
+                .send_replace(Some(Ok(Some(runtime.identity.clone()))));
+            self.finished = true;
+            return;
+        }
+        self.publish(result.map(|_| ()));
         self.finished = true;
     }
-    fn publish(&self, result: CompositionOutcome) {
+    fn publish(&self, result: Result<(), RuntimeManagerError>) {
         let mut registry = self.registry.0.lock().expect("registry mutex");
         match &result {
-            Ok(Some(runtime)) => {
-                // External publication is the ready incarnation. All callers
-                // that arrived during activation joined the same Loading flight.
-                registry
-                    .entries
-                    .insert(self.id.clone(), Entry::Loaded(runtime.clone()));
-            }
-            Ok(None) => {
+            Ok(()) => {
                 registry.remove(&self.id);
             }
             Err(_) if matches!(registry.entries.get(&self.id), Some(Entry::Loading(_))) => {
@@ -1388,9 +1525,7 @@ impl TerminalGuard {
                 registry.unload_failures += 1;
             } // Retain unproven writer.
         }
-        self.flight.result.send_replace(Some(
-            result.map(|runtime| runtime.map(|r| r.identity.clone())),
-        ));
+        self.flight.result.send_replace(Some(result.map(|()| None)));
     }
 }
 impl Drop for TerminalGuard {

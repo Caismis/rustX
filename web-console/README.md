@@ -67,7 +67,7 @@ an independently managed runtime/Host. The [Host contract](WORKSPACES.md) descri
 that operator-owned integration. Use the launcher for complete local composition.
 
 Authentication is #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v7` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v8` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, URL credential, login,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -93,7 +93,7 @@ requests provider/MCP configuration.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v7.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v8.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -133,8 +133,8 @@ prevent older observations overwriting newer summaries. Rename rereads the exact
 Every new connection has a new generation. Socket callbacks, resolved request
 continuations and attachment workers are fenced. A fresh attach/snapshot replaces
 stale observations; old attachment work cannot overwrite a new incarnation, even
-within the same connection. Native unload may close an attachment before its reply;
-its acknowledgement applies only to the attachment lifecycle that requested it.
+within the same connection. Native retirement may close an attachment before a delete or branch-switch reply;
+its acknowledgement applies only to the exact requested operation.
 
 **Disconnect** closes only the socket and stays disconnected. An unexpected loss
 marks observations stale. **Reconnect** is explicit: initialize, list, reattach
@@ -142,7 +142,7 @@ Sessions whose current `attachmentIntent` is `wanted`, then replace snapshots.
 There is no automatic connection loop. Selection controls focus; `openViews`
 tracks bounded browser views; `attachmentIntent` records desired controller ownership;
 `attachment`/target and uncertain-operation diagnostics record server observations.
-Open/Attach sets intent to `wanted`. Detach, unload and closing a view set it to
+Open Session sets intent to `wanted`. Closing a view sets it to
 `released` immediately, before any RPC acknowledgement or failure. Server results
 never change intent. Loss marks an observed route stale regardless of intent.
 
@@ -157,10 +157,9 @@ Switching Sessions and React unmounting alone remain presentation-only.
 
 Disconnect, closing a view, switching focus, and React unmounting never cancel,
 answer, unload or delete. Detach releases only external controller/subscription
-ownership, so work, loaded runtimes and pending interactions survive. Explicit
-**Unload runtime**, available only in **Session actions → Advanced Session controls**,
-is the native shutdown operation and may settle active work.
-After lost detach/unload acknowledgement, released intent prevents reconnect from
+ownership, so work and pending interactions survive. Confirmed **Delete Session**
+owns any required runtime retirement, including for the selected Session.
+After lost detach acknowledgement, released intent prevents reconnect from
 attaching or cold-loading the Session to discover the outcome. Only a later
 explicit **Open Session** sets wanted intent again. A fresh attach
 cannot by itself prove the previous mutation's outcome, so uncertainty remains.
@@ -226,7 +225,7 @@ Supported native gestures: list/create/open, delete preview and revision-checked
 delete, Send/Queue/Steer and cancel, Goal pause/resume/edit, typed slash commands,
 native Fork/Branch/Retry and Session tree navigation, explicit model selection and configuration-owned approval policy,
 answer/decline/cancel interactions and contextual reconnect. Closing a view releases
-its controller without stopping work; advanced unload remains explicit. Resync,
+its controller without stopping work. Resync,
 detach and cold attach remain native client capabilities, not permanent product buttons.
 Commands are client grammar, never server command strings. Unsupported slash input
 is refused without prompt fallback. Retry creates a native branch and executes its
@@ -344,3 +343,9 @@ Save/Reload, CAS external edits, named-Agent editing and desktop/mobile views.
 The [Settings/native auxiliary architecture](SETTINGS-ARCHITECTURE.md) documents CFG3 ownership, draft recovery, resource cards, appearance and bounded artifact preview.
 
 Reset #347 validation and browser evidence: [acceptance record](RESET-347-VALIDATION.md).
+
+Session lists show durable facts, with no residency field or permanent residency
+badges. The Developer Inspector retains exact attachment/incarnation observations;
+server diagnostics retain process residency. Branch switching is semantic, not
+a manual unload sequence. Deletion disables controls, closes the deleted view,
+and focuses another existing view or the normal New Session empty state.

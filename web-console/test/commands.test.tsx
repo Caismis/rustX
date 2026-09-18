@@ -9,7 +9,7 @@ import { CommandSession, NavigationEpoch, createSession } from '../src/app/comma
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v7';
+import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v8';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -190,7 +190,7 @@ describe('inbound transport frontier', () => {
     await expect(scope.transition('branch', selection)).rejects.toThrow('accepted inbound');
     await expect(scope.transition('retry', selection)).rejects.toThrow('accepted inbound');
     await expect(scope.openNode('other', 'other-conversation')).rejects.toThrow('accepted inbound');
-    expect(methods()).not.toContain('session/branch'); expect(methods()).not.toContain('session/unload');
+    expect(methods()).not.toContain('session/branch'); expect(methods()).not.toContain('session/switchNode');
     expect(methods().filter(method => method === 'session/attach')).toHaveLength(2);
     server.socket.deliver(response); await work;
     expect(view().inboundRequests).toBe(0);
@@ -242,7 +242,7 @@ describe('inbound transport frontier', () => {
     const request = await server.waitFor('turn/start', 1);
     await scope.compact();
     expect((await scope.transition('fork', selection))?.session.id).toBe('child');
-    expect(methods()).not.toContain('session/unload');
+    expect(methods()).not.toContain('session/switchNode');
     server.reply(request); await work;
   });
   it.each(['branch', 'retry'] as const)('%s committed before an unresolved inbound request stops before unload', async action => {
@@ -253,7 +253,7 @@ describe('inbound transport frontier', () => {
     const turn = await server.waitFor('turn/start', 1), turnResponse = server.commit(turn);
     server.socket.deliver(branchResponse); await rejected;
     expect(fixture.committed).toHaveLength(1); expect((await scope.tree()).nodes.some(node => node.id === 'branch-A')).toBe(true);
-    expect(methods()).not.toContain('session/unload');
+    expect(methods()).not.toContain('session/switchNode');
     expect(methods().filter(method => method === 'session/branch')).toHaveLength(1);
     server.socket.deliver(turnResponse); await send;
   });
@@ -340,7 +340,7 @@ describe('typed native operations and continuation fencing', () => {
     await expect(scope.transition('branch', selection)).rejects.toThrow('accepted inbound');
     await expect(scope.transition('retry', selection)).rejects.toThrow('accepted inbound');
     await expect(scope.openNode('other-node', 'other-conversation')).rejects.toThrow('accepted inbound');
-    expect(methods()).not.toContain('session/branch'); expect(methods()).not.toContain('session/unload');
+    expect(methods()).not.toContain('session/branch'); expect(methods()).not.toContain('session/switchNode');
     expect(available(commands.find(command => command.id === 'compact')!, false, false, executionIdle(view()))).toBe(true);
     await act(() => scope.compact()); // native maintenance permits pending inbound
     expect(methods().filter(method => method === 'context/compact')).toHaveLength(1);
@@ -368,7 +368,7 @@ describe('typed native operations and continuation fencing', () => {
     expect(fixture.committed).toHaveLength(1);
     expect((await scope.tree()).nodes.some(node => node.id === 'branch-A')).toBe(true);
     expect(methods().filter(method => method === 'session/branch')).toHaveLength(1);
-    expect(methods()).not.toContain('session/unload');
+    expect(methods()).not.toContain('session/switchNode');
     expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
     expect(server.client.target('A').conversation_id).toBe('conversation-A');
   });
@@ -377,7 +377,7 @@ describe('typed native operations and continuation fencing', () => {
     await server.client.send('A', 'Accepted task');
     expect(executionIdle(server.client.getSnapshot().views.A)).toBe(false);
     expect((await scope.transition('fork', selection))?.session.id).toBe('child');
-    expect(methods()).not.toContain('session/unload');
+    expect(methods()).not.toContain('session/switchNode');
     expect(server.client.getSnapshot().views.A.submissions?.[0].messageId).toBe('accepted-user');
   });
   it.each(['branch', 'retry', 'tree'] as const)('an already open %s selector tracks acknowledgement and authoritative reconciliation', async id => {
@@ -391,7 +391,7 @@ describe('typed native operations and continuation fencing', () => {
     const request = await server.waitFor('turn/start', 1), response = server.commit(request);
     expect(row).toHaveProperty('disabled', true);
     fireEvent.click(row);
-    expect(methods()).not.toContain('session/branch'); expect(methods()).not.toContain('session/unload');
+    expect(methods()).not.toContain('session/branch'); expect(methods()).not.toContain('session/switchNode');
     await act(async () => { server.socket.deliver(response); await work; });
     expect(row).toHaveProperty('disabled', true);
     await act(() => server.update('A', { ...fixture.original, messages: [{ role: 'user', source: 'human', id: 'accepted-user', content: [{ type: 'text', text: 'accepted' }] }] }));
@@ -463,10 +463,10 @@ describe('typed native operations and continuation fencing', () => {
   });
   it.each(['branch', 'retry'] as const)('%s creates a native node, unloads then attaches exactly; only retry executes returned input once', async action => {
     const { scope, selection, fixture } = await subject();
-    server.held.add('session/branch'); server.held.add('session/unload'); server.held.add('session/attach');
+    server.held.add('session/branch'); server.held.add('session/switchNode'); server.held.add('session/attach');
     const work = scope.transition(action, selection);
     const branch = await server.waitFor('session/branch', 1); server.reply(branch);
-    const unload = await server.waitFor('session/unload', 1);
+    const unload = await server.waitFor('session/switchNode', 1);
     expect(methods()).not.toContain('turn/start'); server.reply(unload);
     const attach = await server.waitFor('session/attach', 3);
     expect(attach.params).toEqual({ session_id: 'A', node_id: 'branch-A' });
@@ -484,7 +484,7 @@ describe('typed native operations and continuation fencing', () => {
     } else { expect(methods()).not.toContain('turn/start'); expect(result?.content).toEqual(fixture.content); }
     expect(methods()).not.toContain('session/upload');
   });
-  it.each(['session/unload', 'session/attach', 'turn/start'] as const)('retry stops after lost %s response and never repeats the branch or execution', async method => {
+  it.each(['session/switchNode', 'session/attach', 'turn/start'] as const)('retry stops after lost %s response and never repeats the branch or execution', async method => {
     const { scope, selection, fixture } = await subject(); server.held.add(method);
     const count = server.requests.filter(item => item.request.method === method).length + 1;
     const work = scope.transition('retry', selection); const rejection = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
@@ -550,7 +550,7 @@ describe('typed native operations and continuation fencing', () => {
     await act(async () => server.socket.deliver(response));
     expect(screen.getByRole('button', { name: 'Open Session B', current: 'page' })).toBeTruthy();
     expect(methods().filter(method => method === 'session/attach')).toHaveLength(attachments);
-    expect(methods()).not.toContain('session/unload');
+    expect(methods()).not.toContain('session/switchNode');
     expect(fixture.committed).toHaveLength(1);
   });
 });

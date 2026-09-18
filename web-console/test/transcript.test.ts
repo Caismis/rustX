@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v7';
+import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v8';
 import { Server, snapshot } from './fixture';
 import { prependTranscript, refreshTranscript, replaceTranscript, HISTORY_LIMIT } from '../src/client/transcript';
 const entry = (n: number): RuntimeClientTranscriptEntry => ({ cursor: String(n), item: { type: 'message', message: { id: `m${n}`, role: 'assistant', content: [{ type: 'text', text: `Message ${n}` }] } } });
@@ -64,7 +64,7 @@ it('reattachment in the same connection rejects the old page and duplicate load 
   await server.attached('A'); server.held.add('session/transcript');
   const older = server.client.loadEarlier('A'); await server.client.loadEarlier('A');
   const request = await server.waitFor('session/transcript', 1);
-  await server.client.release('A', false); await server.client.attach('A');
+  await server.client.release('A'); await server.client.attach('A');
   server.socket.success(request, { type: 'transcript', page: { entries: [entry(9)] } }); await older;
   expect(server.client.getSnapshot().views.A.history?.page.entries).toEqual([entry(10)]);
   expect(server.requests.filter(item => item.request.method === 'session/transcript')).toHaveLength(1);

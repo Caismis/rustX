@@ -1,5 +1,4 @@
 import { closeSessionView } from './shell-actions';
-import { unloadSession } from './shell-actions';
 import { test, expect } from '@playwright/test';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -33,7 +32,7 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     await expect(remoteB.readSession(id)).rejects.toThrow();
     const listed = await remoteA.client.call('session/list', { offset: 0, limit: 32 }, 'sessions');
     expect(listed.sessions.find(row => row.id === id)?.cwd).toBe(a.workspaceA);
-    expect(listed.residencies[id]).toBe('Unloaded');
+    expect(listed).not.toHaveProperty('residencies');
     expect((await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.loaded).toBe(0);
     const outside = join(a.directory, 'outside-host-roots'); mkdirSync(outside);
     const denied = await remoteA.createSession({ cwd: outside });
@@ -96,8 +95,8 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     expect(await read()).toEqual(original);
     expect((await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.loaded).toBe(1);
     await page.locator(`button[data-session-id="${id}"]`).click();
-    await unloadSession(page);
-    await page.getByLabel('Session status').getByRole('button', { name: 'Open Session', exact: true }).click();
+    await closeSessionView(page, id);
+    await page.locator(`button[data-session-id="${id}"]`).click();
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await expect(page.locator('[aria-label^="Select Workspace"][aria-current="page"]')).toHaveCount(0);
     expect((await a.workspaceHost.host.listWorkspaces()).workspaces.some(row => row.id === wa.id)).toBe(false);

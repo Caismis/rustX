@@ -39,13 +39,13 @@ gates and committed observations establish ordering.
 | C: external disconnect | Same process test as A | Connection detach observed with zero external attachments; provider released, root execution settles while detached; reconnect sees result once |
 | D: interactions | Browser `console.spec.ts`; scripted `headless_approval_and_questionnaire_survive_detach_and_settle_once` and `adapter_disconnect_cannot_settle_approval_or_questionnaire` | Native coordinator; same pending identity after reconnect, exact continuation count; provider gate permits headless publication; stdio EOF cannot settle |
 | E: canonical sources | Process `app_server_current_sources_persisted_selection_and_targeted_cold_replacement` | Resolver + Session settings; TOML edit after provider admission, live/admitted A frozen, cold B sees edit, cold A combines current defaults and explicit model |
-| F: target replacement | Same process configuration test; scripted `replacement_waits_for_active_attempt_task_and_changes_only_incarnation_a`, `unload_claim_rejects_late_operations_and_old_incarnations` | Manager writer claim and endpoint fence; unload completes before cold attach, only A incarnation changes; native gates prove no second writer |
+| F: target replacement | Same process configuration test; scripted `replacement_waits_for_active_attempt_task_and_changes_only_incarnation_a`, `unload_claim_rejects_late_operations_and_old_incarnations` | Manager writer claim and endpoint fence; semantic reconstruction completes before reattach, only A incarnation changes; native gates prove no second writer |
 | G: idle unload | Scripted `idle_grace_detach_eviction_cold_resume_and_session_independence` | Existing manual clock + unload claim; durable list/read/settings/history survive; B remains resident |
 | H: two users/processes | Reference-host process test above | Separate native controllers/roots/config/env; real tool cwd and environment, per-process catalog/read, B death leaves gated A alive |
 | I: transport parity | `tests/support/app_server_conformance.rs::representative_scenario` through direct/stdio/WebSocket; TUI parity | Same DTO version, model/domain vocabulary, snapshot/event transitions and stale attachment rejection |
 | J: same server, both clients | Browser `console.spec.ts` imports actual TUI `AppServerHost` | Browser releases B, remote TUI reads/resyncs B while A runs, releases B back to browser; single-controller refusal first |
 | K: restart | Reference-host SIGKILL test; existing process drain/cold-resume tests; TUI unexpected child death | Tool result has reached next gated provider request; no replay, catalog reads load nothing, native cold recovery |
-| L: bounded repetition | TUI `bounded product lifecycle`; existing browser 34 detach/reopens and transport capacity reaping | Three owned stdio children and three WS lifetimes, deterministic turns, detach/unload; runtime and pending/child/workflow registries return to baseline; child exit awaited |
+| L: bounded repetition | TUI `bounded product lifecycle`; existing browser 34 detach/reopens and transport capacity reaping | Three owned stdio children and three WS lifetimes, deterministic turns, detach/delete; runtime and pending/child/workflow registries return to baseline; child exit awaited |
 
 The lower-level race/recovery matrices remain at their owners. No RSS threshold,
 transport-specific runtime semantics, or test-only semantic RPC is introduced.
@@ -133,11 +133,22 @@ raw protocol log and Runtime facts panel to inspect attachment/incarnation/curso
 and authoritative state; never resubmit a mutation merely because its reply was lost.
 
 Edit the printed canonical TOML source after a runtime is loaded. Resync must keep
-that runtime's composition. Create a fresh Session or explicitly **Unload runtime**
-then **Attach / cold resume** to see current defaults plus persisted selections.
+that runtime's composition. Use the existing configuration reload owner, or reconstruct with `session/restart`
+when composition requires it to see current defaults plus persisted selections.
 To dogfood automatic idle residency, configure `[app_server] idle_grace_ms` before
 server startup, detach every view/controller of an idle Session, and inspect
 `server/diagnostics` until it reports unloaded. The catalog remains visible and a
 later open cold-resumes history/settings. Automated TTL proof uses the manual
 clock, never real waiting. Finish by Ctrl+C in the external server terminal;
 that is the host's explicit process shutdown, independent of client disconnect.
+
+## SESSION-01 / v8
+
+Ordinary Session listing is durable-only. Manager diagnostics retain residency.
+Preview accepts resident/attached/current Sessions without destructive guards.
+Confirmed deletion fences manager admission, joins transitions and proves native
+writer retirement before exclusion, revision validation, commit and cleanup.
+The manager suite parks real composition, retirement and operation boundaries to
+prove both admission orderings, no Loading/replacement publication after fencing,
+external-route closure, active-attempt settlement, absent-Session fencing and
+unrelated-Session isolation. Unproven retirement keeps the writer slot and fence.

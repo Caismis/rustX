@@ -317,7 +317,7 @@ describe("local self-hosted mode: one owned App Server child over stdio", { skip
       const original = await host.readSession(a.sessionId);
       const branched = await host.branchSession(a.sessionId, original.active_node,
         page.surfaceRevision, page.boundaries[0]!.message.id);
-      await assert.rejects(host.attach(a.sessionId, branched.session.active_node), /explicit unload confirmation/);
+      await assert.rejects(host.attach(a.sessionId, branched.session.active_node), /branch switching/);
       const branch = await host.openNode(a.sessionId, branched.session.active_node);
       assert.notEqual(branch.target.conversation_id, a.target.conversation_id);
       assert.equal(branch.nodeId, branched.session.active_node);
@@ -689,7 +689,12 @@ describe("bounded product lifecycle", { skip: SKIP }, () => {
             assert.deepEqual(snapshot.snapshot.workflows.runs, []);
             await host.detach(session.sessionId);
             const attached = await host.attach(session.sessionId);
-            await attached.unload();
+            const preview = await host.previewSessionDeletion(attached.sessionId);
+            assert.equal(preview.status, "preview");
+            if (preview.status !== "preview") throw new Error("expected preview");
+            const deleted = await host.deleteSession(attached.sessionId, preview.preview.target_revision);
+            assert.equal(deleted.status, "deleted");
+            await until(() => attached.serverClosed, "deleted attachment closes");
             const end = (await host.client.call("server/diagnostics", {}, "diagnostics")).snapshot;
             for (const key of ["loaded", "loading", "unloading", "active_roots", "external_attachments"] as const) assert.equal(end[key], baseline[key], key);
             assert.equal((await provider.requests()).length, cycle + 1);

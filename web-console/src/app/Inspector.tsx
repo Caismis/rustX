@@ -20,7 +20,7 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
     connection_generation: state.generation, connection: state.connection,
     attachment_intent: view?.attachmentIntent, attachment: view?.attachment, attachment_id: view?.target?.attachment_id,
     residency: view?.attachment === 'attached' || view?.attachment === 'resynchronizing' ? 'loaded'
-      : view?.attachment === 'unloaded' ? 'unloaded (acknowledged)' : 'not currently observed',
+      : 'not currently observed',
     cursor: view?.cursor, cwd: view?.settings?.cwd,
     attempt: snapshot?.attempt, pending_interactions: snapshot?.pending_interactions,
     background_count: snapshot?.background?.length ?? 0, subagent_count: snapshot?.subagents?.length ?? 0,
@@ -34,7 +34,7 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
     uncertain_operations: state.uncertain.filter(operation => view && operation.sessionId === view.id), model_mutation: view?.modelMutation,
     goal: snapshot?.goal, todos: snapshot?.todos, statuses: snapshot?.statuses,
     background: snapshot?.background, subagents: snapshot?.subagents,
-    trace: view?.trace, session_residency: view ? state.sessionResidencies?.[view.id] : undefined,
+    trace: view?.trace,
     connection_error: state.error, session_error: view?.error,
   };
   return <div className={`inspector ${css.settings}`}>
@@ -48,7 +48,7 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
       <details><summary>Tools, Subagents, Workflows and Agent status</summary><pre>{json({ background: facts.background, subagents: facts.subagents, workflows: facts.workflows, statuses: facts.statuses })}</pre></details>
       <details><summary>Trace and Request Snapshot identities</summary><pre>{json(facts.trace)}</pre></details>
     </SettingsCard>
-    <SettingsCard title="Attachment / residency"><Facts rows={[["Attachment intent", facts.attachment_intent], ["Observed attachment", facts.attachment], ["Attachment ID", facts.attachment_id], ["Runtime incarnation", facts.runtime_incarnation], ["Observed residency", facts.residency], ["Listed residency", json(facts.session_residency)]]} /></SettingsCard>
+    <SettingsCard title="Attachment / residency"><Facts rows={[["Attachment intent", facts.attachment_intent], ["Observed attachment", facts.attachment], ["Attachment ID", facts.attachment_id], ["Runtime incarnation", facts.runtime_incarnation], ["Observed residency", facts.residency]]} /></SettingsCard>
     <SettingsCard title="Inbound / interactions"><details><summary>Mailbox and pending interactions</summary><pre>{json({ inbound: facts.inbound, submissions: facts.submissions, inbound_requests: facts.inbound_requests, pending_interactions: facts.pending_interactions, interaction_operations: facts.interactions })}</pre></details><details><summary>Todo and Goal revisions</summary><pre>{json({ goal: facts.goal, todos: facts.todos })}</pre></details></SettingsCard>
     <SettingsCard title="Configuration / revisions"><Facts rows={[["Resource revision", facts.resource_revision], ["Capability revision", facts.capability_revision], ["Approval mode", facts.approval_mode]]} /><details><summary>Settings evidence</summary><pre>{json({ settings: facts.settings_evidence, model: facts.model, mutation: facts.model_mutation })}</pre></details></SettingsCard>
     <SettingsCard title="Recovery / uncertainty"><Facts rows={[["Shutting down", String(facts.shutting_down ?? 'unobserved')], ["Durability failure", json(facts.durability_failure)]]} /><details><summary>Uncertain operations and reconciliation evidence</summary><pre>{json({ uncertain: facts.uncertain_operations, cancellation: facts.cancellation, model_mutation: facts.model_mutation, interactions: facts.interactions, connection_error: facts.connection_error, session_error: facts.session_error })}</pre></details></SettingsCard>

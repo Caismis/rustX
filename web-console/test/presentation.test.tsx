@@ -95,7 +95,7 @@ it('closing A immediately emits exactly its detach, preserving B, runtime work a
   const detach = await server.waitFor('session/detach', 1);
   expect(server.requests.slice(baseline).filter(({ request }) => request.method !== 'settings/read').map(({ request }) => ({ method: request.method, params: request.params }))).toEqual([{ method: 'session/detach', params: { target } }]);
   expect(server.client.getSnapshot().views.A.attachment).toBe('attached'); // No optimistic server fact.
-  await act(async () => { server.reply(detach); await server.client.release('A', false); });
+  await act(async () => { server.reply(detach); await server.client.release('A'); });
   expect(server.claims().map(item => item.session_id)).toEqual(['B']);
   expect(server.client.getSnapshot().views.A.snapshot).toBe(beforeA);
   expect(server.client.getSnapshot().views.B).toBe(beforeB);
@@ -123,22 +123,4 @@ it('lost close-view acknowledgement leaves intent released across reconnect and 
   expect(server.requests.filter(({ request }) => request.method === 'session/detach')).toHaveLength(1);
   expect(server.requests.filter(({ request }) => request.method === 'session/attach' && request.params.session_id === 'A')).toHaveLength(1);
   expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!).openViews).toEqual(['B']);
-});
-
-it('releasing an open view also removes its existing reload hint without removing its Sidebar row', async () => {
-  await server.attached('A', 'B'); server.held.add('session/unload');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
-  const ui = render(<App client={server.client} workspaceHost={server.workspaceHost} />);
-  act(() => { fireEvent.click(screen.getByRole('button', { name: 'Session actions' })); });
-  act(() => { fireEvent.click(screen.getByRole('menuitem', { name: 'Advanced Session controls' })); });
-  act(() => { fireEvent.click(screen.getByRole('button', { name: 'Unload runtime' })); });
-  const unload = await server.waitFor('session/unload', 1); server.commit(unload);
-  expect(screen.getByRole('button', { name: 'Open Session A' })).toBeTruthy();
-  expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!).openViews).toEqual(['B']);
-  await act(async () => { server.socket.close(); }); ui.unmount();
-  const fresh = new Server(); fresh.snapshots = server.snapshots;
-  const page = render(<App client={fresh.client} workspaceHost={fresh.workspaceHost} />); await act(() => fresh.connect());
-  expect(fresh.claims().map(item => item.session_id)).toEqual(['B']);
-  expect(screen.getByLabelText('Session title').textContent).toBe('Session B');
-  page.unmount(); fresh.client.disconnect();
 });

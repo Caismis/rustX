@@ -454,19 +454,17 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
             .result,
         Some(RuntimeClientResult::Initialized { .. })
     ));
+    let live_target = product.supervisor().inspect_deletion(&a.id).await.unwrap();
     assert!(
-        product
-            .supervisor()
-            .deletion_preflight(&a.id)
-            .await
-            .is_err(),
-        "the actual live target Conversation blocks"
+        rustx::local_runtime::session_deletion::DeletionExclusion::acquire(
+            &paths.runtime_root,
+            &live_target
+        )
+        .is_err(),
+        "inspection permits a live target, but destructive exclusion still requires retirement"
     );
-    let preflight = product
-        .supervisor()
-        .deletion_preflight(&b.id)
-        .await
-        .unwrap();
+    drop(live_target);
+    let preflight = product.supervisor().inspect_deletion(&b.id).await.unwrap();
     assert_eq!(preflight.conversations().len(), 1);
     assert_eq!(
         preflight.conversations()[0].conversation_id,
@@ -507,7 +505,7 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
     assert_eq!(
         product
             .supervisor()
-            .deletion_preflight(&b.id)
+            .inspect_deletion(&b.id)
             .await
             .unwrap()
             .ownership_revision(),

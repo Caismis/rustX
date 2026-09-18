@@ -1528,9 +1528,9 @@ describe("RustxTuiApp lifecycle", () => {
 });
 
 /** Real app routing with native operations held at explicit submission gates. */
-async function deletionAppHarness(overlapInitial = false) {
+async function deletionAppHarness(overlapInitial = false, currentTarget = false) {
   const state = { ...emptyPresentationState(sessionModel("alpha/model-a")), attempt: { ...attemptView(), phase: { type: "running" as const } } };
-  const session = fakeSession(state) as unknown as Record<string, unknown> & {
+  const session = fakeSession(state, currentTarget ? "old" : undefined) as unknown as Record<string, unknown> & {
     publishState(next: typeof state): void;
     publishSnapshot(): void;
   };
@@ -1739,7 +1739,7 @@ it("stale settlement waits through HITL for fresh preview and a second explicit 
 });
 
 for (const outcome of [
-  { status: "blocked", session_id: "old", reason: { kind: "in_use" } },
+  { status: "blocked", session_id: "old", reason: { kind: "resource_conflict" } },
   { status: "committed_durability_uncertain", session_id: "old" },
   { status: "not_found", session_id: "old" },
 ] as const) it(`${outcome.status} settlement survives HITL and presents the native result afterward`, async () => {
@@ -1751,7 +1751,7 @@ for (const outcome of [
     assert.equal(h.surface(), approval);
     assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
     await h.input("\x1b[27u");
-    assert.match(h.text(), outcome.status === "blocked" ? /currently in use/ : outcome.status === "not_found" ? /absent from native authority/ : /durability is uncertain/);
+    assert.match(h.text(), outcome.status === "blocked" ? /external resource owner/ : outcome.status === "not_found" ? /absent from native authority/ : /durability is uncertain/);
     assert.doesNotMatch(h.text(), /delete failed/);
     if (outcome.status === "committed_durability_uncertain") {
       await h.input("rr"); assert.deepEqual(h.recovers, ["old"]);
@@ -1971,4 +1971,19 @@ it("quitting while remote recovery is pending closes the late connection", async
   connection.resolve(second);
   await waitForApplicationContinuation();
   assert.deepEqual(log, ["disconnect"]);
+});
+
+it("deleting the focused last Session disables submissions and opens the empty selector", async () => {
+  const h = await deletionAppHarness(false, true);
+  try {
+    await h.resolvePreview(); await h.input("\t\r");
+    assert.deepEqual(h.executes, [["old", "revision"]]);
+    h.absent(); h.execution.resolve({ status: "deleted", session_id: "old" });
+    await waitForApplicationContinuation();
+    await waitForApplicationContinuation();
+    assert.match(h.text(), /No Sessions available/);
+    assert.match(h.text(), /New Session/);
+    assert.equal(h.cancelled(), 0);
+    assert.equal(h.executes.length, 1);
+  } finally { await h.finish(); }
 });

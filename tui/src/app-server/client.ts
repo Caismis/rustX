@@ -70,7 +70,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 7;
+export const APP_SERVER_PROTOCOL_VERSION = 8;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -135,7 +135,8 @@ export class UncertainOutcomeError extends Error {
 /** Every generated method must deliberately classify a lost response. */
 export type ResponseLossClass = "read" | "side_effecting" | "connection_local";
 export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
-  "session/unload": "side_effecting",
+  "session/restart": "side_effecting",
+  "session/switchNode": "side_effecting",
   "session/transcript": "read",
   "session/trace": "read",
   "artifact/read": "read",
@@ -271,11 +272,19 @@ export class AppServerClient {
    * different discriminator is a protocol violation rather than something to
    * interpret loosely, so it fails instead of being coerced.
    */
+  readonly #deletingSessions = new Set<string>();
+  setSessionDeleting(id: string, deleting: boolean): void {
+    if (deleting) this.#deletingSessions.add(id); else this.#deletingSessions.delete(id);
+  }
+
   async call<M extends MethodName, T extends ResultType>(
     method: M,
     params: MethodParams<M>,
     expect: T,
   ): Promise<ResultOf<T>> {
+    if ('target' in params && this.#deletingSessions.has(params.target.session_id) && method !== 'session/detach') {
+      throw new Error('Session deletion has disabled controls. Verify its outcome before continuing.');
+    }
     const result = await this.#request(method, params, expect);
     return result as ResultOf<T>;
   }
@@ -335,7 +344,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v7 protocol message");
+      this.#fail("invalid App Server v8 protocol message");
       return;
     }
 

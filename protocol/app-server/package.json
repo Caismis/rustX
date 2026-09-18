@@ -6,7 +6,7 @@
   "packageManager": "pnpm@11.13.1",
   "scripts": {
     "generate": "cargo run --manifest-path ../../Cargo.toml --example generate_app_server_protocol && node generate.mjs",
-    "check": "pnpm generate && git diff --exit-code -- v7.schema.json v7.ts fixtures.json fixtures.ts",
+    "check": "pnpm generate && git diff --exit-code -- v8.schema.json v8.ts fixtures.json fixtures.ts",
     "typecheck": "tsc --noEmit --strict --skipLibCheck --module nodenext --target es2022 fixtures.ts type-contracts.ts"
   },
   "devDependencies": {

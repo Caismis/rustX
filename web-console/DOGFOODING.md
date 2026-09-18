@@ -80,10 +80,9 @@ exploration intentionally leaves the provider script unconsumed.
    `publish-question` using the same gate URL pattern. Open A; answer the native
    question and observe `Detached question completed.`.
 7. In Settings save User model `fixture/second-model`. Current runtime remains
-   unchanged. Choose Session actions → Advanced Session controls → Unload runtime,
-   then Open Session. The native
-   runtime incarnation changes; model and durable history/cwd are reconstructed.
-   This is explicit idle unload. Automatic idle-eviction timing is tested with the
+   unchanged. Use Settings → Reload for safe live configuration publication,
+   then verify the selected model in Inspector. Safe live publication preserves the
+   current incarnation and history. Automatic idle eviction is tested with the
    native manual clock, not a wall-clock wait in this guide.
 8. Search Session metadata, try grouped/flat navigation, rename/reorder and
    unregister Workspace B. Its Session still exists and can be opened as an
@@ -128,11 +127,11 @@ message; the destination composer restores native text/upload receipts. Record t
 new SessionId and confirm destination copies exist beneath its own upload root.
 Keep this draft open. Close the source Session view without switching to it. In a
 second browser page connected to the same Host/server, open the source and choose
-Session actions → Advanced Session controls → Unload runtime, then delete it
+Delete the currently selected Session directly after confirmation
 through Actions → Delete → Confirm delete. The source root
 is gone; destination files remain. Return to the first page, Send the restored
 draft and Allow once. Observe `Destination upload read through native Tool.`.
-Reload/reconnect. Finally unload/delete the destination and confirm only its root
+Reload/reconnect. Finally delete the destination and confirm only its root
 is removed. Do not replace native cleanup with shell deletion. Crash/recovery and
 copy/publication race frontiers are covered by the native upload owner tests.
 
@@ -140,8 +139,8 @@ copy/publication race frontiers are covered by the native upload owner tests.
 
 Restart with `dogfood:server web_composer_context`. Create A. Todo starts composed
 but empty; to inspect the distinct absent state, disable the Todo extension in User Settings
-and explicitly unload/cold reopen a separate Session, then re-enable/cold reopen
-before continuing this script. Send `Plan the composer
+and create a separate Session, then re-enable the extension and create the Session
+used for the rest of this script. Send `Plan the composer
 docks`, expand Todo, and inspect native status/dependencies. Send `Keep working
 until the docks are verified`. At the `goal-round` gate, queue exactly
 `Queued during the Goal round`. The seats are Todo → Goal → Queue → Composer.
@@ -254,5 +253,5 @@ settles it. Disconnect exposes Reconnect. A lost response says Needs verificatio
 and is never replayed; inspect the exact request evidence in Developer Inspector.
 Read all Inspector sections and filter/pause/clear the local log: none may emit a
 native mutation. Verify Session actions → Session tree, Chat/Trajectory, Settings,
-light/dark and 390/820/1280/1600px keyboard access. Advanced unload is an explicit
-runtime shutdown with consequences explained in its dialog, not everyday chrome.
+light/dark and 390/820/1280/1600px keyboard access. Confirmed deletion settles
+active work through the native runtime owner; Close view only detaches.

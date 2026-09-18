@@ -36,8 +36,13 @@ persisted phases. A crash selects one complete catalog document atomically.
 
 ## Publication, visibility, and durability
 
-Preview acquires a finite #254 snapshot and releases every guard before returning.
-Execute acquires a fresh preflight and compares the native `target_revision`.
+Preview uses `DeletionTargetSnapshot::inspect` and releases its finite ownership
+snapshot before returning. It acquires no destructive Conversation exclusions.
+Resident, attached, focused, and actively executing Sessions can be previewed.
+Execute first fences Session admission in the runtime manager, retires or joins
+Loading/Resident/Retiring work through native shutdown, and proves writer termination.
+Only then does it acquire destructive exclusion and compare a freshly inspected
+native `target_revision`. A timeout never grants deletion authority.
 Changed semantic ownership is `Stale`; allocation access and workspace
 collisions remain typed pre-commit blockers. An existing pending record returns
 pending state without a second discovery or snapshot.
@@ -103,7 +108,7 @@ promise of permanent cross-allocation reservation.
 
 ## Cleanup and recovery
 
-The supervisor releases its catalog mutex and preflight drops root/target guards
+The supervisor releases its catalog mutex, and inspection/exclusion drop root/target guards
 before dispatching `CleanupWork::run` through `spawn_blocking`. Work owns its
 ProductRoot, frozen record and controller lifetime, not a catalog reference. It
 takes exclusive access to one exact frozen private allocation at a time. Missing
@@ -115,7 +120,7 @@ state, and recursive cleanup does not follow symlinks.
 Empty Session container directories may remain; they contain no Conversation
 source of truth and grant no identity. Projects, workspaces, environments, caches,
 configuration and credentials are outside cleanup. Retained worktrees require
-explicit disposal and continue to block preflight.
+explicit disposal and continue to block deletion.
 
 `LocalSessionClient::compose` recovers pending records after controller admission
 and before ordinary live-store recovery or runtime composition.
@@ -158,16 +163,16 @@ pre-commit failures use a bounded protocol error without private storage paths.
 | --- | --- |
 | `preview` | Bounded confirmation metadata; no guards |
 | `stale` | Ownership changed; obtain a new preview |
-| `blocked` | Current Session, in use, workspace, or invalid ownership |
+| `blocked` | Independent allocation/resource conflict, retained workspace, or invalid ownership |
 | `committed_cleanup_pending` | Logically unavailable; frozen cleanup awaits retry |
 | `committed_durability_uncertain` | Publication durability unproven; recover before further cleanup/final success |
 | `deleted` | This finalization confirmed cleanup and durable record removal |
 | `not_found` | No live Session or pending record, including completed deletion |
 
 The TUI consumes these deletion DTOs from the generated App Server
-`protocol/app-server/v7.ts` contract. There is no separate deletion SDK. Shared Rust/TypeScript
+`protocol/app-server/v8.ts` contract. There is no separate deletion SDK. Shared Rust/TypeScript
 fixtures validate the wire contract, not deletion persistence. Interactive deletion
-UX (#257) and retention/lifecycle policy remain outside this change.
+UX consumes these authoritative outcomes; retention policy remains independent.
 
 ## Deterministic evidence
 
@@ -194,3 +199,21 @@ is the default focused action. The TUI submits only the captured SessionId and
 native target revision, then reconciles paginated visibility from the native
 boundary. Cleanup retry uses `session_delete_recover`; no client storage or
 model-visible operation participates. See [TUI deletion help](../tui/README.md#delete-historical-sessions-inside-resume).
+
+## Product and client behavior (App Server v8)
+
+`session/deletePreview` describes the finite target; `session/delete` confirms
+that exact revision. A confirmed delete owns retirement even for the focused
+Session. No switch-away or unload prerequisite exists. Retained Workspaces remain
+explicit blockers; post-retirement external allocation conflicts are
+`resource_conflict`, never ordinary residency. The initiating client disables
+controls while deletion is pending, removes the view after authoritative deletion,
+and focuses an existing Session or the normal empty state without creating one.
+
+Session existence = durable product state; attachment = client relationship;
+residency = internal process resource lifecycle. Disconnect and close-view do not
+cancel work, settle interactions, retire runtimes, or delete Sessions. Native
+retirement closes old attachment routes; stale incarnations cannot enter operations.
+A lost delete response is never replayed. Reconnect inspects deletion state to
+distinguish a live Session, committed cleanup pending, durability uncertainty, and
+absence. Existing recovery retains the frozen durable workset.

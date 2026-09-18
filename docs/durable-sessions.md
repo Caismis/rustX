@@ -101,18 +101,18 @@ lineage-cut algorithm preserves compaction provenance, historical boundaries,
 identity remapping and transient editor content. A fork prompt is not accepted
 input until explicitly submitted to the destination.
 
-Load versus delete uses existing OS allocation locking. Access acquires the
-shared allocation lock before checking catalog membership. Deletion preflight
-requires exclusive target allocations under frozen ownership. If access wins,
-delete reports in-use; if deletion commits first, allocation admission rejects
-removed membership even when files remain. Recursive cleanup runs outside the
+The runtime manager fences Session admission and retires managed writers before
+delete acquires exclusive target allocations under frozen ownership. Preview only
+inspects ownership and never requires runtime absence. Independent allocation
+owners remain genuine resource conflicts. After deletion commits, allocation
+admission rejects removed membership even when files remain. Recursive cleanup runs outside the
 catalog mutex and outside root ownership exclusion, using the frozen pending
 record. Recovery never rediscovers a new deletion workset.
 
 Deletion preview, execution, and recovery on `SessionController` remain
 crate-private. `DeletionScope`, `DeletionRecord`, previews, blockers, and internal
 results are not public native DTOs: their frozen scopes are cleanup authority.
-App Server v7 exposes bounded public control-plane projections. Compile-fail API
+App Server v8 exposes bounded public control-plane projections. Compile-fail API
 regressions enforce this boundary.
 
 ## Schema
@@ -128,3 +128,13 @@ retaining those defaults would invent Session-owned intent. Reopen reconstructs
 all Sessions without inventing client focus or runtime residency.
 
 See [Session-owned workspace uploads](session-uploads.md) for receipt admission, model paths, fork copies and durable cleanup.
+
+## Session lifecycle (App Server v8)
+
+Create, open/resume, switch, fork/branch, and delete operate on durable Sessions.
+Opening implicitly reuses or composes a runtime. Close view releases an attachment
+only. Runtime residency belongs to `SessionRuntimeManager`, appears in explicit
+diagnostics, and is absent from ordinary Session lists. Confirmed deletion fences
+admission and retires the runtime before destructive exclusion and revision
+revalidation; the current Session is supported. No replacement Session is created
+when the last one is deleted. See [deletion lifecycle](session-deletion-lifecycle.md).

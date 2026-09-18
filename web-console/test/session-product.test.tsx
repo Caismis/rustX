@@ -28,6 +28,9 @@ it.each([
   ['durability failure', { snapshot: { ...snapshot(), durability_failure: { operation: 'commit', diagnostic: 'storage-failure' } } }, {}, 'failure', undefined],
   ['uncertainty outranks storage failure', { snapshot: { ...snapshot(), durability_failure: { operation: 'commit', diagnostic: 'storage-failure' } } }, { uncertain: [uncertain] }, 'uncertain', undefined],
   ['storage failure retains reconnect action', { snapshot: { ...snapshot(), durability_failure: { operation: 'commit', diagnostic: 'storage-failure' } } }, { connection: 'stale' }, 'failure', 'connect'],
+  ['pending deletion disables ordinary activity', { deleting: true }, {}, 'stopping', undefined],
+  ['lost deletion requests verification', { deleting: true }, { uncertain: [uncertain] }, 'uncertain', 'connect'],
+  ['failed retirement stays disabled with honest recovery', { deleting: true, error: 'Writer retirement unproven' }, {}, 'uncertain', 'connect'],
   ['pending native mailbox', { snapshot: { ...snapshot(), inbound: { pending: [{ sequence: '2', revision: '3', message: { id: 'native-input', source: 'human', content: [] } }] } } }, {}, 'queued', undefined],
   ['settled cancellation has no noisy status', { snapshot: { ...snapshot(), attempt: { ...running(), phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } } } } }, {}, 'idle', undefined],
   ['timed out is actionable', { snapshot: { ...snapshot(), attempt: { ...running(), phase: { type: 'settled', outcome: { type: 'timed_out' } } } } }, {}, 'failure', undefined],
@@ -94,7 +97,7 @@ it('lost cancellation remains uncertain through reconnect and a settled snapshot
 });
 it('lost authoritative attachment exposes one Open Session action and sends one admission-fenced attach', async () => {
   const server = await mount();
-  await act(async () => server.client.release('A', true));
+  await act(async () => server.client.release('A'));
   const before = server.requests.length;
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session' })));
   expect(server.requests.slice(before).filter(row => row.request.method === 'session/attach')).toHaveLength(1);

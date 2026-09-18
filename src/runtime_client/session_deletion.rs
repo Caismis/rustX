@@ -25,8 +25,7 @@ pub struct RuntimeClientSessionDeletePreview {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum RuntimeClientSessionDeletionBlocker {
-    CurrentSession,
-    InUse,
+    ResourceConflict,
     Workspace {
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         resource_count: u64,

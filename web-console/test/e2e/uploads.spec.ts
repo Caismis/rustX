@@ -1,6 +1,5 @@
 import { closeSessionView } from './shell-actions';
 import { expectSettled } from './shell-actions';
-import { unloadSession } from './shell-actions';
 import { showInspector } from './shell-actions';
 import { chooseWorkspace } from './shell-actions';
 import { expect, test } from '@playwright/test';
@@ -73,14 +72,14 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     expect(readFileSync(destinationPaths[0], 'utf8')).toBe('UPLOAD_NATIVE_SENTINEL');
     expect(readFileSync(destinationPaths[1])).toEqual(png);
     // Release the source controller without abandoning the destination editor.
-    // The actual TUI adapter cold/unload operation shares the native owner.
+    // Another client can inspect the source; deletion owns its retirement.
     const detached = wire.responses.filter(row => row.method === 'session/detach').length;
     await closeSessionView(page, source);
     await expect.poll(() => wire.responses.filter(row => row.method === 'session/detach').length).toBe(detached + 1);
     const observer = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     try {
       const attached = await observer.client.call('session/attach', { session_id: source }, 'attached');
-      await observer.client.call('session/unload', { target: attached.target }, 'unloaded');
+      await observer.client.call('session/detach', { target: attached.target }, 'detached');
     } finally { await observer.shutdown(); }
     await page.locator(`button[data-session-id="${source}"]`).hover();
     await page.locator(`button[data-session-actions="${source}"]`).click();
@@ -102,8 +101,6 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     await expect(canonical.getByText('Destination upload read through native Tool.', { exact: true })).toBeVisible();
     await expect(canonical.getByText('acceptance.txt', { exact: true })).toBeVisible();
     expect(wire.requests.filter(request => request.method === 'artifact/read')).toHaveLength(0);
-    await unloadSession(page);
-    await expect(page.getByLabel('Session status').getByRole('button', { name: 'Open Session', exact: true })).toBeVisible();
     await page.locator(`button[data-session-id="${destination}"]`).hover();
     await page.locator(`button[data-session-actions="${destination}"]`).click();
     await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();

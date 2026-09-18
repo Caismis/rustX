@@ -1,4 +1,4 @@
-import type { AttachmentTarget, MethodResult, SessionUserMessageBoundary, UserInputBlock } from '../../../../protocol/app-server/v7';
+import type { AttachmentTarget, MethodResult, SessionUserMessageBoundary, UserInputBlock } from '../../../../protocol/app-server/v8';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 
@@ -39,7 +39,7 @@ export class CommandSession {
   current = () => {
     const state = this.client.getSnapshot(), view = state.views[this.sessionId];
     return this.navigationCurrent() && state.connection === 'connected' && state.generation === this.generation
-      && view?.attachment === 'attached' && view.attachmentIntent === 'wanted' && sameTarget(view.target, this.target);
+      && !view?.deleting && view?.attachment === 'attached' && view.attachmentIntent === 'wanted' && sameTarget(view.target, this.target);
   };
   private requireCurrent() { if (!this.current()) throw new Error('Obsolete command view. Inspect current authoritative state.'); }
   async models() {
@@ -94,8 +94,8 @@ export class CommandSession {
     const session = result.session;
     if (action !== 'fork' && !lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error(`Branch ${session.active_node} committed, but the source now has unresolved inbound or accepted work. Open it from Session tree after execution settles; do not repeat the branch.`);
     // The manager permits one resident Conversation per Session. Switch only after
-    // the branch exists. A lost unload/attach response also stops this sequence.
-    if (action !== 'fork') await this.client.release(this.sessionId, true);
+    // the branch exists. A lost branch-switch/attach response also stops this sequence.
+    if (action !== 'fork') await this.client.switchNode(this.sessionId, session.active_node);
     const continuing = () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation;
     if (!continuing()) return;
     await this.client.attach(session.id, session.active_node, continuing);
@@ -138,7 +138,7 @@ export class CommandSession {
     this.requireCurrent();
     if (conversationId !== this.target.conversation_id) {
       if (!lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error('Wait for unresolved requests, accepted inbound and the current attempt to settle before switching lineage.');
-      await this.client.release(this.sessionId, true);
+      await this.client.switchNode(this.sessionId, nodeId);
       if (!this.navigationCurrent() || this.client.getSnapshot().generation !== this.generation) return;
       await this.client.attach(this.sessionId, nodeId, () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation);
     }

@@ -12,7 +12,6 @@ import { RustxTuiApp } from "../src/ui/app.ts";
 import { PopupFrame } from "../src/ui/components/popup-frame.ts";
 import { ResumeSelector } from "../src/ui/components/resume-selector.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
-import { fixtures } from "../../protocol/app-server/fixtures.ts";
 import { FakeTransport, paramsOf, tick } from "./support/app-server-peer.ts";
 import { SERVER_CAPABILITIES } from "./support/app-server-harness.ts";
 import { snapshot, sessionView } from "./support/fixtures.ts";
@@ -23,20 +22,17 @@ const SESSION_NEW = "ses_01900000-0000-7000-8000-000000001003";
 const SESSION_CREATED = "ses_01900000-0000-7000-8000-000000001004";
 const parsedResume = () => parseArguments(["--binary", "rustx", "--resume", "--workspace", "/server/work"]);
 const rows = [SESSION_A, SESSION_B].map((id) => ({ id, name: `Session ${id}`, cwd: "/server/work", active_node: `node_${id.slice(4)}`, updated_at: "2026-09-14T00:00:00Z" }));
-const diagnostics = fixtures.flatMap((f) => "result" in f && f.result?.type === "diagnostics" ? [f.result] : [])[0]!;
 
 async function connected() {
   const transport = new FakeTransport();
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
-  transport.respond(request!.id, { type: "initialized", protocol_version: 7, capabilities: SERVER_CAPABILITIES });
+  transport.respond(request!.id, { type: "initialized", protocol_version: 8, capabilities: SERVER_CAPABILITIES });
   return { transport, host: new AppServerHost({ client: await pending, ownership: "external" }) };
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {
   const request = (await transport.log.awaitMethod("session/list", count)).at(-1)!;
-  transport.respond(request.id, { type: "sessions", sessions, residencies: {} });
-  const diagnostic = (await transport.log.awaitMethod("server/diagnostics", count)).at(-1)!;
-  transport.respond(diagnostic.id, diagnostics);
+  transport.respond(request.id, { type: "sessions", sessions, });
 }
 async function attachment(transport: FakeTransport, id: string, count = 1) {
   const request = (await transport.log.awaitMethod("session/attach", count)).at(-1)!;
@@ -342,7 +338,7 @@ it("committed create retires empty authority before failed attach; reopening rea
   await tick();
   const fresh = h.surfaces.at(-1)!;
   assert.notEqual(fresh, stale);
-  assert.deepEqual(fresh.selector.visibleSessions(), [{ ...createdRow, residency: "Unloaded", activeRoot: false }]);
+  assert.deepEqual(fresh.selector.visibleSessions(), [createdRow]);
   assert.doesNotMatch(fresh.render(80).join(), /No Sessions available|New Session/);
   assert.equal(transport.log.count("session/create"), 1);
   assert.equal(transport.log.count("session/attach"), 1, "catalog refresh does not retry attachment");

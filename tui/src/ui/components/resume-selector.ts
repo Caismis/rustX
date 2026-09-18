@@ -234,8 +234,7 @@ export class ResumeSelector implements PopupContent {
         break;
       case "blocked": {
         const reason = result.reason;
-        const text = reason.kind === "current_session" ? "The active Session cannot be deleted in this version. Switch Sessions or use /new first."
-          : reason.kind === "in_use" ? "The Session or an owned child is currently in use. Release it before trying again."
+        const text = reason.kind === "resource_conflict" ? "An external resource owner prevents deletion. Inspect the ownership conflict before trying again."
           : reason.kind === "workspace" ? `${reason.resource_count} retained workspace resources block deletion. Use the existing workspace/subagent disposal action explicitly first.`
           : "Native ownership could not be validated. The Session remains available; deletion is blocked.";
         this.#state = { kind: "notice", text };

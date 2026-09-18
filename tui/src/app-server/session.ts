@@ -565,20 +565,11 @@ export class AppServerSession {
     );
   }
 
-  /**
-   * Explicitly unloads this Session's runtime.
-   *
-   * This is a deliberate product action with an incarnation check behind it,
-   * and it is emphatically not what switching focus does.
-   */
-  async unload(): Promise<void> {
+  /** Switch the durable branch; native retirement remains manager-owned. */
+  async switchNode(nodeId: string): Promise<void> {
     this.#released = true;
     this.#epoch += 1;
-    await this.#client.call(
-      "session/unload",
-      { target: this.#target },
-      "unloaded",
-    );
+    await this.#client.call("session/switchNode", { target: this.#target, node_id: nodeId }, "session");
   }
 
   /** Applies a pure local transformation of transient client state. */

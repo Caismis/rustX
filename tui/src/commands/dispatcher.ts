@@ -238,14 +238,6 @@ export class CommandDispatcher {
           return await this.newSession();
         case "/resume":
           return await this.#resume(session, argument);
-        case "/unload": {
-          if (!argument || /\s/.test(argument)) return usage("/unload <session-id>");
-          if (argument === session.sessionId) return transient("error", "switch focus to another Session before unloading this one");
-          const background = this.#context.host.attachment(argument);
-          if (background === undefined) return transient("error", "this client has no attachment for that Session");
-          await background.unload();
-          return transient("info", `server unloaded Session ${argument}; its durable history remains available`);
-        }
         case "/session":
           return await this.#sessionInfo(session);
         case "/name":

@@ -28,7 +28,7 @@ fn git(root: &std::path::Path, args: &[&str]) -> String {
 }
 
 #[tokio::test]
-async fn deletion_preflight_first_excludes_workflow_destructive_admission_until_release() {
+async fn inspect_deletion_first_excludes_workflow_destructive_admission_until_release() {
     disposal_race(true, true).await;
 }
 
@@ -159,7 +159,7 @@ async fn disposal_race(preflight_first: bool, bind_store: bool) {
     if preflight_first {
         // A separate target isolates the ownership freeze from the live store's
         // ConversationAccess. No conflicting physical operation may cross it.
-        let preview = SessionDeletionPreflight::acquire(root.path(), &other.session_id).unwrap();
+        let preview = DeletionTargetSnapshot::inspect(root.path(), &other.session_id).unwrap();
         assert!(
             manager
                 .dispose_workflow_workspace(&*store, &run)
@@ -209,7 +209,7 @@ async fn disposal_race(preflight_first: bool, bind_store: bool) {
     assert!(checkout.exists());
     assert_eq!(git(source.path(), &["rev-parse", &branch]), branch_head);
     assert_eq!(
-        SessionDeletionPreflight::acquire(root.path(), &other.session_id)
+        DeletionTargetSnapshot::inspect(root.path(), &other.session_id)
             .unwrap_err()
             .kind(),
         std::io::ErrorKind::WouldBlock
@@ -219,7 +219,7 @@ async fn disposal_race(preflight_first: bool, bind_store: bool) {
     assert!(!checkout.exists());
     assert_eq!(git(source.path(), &["rev-parse", &branch]), branch_head);
     assert_eq!(
-        SessionDeletionPreflight::acquire(root.path(), &other.session_id)
+        DeletionTargetSnapshot::inspect(root.path(), &other.session_id)
             .unwrap_err()
             .kind(),
         std::io::ErrorKind::WouldBlock,
@@ -232,6 +232,6 @@ async fn disposal_race(preflight_first: bool, bind_store: bool) {
     assert!(!checkout.exists());
     assert!(git(source.path(), &["branch", "--list", &branch]).is_empty());
     drop(store); // ordinary target access ends; physical disposal has settled
-    let final_preview = SessionDeletionPreflight::acquire(root.path(), &session).unwrap();
+    let final_preview = DeletionTargetSnapshot::inspect(root.path(), &session).unwrap();
     assert!(final_preview.workspace_blockers().is_empty());
 }

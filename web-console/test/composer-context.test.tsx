@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { GoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v7';
+import type { GoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v8';
 import { App } from '../src/app/App';
 import { ComposerContextStack } from '../src/app/composer/ComposerContextStack';
 import { GoalDock } from '../src/app/composer/GoalDock';
@@ -358,7 +358,7 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     server.held.add('goal/control');
     const work = server.client.controlGoal('A', goal().reference, { action: 'pause' });
     const request = await server.waitFor('goal/control', 1);
-    await server.client.release('A', false); await server.client.attach('A');
+    await server.client.release('A'); await server.client.attach('A');
     server.reply(request);
     expect(await work).toEqual({ status: 'obsolete' });
     expect(server.client.getSnapshot().views.A).toMatchObject({ attachment: 'attached', error: undefined });

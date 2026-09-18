@@ -93,11 +93,12 @@
           ]
         },
         {
+          "description": "Reconstruct the current Session composition from current configuration.",
           "type": "object",
           "properties": {
             "method": {
               "type": "string",
-              "const": "session/unload"
+              "const": "session/restart"
             },
             "params": {
               "type": "object",
@@ -109,6 +110,35 @@
               "additionalProperties": false,
               "required": [
                 "target"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/switchNode"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "node_id": {
+                  "$ref": "#/$defs/SessionNodeId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "node_id"
               ]
             }
           },
@@ -1570,6 +1600,10 @@
         "data"
       ]
     },
+    "SessionNodeId": {
+      "type": "string",
+      "pattern": "^node_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
     "TraceCursor": {
       "description": "Opaque Trace-only exclusive boundary. Valid only in its conversation.",
       "type": "string"
@@ -1969,10 +2003,6 @@
       "required": [
         "cwd"
       ]
-    },
-    "SessionNodeId": {
-      "type": "string",
-      "pattern": "^node_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "SurfaceRevision": {
       "description": "The identity of one exact historical Conversation Surface state.\n\nA revision is a monotonic counter in its own identity domain. The empty\nSurface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and\nevery accepted [`SurfaceOp`] advances it by exactly one, so revision `n`\nis precisely \"the Surface after the first `n` accepted operations\".\n\nA revision is deliberately **not** a `MessageId`, an `AttemptId`, a\n`RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,\nor a `CapabilityRevision`: none of those identify a Surface state, and\nnone of them may be substituted for one.",
@@ -4811,19 +4841,6 @@
         {
           "type": "object",
           "properties": {
-            "type": {
-              "type": "string",
-              "const": "unloaded"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
             "model": {
               "$ref": "#/$defs/SessionModelView"
             },
@@ -5105,16 +5122,6 @@
         {
           "type": "object",
           "properties": {
-            "residencies": {
-              "description": "Point-in-time runtime observation for exactly this bounded catalog page.\nThis never loads or attaches a Session.",
-              "type": "object",
-              "additionalProperties": false,
-              "patternProperties": {
-                "^ses_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$": {
-                  "$ref": "#/$defs/ResidencyState"
-                }
-              }
-            },
             "sessions": {
               "type": "array",
               "items": {
@@ -5138,7 +5145,6 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "residencies",
             "sessions"
           ]
         },
@@ -10933,20 +10939,7 @@
           "properties": {
             "kind": {
               "type": "string",
-              "const": "current_session"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "const": "in_use"
+              "const": "resource_conflict"
             }
           },
           "required": [

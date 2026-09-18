@@ -28,7 +28,7 @@ it('saves a whole Workspace Provider with explicit credentials without copying U
   fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://workspace.invalid' } });
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'WORKSPACE_KEY' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
-  await screen.findByText(/Source saved. The loaded runtime/);
+  await screen.findByText(/Source saved. Use Reload/);
   expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toEqual({ method: 'configuration/sourceWrite', params: { session_id: cfg3Session, expected_revision: 'workspace-1', mutation: { kind: 'config', scope: 'workspace', mutation: { unit: 'provider', id: 'transport', authored: { base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } });
   expect(subject.request.mock.calls.filter(([operation]) => operation.method === 'configuration/reload')).toHaveLength(0);
   expect(screen.getByText(/Runtime generation 7 · Pending reload/)).toBeTruthy();
@@ -111,7 +111,7 @@ it('replaces against the newer revision only after an explicit review gesture', 
   fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Use reviewed revision' }));
   fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
-  await screen.findByText(/Source saved. The loaded runtime/);
+  await screen.findByText(/Source saved. Use Reload/);
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'reviewed', mutation: { mutation: { authored: ['read'] } } } });
 });
 
@@ -176,7 +176,7 @@ it('reconnect rereads native sources without replaying a dirty draft', async () 
 });
 
 it('an older authoritative read cannot replace a newer read', async () => {
-  let release: (value: import('../../protocol/app-server/v7').MethodResult) => void = () => {};
+  let release: (value: import('../../protocol/app-server/v8').MethodResult) => void = () => {};
   let count = 0;
   const subject = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++count === 2) return new Promise(resolve => { release = resolve; }); });
   render(<Settings client={subject.client} sessionId={cfg3Session} />); await screen.findByText('server-frozen-model');
@@ -202,7 +202,7 @@ it('removes literal credentials from a successful Provider draft using the redac
   fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } }); fireEvent.change(screen.getByLabelText('Credential source'), { target: { value: 'literal' } });
   fireEvent.change(screen.getByLabelText('New literal credential'), { target: { value: 'SECRET_SENTINEL' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
-  await screen.findByText(/Source saved. The loaded runtime/);
+  await screen.findByText(/Source saved. Use Reload/);
   await waitFor(() => expect(screen.queryByLabelText('New literal credential')).toBeNull());
   expect(document.body.innerHTML).not.toContain('SECRET_SENTINEL');
   fireEvent.click(screen.getByRole('button', { name: 'Back to catalog' })); fireEvent.click(screen.getByRole('button', { name: 'Edit Provider secret' }));
@@ -235,7 +235,7 @@ it.each([
   ['effect', 'refresh'], ['effect', 'write'], ['refresh', 'refresh'], ['refresh', 'write'],
 ] as const)('fences an obsolete %s read rejection after a newer %s', async (readKind, successor) => {
   let rejectRead!: (error: Error) => void;
-  const pending = new Promise<import('../../protocol/app-server/v7').MethodResult>((_, reject) => { rejectRead = reject; });
+  const pending = new Promise<import('../../protocol/app-server/v8').MethodResult>((_, reject) => { rejectRead = reject; });
   let reads = 0;
   const subject = cfg3Client(async op => {
     if (op.method === 'configuration/sourcesRead' && ++reads === 2) return pending;
@@ -256,7 +256,7 @@ it.each([
   } else {
     fireEvent.click(screen.getByLabelText('read'));
     fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
-    await screen.findByText(/Source saved. The loaded runtime/);
+    await screen.findByText(/Source saved. Use Reload/);
   }
   const revision = successor === 'refresh' ? 'new-authority' : 'saved-2';
   await screen.findByText(new RegExp(`Revision: ${revision}`));

@@ -61,11 +61,11 @@ impl LocalSessionAttachment {
     }
     /// # Errors
     /// Identity, storage and attachment failures are returned explicitly.
-    pub async fn deletion_preflight(
+    pub async fn inspect_deletion(
         &self,
         id: &SessionId,
-    ) -> std::io::Result<super::session_deletion::SessionDeletionPreflight> {
-        self.controller.catalog.lock().await.deletion_preflight(id)
+    ) -> std::io::Result<super::session_deletion::DeletionTargetSnapshot> {
+        self.controller.catalog.lock().await.inspect_deletion(id)
     }
     pub(crate) async fn delete_preview(
         &self,
@@ -692,7 +692,7 @@ pub(crate) fn project_session_deletion(
         Native::Blocked { session_id, reason } => Wire::Blocked {
             session_id,
             reason: match reason {
-                Blocker::InUse => Reason::InUse,
+                Blocker::ResourceConflict => Reason::ResourceConflict,
                 Blocker::Workspace { resources } => Reason::Workspace {
                     resource_count: resources.len() as u64,
                 },
