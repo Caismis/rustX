@@ -1,3 +1,4 @@
+import { connectRemote } from './shell-actions';
 import { chooseWorkspace, connectionAction } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync, appendFileSync } from 'node:fs';
@@ -10,20 +11,19 @@ test('CFG3 committed write and reload response loss reconstructs native state wi
   const fixture = await startDogfood(); const wire = await wireProbe(page);
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/');
-    await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
-    await page.getByLabel('Transport token').fill(fixture.token);
-    await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     const writes = () => wire.requests.filter(request => request.method === 'configuration/sourceWrite');
     const reconnect = async () => {
       await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
       await connectionAction(page, 'Reconnect');
-      await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
+      await expect(page.getByLabel('Transport token')).toHaveCount(0);
       await settings.getByRole('button', { name: 'Read current sources', exact: true }).click();
     };
     await settings.getByRole('tab', { name: 'User', exact: true }).click();
@@ -44,6 +44,7 @@ test('CFG3 committed write and reload response loss reconstructs native state wi
     await reconnect();
     await settings.getByRole('tab', { name: 'User', exact: true }).click();
     await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();
+    await settings.getByRole('button', { name: 'Edit Model fixture/console-model', exact: true }).click();
     await expect(settings.getByLabel('Context window')).toHaveValue('250000');
     expect(writes()).toHaveLength(2);
     await settings.getByRole('button', { name: 'MCP', exact: true }).click();
@@ -67,11 +68,13 @@ test('CFG3 committed write and reload response loss reconstructs native state wi
     expect(wire.requests.filter(request => request.method === 'configuration/reload')).toHaveLength(1);
     expect(writes()).toHaveLength(3);
     // Remounting a different Session reconstructs its own authoritative source scope.
+    await settings.getByRole('button', { name: 'Edit MCP loss-fixture', exact: true }).click();
     await settings.getByLabel('MCP command', { exact: true }).fill('unsaved-draft');
     await chooseWorkspace(page, 'Workspace B');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.getByLabel('Session location', { exact: true })).toContainText(fixture.workspaceB);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     await settings.getByRole('tab', { name: 'User', exact: true }).click();
     await settings.getByRole('button', { name: 'MCP', exact: true }).click();
     await settings.getByRole('button', { name: 'Edit MCP loss-fixture', exact: true }).click();

@@ -1,3 +1,4 @@
+import { connectRemote } from './shell-actions';
 import { chooseWorkspace, connectionAction } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { expect, test, type Locator } from '@playwright/test';
@@ -12,10 +13,8 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const connect = async () => {
-    await page.getByLabel('WebSocket endpoint').fill(`${fixture.endpoint}/`);
-    await page.getByLabel('Transport token').fill(fixture.token);
-    await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
+    await connectRemote(page, `${fixture.endpoint}/`, fixture.token);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0);
   };
   const message = page.getByRole('textbox', { name: 'Message', exact: true });
   const todo = page.getByRole('region', { name: 'To-dos' });
@@ -140,7 +139,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
     await expect(goal.getByRole('button', { name: 'Resume goal' })).toBeDisabled();
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await expect(goal).toContainText('Paused Goal'); await expect(goal).toContainText('1/3 rounds');
     expect(await revision()).toBe(settled);
     await expect(todo.locator('li')).toHaveCount(2);

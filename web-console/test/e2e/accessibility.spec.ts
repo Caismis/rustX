@@ -17,10 +17,15 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
   };
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await expect(page).toHaveTitle(/rustX/);
+    await tabTo(page.getByRole('button', { name: 'Settings', exact: true })); await page.keyboard.press('Enter');
+    await expect(page.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
+    await tabTo(page.getByRole('button', { name: 'Connection', exact: true })); await page.keyboard.press('Enter');
+    await tabTo(page.getByLabel('Connection mode')); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
     await tabTo(page.getByLabel('WebSocket endpoint')); await page.keyboard.press('ControlOrMeta+A'); await page.keyboard.type(fixture.endpoint);
     await tabTo(page.getByLabel('Transport token')); await page.keyboard.type(fixture.token);
     await tabTo(page.getByRole('button', { name: 'Connect', exact: true })); await page.keyboard.press('Enter');
-    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
+    await expect(page.locator('.connection-status')).toHaveText('Connected');
+    await tabTo(page.getByRole('button', { name: 'Close Settings', exact: true })); await page.keyboard.press('Enter');
     await tabTo(page.getByRole('button', { name: 'New Session', exact: true }).first()); await page.keyboard.press('Enter');
     const workspace = page.getByLabel('Choose Workspace');
     await tabTo(workspace); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
@@ -53,6 +58,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await expect(page.getByRole('region', { name: 'Trajectory', exact: true })).toBeVisible();
     await tabTo(page.getByRole('button', { name: 'Settings', exact: true })); await page.keyboard.press('Enter');
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     await tabTo(settings.getByRole('tab', { name: 'Effective', exact: true }));
     await page.keyboard.press('ArrowRight');
     await expect(settings.getByRole('tab', { name: 'User', exact: true })).toBeFocused();

@@ -1,3 +1,4 @@
+import { connectRemote } from './shell-actions';
 import { closeSessionView } from './shell-actions';
 import { test, expect } from '@playwright/test';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -39,8 +40,7 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     const deniedBefore = await remoteA.readSettings(denied.session.id);
     await page.addInitScript(({ endpoint, id }) => localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: [id] })), { endpoint: a.endpoint, id: denied.session.id });
     await routeWorkspaceHost(page, a); await page.goto('/'); await expect(page).toHaveTitle(/rustX/);
-    await page.getByLabel('WebSocket endpoint').fill(a.endpoint); await page.getByLabel('Transport token').fill(a.token);
-    await page.getByRole('button', { name: 'Connect', exact: true }).click();
+    await connectRemote(page, a.endpoint, a.token);
     await expect(page.locator(`button[data-session-id="${id}"]`)).toBeVisible();
     await expect(page.locator(`button[data-session-id="${denied.session.id}"]`)).toBeVisible();
     await page.locator(`button[data-session-id="${denied.session.id}"]`).click();

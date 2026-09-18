@@ -1,3 +1,4 @@
+import { connectRemote } from './shell-actions';
 import { chooseWorkspace, closeSettings } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
@@ -12,10 +13,8 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
   const agentPath = join(fixture.workspaceA, '.agents/agents/reviewer.toml');
   const workflow = readFileSync(workflowPath, 'utf8'), agent = readFileSync(agentPath, 'utf8');
   const connect = async () => {
-    await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
-    await page.getByLabel('Transport token').fill(fixture.token);
-    await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0);
   };
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await connect();

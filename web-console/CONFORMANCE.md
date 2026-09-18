@@ -6,6 +6,30 @@ real App Server WebSockets, local provider HTTP/SSE and the actual Node Product
 Host. Owner races stay in deterministic Rust tests; component tests cover bounded
 presentation mechanics. Passing only the browser suite is insufficient.
 
+## Local bootstrap and explicit Remote Settings (WEB-13)
+
+Normal startup uses the real dev launcher and requires zero endpoint/token input;
+`--no-open` prints the authenticated startup URL without browser handoff. External
+fixtures explicitly select Settings → Connection → Remote App Server. Browser auth
+never grants Workspace filesystem authority; see [CONNECTION.md](CONNECTION.md).
+
+| Boundary | Executable evidence |
+| --- | --- |
+| Separate fresh credentials, 0600 bootstrap scratch, readiness/settlement | `dev/test/launcher.test.ts`, `process.test.ts` |
+| Boolean forwarding and sanitized browser handoff | `dev/test/browser.test.ts` |
+| Resource-free root exchange/CSP, separated fresh proofs, exact bootstrap, missing/wrong proof rejection, bounded sessions, restart, exact roots | `test/browser-auth.test.ts` |
+| Origin-only proof headers on bootstrap and Product Host; redirects/external destinations refused | `test/carrier-http.test.ts` |
+| Real-browser cross-port capture and replay rejected; origin-scoped storage, no Cookie bearer, stale-proof rejection | `test/e2e/browser-origin-auth.spec.ts` |
+| Mode-local recovery, no fallback, delayed bootstrap fence, exactly-once close before replacement | `test/connection-controller.test.ts` |
+| Two-server Session ID collision, same-authority restoration, view/focus/dialog retirement, detached uncertainty, deletion refusal, bounded evidence and close timeout | `test/authority.test.tsx` |
+| Overview by default; recovery targets Connection | `test/authority.test.tsx`, `test/e2e/dev-launcher.spec.ts`, `accessibility.spec.ts` |
+| Non-Windows acceptance without process-lifetime wait; Windows launcher exit; helper-only cancellation | `dev/test/browser.test.ts` |
+| Native refusal of browser token, clean URL, automatic local connect/reload, storage isolation, exact roots | `test/e2e/dev-launcher.spec.ts` |
+| Explicit Remote Settings and keyboard reachability | Existing real-server browser fixtures and `accessibility.spec.ts` |
+
+App Server protocol remains v8. Carrier bootstrap is not JSON-RPC and ordinary
+App Server traffic continues directly over its native authenticated WebSocket.
+
 ## Historical prerequisite baseline (before CFG3)
 
 Fetched base: `9980fc719a573ece0cab0114311345dc4c78b621`. The following issues are

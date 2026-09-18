@@ -16,13 +16,15 @@ import css from '../../presentation/settings/SettingsContent.module.css';
 import { SettingsDrafts } from './drafts';
 import { navigateTabs } from '../../presentation/primitives/tabs';
 import { SettingsPanel } from '../../presentation/settings/SettingsRoot';
+import type { ConnectionController } from '../../connection/controller';
+import { ConnectionSettings } from './ConnectionSettings';
 
 const sections = [
   ['overview', 'Overview', ''], ['general', 'General', 'Runtime'], ['catalog', 'Providers & Models', 'Runtime'], ['policies', 'Tool Policies', 'Runtime'],
   ['root-model', 'Model', 'Root Agent'], ['root-tools', 'Tools', 'Root Agent'], ['root-skills', 'Skill access', 'Root Agent'], ['root-plugins', 'Plugins', 'Root Agent'], ['root-agents', 'Agents & Workflows', 'Root Agent'],
   ['mcp', 'MCP', 'Resources'], ['python', 'Managed Python', 'Resources'], ['skills', 'Skills', 'Resources'], ['agents', 'Agents', 'Resources'], ['workflows', 'Workflows', 'Resources'], ['advanced', 'Diagnostics & source facts', 'Advanced'],
 ] as const;
-type Section = typeof sections[number][0] | 'appearance';
+type Section = typeof sections[number][0] | 'appearance' | 'connection';
 function sourceRevision(source: SourceSettings, mutation: SourceMutation) {
   if (mutation.kind === 'config') return source[mutation.scope].revision;
   if (mutation.kind === 'mcp') return (mutation.scope === 'user' ? source.user_mcp : source.workspace_mcp).revision;
@@ -37,21 +39,23 @@ function nativeDiagnostic(cause: unknown): string {
   return cause.error.message;
 }
 
-function SettingsContent({ client, sessionId, onClose = () => {}, theme = 'light', setTheme, onConnection }: { client: AppServerClient; sessionId?: string; onClose?: () => void; theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void; onConnection?: () => void }) {
+interface SettingsProps { client: AppServerClient; sessionId?: string; onClose?: () => void; theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void; connection?: ConnectionController; initialSection?: 'overview' | 'connection' }
+function SettingsContent({ client, sessionId, onClose = () => {}, theme = 'light', setTheme, connection, section, setSection }: SettingsProps & { section: Section; setSection: (section: Section) => void }) {
   const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const target = sessionId ? transport.views[sessionId]?.target : undefined;
-  const [scope, setScope] = useState<'effective' | SourceScope>('effective'), [section, setSection] = useState<Section>('overview');
+  const [scope, setScope] = useState<'effective' | SourceScope>('effective');
   const [source, setSource] = useState<SourceSettings>(), [effective, setEffective] = useState<EffectiveConfiguration>();
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const writing = useRef(false), epoch = useRef(0), readSequence = useRef(0);
+  const needsRuntime = section !== 'connection' && section !== 'appearance';
   const read = useCallback(async () => {
-    if (!sessionId) return { source: undefined, effective: undefined };
+    if (!sessionId || !needsRuntime) return { source: undefined, effective: undefined };
     const [authored, published] = await Promise.all([
       client.request({ method: 'configuration/sourcesRead', params: { session_id: sessionId } }, 'source_settings'),
       target ? client.request({ method: 'configuration/effective', params: { target } }, 'effective_configuration') : Promise.resolve(undefined),
     ]);
     return { source: authored.projection, effective: published?.projection };
-  }, [client, sessionId, target]);
+  }, [client, sessionId, target, needsRuntime]);
   const refresh = useCallback(async (reportFailure = false) => {
     const at = epoch.current, sequence = ++readSequence.current;
     try {
@@ -108,7 +112,8 @@ function SettingsContent({ client, sessionId, onClose = () => {}, theme = 'light
       }
     } finally { writing.current = false; setBusy(false); }
   };
-  const frame = (children: import('react').ReactNode) => <SettingsPanel rows={[{ id: 'appearance', label: 'Appearance' }, ...sections.map(([id, label, group]) => ({ id, label, group }))]} activeId={section} onSelect={id => setSection(id as Section)} onClose={onClose} actions={onConnection && <Button onClick={onConnection}>Connection</Button>}>{children}</SettingsPanel>;
+  const frame = (children: import('react').ReactNode) => <SettingsPanel rows={[{ id: 'appearance', label: 'Appearance' }, ...(connection ? [{ id: 'connection', label: 'Connection' }] : []), ...sections.map(([id, label, group]) => ({ id, label, group }))]} activeId={section} onSelect={id => setSection(id as Section)} onClose={onClose}>{children}</SettingsPanel>;
+  if (section === 'connection' && connection) return frame(<ConnectionSettings connection={connection} client={client} />);
   if (section === 'appearance') return frame(<section className={css.settings}><h2>Appearance</h2><p className={css.hint}>Presentation preferences are saved in this browser. Runtime configuration remains native.</p><label>Theme<select aria-label="Theme" value={theme} onChange={event => setTheme?.(event.target.value as 'light' | 'dark')}><option value="light">Light</option><option value="dark">Dark</option></select></label></section>);
   if (!source) return frame(<section className={css.settings} aria-label="Settings">{error ? <p role="alert">{error}</p> : <p role="status">{sessionId ? 'Loading configuration…' : 'Open a Session to inspect its native configuration.'}</p>}<Button onClick={() => void refresh(true).catch(() => { /* Current failures are reported inside the read fence. */ })}>Read current sources</Button></section>);
   const selected = scope === 'effective' ? undefined : source[scope];
@@ -161,6 +166,8 @@ function RootFacts({ value, section }: { value: EffectiveConfiguration; section:
   return <dl>{facts.map(([name, fact, field]) => <div key={field}><dt>{name}</dt><dd>{<NativeFacts value={fact} />} · <Origin value={value} field={field} /></dd></div>)}</dl>;
 }
 function Origin({ value, field }: { value: EffectiveConfiguration; field: string }) { const origin = value.provenance[field]; return <span>{origin ? origin.kind === 'builtin' ? 'Product default' : origin.kind === 'process' ? 'Process binding' : `${origin.kind}: ${origin.document}` : 'Native domain default'}</span>; }
-export function Settings(props: Parameters<typeof SettingsContent>[0]) {
-  return <SettingsDrafts key={props.sessionId}><SettingsContent {...props} /></SettingsDrafts>;
+export function Settings(props: SettingsProps) {
+  const transport = useSyncExternalStore(props.client.subscribe, props.client.getSnapshot);
+  const [section, setSection] = useState<Section>(props.initialSection ?? 'overview');
+  return <SettingsDrafts key={`${transport.authorityRevision ?? 0}:${props.sessionId}`}><SettingsContent {...props} section={section} setSection={setSection} /></SettingsDrafts>;
 }

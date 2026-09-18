@@ -133,7 +133,7 @@ process.on('SIGTERM',()=>queueMicrotask(()=>process.send({signal:'SIGTERM'})));
 `);
   const connection = once(server, 'connection');
   const child = spawn(process.execPath, ['--import', observer, join(root, 'dev/src/main.ts'), mode, '--binary', binary,
-    ...(mode === 'web' ? ['--workspace', directory] : transport ? ['--listen', transport, '--token-file', userState] : [])],
+    ...(mode === 'web' ? ['--no-open', '--workspace', directory] : transport ? ['--listen', transport, '--token-file', userState] : [])],
   { stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
   let errors = ''; child.stderr!.on('data', chunk => { errors += chunk; });
   const output = lines(child.stdout!);
@@ -181,7 +181,7 @@ for (const phase of ['startup', 'ready'] as const) test(`real main SIGHUP during
   if (phase === 'ready') {
     f.socket.write('ready\n');
     let line = '';
-    while (!line.startsWith('[dev] Browser:')) line = await f.output.next();
+    while (!line.startsWith('[dev] rustX Web:')) line = await f.output.next();
     assert.ok(existsSync(join(scratch, 'host-config.json')));
   }
   f.child.kill('SIGHUP');

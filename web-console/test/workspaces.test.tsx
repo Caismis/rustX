@@ -233,7 +233,7 @@ it.each(['navigation', 'connection'] as const)('late Host authorization cannot a
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(methods()).not.toContain('session/attach');
   if (supersession === 'navigation') fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B' }));
-  else act(() => server.client.disconnect());
+  else await act(async () => { await server.client.disconnect(); });
   await act(async () => gate.resolve([{ authorized: true, workspaceId: 'wA' }]));
   expect(methods()).not.toContain('session/attach'); expect(server.loaded.size).toBe(0);
   if (supersession === 'navigation') expect(screen.getByRole('button', { name: 'Select Workspace Workspace B' }).getAttribute('aria-current')).toBe('page');

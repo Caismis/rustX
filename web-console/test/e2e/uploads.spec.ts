@@ -1,3 +1,4 @@
+import { connectRemote } from './shell-actions';
 import { closeSessionView } from './shell-actions';
 import { expectSettled } from './shell-actions';
 import { showInspector } from './shell-actions';
@@ -19,10 +20,8 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
   const canonical = page.getByLabel('Canonical conversation');
   const id = async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId as string;
   const connect = async () => {
-    await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
-    await page.getByLabel('Transport token').fill(fixture.token);
-    await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0); await showInspector(page);
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
   };
   const submit = async (phase: string) => {
     await page.getByRole('button', { name: 'Send', exact: true }).click();

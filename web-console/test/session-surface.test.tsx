@@ -6,10 +6,15 @@ import { sessionDisplayTitle } from '../src/bindings/session-title';
 import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
+import { cfg3Effective, cfg3Source } from './cfg3-data';
 import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v8';
 
 let server: Server;
-beforeEach(() => { server = new Server(); localStorage.clear(); });
+beforeEach(() => {
+  server = new Server(); localStorage.clear();
+  server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: cfg3Source(), session_revision: '1' }));
+  server.handlers.set('configuration/effective', () => ({ type: 'effective_configuration', projection: cfg3Effective() }));
+});
 afterEach(() => { cleanup(); server.client.disconnect(); localStorage.clear(); });
 async function mount(ids = ['A', 'B']) {
   await server.attached(...ids);
@@ -82,6 +87,7 @@ it('identifies two unnamed previews and two empty Sessions without UUID fallback
 
 it('Connection shows product state without a generation counter', async () => {
   await mount();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
   expect(document.querySelector('.connection-status')!.textContent).toBe('Connected');
   expect(document.querySelector('.connection-status small')).toBeNull();
@@ -364,9 +370,10 @@ it('unscoped uncertainty is global, not assigned to every Session; reviewed diag
   expect(screen.getByText(/A global operation needs verification/)).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
   expect(JSON.parse(screen.getByLabelText('Native diagnostic JSON').textContent!).uncertain_operations).toEqual([]);
-  const before = methods().length;
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
   fireEvent.click(screen.getByText('Review uncertain operations'));
+  const before = methods().length;
   fireEvent.click(screen.getByRole('button', { name: 'I have verified the affected work' }));
   expect(server.client.getSnapshot().uncertain).toEqual([]);
   expect(methods().slice(before)).toEqual([]);
@@ -388,6 +395,7 @@ it('interaction operation evidence is scoped and cannot be dismissed as a non-in
   await select('B');
   const evidence = JSON.parse(screen.getByLabelText('Native diagnostic JSON').textContent!);
   expect(Object.values(evidence.interactions)).toEqual([{ sessionId: 'B', status: 'uncertain' }]);
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
   expect(screen.queryByText('Review uncertain operations')).toBeNull();
   expect(methods().filter(method => method === 'interaction/respond')).toHaveLength(1);
@@ -475,6 +483,7 @@ it('reviewing a notice restores capacity at the 64-diagnostic limit without repl
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   await expect(server.client.request({ method: 'session/name', params: { session_id: 'A', name: 'Blocked' } }, 'session')).rejects.toThrow();
   expect(methods().filter(method => method === 'session/name')).toHaveLength(64);
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
   fireEvent.click(screen.getByText('Review uncertain operations'));
   const before = methods().length;

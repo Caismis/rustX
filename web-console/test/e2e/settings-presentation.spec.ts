@@ -6,6 +6,7 @@ test('native Settings reference cards, inventories, keyboard scopes and narrow t
  await expect(page).toHaveTitle('rustX native Settings reference');
  await page.getByRole('button', { name: 'Settings', exact: true }).click();
  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+ await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
  await expect(settings.getByText('server-frozen-model')).toBeVisible();
  await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();
  await expect(settings.getByRole('button', { name: /^Save / })).toHaveCount(0);

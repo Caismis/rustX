@@ -1101,11 +1101,12 @@
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "destination": "web-console/src/app/settings/Settings.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation.",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
         "../../../../protocol/app-server/v8",
         "../../client/app-server",
+        "../../connection/controller",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/tabs",
         "../../presentation/settings/SettingsContent",
@@ -1114,6 +1115,7 @@
         "../components/NativeFacts",
         "./AgentEditor",
         "./CatalogEditor",
+        "./ConnectionSettings",
         "./Integrations",
         "./ResourceInventory",
         "./RootEditor",
@@ -1136,7 +1138,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "a2a57984e3a12cdecc1f716f54046dfc41480de050c96693d7d3fdfee224540f"
+      "local_sha256": "dbab0ec374e4817cb42e6f2949e560145f000737805824d6f3c85630ac4d715d"
     },
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
@@ -2166,6 +2168,48 @@
     }
   ],
   "inspected_only": [
+    {
+      "upstream": "packages/client/connection/src/browser-auth.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "90f6a4220979bd98d9d71f009a457a0d8af9d9608496dd5fa78dd7045871ea98",
+      "treatment": "WEB-13 inspected only: product/security reference; independently implemented process-ephemeral authentication and launcher handoff"
+    },
+    {
+      "upstream": "packages/client/connection/src/rpc-host.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "b1068051bcd1176866a792b62db4c12042907470a50da8ed98dfb7b1976c78fa",
+      "treatment": "WEB-13 inspected only: product/security reference; independently implemented process-ephemeral authentication and launcher handoff"
+    },
+    {
+      "upstream": "packages/client/connection/README.md",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "a6dda91b8d39fb7c8fbb42382f974ab8d0ebbb8be08715180e70efcb2298eece",
+      "treatment": "WEB-13 inspected only: product/security reference; independently implemented process-ephemeral authentication and launcher handoff"
+    },
+    {
+      "upstream": "packages/bundle/web-app/src/index.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "a8302cd9b13b6cb1be94ebd2a51b0f42920bb09862eaa8ecf824f9a3e1c7525b",
+      "treatment": "WEB-13 inspected only: product/security reference; independently implemented process-ephemeral authentication and launcher handoff"
+    },
+    {
+      "upstream": "packages/bundle/web-app/README.md",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "8b48af4c64bcf05e63f2dbc73751bfe4a6e66de7ac753fe56eb1a6813fc14301",
+      "treatment": "WEB-13 inspected only: product/security reference; independently implemented process-ephemeral authentication and launcher handoff"
+    },
+    {
+      "upstream": "apps/cli/tests/web-auth.e2e.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "39815d58c4c4c852d9bb45a02e17f99864e8104719660c298fd8c90b532682e5",
+      "treatment": "WEB-13 inspected only: product/security reference; independently implemented process-ephemeral authentication and launcher handoff"
+    },
+    {
+      "upstream": "packages/client/connection/tests/browser-auth.host.spec.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "7f3edb8b3d1b2218a833e0dc5b7f23eb2afcad1cac37caf5b06582f10d09c376",
+      "treatment": "WEB-13 inspected only: product/security reference; independently implemented process-ephemeral authentication and launcher handoff"
+    },
     {
       "upstream": "apps/web/src/main.ts",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",

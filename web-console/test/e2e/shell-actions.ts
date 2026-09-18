@@ -14,13 +14,26 @@ export async function chooseWorkspace(page: Page, label: string) {
   await page.getByLabel('Choose Workspace').selectOption({ label });
 }
 export async function connectionAction(page: Page, action: 'Disconnect' | 'Reconnect') {
-  if (!await page.getByRole('dialog', { name: 'Connection', exact: true }).isVisible()) {
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-    await (await settings.isVisible() ? settings : page).getByRole('button', { name: 'Connection', exact: true }).click();
-  }
-  await page.getByRole('dialog', { name: 'Connection', exact: true }).getByRole('button', { name: action, exact: true }).click();
-  if (action === 'Disconnect') await page.getByRole('dialog', { name: 'Connection', exact: true }).getByRole('button', { name: 'Close dialog', exact: true }).click();
-  else await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  const previous = await settings.isVisible() ? await settings.locator('[aria-current="page"]').innerText() : undefined;
+  await openConnectionSettings(page);
+  await page.getByRole('region', { name: 'Connection Settings', exact: true }).getByRole('button', { name: action, exact: true }).click();
+  if (action === 'Reconnect') await expect(page.locator('.connection-status')).toHaveText('Connected');
+  if (previous) await settings.getByRole('button', { name: previous, exact: true }).click();
+  else await closeSettings(page);
+}
+export async function openConnectionSettings(page: Page) {
+  if (!await page.getByRole('dialog', { name: 'Settings', exact: true }).isVisible()) await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: 'Connection', exact: true }).click();
+}
+export async function connectRemote(page: Page, endpoint: string, token: string) {
+  await openConnectionSettings(page);
+  await page.getByLabel('Connection mode').selectOption('remote');
+  await page.getByLabel('WebSocket endpoint').fill(endpoint);
+  await page.getByLabel('Transport token').fill(token);
+  await page.getByRole('button', { name: 'Connect', exact: true }).click();
+  await expect(page.locator('.connection-status')).toHaveText('Connected');
+  await closeSettings(page);
 }
 export async function showInspector(page: Page) {
   const panel = page.getByRole('complementary', { name: 'Developer inspector' });

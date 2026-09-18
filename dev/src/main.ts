@@ -12,7 +12,10 @@ try {
   process.on('SIGINT', interrupt); process.on('SIGTERM', terminate); process.on('SIGHUP', hangup);
   try {
     const ready = await launcher.start(args);
-    if (ready) console.log(`[dev] Browser: ${ready.url}\n[dev] App Server: ${ready.endpoint}\n[dev] Transport token file (enter its contents in Connect): ${ready.tokenFile}\n[dev] Exact Workspace roots: ${ready.workspaces.join(', ')}`);
+    if (ready) {
+      console.log(`[dev] Exact Workspace roots: ${ready.workspaces.join(', ')}`);
+      launcher.handoff(ready, args.noOpen || !!process.env.SSH_CONNECTION || !!process.env.SSH_TTY);
+    }
     process.exitCode = await launcher.done;
   } finally {
     process.off('SIGINT', interrupt); process.off('SIGTERM', terminate); process.off('SIGHUP', hangup);

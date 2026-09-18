@@ -1,3 +1,4 @@
+import { connectRemote } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -31,15 +32,14 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
     const mcpFile = join(fixture.workspaceA, '.agents/mcp.toml');
     writeFileSync(mcpFile, '[mcp_servers.implicit-http]\nurl = "https://example.invalid/mcp"\nheaders = { Authorization = "fixture-header-secret" }\n[mcp_servers.implicit-stdio]\ncommand = "fixture-not-executed"\nenv = { TOKEN = "fixture-env-secret" }\n');
     await routeWorkspaceHost(page, fixture); await page.goto('/');
-    await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
-    await page.getByLabel('Transport token').fill(fixture.token);
-    await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
     for (const owner of ['Root', 'Agent'] as const) {
       await settings.getByRole('button', { name: owner === 'Root' ? 'Model' : 'Agents', exact: true }).click();

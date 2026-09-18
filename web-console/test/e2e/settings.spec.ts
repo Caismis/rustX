@@ -1,3 +1,4 @@
+import { connectRemote } from './shell-actions';
 import { chooseWorkspace } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -9,15 +10,14 @@ test('CFG3 atomic Provider and Model editing, Root selections, Save and reload f
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/');
-    await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
-    await page.getByLabel('Transport token').fill(fixture.token);
-    await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     const saved = async () => { await expect(settings.getByText(/Source saved. Use Reload/)).toBeVisible(); };
     await settings.getByRole('tab', { name: 'User', exact: true }).click();
     await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();

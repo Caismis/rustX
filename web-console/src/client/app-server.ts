@@ -66,6 +66,8 @@ export interface UncertainOperation {
   generation: number;
 }
 export interface ClientView {
+  authorityRevision?: number;
+  detached?: readonly DetachedEvidence[];
   endpoint?: string;
   connection: ConnectionState;
   generation: number;
@@ -76,6 +78,12 @@ export interface ClientView {
   views: Readonly<Record<string, SessionView>>;
   uncertain: readonly UncertainOperation[];
   interactionOperations: Readonly<Record<string, { sessionId: string; status: 'in-flight' | 'uncertain' | 'acknowledged' }>>;
+}
+/** Read-only historical evidence. Never consulted by attachment/control admission. */
+export interface DetachedEvidence {
+  authority: string;
+  operations: readonly UncertainOperation[];
+  sessions: readonly Pick<SessionView, 'id' | 'error' | 'modelMutation' | 'cancellation'>[];
 }
 export interface Socket {
   onopen: ((event: Event) => unknown) | null;
@@ -178,15 +186,40 @@ export class AppServerClient {
   restoreViews(ids: readonly string[]) {
     for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.setSession(id, { attachmentIntent: 'wanted' });
   }
-  async connect(endpoint: string, token: string, reconnect = false) {
+  // Browser transport authority, not a durable server identity. Reconnect alone
+  // can restore wanted Session intent; replacement must retire it after fencing.
+  isSameAuthority(endpoint: string) { return !this.state.endpoint || new URL(endpoint).href === this.state.endpoint; }
+  async connect(endpoint: string, token: string, transition: 'reconnect' | 'replace-authority' = 'reconnect', committed?: () => void) {
     const url = new URL(endpoint);
     if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== '/') {
       throw new Error('Use a ws:// or wss:// endpoint at / with no credentials, query, or fragment.');
     }
     if (!/^[A-Za-z0-9_-]{43,128}$/.test(token)) throw new Error('Enter the dedicated 43–128 character App Server transport token.');
-    this.disconnect();
+    const replacing = !this.isSameAuthority(url.href);
+    if (replacing && transition !== 'replace-authority') throw new Error('Different App Server authority requires explicit replacement.');
+    if (replacing) this.admitAuthorityReplacement();
+    const attempt = ++this.connectionAttempt;
+    if (this.socket) this.endConnection('disconnected');
     const generation = this.state.generation;
-    this.publish({ endpoint: url.href, connection: reconnect ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
+    if (this.closing) await this.closing;
+    if (generation !== this.state.generation || attempt !== this.connectionAttempt) return;
+    if (replacing) {
+      const sessions = Object.values(this.state.views).filter(view => view.error || view.modelMutation || view.cancellation)
+        .map(({ id, error, modelMutation, cancellation }) => ({ id, error, modelMutation, cancellation }));
+      // Admission reserved capacity for close-time evidence before synchronous fencing.
+      // Generation-guarded continuations cannot create new Session diagnostics;
+      // model/cancellation continuations only update already-reserved Session rows.
+      const detached = [...(this.state.detached ?? [])];
+      if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, operations: this.state.uncertain, sessions });
+      this.attachmentEpochs.clear(); this.previewChecked.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear();
+      this.listEpoch++; this.listOffset = 0; this.listQuery = '';
+      this.log.clear();
+      this.publish({ views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
+        authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
+    }
+    this.publish({ endpoint: url.href, connection: transition === 'reconnect' ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
+    // Ownership commits after close/retirement, before attempting the new transport.
+    committed?.();
     try {
       const socket = this.socketFactory(url.href, ['rustx.app-server.v8', `rustx-token.${token}`]);
       this.socket = socket;
@@ -202,7 +235,7 @@ export class AppServerClient {
         const timer = setTimeout(() => fail('WebSocket connection timed out.'), this.timeoutMs);
         socket.onopen = () => { clearTimeout(timer); if (this.current(generation)) resolve(); else reject(new Error('Obsolete connection.')); };
         socket.onmessage = event => { if (this.current(generation)) this.receive(event.data, generation); };
-        socket.onclose = () => { clearTimeout(timer); fail('WebSocket closed. Check endpoint and transport token.'); };
+        socket.onclose = () => { this.closedSockets.add(socket); clearTimeout(timer); fail('WebSocket closed. Check endpoint and transport token.'); };
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
@@ -237,9 +270,27 @@ export class AppServerClient {
       throw error;
     }
   }
+  /** Side-effect-free policy, called immediately before fencing with no intervening await.
+   * One replacement detaches at most one authority batch. pump transmits at most
+   * eight requests; only sent mutations become uncertain, each exactly once.
+   * request admission already bounds uncertain + pending to 64 for mutations.
+   * Reserve Session rows for pending continuations too, including unsent work.
+   */
+  private admitAuthorityReplacement() {
+    const views = Object.values(this.state.views);
+    if (views.some(view => view.deleting)) throw new Error('Resolve pending Session deletion verification/recovery on the current App Server before replacing its authority.');
+    if ((this.state.detached?.length ?? 0) >= 8) throw new Error('Review and acknowledge detached authority diagnostics before replacing another App Server.');
+    const sessions = new Set(views.filter(view => view.error || view.modelMutation || view.cancellation).map(view => view.id));
+    for (const pending of this.pending.values()) if (pending.context.sessionId) sessions.add(pending.context.sessionId);
+    if (sessions.size > 64) throw new Error('Too many unresolved Session diagnostics. Review the current authority before replacing it.');
+  }
   private current(generation: number) { return generation === this.state.generation && !!this.socket; }
   /** Explicit transport loss only; never dispatches semantic cancellation or unload. */
-  disconnect() { this.endConnection('disconnected'); }
+  private closing?: Promise<void>;
+  private connectionAttempt = 0;
+  private closedSockets = new WeakSet<Socket>();
+  disconnect() { ++this.connectionAttempt; this.endConnection('disconnected'); return this.closing; }
+  acknowledgeDetached(index: number) { this.publish({ detached: this.state.detached?.filter((_, at) => at !== index) }); }
   private lose(generation: number) {
     if (this.current(generation)) this.endConnection('stale');
   }
@@ -269,7 +320,15 @@ export class AppServerClient {
         ...view, ...(view.recoveringDeletion ? { recoveringDeletion: false, deletionRecovery: undefined } : {}), history: undefined, target: undefined, submissions: undefined, inboundRequests: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
       }])),
     });
-    oldSocket?.close();
+    if (oldSocket && !this.closedSockets.has(oldSocket)) {
+      const previousClose = oldSocket.onclose;
+      this.closing = new Promise<void>((resolve, reject) => {
+        const deadline = setTimeout(() => reject(new Error('Previous WebSocket did not close. Reload before reconnecting.')), this.timeoutMs);
+        oldSocket.onclose = event => { clearTimeout(deadline); this.closedSockets.add(oldSocket); previousClose?.(event); resolve(); };
+        oldSocket.close();
+      });
+      void this.closing.catch(() => {});
+    }
   }
   /** Correlation only. No call is ever retried. Every payload is a generated union. */
   async request<T extends MethodResult['type']>(operation: Request1, expected: T): Promise<Extract<MethodResult, { type: T }>> {

@@ -5,6 +5,7 @@ import { basename, join } from 'node:path';
 import type { LocalHostConfig } from '../../web-console/host/workspaces.ts';
 import type { Arguments } from './arguments.ts';
 import { spawnOwned, type Spawn, type OwnedChild, type ChildSpec } from './process.ts';
+import { handoff, openBrowser } from './browser.ts';
 
 export interface WebReady { url: string; endpoint: string; tokenFile: string; hostConfigFile: string; workspaces: string[] }
 
@@ -19,6 +20,7 @@ export class Launcher {
   #terminal: Promise<number> | undefined;
   #directory: string | undefined;
   #started = false;
+  #browserTask?: Promise<void>;
 
   constructor(root: string, spawn: Spawn = spawnOwned) {
     this.#root = root; this.#spawn = spawn;
@@ -76,21 +78,31 @@ export class Launcher {
       }
       for (const workspace of args.workspaces) if (!statSync(workspace).isDirectory()) throw new Error(`Workspace is not a directory: ${workspace}`);
       this.#active();
-      const tokenFile = this.#write('transport-token', randomBytes(32).toString('base64url'));
+      const transportToken = randomBytes(32).toString('base64url');
+      const tokenFile = this.#write('transport-token', transportToken);
       const endpoint = await this.#ready(this.#child({ component: 'app-server', command: args.binary,
         args: ['app-server', ...args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile], cwd: process.cwd(), readiness: 'app-server' }));
       const config: LocalHostConfig = { endpoint, picker: true, metadataFile: join(this.#scratch(), 'workspaces.json'),
         roots: args.workspaces.map((cwd, index) => ({ id: `root-${index + 1}`, cwd, displayName: basename(cwd) || cwd })) };
       const hostConfigFile = this.#write('host-config.json', JSON.stringify(config));
+      let browserLaunchToken: string;
+      do { browserLaunchToken = randomBytes(32).toString('base64url'); } while (browserLaunchToken === transportToken);
+      const bootstrapFile = this.#write('web-bootstrap.json', JSON.stringify({ appServerEndpoint: endpoint, transportTokenFile: tokenFile, browserLaunchToken }));
       const url = await this.#ready(this.#child({ component: 'web', command: process.execPath,
         args: [join(this.#root, 'web-console/scripts/dev-carrier.ts')], cwd: join(this.#root, 'web-console'),
-        env: { ...process.env, RUSTX_WORKSPACE_HOST_CONFIG: hostConfigFile }, readiness: 'web' }));
-      return { url, endpoint, tokenFile, hostConfigFile, workspaces: args.workspaces };
+        env: { ...process.env, RUSTX_WORKSPACE_HOST_CONFIG: hostConfigFile, RUSTX_WEB_BOOTSTRAP_CONFIG: bootstrapFile }, readiness: 'web' }));
+      const startup = new URL(url); startup.searchParams.set('token', browserLaunchToken);
+      return { url: startup.href, endpoint, tokenFile, hostConfigFile, workspaces: args.workspaces };
     } catch (error) {
       if (!this.#abort.signal.aborted) process.stderr.write(`[dev] ${String(error)}\n`);
       await this.settle(1);
       return;
     }
+  }
+  handoff(ready: WebReady, noOpen: boolean) {
+    if (this.#abort.signal.aborted || this.#browserTask) return;
+    this.#browserTask = handoff(ready.url, noOpen, url => openBrowser(url, this.#abort.signal), console.log,
+      message => { if (!this.#abort.signal.aborted) console.error(message); });
   }
   settle(code: number): Promise<number> {
     if (this.#terminal) return this.#terminal;
@@ -99,6 +111,7 @@ export class Launcher {
     this.#abort.abort();
     this.#terminal = Promise.resolve().then(async () => {
       const results = await Promise.allSettled(this.#children.map(child => child.stop()));
+      await this.#browserTask;
       for (const result of results) if (result.status === 'rejected') {
         process.stderr.write(`[dev] cleanup: ${String(result.reason)}\n`); code = 1;
       }

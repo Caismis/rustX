@@ -56,8 +56,10 @@ pnpm --dir dev web -- \
 ```
 
 It owns the real App Server, ephemeral transport credential, exact-root Product
-Host configuration, and Vite carrier. Open the printed browser URL and enter the
-printed endpoint plus the contents of the private token file in **Connect**.
+Host configuration, browser launch credential, and Vite carrier. The browser opens,
+authenticates, redirects to a clean URL and connects automatically. No endpoint or
+token input is needed. Reload reconnects through fresh authenticated bootstrap.
+Use `--no-open` for manual browser handoff; the authenticated startup URL is printed once.
 The native settings resolver remains authoritative; no fake provider starts.
 Choose an authorized Workspace or open a listed native Session. The browser never
 supplies arbitrary cwd authority or supplies configuration authority.
@@ -66,15 +68,29 @@ Direct `pnpm dev`/`preview` remain component-only commands for focused UI work o
 an independently managed runtime/Host. The [Host contract](WORKSPACES.md) describes
 that operator-owned integration. Use the launcher for complete local composition.
 
-Authentication is #36's **local/trusted, single writable controller** boundary.
+Native authentication remains #36's **local/trusted, single writable controller** boundary.
 The browser sends subprotocols `rustx.app-server.v8` and `rustx-token.<token>` in its
-WebSocket handshake. No arbitrary authorization header, URL credential, login,
+WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
 resolved by rustX and never entered, stored or requested here. The dedicated socket
-token stays in page memory; reload requires entering it again. Only the safe
-endpoint and up to 32 navigation IDs are stored in localStorage. They are hints to
+token stays in page memory. The carrier's separate launch token is exchanged only
+at `GET /?token=…`, before loading application resources. A tiny no-store page with
+restrictive CSP stores only a separately generated browser-session proof in
+origin-scoped sessionStorage and replaces the URL with clean `/`. The proof is sent
+only as `X-Rustx-Browser-Session` on same-origin bootstrap/Product Host requests;
+redirects are refused. Cookies are not authentication: they cannot isolate ports.
+Reload reuses this tab's proof; carrier restart rejects it until a new launch exchange.
+Neither the launch token nor App Server token enters browser storage or IndexedDB.
+Only safe presentation metadata and up to 32 navigation IDs are stored in localStorage. They are hints to
 read server state, not persisted conversation or interaction state.
+
+For an external App Server, explicitly choose **Settings → Connection → Remote App
+Server**, then supply its `ws://` or `wss://` root endpoint and transport token.
+The token remains memory-only; reload starts in Local mode and never restores a
+remote connection implicitly. Standalone `pnpm dev` without bootstrap shows recovery
+and directs you to Settings. Neither mode falls back into the other. Remote attachment
+does not grant Product Host Workspace authority. See [CONNECTION.md](CONNECTION.md).
 
 See [App Server transport/protocol](../docs/app-server-protocol.md) for supported
 bind/authentication semantics and deployment boundaries. No browser UI can redact
@@ -179,7 +195,12 @@ explicit **Open Session** sets wanted intent again. A fresh attach
 cannot by itself prove the previous mutation's outcome, so uncertainty remains.
 
 The endpoint/openViews navigation hints retain only wanted views for automatic
-page-reload restoration. A released Session remains in the Sidebar catalog, without
+page-reload restoration only at the same normalized endpoint; they never choose
+connection material. Replacing App Server authority closes active browser views
+and focus instead of reinterpreting their IDs against the new server. Old uncertain
+operations remain detached, read-only diagnostics; unresolved deletion recovery
+refuses replacement. See [connection ownership](CONNECTION.md).
+A released Session remains in the Sidebar catalog, without
 remaining a resume hint; no persisted observation or request state is introduced.
 On a fresh page the Session remains available through the native list
 for explicit Open. Opening or resuming resolves through rustX's canonical
@@ -298,9 +319,10 @@ which observations were automated versus manually inspected.
 from `presentation/` form one Harness-derived foundation. AppFrame accepts Sidebar,
 main, right-panel and overlay seats. Its measured columns retain the upstream
 280px Sidebar, 56px rail, 1024px responsive collapse and right-panel constraints.
-The Sidebar Settings entry opens the shared modal/navigation frame; existing CFG3
+The Sidebar Settings entry opens **Overview** in the shared modal/navigation frame; existing CFG3
 editors supply its content. Inspector uses the right panel and is closed initially.
-Connection settings are reachable from the Sidebar and Settings frame.
+Connection is an explicit Settings section. Connection recovery **Show details**
+opens that section directly without changing the ordinary Settings default.
 
 Menus, HoverCards, Tooltips and Modals own only presentation/focus state. The
 workspace adapter projects native list/cwd, Host classification and current

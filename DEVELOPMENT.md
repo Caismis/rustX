@@ -72,10 +72,30 @@ real App Server on `ws://127.0.0.1:0`, waits for its bound-listener announcement
 and starts the normal Vite carrier with one ephemeral Product Host configuration.
 Vite selects its own free loopback port and reports readiness through IPC only
 after `listen()` completes. There are no readiness sleeps or port reservations.
-The summary prints the browser URL, native endpoint, token **file path**, and exact
-Workspace roots. Open the URL, enter that endpoint and the contents of the token
-file in **Connect**. The transport token stays in page memory; it is neither logged
-nor persisted in browser storage. Never enter a provider key in this screen.
+The launcher prints one authenticated startup URL and opens the default browser.
+The browser exchanges its launch credential for a random, origin-scoped session
+proof stored only in sessionStorage. A resource-free, no-store exchange page uses
+`location.replace('/')` before application resources load. The proof explicitly
+authenticates same-origin bootstrap and Product Host APIs; no auth Cookie is used.
+The clean-root app automatically connects to the exact native App Server. Reload
+repeats authenticated bootstrap without credential entry. Use `--no-open` to print
+the URL without opening a browser; SSH launches also suppress automatic opening.
+Browser opener failure leaves the composition running and points to the printed URL.
+The opener receives only a bounded desktop environment, never provider/MCP credentials.
+It observes OS handoff, not browser lifetime. Only Windows waits for the short-lived
+PowerShell launcher; Linux/macOS/WSL return after `open()` accepts the URL.
+App Server credentials never appear in the URL or browser persistent storage.
+
+For the minimal local launch, use:
+
+```sh
+pnpm --dir dev web -- --workspace /absolute/path/to/project
+```
+
+Externally managed App Servers use **Settings → Connection → Remote App Server**.
+Select Remote explicitly and enter its endpoint and transport token there. Failed
+local startup never chooses Remote; failed Remote never chooses Local. Remote
+attachment grants no Product Host filesystem authority. See [connection security](web-console/CONNECTION.md).
 
 The Product Host retains all Workspace navigation/authorization decisions. Only
 explicit exact roots are authorized; descendants are not implicitly admitted.
@@ -101,7 +121,8 @@ group. Native runtime/tool settlement remains native-owned.
 The process owner also observes process-group disappearance after escalation;
 delivering a kill signal alone is not treated as settlement.
 
-Scratch contains one random transport token (0600), one Host config (0600), and the
+Scratch contains one random transport token (0600), one Host config (0600), a private
+Web bootstrap config (0600, referencing the existing transport-token file), and the
 Host's ephemeral registration metadata, beneath a private temporary directory
 (0700). User configuration, runtime roots, Workspace files and persistent Host metadata
 are never launcher scratch and are never removed. Launcher SIGINT/SIGHUP/SIGTERM

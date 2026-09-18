@@ -12,7 +12,9 @@ it('boots the source-derived shell with no Host backend and exposes only support
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   expect(document.querySelector('[data-harness-frame]')).toBeTruthy();
   expect(screen.getAllByText('rustX').length).toBeGreaterThan(0);
-  expect(screen.getByRole('button', { name: 'Connect' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+  expect(screen.queryByLabelText('WebSocket endpoint')).toBeNull();
+  expect(screen.queryByLabelText('Transport token')).toBeNull();
   expect(screen.queryByText(/Workspace manager|Provider settings|Install plugin|Retry turn|Queue prompt|Open file/)).toBeNull();
   expect(server.requests).toEqual([]);
 });
