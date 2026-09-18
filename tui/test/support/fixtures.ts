@@ -553,7 +553,7 @@ export function foreground(
   name: string,
   state: ForegroundToolExecution["state"],
 ): ForegroundToolExecution {
-  return { call_id: callId, tool_id: toolId, name, state };
+  return { message_id: "assistant-1", block_index: 0, call_id: callId, tool_id: toolId, name, state };
 }
 
 /** One catalog entry. */

@@ -4631,6 +4631,14 @@ export interface RuntimeClientTranscriptEntry {
  */
 export interface ForegroundToolExecution {
   /**
+   * Identifies a committed canonical message block.
+   */
+  message_id: string;
+  /**
+   * Canonical Assistant content block (also used by live publication frames).
+   */
+  block_index: number;
+  /**
    * Identifies one tool call issued by the current agent.
    */
   call_id: string;

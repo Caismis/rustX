@@ -7163,6 +7163,14 @@
       "description": "The foreground tool execution read model of one logical tool call.\n\nKeyed by the canonical logical tool-call identity, so parallel physical\ncompletion timing can never corrupt logical identities or canonical\nordering. Native, MCP, and Python foreground executions converge through\nthis one shape.",
       "type": "object",
       "properties": {
+        "message_id": {
+          "description": "Exact Assistant occurrence; provider call IDs can repeat across history.",
+          "$ref": "#/$defs/MessageId"
+        },
+        "block_index": {
+          "description": "Canonical Assistant content block (also used by live publication frames).",
+          "$ref": "#/$defs/ContentBlockIndex"
+        },
         "call_id": {
           "description": "The logical tool-call identity.",
           "$ref": "#/$defs/ToolCallId"
@@ -7182,11 +7190,20 @@
       },
       "additionalProperties": false,
       "required": [
+        "message_id",
+        "block_index",
         "call_id",
         "tool_id",
         "name",
         "state"
       ]
+    },
+    "ContentBlockIndex": {
+      "description": "A stable index identifying one content block within the ordered content\nlist of the canonical message being assembled.\n\nStreaming facts (text deltas, reasoning deltas, provider continuation\nstate, tool-call content) reference the block they belong to by this\nindex, so interleaved and multiple blocks remain unambiguous without\nexposing any provider-specific block id type.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "maximum": 4294967295
     },
     "ForegroundToolState": {
       "description": "The externally meaningful state of one foreground tool execution.",
@@ -8919,13 +8936,6 @@
           ]
         }
       ]
-    },
-    "ContentBlockIndex": {
-      "description": "A stable index identifying one content block within the ordered content\nlist of the canonical message being assembled.\n\nStreaming facts (text deltas, reasoning deltas, provider continuation\nstate, tool-call content) reference the block they belong to by this\nindex, so interleaved and multiple blocks remain unambiguous without\nexposing any provider-specific block id type.",
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0,
-      "maximum": 4294967295
     },
     "EventId": {
       "description": "Identifies one durable runtime event.",

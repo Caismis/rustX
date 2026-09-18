@@ -248,7 +248,8 @@ use super::inbox::{
 /// Version 35 requires the fixed Journal presentation indexes for bounded Trace
 /// seeks. Older development stores are rejected, never lazily repaired.
 /// Version 37 adds native compare-and-set revisions to Pending Inbound.
-pub const SQLITE_SCHEMA_VERSION: i64 = 38;
+/// Version 39 persists exact canonical Tool occurrence/result associations.
+pub const SQLITE_SCHEMA_VERSION: i64 = 39;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -1615,6 +1616,10 @@ impl ConversationStore for SqliteConversationStore {
                 }
                 validate_surface_operation_references(&transaction, operation)?;
                 append_surface_op(&transaction, revision, generation, operation)?;
+                if let SurfaceOp::Append { message_id } = operation {
+                    let message = load_message_tx(&transaction, message_id)?;
+                    associate_canonical_tool_result(&transaction, &message, &active, None)?;
+                }
                 apply_surface_op(&mut active, operation)?;
             }
             if revision != SurfaceRevision::INITIAL {
@@ -1761,7 +1766,9 @@ impl ConversationStore for SqliteConversationStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("canonical event transaction: {error}")))?;
         ensure_surface_head(&transaction)?;
-        let transcript_cursor = append_message_and_surface(&transaction, message)?;
+        let owner = event_tool_owner(&transaction, message, &event)?;
+        let transcript_cursor =
+            append_message_and_surface_internal(&transaction, message, None, owner.as_ref())?;
         #[cfg(test)]
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: canonical event journal commit"));
@@ -1796,9 +1803,15 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(format!("canonical event batch transaction: {error}")))?;
         ensure_surface_head(&transaction)?;
         let mut receipts = Vec::with_capacity(messages.len());
-        for message in messages {
+        for (message, event) in messages.iter().zip(events) {
+            let owner = event_tool_owner(&transaction, message, event)?;
             receipts.push(TranscriptCommitReceipt {
-                transcript_cursor: append_message_and_surface(&transaction, message)?,
+                transcript_cursor: append_message_and_surface_internal(
+                    &transaction,
+                    message,
+                    None,
+                    owner.as_ref(),
+                )?,
             });
         }
         let mut persisted = Vec::with_capacity(events.len());
@@ -4893,6 +4906,17 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 message_id TEXT NOT NULL UNIQUE,
                 message_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS canonical_tool_calls (
+                assistant_message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
+                block_index INTEGER NOT NULL CHECK(block_index >= 0),
+                call_id TEXT NOT NULL,
+                tool_id TEXT NOT NULL,
+                result_message_id TEXT UNIQUE REFERENCES message_ledger(message_id),
+                PRIMARY KEY(assistant_message_id,block_index),
+                UNIQUE(assistant_message_id,call_id)
+            );
+            CREATE INDEX IF NOT EXISTS canonical_tool_calls_by_call
+                ON canonical_tool_calls(call_id,tool_id,assistant_message_id);
             CREATE TABLE IF NOT EXISTS transcript_order (
                 position INTEGER PRIMARY KEY,
                 reference_kind TEXT NOT NULL,
@@ -5063,6 +5087,16 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             "transcript_order",
             &["position", "reference_kind", "reference_id"],
         ),
+        (
+            "canonical_tool_calls",
+            &[
+                "assistant_message_id",
+                "block_index",
+                "call_id",
+                "tool_id",
+                "result_message_id",
+            ],
+        ),
         ("bootstrap_identity", &["message_count", "history_digest"]),
         (
             "surface_ops",
@@ -5165,6 +5199,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ("pending_inbound", "message_id"),
         ("inbound_correlation", "message_id"),
         ("message_ledger", "message_id"),
+        ("canonical_tool_calls", "result_message_id"),
         ("events", "event_id"),
         ("request_snapshots", "request_id"),
         ("publication_streams", "stream_id"),
@@ -5172,6 +5207,16 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
     ] {
         verify_unique_column(connection, table, column)?;
     }
+    verify_unique_columns(
+        connection,
+        "canonical_tool_calls",
+        &["assistant_message_id", "block_index"],
+    )?;
+    verify_unique_columns(
+        connection,
+        "canonical_tool_calls",
+        &["assistant_message_id", "call_id"],
+    )?;
     verify_unique_columns(
         connection,
         "publication_proposals",
@@ -5474,11 +5519,82 @@ fn update_checkpoint(
     Ok(())
 }
 
+/// The publication generation proves an exact Assistant owner when the commit
+/// carries a runtime envelope. Direct canonical commits and lineage bootstrap
+/// instead use their authoritative Surface at the commit's historical position.
+fn event_tool_owner(
+    transaction: &Transaction<'_>,
+    message: &MessageBlock,
+    event: &RuntimeEventEnvelope,
+) -> Result<Option<MessageId>, ConversationStoreError> {
+    if let (MessageBlock::Tool(tool), Some(attempt), Some(turn)) =
+        (message, event.attempt_id.as_ref(), event.turn_id.as_ref())
+    {
+        canonical_generation_owner(transaction, &tool.tool_call_id, attempt, turn)
+    } else {
+        Ok(None)
+    }
+}
+
+/// Persists only the relationship, not a second Tool body/lifecycle. Active
+/// Surface membership is a native ownership proof (its call IDs are unique),
+/// never a "latest call" or "nearest message" heuristic. Ambiguity is refused.
+fn associate_canonical_tool_result(
+    transaction: &Transaction<'_>,
+    message: &MessageBlock,
+    active: &[MessageId],
+    owner: Option<&MessageId>,
+) -> Result<(), ConversationStoreError> {
+    let MessageBlock::Tool(tool) = message else {
+        return Ok(());
+    };
+    let owners = owner.map_or_else(|| active.to_vec(), |id| vec![id.clone()]);
+    let mut statement = transaction.prepare(
+        "SELECT assistant_message_id,block_index,result_message_id FROM canonical_tool_calls
+         WHERE call_id=?1 AND tool_id=?2 AND assistant_message_id IN (SELECT value FROM json_each(?3)) LIMIT 2",
+    ).map_err(|error| storage(format!("canonical Tool owner: {error}")))?;
+    let rows = statement
+        .query_map(
+            params![
+                tool.tool_call_id.as_str(),
+                tool.tool_id.as_str(),
+                encode(&owners, "Tool owner Surface")?
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .map_err(|error| storage(format!("canonical Tool owners: {error}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| storage(format!("canonical Tool owner row: {error}")))?;
+    let (assistant, block, previous) = match rows.as_slice() {
+        [] if owner.is_none() => return Ok(()), // Unowned canonical Tool messages have no call occurrence.
+        [row] => row,
+        _ => {
+            return Err(storage(
+                "canonical Tool result has missing or ambiguous occurrence ownership",
+            ));
+        }
+    };
+    if previous.as_deref().is_some_and(|id| id != tool.id.as_str()) {
+        return Err(storage(
+            "canonical Tool occurrence already has a different result",
+        ));
+    }
+    transaction.execute("UPDATE canonical_tool_calls SET result_message_id=?1 WHERE assistant_message_id=?2 AND block_index=?3", params![tool.id.as_str(), assistant, block])
+        .map_err(|error| storage(format!("canonical Tool result association: {error}")))?;
+    Ok(())
+}
+
 fn append_message_and_surface(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
-    append_message_and_surface_internal(transaction, message, None)
+    append_message_and_surface_internal(transaction, message, None, None)
 }
 
 /// Appends one seeded canonical message to the Ledger alone.
@@ -5503,13 +5619,14 @@ fn append_adopted_message_and_surface(
     message: &MessageBlock,
     pending_message_id: &MessageId,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
-    append_message_and_surface_internal(transaction, message, Some(pending_message_id))
+    append_message_and_surface_internal(transaction, message, Some(pending_message_id), None)
 }
 
 fn append_message_and_surface_internal(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
     allowed_pending_message_id: Option<&MessageId>,
+    tool_owner: Option<&MessageId>,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
     if matches!(
         message,
@@ -5527,6 +5644,7 @@ fn append_message_and_surface_internal(
     }
     let transcript_cursor =
         append_message_ledger(transaction, message, allowed_pending_message_id)?;
+    associate_canonical_tool_result(transaction, message, &head.active_message_ids, tool_owner)?;
     let mut active = head.active_message_ids;
     active.push(id.clone());
     let revision = head.revision.next();
@@ -5566,6 +5684,21 @@ fn append_message_ledger(
             params![position, id.as_str(), encode(message, "canonical message")?],
         )
         .map_err(|error| map_insert_error(&error, &id))?;
+    if let MessageBlock::Assistant(assistant) = message {
+        for (index, block) in assistant.content.iter().enumerate() {
+            if let AssistantContentBlock::ToolCall(call) = block {
+                let block_index =
+                    u32::try_from(index).map_err(|_| storage("Tool block index overflow"))?;
+                transaction
+                    .execute(
+                        "INSERT INTO canonical_tool_calls(assistant_message_id,block_index,call_id,tool_id)
+                         VALUES(?1,?2,?3,?4)",
+                        params![assistant.id.as_str(), block_index, call.id.as_str(), call.tool_id.as_str()],
+                    )
+                    .map_err(|error| storage(format!("canonical Tool occurrence: {error}")))?;
+            }
+        }
+    }
     if transcript_visible_message(message) {
         Ok(Some(append_transcript_reference(
             transaction,
@@ -5876,6 +6009,59 @@ fn load_canonical_rows(
     .collect()
 }
 
+/// One indexed range per Assistant, then indexed result-message seeks.
+/// No provider-id query or JSON filtering of the historical Ledger.
+fn load_transcript_tools(
+    connection: &Connection,
+    assistant: &crate::message::types::AssistantMessageBlock,
+) -> Result<Vec<crate::durable::inbox::TranscriptTool>, ConversationStoreError> {
+    let mut tool_calls = Vec::new();
+    let mut statement = connection
+        .prepare(TRANSCRIPT_TOOLS_SQL)
+        .map_err(|error| storage(format!("transcript Tool associations: {error}")))?;
+    let rows = statement
+        .query_map([assistant.id.as_str()], |row| {
+            Ok((row.get::<_, u32>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .map_err(|error| storage(format!("transcript Tool rows: {error}")))?;
+    for row in rows {
+        let (block_index, result_json) =
+            row.map_err(|error| storage(format!("transcript Tool row: {error}")))?;
+        let Some(AssistantContentBlock::ToolCall(call)) =
+            assistant.content.get(block_index as usize)
+        else {
+            return Err(storage(
+                "canonical Tool occurrence references a non-Tool block",
+            ));
+        };
+        let result = result_json
+            .map(|json| decode::<MessageBlock>(&json, "transcript Tool result"))
+            .transpose()?
+            .map(|message| match message {
+                MessageBlock::Tool(tool)
+                    if tool.tool_call_id == call.id && tool.tool_id == call.tool_id =>
+                {
+                    Ok(tool.result)
+                }
+                _ => Err(storage(
+                    "canonical Tool occurrence references a foreign result",
+                )),
+            })
+            .transpose()?;
+        tool_calls.push(crate::durable::inbox::TranscriptTool {
+            message_id: assistant.id.clone(),
+            block_index: crate::message::types::ContentBlockIndex::new(block_index),
+            call: call.clone(),
+            result,
+        });
+    }
+    Ok(tool_calls)
+}
+
+const TRANSCRIPT_TOOLS_SQL: &str = "SELECT c.block_index,l.message_json FROM canonical_tool_calls c
+    LEFT JOIN message_ledger l ON l.message_id=c.result_message_id
+    WHERE c.assistant_message_id=?1 ORDER BY c.block_index";
+
 /// Reads the bounded transcript ordering spine newest-first, resolves each
 /// reference through its canonical durable owner, and returns the selected
 /// rows in chronological order.
@@ -5943,19 +6129,17 @@ fn load_transcript_page(
             );
             let item = load_transcript_item(connection, &reference_kind, &reference_id)?;
             let mut tool_calls = Vec::new();
-            if let TranscriptItem::Message { message: MessageBlock::Assistant(assistant) } = &item {
-                for block in &assistant.content {
-                    if let crate::message::types::AssistantContentBlock::ToolCall(call) = block {
-                        let result_json: Option<String> = connection.query_row(
-                            "SELECT message_json FROM message_ledger WHERE json_extract(message_json, '$.role') = 'tool' AND json_extract(message_json, '$.tool_call_id') = ?1 AND json_extract(message_json, '$.tool_id') = ?2 LIMIT 1",
-                            params![call.id.as_str(), call.tool_id.as_str()], |row| row.get(0),
-                        ).optional().map_err(|error| storage(format!("transcript Tool lookup: {error}")))?;
-                        let result = result_json.map(|json| decode::<MessageBlock>(&json, "transcript Tool result")).transpose()?.and_then(|message| match message { MessageBlock::Tool(tool) => Some(tool.result), _ => None });
-                        tool_calls.push(crate::durable::inbox::TranscriptTool { call: call.clone(), result });
-                    }
-                }
+            if let TranscriptItem::Message {
+                message: MessageBlock::Assistant(assistant),
+            } = &item
+            {
+                tool_calls = load_transcript_tools(connection, assistant)?;
             }
-            Ok(TranscriptEntry { tool_calls, cursor, item })
+            Ok(TranscriptEntry {
+                tool_calls,
+                cursor,
+                item,
+            })
         })
         .collect::<Result<Vec<_>, ConversationStoreError>>()?;
     Ok(TranscriptPage {
@@ -9113,6 +9297,154 @@ mod tests {
     }
 
     #[test]
+    fn transcript_tool_reads_seek_occurrences_and_result_message_indexes() {
+        let store = store();
+        let connection = store.conn.lock().unwrap();
+        let plan = connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {TRANSCRIPT_TOOLS_SQL}"))
+            .unwrap()
+            .query_map(["assistant"], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        assert!(
+            plan.contains("SEARCH c USING INDEX sqlite_autoindex_canonical_tool_calls_2"),
+            "{plan}"
+        );
+        assert!(
+            plan.contains("SEARCH l USING INDEX sqlite_autoindex_message_ledger_1"),
+            "{plan}"
+        );
+        assert!(
+            !plan.contains("SCAN ") && !plan.contains("TEMP B-TREE"),
+            "{plan}"
+        );
+    }
+
+    #[test]
+    fn transcript_tool_schema_38_is_refused_without_backfill() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("old.sqlite");
+        let id = ConversationId::new("conv_a2b8feb8-c105-7980-8a72-d8482750c3fc");
+        {
+            let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+            store.conn.lock().unwrap().execute_batch("DROP TABLE canonical_tool_calls; UPDATE rustx_store SET schema_version=38 WHERE id=1").unwrap();
+        }
+        assert!(matches!(
+            SqliteConversationStore::open(id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 38,
+                expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+        let connection = Connection::open(path).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE name='canonical_tool_calls'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn transcript_tool_lineage_seed_keeps_retired_reused_call_occurrences() {
+        let call = ToolCall {
+            id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-bash"),
+            name: "bash".into(),
+            arguments: serde_json::json!({}),
+        };
+        let assistant = |id| {
+            MessageBlock::Assistant(AssistantMessageBlock {
+                id: MessageId::new(id),
+                content: vec![AssistantContentBlock::ToolCall(call.clone())],
+            })
+        };
+        let result = |id, text: &str| {
+            MessageBlock::Tool(ToolMessageBlock {
+                id: MessageId::new(id),
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+                result: ToolExecutionResult {
+                    status: ToolExecutionStatus::Success,
+                    content: vec![crate::tools::types::ToolResultContent::Text(
+                        crate::message::content::TextBlock { text: text.into() },
+                    )],
+                    duration_ms: 1,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    workflow: None,
+                    managed_output: None,
+                },
+            })
+        };
+        let canonical = vec![
+            assistant("a"),
+            result("ra", "old-result"),
+            MessageBlock::User(summary_message("summary", "retired A")),
+            assistant("b"),
+        ];
+        let history = vec![
+            SurfaceOp::Append {
+                message_id: MessageId::new("a"),
+            },
+            SurfaceOp::Append {
+                message_id: MessageId::new("ra"),
+            },
+            SurfaceOp::Replace {
+                start: MessageId::new("a"),
+                end: MessageId::new("ra"),
+                replacement: MessageId::new("summary"),
+            },
+            SurfaceOp::Append {
+                message_id: MessageId::new("b"),
+            },
+        ];
+        let store = store();
+        store
+            .initialize_lineage(&LineageSeed::replayed(canonical, history).unwrap())
+            .unwrap();
+        let unresolved = crate::runtime_client::snapshot::transcript_page_view(
+            store.load_transcript_page(None, 1).unwrap(),
+        )
+        .unwrap();
+        let current = &unresolved.entries[0].tool_calls[0];
+        assert_eq!(current.message_id, MessageId::new("b"));
+        assert!(matches!(
+            current.state,
+            crate::runtime_client::snapshot::ForegroundToolState::Assembled { .. }
+        ));
+        assert!(
+            !serde_json::to_string(current)
+                .unwrap()
+                .contains("old-result")
+        );
+        store.append_canonical(&result("rb", "new-result")).unwrap();
+        let page = store.load_transcript_page(None, 10).unwrap();
+        let tools: Vec<_> = page
+            .entries
+            .iter()
+            .flat_map(|entry| &entry.tool_calls)
+            .collect();
+        assert_eq!(tools.len(), 2);
+        for (tool, owner, text) in [(tools[0], "a", "old-result"), (tools[1], "b", "new-result")] {
+            assert_eq!(tool.message_id, MessageId::new(owner));
+            assert_eq!(
+                tool.result.as_ref().unwrap().content,
+                vec![crate::tools::types::ToolResultContent::Text(
+                    crate::message::content::TextBlock { text: text.into() }
+                )]
+            );
+        }
+    }
+
+    #[test]
     fn agent_transcript_tools_resolve_native_results_across_page_boundaries() {
         let store = store();
         store.initialize(&[user_message("u", "Run")]).unwrap();
@@ -9140,6 +9472,16 @@ mod tests {
                 .iter()
                 .all(|tool| tool.result.is_none())
         );
+        let unresolved =
+            crate::runtime_client::snapshot::transcript_page_view(before.clone()).unwrap();
+        for (index, tool) in unresolved.entries[0].tool_calls.iter().enumerate() {
+            assert_eq!(tool.message_id, MessageId::new("assistant"));
+            assert_eq!(tool.block_index.get() as usize, index);
+            assert!(matches!(
+                tool.state,
+                crate::runtime_client::snapshot::ForegroundToolState::Assembled { .. }
+            ));
+        }
         // Physical/result publication order differs from canonical call order.
         for (index, call) in calls.iter().enumerate().rev() {
             store
@@ -10534,7 +10876,7 @@ mod tests {
                 result,
                 Err(ConversationStoreError::SchemaVersionMismatch {
                     stored: 32,
-                    expected: 38
+                    expected: SQLITE_SCHEMA_VERSION
                 })
             ));
         }
@@ -13023,7 +13365,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 38);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 39);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -13092,7 +13434,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 38);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 39);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -13270,7 +13612,7 @@ mod tests {
             SqliteConversationStore::open(id, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 34,
-                expected: 38
+                expected: SQLITE_SCHEMA_VERSION
             })
         ));
     }
@@ -13293,7 +13635,6 @@ mod tests {
                 )
                 .unwrap()
         };
-        assert_eq!(stored, 38);
         assert_eq!(stored, SQLITE_SCHEMA_VERSION);
         SqliteConversationStore::open(conversation_id, &path).expect("a current store reopens");
     }

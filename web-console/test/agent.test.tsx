@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v6';
 import { AgentControls } from '../src/app/agent/AgentControls';
@@ -130,7 +130,7 @@ it('pending approval restores after browser absence; accepted response cannot se
  expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
 });
 it('Tool identity selects presentation; running, terminal failures, cancellation and uncertainty stay native', () => {
- const tool: ForegroundToolExecution = { call_id: 'call', tool_id: 'tool-bash', name: 'shell', state: { type: 'running', arguments: '{"command":"pwd"}' } };
+ const tool: ForegroundToolExecution = { message_id: 'a', block_index: 0, call_id: 'call', tool_id: 'tool-bash', name: 'shell', state: { type: 'running', arguments: '{"command":"pwd"}' } };
  const ui = render(<Tool tool={tool}/>);
  expect(ui.container.querySelector('[data-tool-renderer="bash"]')).toBeTruthy();
  expect(screen.getByLabelText('Tool status').textContent).toBe('running');
@@ -145,7 +145,7 @@ it('Tool identity selects presentation; running, terminal failures, cancellation
 it('reasoning and Tool rows remain at native canonical positions while live state changes', () => {
  const s = running();
  const call = { id: 'call', tool_id: 'tool-bash', name: 'bash', arguments: { command: 'pwd' } };
- const tool: ForegroundToolExecution = { call_id: call.id, tool_id: call.tool_id, name: call.name, state: { type: 'assembled', arguments: '{"command":"pwd"}' } };
+ const tool: ForegroundToolExecution = { message_id: 'a', block_index: 1, call_id: call.id, tool_id: call.tool_id, name: call.name, state: { type: 'assembled', arguments: '{"command":"pwd"}' } };
  s.transcript.entries = [{ cursor: '10', tool_calls: [tool], item: { type: 'message', message: { role: 'assistant', id: 'a', content: [{ type: 'reasoning', text: 'First reason' }, { type: 'tool_call', ...call }, { type: 'text', text: 'After call' }] } } }];
  s.attempt!.foreground = [{ ...tool, state: { type: 'running', arguments: tool.state.arguments } }];
  const ui = render(<AgentTranscript snapshot={s}/>);
@@ -161,4 +161,34 @@ it('an acknowledged Stop remains fenced when its authoritative reread fails', as
  expect(server.client.getSnapshot().views.A.snapshot?.attempt?.phase.type).toBe('running');
  server.handlers.delete('session/snapshot'); await server.client.refresh('A');
  await server.client.cancelTurn('A'); expect(count('turn/cancel')).toBe(1);
+});
+
+it('live foreground overlays only its exact canonical occurrence when historical Attempts reuse a provider call ID', () => {
+ const s = running();
+ const old: ForegroundToolExecution = { message_id: 'assistant-A', block_index: 1, call_id: 'call-1', tool_id: 'tool-bash', name: 'bash', state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: 1, content: [{ type: 'text', text: 'old-result' }] } } };
+ const current: ForegroundToolExecution = { ...old, message_id: 'assistant-B', state: { type: 'assembled', arguments: '{}' } };
+ s.transcript.entries = [old, current].map((tool, index) => ({ cursor: String(index + 1), tool_calls: [tool], item: { type: 'message', message: { role: 'assistant', id: tool.message_id, content: [{ type: 'reasoning', text: `Reason ${index}` }, { type: 'tool_call', id: tool.call_id, tool_id: tool.tool_id, name: tool.name, arguments: {} }] } } }));
+ s.attempt!.foreground = [{ ...current, state: { type: 'running', arguments: '{}' } }];
+ const ui = render(<AgentTranscript snapshot={s}/>);
+ const oldRow = within(screen.getByLabelText('assistant · assistant-A'));
+ const newRow = within(screen.getByLabelText('assistant · assistant-B'));
+ expect(newRow.getByLabelText('Tool status').textContent).toBe('running');
+ expect(screen.getByLabelText('assistant · assistant-B').querySelectorAll('[data-tool-call-id]')).toHaveLength(1);
+ fireEvent.click(oldRow.getByRole('button', { name: /bash/ }));
+ expect(oldRow.getByText('old-result')).toBeTruthy();
+ expect(newRow.queryByText('old-result')).toBeNull();
+ expect(oldRow.getByLabelText('Tool status').textContent).toBe('success');
+ // Canonical settlement of this same occurrence wins over lagging live state.
+ s.transcript.entries![1].tool_calls = [{ ...current, state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: 1, content: [{ type: 'text', text: 'new-result' }] } } }];
+ ui.rerender(<AgentTranscript snapshot={{ ...s }}/>);
+ expect(newRow.getByLabelText('Tool status').textContent).toBe('success');
+ fireEvent.click(newRow.getByRole('button', { name: /bash/ }));
+ expect(newRow.getByText('new-result')).toBeTruthy();
+ expect(newRow.queryByText('old-result')).toBeNull();
+ s.transcript.entries![1].tool_calls = [current];
+ // A historical unresolved occurrence also cannot borrow B's live state.
+ s.transcript.entries![0].tool_calls = [{ ...old, state: { type: 'assembled', arguments: '{}' } }];
+ ui.rerender(<AgentTranscript snapshot={{ ...s }}/>);
+ expect(oldRow.getByLabelText('Tool status').textContent).toBe('assembled');
+ expect(newRow.getByLabelText('Tool status').textContent).toBe('running');
 });

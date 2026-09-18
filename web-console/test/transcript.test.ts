@@ -72,7 +72,7 @@ it('reattachment in the same connection rejects the old page and duplicate load 
 
 it('fresh native Tool projections replace overlaps; unresolved old projections force an authoritative window rebase', () => {
   const call = entry(8);
-  call.tool_calls = [{ call_id: 'native-call', tool_id: 'tool-bash', name: 'bash', state: { type: 'assembled', arguments: '{}' } }];
+  call.tool_calls = [{ message_id: 'm8', block_index: 0, call_id: 'native-call', tool_id: 'tool-bash', name: 'bash', state: { type: 'assembled', arguments: '{}' } }];
   const first = replaceTranscript({ entries: [call, entry(9)], next_cursor: '8' });
   const rebased = refreshTranscript(first, { entries: [entry(9), entry(10)], next_cursor: '9' });
   expect(rebased.page.entries).toEqual([entry(9), entry(10)]);

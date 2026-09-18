@@ -436,7 +436,7 @@ impl RuntimeClientProjection {
             .attempt
             .as_mut()
             .expect("durable message bootstrap creates the attempt view");
-        for block in &assistant.content {
+        for (index, block) in assistant.content.iter().enumerate() {
             let AssistantContentBlock::ToolCall(call) = block else {
                 continue;
             };
@@ -448,6 +448,10 @@ impl RuntimeClientProjection {
                 continue;
             }
             attempt.foreground.push(ForegroundToolExecution {
+                message_id: assistant.id.clone(),
+                block_index: ContentBlockIndex::new(
+                    u32::try_from(index).expect("canonical block index"),
+                ),
                 call_id: call.id.clone(),
                 tool_id: call.tool_id.clone(),
                 name: call.name.clone(),
@@ -987,6 +991,8 @@ impl RuntimeClientProjection {
                 self.ensure_attempt(attempt_id);
                 let attempt = self.snapshot.attempt.as_mut().expect("attempt view exists");
                 attempt.foreground.push(ForegroundToolExecution {
+                    message_id: message_id.clone(),
+                    block_index: *block_index,
                     call_id: call.id.clone(),
                     tool_id: call.tool_id.clone(),
                     name: call.name.clone(),
@@ -4581,7 +4587,7 @@ mod tests {
                 &mut projection,
                 sequence as u64,
                 PublicationPayload::ProposedToolCallStarted {
-                    block_index: ContentBlockIndex::new(0),
+                    block_index: ContentBlockIndex::new(u32::try_from(sequence).unwrap()),
                     call,
                 },
             );
@@ -4620,6 +4626,9 @@ mod tests {
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         let foreground = &snapshot.attempt.as_ref().expect("attempt view").foreground;
         assert_eq!(foreground.len(), 2);
+        assert_eq!(foreground[0].block_index, ContentBlockIndex::new(0));
+        assert_eq!(foreground[1].block_index, ContentBlockIndex::new(1));
+        assert_eq!(foreground[0].message_id, foreground[1].message_id);
         assert_eq!(foreground[0].call_id, ToolCallId::new("call_a"));
         assert_eq!(foreground[1].call_id, ToolCallId::new("call_b"));
         assert!(matches!(

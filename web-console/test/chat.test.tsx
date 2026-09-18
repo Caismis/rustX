@@ -41,7 +41,7 @@ it('durable user/assistant order and tool artifact galleries follow only transcr
   const s = snapshot();
   s.transcript = { entries: [
     { cursor: '1', item: { type: 'message', message: { role: 'user', id: 'u', source: 'human', content: [{ type: 'text', text: 'First user' }] } } },
-    { cursor: '2', tool_calls: [{ call_id: 'native-call', tool_id: 'image-tool', name: 'image-tool', state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: 1, artifacts: [{ artifact_id: 'artifact_1', name: 'tool.png', mime_type: 'image/png' }] } } }], item: { type: 'message', message: { role: 'assistant', id: 'a', content: [{ type: 'text', text: 'Second assistant' }, { type: 'tool_call', id: 'native-call', tool_id: 'image-tool', name: 'image-tool', arguments: {} }] } } },
+    { cursor: '2', tool_calls: [{ message_id: 'a', block_index: 1, call_id: 'native-call', tool_id: 'image-tool', name: 'image-tool', state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: 1, artifacts: [{ artifact_id: 'artifact_1', name: 'tool.png', mime_type: 'image/png' }] } } }], item: { type: 'message', message: { role: 'assistant', id: 'a', content: [{ type: 'text', text: 'Second assistant' }, { type: 'tool_call', id: 'native-call', tool_id: 'image-tool', name: 'image-tool', arguments: {} }] } } },
     { cursor: '3', item: { type: 'message', message: { role: 'tool', id: 't', tool_call_id: 'native-call', tool_id: 'image-tool', result: { status: { type: 'success' }, duration_ms: 1, artifacts: [{ artifact_id: 'artifact_1', name: 'tool.png', mime_type: 'image/png' }] } } } },
   ] };
   const ui = render(<AgentTranscript snapshot={s} />);

@@ -605,6 +605,10 @@ pub struct TranscriptEntry {
 /// One canonical call and its optional committed result, never client-assembled.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptTool {
+    /// Canonical Assistant identity; provider call IDs can repeat across history.
+    pub message_id: MessageId,
+    /// Exact content position inside that Assistant.
+    pub block_index: crate::message::types::ContentBlockIndex,
     pub call: crate::tools::types::ToolCall,
     pub result: Option<crate::tools::types::ToolExecutionResult>,
 }

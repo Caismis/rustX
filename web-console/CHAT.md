@@ -31,8 +31,10 @@ native historical actions as described below; it never derives canonical history
 
 `RuntimeClientTranscriptEntry.tool_calls` contains native `ForegroundToolExecution`
 records in the Assistant's block order. The durable owner resolves each result
-from the canonical ledger, even when the result lies beyond the requested page.
-The runtime projection supplies live state for the exact `(call_id, tool_id)`;
+through the persisted canonical occurrence/result-message index, even when the
+result lies beyond the requested page. Provider call IDs may repeat across Attempts.
+The runtime projection supplies live state only for the exact native
+`(message_id, block_index)` occurrence (also checking call/Tool identity);
 a settled durable record wins. React never joins call and result messages.
 
 `bindings/tools.ts` selects Bash, Read, Write/Edit and Glob/Grep views by native

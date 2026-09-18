@@ -17,7 +17,7 @@ export function Content({ blocks, markdown = false, streaming = false, tools = [
     if (block.type === 'refusal') return <p key={index}>{block.text}</p>;
     if (block.type === 'tool_call') {
       const id = 'call_id' in block ? block.call_id : block.id;
-      const tool = tools.find(tool => tool.call_id === id);
+      const tool = tools.find(tool => tool.block_index === ('block_index' in block ? block.block_index : index) && tool.call_id === id && tool.tool_id === block.tool_id);
       return tool ? <Tool key={id} tool={tool}/> : <small key={id}>Assembling {block.name}…</small>;
     }
     return null;

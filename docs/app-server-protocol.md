@@ -771,12 +771,31 @@ Protocol 6 refuses obsolete development versions; no dual decoding exists.
 
 ## Agent read projections (#346)
 
-`RuntimeClientTranscriptEntry.tool_calls` exposes the native Tool lifecycle at its
-canonical Assistant block position. The durable transcript owner resolves results
-by native call/Tool identity across page boundaries, and runtime-client conversion
-uses the same `ForegroundToolExecution` shape as live `attempt.foreground`. It adds
-no event protocol, browser assembler, lifecycle owner or durable schema. Consumers
-must not independently join Tool call/result messages or infer ordering from events.
+`RuntimeClientTranscriptEntry.tool_calls` exposes native `ForegroundToolExecution`
+records at canonical Assistant positions. Each record now requires `message_id`
+(the exact Assistant MessageId) and `block_index` (its content position), alongside
+`call_id`, `tool_id`, `name` and `state`. Live `attempt.foreground` carries the same
+occurrence identity from native publication frames or canonical bootstrap. A live
+record may update only that exact occurrence; a canonical settled result wins.
+Provider ToolCallIds are not unique across a Conversation lifetime (the recovery
+owner already scopes evidence by Attempt). Consumers must never join historical
+calls/results or overlay current state by provider call/Tool identity alone.
+
+SQLite schema **39** persists `canonical_tool_calls`, keyed by
+`(assistant_message_id, block_index)`, with call/Tool identity and a nullable unique
+`result_message_id` referencing the canonical ledger. The Assistant commit indexes
+its occurrences. The Tool-result transaction binds through the existing
+Attempt/turn-scoped publication generation; direct canonical/seed writes use the
+native Surface at that exact historical transition. Ambiguous ownership is
+refused. Lineage seeds replay their retained Surface history, including retired
+spans, to establish the same associations. Results are never copied into a second
+lifecycle store. Schema 38 development databases are refused, without backfill or
+fallback JSON scanning.
+
+Transcript reads perform one occurrence-index range seek per Assistant page row
+and ledger MessageId-index seeks for linked results, even outside that page:
+work is bounded by page rows and their associations, not total ledger history.
+There is no new event protocol, browser assembler or execution owner.
 
 `SourceSettings.prospective_approval_mode` is the native configuration resolver's
 prospective policy (absent when the candidate is invalid). It describes authored

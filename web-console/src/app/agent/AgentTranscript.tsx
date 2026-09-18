@@ -17,7 +17,7 @@ export function AgentTranscript({ snapshot, history, loadEarlier, latest, onHist
     {history?.error && <p role="alert">{history.error}</p>}
     {!messages.length && !entries.length && <Feedback kind="empty" title="Ready for a task."><p>This Session’s conversation is owned by rustX.</p></Feedback>}
     {entries.filter(entry => entry.item.type !== 'message' || entry.item.message.role !== 'tool').map(entry => <div key={entryIdentity(entry)} data-chat-anchor-key={entryIdentity(entry)}>
-      {entry.item.type === 'message' ? <Message message={entry.item.message} tools={(entry.tool_calls ?? []).map(tool => tool.state.type === 'settled' ? tool : snapshot.attempt?.foreground?.find(live => live.call_id === tool.call_id && live.tool_id === tool.tool_id) ?? tool)} /> : <details>
+      {entry.item.type === 'message' ? <Message message={entry.item.message} tools={(entry.tool_calls ?? []).map(tool => tool.state.type === 'settled' ? tool : snapshot.attempt?.foreground?.find(live => live.message_id === tool.message_id && live.block_index === tool.block_index && live.call_id === tool.call_id && live.tool_id === tool.tool_id) ?? tool)} /> : <details>
         <summary>{entry.item.type === 'publication_audit' ? 'Assistant publication / recovery' : `Historical interaction · ${entry.item.interaction_id}`}</summary>
         <pre>{json(entry.item)}</pre>
       </details>}
@@ -27,6 +27,6 @@ export function AgentTranscript({ snapshot, history, loadEarlier, latest, onHist
       </div>}
     </div>)}
     {messages.some(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id)) && <details><summary>Current context</summary>{messages.filter(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id)).map(message => <Message key={message.id} message={message} />)}</details>}
-    {streaming && !durableIds.has(streaming.message_id) && <div data-chat-anchor-key={`message:${streaming.message_id}`}><AssistantMessage label={`Streaming · ${streaming.message_id}`}><Content blocks={streaming.blocks ?? []} markdown streaming tools={snapshot.attempt?.foreground}/></AssistantMessage></div>}
+    {streaming && !durableIds.has(streaming.message_id) && <div data-chat-anchor-key={`message:${streaming.message_id}`}><AssistantMessage label={`Streaming · ${streaming.message_id}`}><Content blocks={streaming.blocks ?? []} markdown streaming tools={snapshot.attempt?.foreground?.filter(tool => tool.message_id === streaming.message_id)}/></AssistantMessage></div>}
   </div>;
 }

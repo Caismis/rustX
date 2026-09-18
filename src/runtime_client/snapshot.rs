@@ -456,6 +456,8 @@ pub(crate) fn transcript_page_view(
                         let arguments =
                             serde_json::to_string(&tool.call.arguments).expect("JSON arguments");
                         ForegroundToolExecution {
+                            message_id: tool.message_id,
+                            block_index: tool.block_index,
                             call_id: tool.call.id,
                             tool_id: tool.call.tool_id,
                             name: tool.call.name,
@@ -696,6 +698,10 @@ pub enum InFlightBlock {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct ForegroundToolExecution {
+    /// Exact Assistant occurrence; provider call IDs can repeat across history.
+    pub message_id: MessageId,
+    /// Canonical Assistant content block (also used by live publication frames).
+    pub block_index: ContentBlockIndex,
     /// The logical tool-call identity.
     pub call_id: ToolCallId,
     /// The canonical tool identity.

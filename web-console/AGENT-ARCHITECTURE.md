@@ -27,7 +27,12 @@ an active attempt keeps its admitted policy. The Agent control must display this
 boundary explicitly, including pending Reload, rather than imply a Save changed
 execution. No Session approval override or compatibility settings API is added.
 
-Tool results are resolved by the native durable ledger at the call's canonical
-position, including across transcript page boundaries. The current foreground
-projection supplies live state for the exact call identity. No unproven turn
+Tool results are associated atomically in native SQLite schema 39 by canonical
+Assistant MessageId plus block index, with a nullable result MessageId reference.
+The existing Attempt/turn-scoped publication owner proves the result's Assistant;
+native Surface history supplies ownership for direct canonical/lineage writes.
+Transcript pages use indexed occurrence/result-message seeks across page
+boundaries. The foreground projection carries the same MessageId/block identity;
+only that exact occurrence can receive its live state. Provider call/Tool IDs
+alone are never historical identity. No unproven turn
 folding or inferred subcall nesting is supported.
