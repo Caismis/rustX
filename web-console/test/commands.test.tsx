@@ -9,7 +9,7 @@ import { CommandSession, NavigationEpoch, createSession } from '../src/app/comma
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v6';
+import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v7';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -110,7 +110,7 @@ async function subject() {
 describe('successful command draft consumption', () => {
   async function open(draft: string) {
     await subject();
-    localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A'] }));
+    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
     render(<App client={server.client} workspaceHost={server.workspaceHost} />);
     const input = screen.getByLabelText('Message'); input.focus();
     fireEvent.change(input, { target: { value: draft } });
@@ -303,7 +303,7 @@ describe('typed native operations and continuation fencing', () => {
     if (source === 'pending-settled') history.attempt = { attempt_id: 'settled-attempt', turn: 1, phase: { type: 'settled', outcome: { type: 'completed', finish_reason: { type: 'stop' } } } };
     history.transcript.entries!.unshift({ cursor: '0', item: { type: 'message', message: { role: 'user', source: 'human', id: 'user-cut', content: [{ type: 'text', text: 'Try this' }] } } });
     await server.update('A', history);
-    localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A'] }));
+    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
     render(<App client={server.client} workspaceHost={server.workspaceHost} />);
     const pending = { revision: "0", sequence: '1', message: { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'Accepted task' }] } };
     if (source === 'acknowledgement') {
@@ -312,7 +312,10 @@ describe('typed native operations and continuation fencing', () => {
       act(() => { work = server.client.send('A', 'Accepted task'); });
       const request = await server.waitFor('turn/start', 1);
       expect(server.client.getSnapshot().views.A.submissions ?? []).toEqual([]);
-      for (const name of ['Branch', 'Retry / Regenerate', 'Session tree']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+      for (const name of ['Branch', 'Retry / Regenerate']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+      fireEvent.click(screen.getByRole('button', { name: 'Session actions' }));
+      expect(screen.getByRole('menuitem', { name: 'Session tree' })).toHaveProperty('disabled', true);
+      fireEvent.keyDown(document, { key: 'Escape' });
       expect(screen.getByRole('button', { name: 'Fork' })).toHaveProperty('disabled', false);
       fireEvent.change(screen.getByLabelText('Message'), { target: { value: '/branch' } });
       expect(screen.queryByRole('option', { name: /Branch within/ })).toBeNull();
@@ -324,7 +327,10 @@ describe('typed native operations and continuation fencing', () => {
     expect(activeAttempt(view().snapshot)).toBe(false);
     expect(executionIdle(view())).toBe(false);
     if (source !== 'acknowledgement') expect(view().submissions ?? []).toEqual([]);
-    for (const name of ['Branch', 'Retry / Regenerate', 'Session tree']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+    for (const name of ['Branch', 'Retry / Regenerate']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+      fireEvent.click(screen.getByRole('button', { name: 'Session actions' }));
+      expect(screen.getByRole('menuitem', { name: 'Session tree' })).toHaveProperty('disabled', true);
+      fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.getByRole('button', { name: 'Fork' })).toHaveProperty('disabled', false);
     const input = screen.getByLabelText('Message');
     fireEvent.change(input, { target: { value: '/branch' } });
@@ -343,7 +349,10 @@ describe('typed native operations and continuation fencing', () => {
     expect(executionIdle(view())).toBe(false); // authority now owns the blocking fact
     await act(() => server.update('A', { ...history, messages: [{ role: 'user', ...pending.message }], inbound: {} }));
     expect(executionIdle(view())).toBe(true);
-    for (const name of ['Branch', 'Retry / Regenerate', 'Session tree']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', false);
+    for (const name of ['Branch', 'Retry / Regenerate']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', false);
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions' }));
+    expect(screen.getByRole('menuitem', { name: 'Session tree' })).toHaveProperty('disabled', false);
+    fireEvent.keyDown(document, { key: 'Escape' });
     fireEvent.change(input, { target: { value: '/' } });
     expect(screen.getByRole('option', { name: /Branch within/ })).toBeTruthy();
   });
@@ -525,7 +534,7 @@ describe('typed native operations and continuation fencing', () => {
   });
   it.each(['fork', 'branch'] as const)('App navigation after committed %s cannot be redirected by a late reply', async action => {
     const { fixture } = await subject();
-    localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A', 'B'] }));
+    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
     render(<App client={server.client} workspaceHost={server.workspaceHost} />);
     const input = screen.getByLabelText('Message');
     fireEvent.change(input, { target: { value: `/${action}` } });
@@ -539,7 +548,7 @@ describe('typed native operations and continuation fencing', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
     const attachments = methods().filter(method => method === 'session/attach').length;
     await act(async () => server.socket.deliver(response));
-    expect(screen.getByRole('tab', { name: 'Session B', selected: true })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open Session B', current: 'page' })).toBeTruthy();
     expect(methods().filter(method => method === 'session/attach')).toHaveLength(attachments);
     expect(methods()).not.toContain('session/unload');
     expect(fixture.committed).toHaveLength(1);

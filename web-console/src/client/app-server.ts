@@ -3,7 +3,7 @@ import type {
   PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v6';
+} from '../../../protocol/app-server/v7';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from './uploads';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, type TranscriptCache } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
@@ -17,9 +17,11 @@ export type InboundControlOutcome =
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'resynchronizing' | 'stale' | 'incompatible' | 'error';
 export interface SessionView {
   id: string;
+  /** Last native catalog row, retained when the Sidebar reads a different page. */
+  summary?: SessionSummary;
   // Local future-control intent; never inferred from an RPC acknowledgement.
   attachmentIntent: 'wanted' | 'released';
-  // Last server observation, independent of tab visibility and local intent.
+  // Last server observation, independent of focus and local intent.
   attachment: 'detached' | 'attaching' | 'attached' | 'resynchronizing' | 'stale' | 'unloaded' | 'error';
   target?: AttachmentTarget;
   /** Exact native node explicitly opened by this view; retained across reconnect. */
@@ -67,7 +69,7 @@ export interface ClientView {
   capabilities?: ServerCapabilities;
   error?: string;
   sessions: readonly SessionSummary[];
-  sessionResidencies?: Record<string, import('../../../protocol/app-server/v6').ResidencyState>;
+  sessionResidencies?: Record<string, import('../../../protocol/app-server/v7').ResidencyState>;
   nextOffset?: number | null;
   views: Readonly<Record<string, SessionView>>;
   uncertain: readonly UncertainOperation[];
@@ -112,7 +114,7 @@ function goalRefusal(error: unknown) {
   return error.message;
 }
 const READS = new Set<Request1['method']>([
-  'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/tree', 'session/deletePreview',
+  'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/tree', 'session/deletePreview',
   'session/snapshot', 'session/transcript', 'session/trace', 'settings/read', 'settings/model', 'settings/models',
   'configuration/sourcesRead', 'configuration/effective', 'resources/read', 'background/status', 'subagent/status', 'session/boundaries',
 ]);
@@ -136,6 +138,12 @@ export class AppServerClient {
   private attachmentChanges = new Map<string, { kind: 'attach' | 'detach' | 'unload'; work: Promise<void> }>();
   private attachmentChangeCount = 0;
   private attachmentEpochs = new Map<string, number>();
+  private previewChecked = new Set<string>();
+  private summaryObservedEpoch = new Map<string, number>();
+  private summaryInFlight = new Map<string, { generation: number; work: Promise<void> }>();
+  private summaryReadSequence = 0;
+  // Minimum acceptable metadata sequence: last observation or a committed rename read floor.
+  private summaryReads = new Map<string, number>();
   private state: ClientView = {
     connection: 'disconnected', generation: 0, sessions: [], views: {}, uncertain: [], interactionOperations: {},
   };
@@ -147,7 +155,7 @@ export class AppServerClient {
     for (const listener of this.listeners) listener();
   }
   private setSession(id: string, patch: Partial<SessionView>) {
-    const view = this.state.views[id] ?? { id, attachmentIntent: 'released' as const, attachment: 'detached' as const };
+    const view = this.state.views[id] ?? { id, summary: this.state.sessions.find(row => row.id === id), attachmentIntent: 'released' as const, attachment: 'detached' as const };
     this.publish({ views: { ...this.state.views, [id]: { ...view, ...patch } } });
   }
   // Product policy is injected by the Web owner, not interpreted by this transport.
@@ -178,7 +186,7 @@ export class AppServerClient {
     const generation = this.state.generation;
     this.publish({ endpoint: url.href, connection: reconnect ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v6', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v7', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -196,12 +204,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 6, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 7, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 6 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v6 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (hello.protocol_version !== 7 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v7 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
@@ -356,10 +364,84 @@ export class AppServerClient {
   private listQuery = '';
   async listSessions(offset = this.listOffset, query = this.listQuery, current: () => boolean = () => true) {
     const epoch = ++this.listEpoch;
+    const summaryRead = ++this.summaryReadSequence;
     this.listOffset = offset; this.listQuery = query;
     const generation = this.state.generation;
     const result = await this.request({ method: 'session/list', params: { offset, limit: 32, query } }, 'sessions');
-    if (this.current(generation) && epoch === this.listEpoch && current()) this.publish({ sessions: result.sessions, sessionResidencies: result.residencies, nextOffset: result.next_offset });
+    if (this.current(generation) && epoch === this.listEpoch && current()) {
+      const views = { ...this.state.views };
+      const sessions = result.sessions.map(row => {
+        const cached = views[row.id]?.summary ?? this.state.sessions.find(item => item.id === row.id);
+        const summary = (this.summaryReads.get(row.id) ?? 0) > summaryRead && cached ? cached : row;
+        if (summary === row) this.summaryReads.set(row.id, summaryRead);
+        if (views[row.id]) views[row.id] = { ...views[row.id], summary };
+        return summary;
+      });
+      // Retain ordering fences only for metadata actually cached by this client.
+      for (const id of this.summaryReads.keys()) if (!views[id] && !sessions.some(row => row.id === id)) this.summaryReads.delete(id);
+      this.publish({ sessions, sessionResidencies: result.residencies, nextOffset: result.next_offset, views });
+    }
+  }
+  /** Cached values remain renderable across transport loss. Each attachment
+   * establishes fresh exact metadata independently of its first-message check. */
+  private async refreshDisplaySummary(id: string) {
+    const generation = this.state.generation, epoch = this.attachmentEpochs.get(id);
+    const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch
+      && this.state.views[id]?.attachmentIntent === 'wanted';
+    if (!current()) return;
+    const existing = this.summaryInFlight.get(id);
+    if (existing?.generation === generation) {
+      await existing.work.catch(() => {});
+      if (!current()) return;
+    }
+    const summary = this.state.sessions.find(row => row.id === id) ?? this.state.views[id]?.summary;
+    if (this.summaryObservedEpoch.get(id) === epoch && summary
+      && (summary.name || summary.preview || this.previewChecked.has(id) || !this.hasCanonicalUser(id))) return;
+    await this.readSessionSummary(id).catch(() => {});
+  }
+  private hasCanonicalUser(id: string) {
+    return !!this.state.views[id]?.snapshot?.transcript.entries?.some(entry => entry.item.type === 'message' && entry.item.message.role === 'user');
+  }
+  /** Exact native metadata observation, never a catalog search or membership change.
+   * Coalesce within a connection; only successful reads begun after canonical
+   * user history can complete the first-message check (including preview=None). */
+  readSessionSummary(id: string): Promise<void> {
+    const existing = this.summaryInFlight.get(id);
+    if (existing?.generation === this.state.generation) return existing.work;
+    const generation = this.state.generation, summaryRead = ++this.summaryReadSequence;
+    const epoch = this.attachmentEpochs.get(id), canonicalUser = this.hasCanonicalUser(id);
+    const work = (async () => {
+      const { summary } = await this.request({ method: 'session/summary', params: { session_id: id } }, 'session_summary');
+      if (!this.current(generation) || this.attachmentEpochs.get(id) !== epoch) throw new Error('Obsolete Session summary read.');
+      if (summary.id !== id) throw new Error('Mismatched Session summary identity.');
+      if ((this.summaryReads.get(id) ?? 0) <= summaryRead) {
+        this.summaryReads.set(id, summaryRead);
+        this.publish({ sessions: this.state.sessions.map(row => row.id === id ? summary : row),
+          views: this.state.views[id] ? { ...this.state.views, [id]: { ...this.state.views[id], summary } } : this.state.views });
+        if (epoch !== undefined && this.state.views[id]?.attachmentIntent === 'wanted') {
+          this.summaryObservedEpoch.set(id, epoch);
+          if (canonicalUser) this.previewChecked.add(id);
+        }
+      }
+    })();
+    const read = { generation, work };
+    this.summaryInFlight.set(id, read);
+    void work.finally(() => { if (this.summaryInFlight.get(id) === read) this.summaryInFlight.delete(id); }).catch(() => {});
+    return work;
+  }
+  /** A committed rename requires a read started after its acknowledgement.
+   * Ordinary observers still coalesce; the old read cannot publish past this floor. */
+  async renameSession(id: string, name: string): Promise<void> {
+    const generation = this.state.generation;
+    await this.request({ method: 'session/name', params: { session_id: id, name } }, 'session');
+    if (!this.current(generation)) return;
+    await this.readFreshSessionSummary(id);
+  }
+  private readFreshSessionSummary(id: string): Promise<void> {
+    this.summaryReads.set(id, ++this.summaryReadSequence);
+    this.summaryObservedEpoch.delete(id);
+    this.summaryInFlight.delete(id);
+    return this.readSessionSummary(id);
   }
   async deleteSession(id: string, expectedRevision: string) {
     const generation = this.state.generation;
@@ -387,6 +469,7 @@ export class AppServerClient {
       this.setSession(id, { attachment: 'attaching', error: undefined });
       const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
       this.attachmentEpochs.set(id, epoch);
+      this.previewChecked.delete(id);
       await this.performAttach(id, generation, epoch, navigationCurrent);
     });
   }
@@ -428,6 +511,10 @@ export class AppServerClient {
       const settings = await this.request({ method: 'settings/read', params: { session_id: id } }, 'settings');
       if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
       this.setSession(id, { settings: settings.settings });
+      // A restored/branched view may be outside the visible catalog page. Read
+      // its native identity even before any user message exists; never invent it.
+      await this.refreshDisplaySummary(id);
+      if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
       if (this.dirty.has(id)) { this.resubscribe.add(id); await this.refresh(id); }
     } catch (error) {
       if (current() && (!target || sameTarget(this.state.views[id]?.target, target))) this.setSession(id, { attachment: 'error', error: String(error) });
@@ -460,6 +547,8 @@ export class AppServerClient {
         if (BigInt(result.cursor) >= BigInt(this.state.views[id].cursor ?? '0')) {
           this.setSession(id, { snapshot: result.snapshot, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: refreshTrace(this.state.views[id]?.trace, result.snapshot.trace, result.snapshot.trace_updates), error: undefined });
           this.reconcileInteractions(id); this.settleSubmissions(id);
+          await this.refreshDisplaySummary(id);
+          if (!current()) return;
         }
         if (resync) await this.request({ method: 'session/subscribe', params: { target, after_cursor: result.cursor } }, 'subscribed');
         if (current()) this.setSession(id, { attachment: 'attached' });
@@ -668,7 +757,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v6').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v7').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
@@ -763,6 +852,8 @@ export class AppServerClient {
     }
   }
   private retireAttachmentWork(id: string) {
+    this.previewChecked.delete(id);
+    this.summaryObservedEpoch.delete(id);
     this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);
     this.setSession(id, { history: undefined, submissions: undefined });
   }

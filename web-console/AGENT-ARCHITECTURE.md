@@ -22,6 +22,17 @@ transport generations, attachment/incarnation fences, read caches and uncertaint
 No presentation surface owns execution, canonical messages, Tool settlement,
 interaction lifetime or durable configuration.
 
+WEB-12 replaces the exact Attempt line with a deterministic product projection:
+Working, Queued, Stopping, connection recovery, Needs verification and actionable
+failure. Idle has no status chrome. A request to stop is never a successful stop;
+unresolved request evidence survives even a suggestive settled snapshot.
+Tool/Subagent/Workflow activity remains product UI; exact execution identifiers,
+raw Agent status, native mailbox data and revision evidence live in the existing
+Inspector. Interaction cards retain their questions, Tool arguments and review
+subjects, while routing IDs and review instance metadata move to diagnostics.
+Goal/Queue changes are limited to diagnostic text removal; their layout, native
+references, CAS, controls and the WEB-11 composer contract are unchanged.
+
 CFG3 Save changes desired source configuration. Reload publishes a generation;
 an active attempt keeps its admitted policy. The Agent control must display this
 boundary explicitly, including pending Reload, rather than imply a Save changed

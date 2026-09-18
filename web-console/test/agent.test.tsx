@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v6';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v7';
 import { AgentControls } from '../src/app/agent/AgentControls';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { Interactions } from '../src/app/agent/Interactions';
@@ -170,10 +170,10 @@ it('live foreground overlays only its exact canonical occurrence when historical
  s.transcript.entries = [old, current].map((tool, index) => ({ cursor: String(index + 1), tool_calls: [tool], item: { type: 'message', message: { role: 'assistant', id: tool.message_id, content: [{ type: 'reasoning', text: `Reason ${index}` }, { type: 'tool_call', id: tool.call_id, tool_id: tool.tool_id, name: tool.name, arguments: {} }] } } }));
  s.attempt!.foreground = [{ ...current, state: { type: 'running', arguments: '{}' } }];
  const ui = render(<AgentTranscript snapshot={s}/>);
- const oldRow = within(screen.getByLabelText('assistant · assistant-A'));
- const newRow = within(screen.getByLabelText('assistant · assistant-B'));
+ const oldRow = within(ui.container.querySelector('[data-chat-anchor-key="message:assistant-A"]')! as HTMLElement);
+ const newRow = within((ui.container.querySelector('[data-chat-anchor-key="message:assistant-B"]')! as HTMLElement));
  expect(newRow.getByLabelText('Tool status').textContent).toBe('running');
- expect(screen.getByLabelText('assistant · assistant-B').querySelectorAll('[data-tool-call-id]')).toHaveLength(1);
+ expect((ui.container.querySelector('[data-chat-anchor-key="message:assistant-B"]')! as HTMLElement).querySelectorAll('[data-tool-call-id]')).toHaveLength(1);
  fireEvent.click(oldRow.getByRole('button', { name: /bash/ }));
  expect(oldRow.getByText('old-result')).toBeTruthy();
  expect(newRow.queryByText('old-result')).toBeNull();

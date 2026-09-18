@@ -1,5 +1,5 @@
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v6';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v7';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
 
@@ -55,6 +55,8 @@ export class Server {
   handlers = new Map<Request['method'], (request: Request) => MethodResult>();
   sockets: FakeSocket[] = [];
   snapshots = new Map<string, RuntimeClientSnapshot>([['A', snapshot('A')], ['B', snapshot('B')]]);
+  /** Explicit native catalog metadata; tests never derive preview in the browser. */
+  summaries = new Map<string, Partial<SessionSummary>>();
   nodeSnapshots = new Map<string, RuntimeClientSnapshot>();
   cursor = 0n;
   private attachmentSequence = 0;
@@ -67,10 +69,10 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 6;
+  version = 7;
   capabilities = capabilities;
   client = new AppServerClient((_url, protocols) => {
-    if (protocols[0] !== 'rustx.app-server.v6' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    if (protocols[0] !== 'rustx.app-server.v7' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   });
@@ -120,6 +122,10 @@ export class Server {
     this.completed.set(request, response);
     return response;
   }
+  summary(id: string): SessionSummary {
+    if (!this.snapshots.has(id)) throw new RpcFailure({ code: -32000, message: 'Unknown Session', data: { kind: 'unknown_session', session_id: id } });
+    return { id, cwd: `/workspace/${id}`, name: `Session ${id}`, updated_at: '2026-09-14T00:00:00Z', active_node: `node-${id}`, ...this.summaries.get(id) };
+  }
   private execute(request: Request, socket: FakeSocket): MethodResult {
     const params = request.params;
     const id = 'target' in params ? params.target.session_id : 'session_id' in params ? params.session_id : 'A';
@@ -132,7 +138,8 @@ export class Server {
     switch (request.method) {
       case 'initialize': result = { type: 'initialized', protocol_version: this.version, capabilities: this.capabilities }; break;
       case 'server/info': result = { type: 'server_info', capabilities: this.capabilities }; break;
-      case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', residencies: Object.fromEntries([...this.snapshots.keys()].map(id => [id, this.loaded.has(id) ? 'Loaded' : 'Unloaded'])), sessions: [...this.snapshots.keys()].slice(request.params.offset, request.params.offset + request.params.limit).map(id => ({ id, cwd: `/workspace/${id}`, name: `Session ${id}`, updated_at: '2026-09-14T00:00:00Z', active_node: `node-${id}` } satisfies SessionSummary)) }; break;
+      case 'session/summary': result = { type: 'session_summary', summary: this.summary(request.params.session_id) }; break;
+      case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', residencies: Object.fromEntries([...this.snapshots.keys()].map(id => [id, this.loaded.has(id) ? 'Loaded' : 'Unloaded'])), sessions: [...this.snapshots.keys()].map(id => this.summary(id)).filter(row => !request.params.query || [row.id, row.name, row.preview].some(text => text?.toLowerCase().includes(request.params.query!.toLowerCase()))).slice(request.params.offset, request.params.offset + request.params.limit) }; break;
       case 'session/attach': {
         this.reservations.get(socket)?.delete(id);
         if (!this.loaded.has(id)) { this.loaded.add(id); this.coldLoads.set(id, (this.coldLoads.get(id) ?? 0) + 1); }

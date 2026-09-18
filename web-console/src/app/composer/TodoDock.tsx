@@ -3,7 +3,7 @@
 // summary, bounded expanded list and status glyphs. The rustX Conversation
 // owns the list; this card owns only its disclosure state and has no mutation.
 import { useEffect, useId, useState } from 'react';
-import type { TodoTask } from '../../../../protocol/app-server/v6';
+import type { TodoTask } from '../../../../protocol/app-server/v7';
 import type { TodoDockState } from '../../bindings/composer-context';
 import { IconChecklistOutline14, IconChevronDownOutline14 } from '../../presentation/primitives/icons';
 import css from './TodoDock.module.css';

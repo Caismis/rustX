@@ -13,7 +13,7 @@ test('CFG3 committed write and reload response loss reconstructs native state wi
     await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
     await page.getByLabel('Transport token').fill(fixture.token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
@@ -21,9 +21,9 @@ test('CFG3 committed write and reload response loss reconstructs native state wi
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     const writes = () => wire.requests.filter(request => request.method === 'configuration/sourceWrite');
     const reconnect = async () => {
-      await expect(page.locator('.status strong')).toHaveText('stale');
+      await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
       await connectionAction(page, 'Reconnect');
-      await expect(page.locator('.status strong')).toHaveText('connected');
+      await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
       await settings.getByRole('button', { name: 'Read current sources', exact: true }).click();
     };
     await settings.getByRole('tab', { name: 'User', exact: true }).click();
@@ -70,7 +70,7 @@ test('CFG3 committed write and reload response loss reconstructs native state wi
     await settings.getByLabel('MCP command', { exact: true }).fill('unsaved-draft');
     await chooseWorkspace(page, 'Workspace B');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
-    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText(fixture.workspaceB);
+    await expect(page.getByLabel('Session location', { exact: true })).toContainText(fixture.workspaceB);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await settings.getByRole('tab', { name: 'User', exact: true }).click();
     await settings.getByRole('button', { name: 'MCP', exact: true }).click();

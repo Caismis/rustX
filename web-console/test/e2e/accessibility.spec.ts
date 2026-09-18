@@ -20,12 +20,21 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await tabTo(page.getByLabel('WebSocket endpoint')); await page.keyboard.press('ControlOrMeta+A'); await page.keyboard.type(fixture.endpoint);
     await tabTo(page.getByLabel('Transport token')); await page.keyboard.type(fixture.token);
     await tabTo(page.getByRole('button', { name: 'Connect', exact: true })); await page.keyboard.press('Enter');
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
     await tabTo(page.getByRole('button', { name: 'New Session', exact: true }).first()); await page.keyboard.press('Enter');
     const workspace = page.getByLabel('Choose Workspace');
     await tabTo(workspace); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
     await tabTo(page.getByRole('button', { name: 'Create Session', exact: true })); await page.keyboard.press('Enter');
     const message = page.getByLabel('Message', { exact: true }); await expect(message).toBeEnabled();
+    const expandSidebar = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+    const wasCollapsed = await expandSidebar.isVisible();
+    if (wasCollapsed) { await tabTo(expandSidebar); await page.keyboard.press('Enter'); }
+    await tabTo(page.locator('button[data-session-id]').first()); await page.keyboard.press('Enter');
+    const rowActions = page.locator('button[data-session-actions]').first();
+    await tabTo(rowActions); await page.keyboard.press('Enter'); await page.keyboard.press('ArrowDown');
+    await expect(page.getByRole('menuitem', { name: 'Close New session view', exact: true })).toBeFocused();
+    await page.keyboard.press('Escape'); await expect(rowActions).toBeFocused();
+    if (wasCollapsed) { await tabTo(page.getByRole('button', { name: 'Collapse Sidebar', exact: true })); await page.keyboard.press('Enter'); }
     await tabTo(message); await page.keyboard.type('/mdl'); await page.keyboard.press('Enter');
     const dialog = page.getByRole('dialog', { name: '/model', exact: true }); await expect(dialog).toBeVisible();
     await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(message).toBeFocused();
@@ -60,6 +69,10 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(await page.locator('main').evaluate(el => getComputedStyle(el.parentElement!).transitionDuration)).toBe('0s');
     await page.screenshot({ path: `test-results/acceptance-keyboard-${width}.png`, fullPage: true });
+    await page.keyboard.press('Escape');
+    await tabTo(page.getByRole('button', { name: 'Toggle Inspector', exact: true })); await page.keyboard.press('Enter');
+    await expect(page.getByRole('complementary', { name: 'Developer inspector' })).toBeVisible();
+    await tabTo(page.getByRole('button', { name: 'Close Inspector', exact: true })); await page.keyboard.press('Enter');
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   } finally { await page.close(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
 });

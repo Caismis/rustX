@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v6';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v7';
 import { interactionKey, OutcomeUncertain } from '../src/client/app-server';
 import { conversation } from '../src/bindings/projection';
 import { capabilities, endpoint, interaction, Server, snapshot, TOKEN } from './fixture';
@@ -12,11 +12,11 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 6 } });
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 7 } });
     expect(JSON.stringify(s.client.log.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
-    const s = server(); s.version = 5;
+    const s = server(); s.version = 6;
     await expect(s.connect()).rejects.toThrow('Incompatible');
     expect(s.client.getSnapshot().connection).toBe('incompatible');
     expect(s.requests.map(item => item.request.method)).toEqual(['initialize']);

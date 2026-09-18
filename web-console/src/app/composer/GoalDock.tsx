@@ -7,7 +7,7 @@
 // offers Pause and a stopped one offers Resume — never both, and never a
 // separate arm/play step. There is no create, clear or complete control here.
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import type { GoalMutation, GoalRef, GoalSnapshot } from '../../../../protocol/app-server/v6';
+import type { GoalMutation, GoalRef, GoalSnapshot } from '../../../../protocol/app-server/v7';
 import type { GoalDockState } from '../../bindings/composer-context';
 import type { GoalControlOutcome } from '../../client/app-server';
 import {
@@ -130,7 +130,7 @@ export function GoalDock({ state, observation, disabled, mutate }: {
           {...editing.field === 'budget' ? { type: 'number', min: 1, step: 1, inputMode: 'numeric' as const } : { type: 'text' }}
           value={editing.draft} disabled={pending} onChange={event => setEditing({ field: editing.field, draft: event.target.value })} onKeyDown={onKeyDown} />
         : <><span className={css.label}>{label}</span><span className={css.objective} title={goal.objective}>{goal.objective}</span></>}
-      <span className={css.meta}>{goal.autonomous_rounds_consumed}/{goal.autonomous_round_budget} rounds · r{goal.reference.revision}</span>
+      <span className={css.meta}>{goal.autonomous_rounds_consumed}/{goal.autonomous_round_budget} rounds</span>
       <div className={css.actions}>{editing ? <>
         <button type="button" className={css.iconButton} aria-label={editing.field === 'objective' ? 'Save goal objective' : 'Save round budget'} disabled={locked || !draftValid} onClick={save}><IconCheckOutline14 /></button>
         <button type="button" className={css.iconButton} aria-label="Cancel goal edit" disabled={pending} onClick={cancel}><IconCloseOutline16 size={14} /></button>

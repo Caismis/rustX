@@ -1,5 +1,32 @@
 # Harness presentation provenance — WEB-RESET-01
 
+## WEB-12 Session convergence
+
+PR #361 repair retains these exact upstream pins and imports no new Harness code.
+Existing WorkspaceNavigation, WorkspaceBrowser, Rows/Rows.module.css and QueueDock
+adaptations now carry Sidebar-only selection/close callbacks, visible scoped status,
+and product conflict wording. Their reviewed local hashes/import inventories are
+updated; upstream hashes, MIT headers and license/notice closure are unchanged.
+The title helper and bounded native catalog cache invalidation are rustX-authored.
+No LLM title generation or browser-owned naming authority is introduced.
+
+Re-fetched upstream remains `ddefc45fbc7f8e46dd73185e68295696d1297887`.
+Compared the Epic baseline `c291e7961a515f6d7af9304e7fd1d257929aef26`
+and current `ui-conversation/src/client/skeleton/ConversationSession.tsx`,
+`ConversationRoot.tsx`, `contract/slots.ts` and `apply.ts`. Current
+`skeleton/DefaultConversationViews.tsx` is absent at the Epic baseline; its earlier
+body lives in `ConversationSession.tsx`. Current `ui-layout/src/client/columns.ts`,
+`ui-sidebar/src/client/HeaderLeadingControls.tsx`, and
+`ui-sidebar-right/src/client/shell/{SidebarRight,RightbarRoot}.tsx` informed the
+header corner, right-panel seat and responsive boundary.
+
+This change uses interaction/layout knowledge and existing imported primitives;
+no new current-upstream source is copied and no baseline is repinned. The native
+product-state mapping, Inspector sections and App bindings are rustX code. Existing
+derived GoalDock, QueueDock and WorkspaceNavigation records have reviewed local
+hash/treatment updates for concise product copy; original hashes and MIT/DeepSeek
+license remain unchanged. No new dependency or license closure is introduced.
+
 **Harness owns the presentation baseline; rustX owns all product/runtime semantics.**
 
 Upstream: https://github.com/deepseek-ai/deepseek-harness

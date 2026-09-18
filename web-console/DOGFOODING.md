@@ -76,11 +76,12 @@ exploration intentionally leaves the provider script unconsumed.
 5. In A send `Approval please`. Reload while approval is pending; reconnect and
    Allow once. Inspect the real bash Tool input/result and `Approval completed.`.
    Send `Questionnaire please`, reload/reconnect, choose Keep native and submit.
-6. Send `Publish while detached`. After `Preparing a question.`, Detach A. Release
-   `publish-question` using the same gate URL pattern. Attach A; answer the native
+6. Send `Publish while detached`. After `Preparing a question.`, close A's view. Release
+   `publish-question` using the same gate URL pattern. Open A; answer the native
    question and observe `Detached question completed.`.
 7. In Settings save User model `fixture/second-model`. Current runtime remains
-   unchanged. Explicitly Unload runtime, then Attach / cold resume. The native
+   unchanged. Choose Session actions → Advanced Session controls → Unload runtime,
+   then Open Session. The native
    runtime incarnation changes; model and durable history/cwd are reconstructed.
    This is explicit idle unload. Automatic idle-eviction timing is tested with the
    native manual clock, not a wall-clock wait in this guide.
@@ -126,8 +127,9 @@ Fork at the `Use my uploaded files` User boundary. This cut is **before** that
 message; the destination composer restores native text/upload receipts. Record the
 new SessionId and confirm destination copies exist beneath its own upload root.
 Keep this draft open. Close the source Session view without switching to it. In a
-second browser page connected to the same Host/server, open the source, Unload
-runtime, then delete it through Actions → Delete → Confirm delete. The source root
+second browser page connected to the same Host/server, open the source and choose
+Session actions → Advanced Session controls → Unload runtime, then delete it
+through Actions → Delete → Confirm delete. The source root
 is gone; destination files remain. Return to the first page, Send the restored
 draft and Allow once. Observe `Destination upload read through native Tool.`.
 Reload/reconnect. Finally unload/delete the destination and confirm only its root
@@ -172,7 +174,7 @@ Stale boundaries are refused by Rust; no UI silently substitutes a newer cut.
 
 Restart with `dogfood:server web_workflow_conformance`, create A and send
 `workflow conformance request`. At `workflow-child-admitted`, inspect the native
-Workflow and Subagent cards, reload/reconnect and compare their identities. In
+Workflow and Subagent cards, reload/reconnect and compare their identities in Developer Inspector. In
 Trajectory inspect Workflow Timing: end/duration remain unavailable while running.
 Release the gate and observe `workflow conformance complete`. Settings →
 Integrations contains the existing acceptance Skill, reviewer Agent and review_pr
@@ -226,3 +228,31 @@ restores its trigger. Inspect visible focus, labels, disabled untrusted controls
 Goal edit Enter/Escape and long history without a focus trap. Enable reduced motion.
 Repeat Session switching/reconnect and image open/close; automation checks native
 attachment counts, object URL release and bounded caches/log retention directly.
+
+## 7. Product surface audit
+
+Use [PRODUCT-SURFACE.md](PRODUCT-SURFACE.md) to classify every visible control.
+Select Sessions only in Sidebar; verify no horizontal Session selector exists.
+Open A and B, leave A working, select B, and close A's browser view from its row
+menu: only the explicit close releases its controller; neither action stops A.
+Use Sidebar View options → Close all views to release even restored views whose
+catalog rows are absent, then reopen a Session without an invisible capacity block.
+Verify empty labels say New session, unnamed committed work uses native preview,
+and manual names win permanently. For an off-page unnamed view, interrupt the exact
+`session/summary` read after canonical user-message commit, then reconnect: the
+native preview must converge without rename or replay. A successful file-only read
+stays New session without repeated metadata IO. Sidebar `session/list` search/page
+must not change to resolve the header; `view.summary` is a replaceable observation.
+No LLM naming is implemented. Check deletion
+title and impact counts without raw identity/revision. With A healthy and B uncertain,
+verify B's visible row warning, A's clean status, and Inspector ownership separation.
+Read global uncertainty separately; review/acknowledge non-interaction notices only
+after checking affected work, through Connection → Review uncertain operations.
+Fresh/idle Sessions have no exact Attempt or attachment line. A running turn says
+Working; queued input stays in Queue; a stop request says Stopping until authority
+settles it. Disconnect exposes Reconnect. A lost response says Needs verification
+and is never replayed; inspect the exact request evidence in Developer Inspector.
+Read all Inspector sections and filter/pause/clear the local log: none may emit a
+native mutation. Verify Session actions → Session tree, Chat/Trajectory, Settings,
+light/dark and 390/820/1280/1600px keyboard access. Advanced unload is an explicit
+runtime shutdown with consequences explained in its dialog, not everyday chrome.

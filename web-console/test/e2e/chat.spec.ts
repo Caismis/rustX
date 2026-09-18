@@ -85,10 +85,10 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     // Reconstruct a bounded latest window while the same native attempt is
     // held mid-stream, then page its history without changing live ownership.
     await connectionAction(page, 'Reconnect');
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Load earlier', exact: true }).click();
     await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(1);
-    await expect(page.locator('.attempt-status')).toContainText('running');
+    await expect(page.getByLabel('Session status')).toContainText('Working…');
 
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
@@ -96,7 +96,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     // A reader away from the tail owns their position while live repair runs.
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     await connectionAction(page, 'Reconnect');
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
     await ledger.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
     await expect(trajectory.getByRole('table')).toContainText('running');
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
@@ -106,10 +106,10 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     expect(await ledger.evaluate(el => el.scrollTop)).toBe(0);
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     await expect(page.getByText('Settled', { exact: true })).toHaveCount(1);
-    await expect(page.locator('[aria-label^="Streaming ·"]')).toHaveCount(0);
+    await expect(page.locator('[aria-label="Streaming response"]')).toHaveCount(0);
     await expect(page.getByRole('table')).toHaveCount(1);
     await connectionAction(page, 'Reconnect');
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Rich reply' })).toHaveCount(1);
     await page.getByRole('button', { name: 'Load earlier', exact: true }).click();
     await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(1);
@@ -120,7 +120,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(page.getByLabel('Message', { exact: true })).toHaveValue('');
     await expect(page.getByLabel('Canonical conversation').getByText('note.txt', { exact: true })).toBeVisible();
     await connectionAction(page, 'Reconnect');
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
     await expect(page.getByLabel('Canonical conversation').getByText('note.txt', { exact: true })).toBeVisible();
     await page.getByLabel('Message', { exact: true }).fill('Image please');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
@@ -143,7 +143,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await decode();
     expect(await urlCount()).toBe(1);
     await connectionAction(page, 'Reconnect');
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
     await canonical.locator('[data-tool-call-id="chat-image"]').getByRole('button', { expanded: false }).click();
     await expect(load).toHaveCount(1);
     expect(await urlCount()).toBe(0);
@@ -169,7 +169,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(trajectory.getByLabel('Trace record inspector')).toContainText('chat-image');
     await page.screenshot({ path: 'test-results/trajectory-inspector.png', fullPage: true });
     await connectionAction(page, 'Reconnect');
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
     await expect(trajectory.locator(`[data-trace-id="${stableToolId}"]`)).toHaveCount(1);
     expect(await trajectory.innerText()).not.toContain(fixture.workspaceA);
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();

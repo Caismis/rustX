@@ -32,6 +32,29 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         attachment_id: crate::runtime_client::types::AttachmentId::new("attachment-fixture"),
     };
     let mut fixtures = vec![
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("exact-session-summary".into()),
+            call: Method::SessionSummary {
+                session_id: target.session_id.clone(),
+            },
+        })),
+        ProtocolMessage::Response(Response::Success(Box::new(Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("exact-session-summary".into()),
+            result: MethodResult::SessionSummary {
+                summary: crate::local_runtime::session::SessionSummary {
+                    id: target.session_id.clone(),
+                    cwd: "/workspace".into(),
+                    name: None,
+                    preview: Some("Native first user message".into()),
+                    updated_at: chrono::DateTime::from_timestamp(0, 0).expect("fixture date"),
+                    active_node: crate::local_runtime::session::SessionNodeId::new(
+                        "node_00000000-0000-7000-8000-000000000001",
+                    ),
+                },
+            },
+        }))),
         ProtocolMessage::Response(Response::Success(Box::new(Success {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::Integer(291),
@@ -477,7 +500,7 @@ mod tests {
     fn committed_rust_artifacts_are_current() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server");
         assert_eq!(
-            std::fs::read_to_string(root.join("v6.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v7.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

@@ -103,8 +103,8 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(APP_SERVER_PROTOCOL_VERSION, 6);
-    assert.equal(params.protocol_version, 6);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 7);
+    assert.equal(params.protocol_version, 7);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
     assert.equal(transport.log.count("initialize"), 1);
@@ -117,7 +117,7 @@ describe("initialization", () => {
     const error: RpcError = {
       code: -32000,
       message: "unsupported protocol version",
-      data: { kind: "unsupported_version", supported: 1, requested: 2 },
+      data: { kind: "unsupported_version", supported: 6, requested: 7 },
     };
     transport.respondError(request!.id, error);
 
@@ -137,10 +137,10 @@ describe("initialization", () => {
     const [request] = await transport.log.awaitMethod("initialize");
     transport.respond(request!.id, {
       type: "initialized",
-      protocol_version: 99,
+      protocol_version: 6,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 99/);
+    await assert.rejects(pending, /negotiated protocol 6, this client speaks 7/);
   });
 });
 
@@ -245,6 +245,17 @@ describe("terminal settlement", () => {
     // Re-reading after reconnecting is always safe: nothing happened.
     assert.ok(failure instanceof TransportClosedError);
     assert.ok(!isUncertainOutcome(failure));
+  });
+
+  it("classifies a lost exact Session summary as a retryable read, never uncertain mutation", async () => {
+    const { client, transport } = await initialized();
+    const read = client.call("session/summary", { session_id: "ses_00000000-0000-7000-8000-000000000001" }, "session_summary");
+    await transport.log.awaitMethod("session/summary");
+    transport.fail("socket_error");
+    const failure = await read.then(() => undefined, (cause: unknown) => cause);
+    assert.ok(failure instanceof TransportClosedError);
+    assert.ok(!isUncertainOutcome(failure));
+    assert.equal(transport.log.count("session/summary"), 1);
   });
 });
 
@@ -687,6 +698,7 @@ describe("generated-contract ingress", () => {
     await assert.rejects(pending, TransportClosedError);
     assert.equal(transport.log.count("initialize"), 1);
     assert.equal(METHOD_RESPONSE_LOSS_CLASS.initialize, "connection_local");
+    assert.equal(METHOD_RESPONSE_LOSS_CLASS["session/summary"], "read");
   });
 });
 

@@ -146,3 +146,54 @@ is the supported local engine selection when Docker is absent. Current composer
 references cover idle empty/draft, running Stop/Queue, attachments and the context
 stack in both themes at 1440px and 390px. Shell/Settings baselines also include the
 changed composer behind their overlays; no shell or Settings redesign is implied.
+
+## WEB-12 product / Inspector boundary
+
+`session-surface.test.tsx` proves Sidebar-only selection, background work across
+focus changes, finite view capacity and explicit close/release, native-only naming
+and first-commit catalog invalidation (including file-only input), manual name
+precedence, A/B and unscoped uncertainty, scoped interaction evidence, local-only
+diagnostic acknowledgement and exact revision-confirmed deletion without raw DTOs.
+The former Session-tab selectors are removed; Chat/Trajectory keep tab semantics.
+
+Exact metadata regressions use `session/summary`, never fuzzy `session/list(query=id)`.
+Native catalog tests prove a 32-row search collision cannot obscure exact identity,
+and exact/list projections agree. App Server tests prove exact reads and not-found
+errors do not compose runtimes or change residency. Web tests cover RPC/socket read
+failure followed by reconnect retry off-page, in-flight coalescing, successful
+file-only/no-preview completion, manual rename, and older-list/newer-summary fencing.
+`view.summary` remains a replaceable observation, not catalog membership authority.
+
+Product-surface baseline validation: 421 deterministic tests in 29 files; all 39 browser acceptance
+tests; 23 intentional snapshot/geometry update cases followed by normal zero-tolerance
+E2E. Keyboard acceptance now explicitly reaches Sidebar row actions/Close view and
+Inspector at all four widths. Reviewed rendered light/dark/narrow, native preview,
+manual name, empty Session, background work, scoped uncertainty, Inspector and deletion
+captures. Typecheck, production build, 104-source provenance/100-package notices,
+upstream reference audit and the 30-test development-launcher lane pass. The subsequent
+exact-summary repair adds one durable native protocol read and runs the complete
+Rust/protocol/TUI/Web lanes; it requires no visual snapshot changes, screenshot
+tolerance changes or semantic sleeps. Per-head validation is recorded in PR #361.
+The unlisted-restoration regression also fills all 32 view slots without matching
+catalog rows, then recovers through explicit Sidebar Close all views. Its companion
+proves bulk close only releases observed controllers and leaves running work intact.
+
+`session-product.test.tsx` covers deterministic status priority, idle silence,
+accepted versus unaccepted inbound, cancellation request versus settlement,
+attachment recovery, durability and uncertain outcomes. It proves exact native
+identity/phase/revision evidence remains in Inspector, Inspector navigation and
+local log controls send no native operations, and lost cancellation is not replayed.
+Existing client/runtime tests remain authoritative for attachment and residency.
+
+Browser tests no longer synchronize through `.attempt-status`, permanent lifecycle
+buttons or attachment suffixes. They use canonical resulting messages, product
+readiness, actual wire responses, native diagnostics, or explicit Inspector reads.
+Advanced unload is tested through its disclosed dialog; controller handoff uses
+close/open and exact native detach acknowledgements. Shell references now include
+idle, queued, stopping, reconnect and uncertainty, alongside desktop light/dark,
+Inspector and narrow layouts. Existing four-width keyboard acceptance remains.
+
+Each Agent reference mode runs as its own test/page/context rather than sharing
+one multi-navigation capture. This keeps reference setup independent, including
+the browser's paint caches. Screenshot tolerances remain zero; no composer style
+workaround, semantic sleep or retry is introduced.

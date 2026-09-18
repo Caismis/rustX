@@ -323,6 +323,7 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
         <span className={css.searchResultTitle}>{result.title}</span>
       </span>
       <span className={css.searchResultMeta}>
+        {result.observation && <span>{result.observation}</span>}
         <span className={css.searchResultWorkspace}>{result.workspace || t('group.ungrouped')}</span>
         {result.snippet !== undefined && (
           <span className={css.searchResultSnippet}>{result.snippet}</span>
@@ -347,7 +348,7 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
  * @returns the session row.
  */
 export function SessionNodeItem({
-  node, currentId, now, onOpen, onRename, onFork, onDelete, flat = false, t,
+  node, currentId, now, onOpen, onRename, onFork, onDelete, onClose, flat = false, t,
 }: {
   node: SessionNode
   currentId: string | undefined
@@ -359,6 +360,7 @@ export function SessionNodeItem({
   onFork: (id: SessionNode['id']) => void
   /** Open the native revision-checked deletion preview. */
   onDelete: (id: SessionNode['id']) => void
+  onClose?: (id: SessionNode['id']) => void
   /** The row is rendered without a parent Workspace header. */
   flat?: boolean | undefined
   t: RowTranslate
@@ -373,6 +375,7 @@ export function SessionNodeItem({
   const titleRef = useRef<HTMLSpanElement>(null)
   // The adapter opens native revision-checked deletion preview; never archive locally.
   const sessionMenuItems = [
+    ...(onClose ? [{ id: 'close', label: `Close ${title} view` }] : []),
     { id: 'rename', label: t('rename'), icon: <IconEditOutline16 /> },
     { id: 'fork', label: t('menu.fork'), icon: <IconBranchOutline16 /> },
     // 20-native glyph in the menu's 16px icon slot (Menu.module.css .itemIcon).
@@ -400,7 +403,7 @@ export function SessionNodeItem({
           {showStatus && <SessionStatusDots statuses={statuses} />}
         </span>
       )}
-<button type="button" className={clsx(css.title, css.titleButton)} data-session-id={node.id} aria-label={`Open ${title}`} aria-current={selected ? "page" : undefined} title={node.observation}><span ref={titleRef}>{title}</span></button>
+<button type="button" className={clsx(css.title, css.titleButton)} data-session-id={node.id} aria-label={`Open ${title}`} aria-current={selected ? "page" : undefined} title={node.observation}><span ref={titleRef}>{title}</span>{node.observation && <small className={css.observation}>{node.observation}</small>}</button>
       <span className={css.time}>{timeLabel(row.updatedAt, now, t)}</span>
         <span className={css.rowActions}>
           <Menu
@@ -412,6 +415,7 @@ export function SessionNodeItem({
               if (id === 'rename') onRename(node.id, row.title)
               if (id === 'fork') onFork(node.id)
               if (id === 'delete') onDelete(node.id)
+              if (id === 'close') onClose?.(node.id)
             }}
             portal
             closeOnPointerLeave

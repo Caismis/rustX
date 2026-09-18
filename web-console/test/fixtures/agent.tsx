@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { RpcFailure } from '../../src/client/app-server';
 import { App } from '../../src/app/App';
 import { Server, interaction, snapshot, endpoint } from '../fixture';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v6';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v7';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -48,7 +48,7 @@ if (mode === 'questionnaire') {
 }
 server.snapshots.set('A', s);
 await server.attached('A');
-localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint, tabs: ['A'] }));
+localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
 createRoot(document.getElementById('root')!).render(mode === 'restored' ? <RestoredComposerFixture /> : <App client={server.client} workspaceHost={server.workspaceHost}/>);
 
 // Browser-only controls for deterministic composer projection/transport tests.

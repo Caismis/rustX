@@ -204,7 +204,7 @@ pub struct SessionUserMessageBoundaryPage {
     pub next_offset: Option<usize>,
 }
 
-/// One bounded row in the `/resume` selector.
+/// Native display metadata, shared by exact identity reads and catalog rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionSummary {
     /// Canonical durable Session cwd, projected without loading a runtime.
@@ -215,7 +215,7 @@ pub struct SessionSummary {
     pub name: Option<String>,
     /// The first user message of this Session's root lineage, bounded to one
     /// line. It is what an unnamed row is recognized by, and it is derived
-    /// for the page rather than stored: the catalog keeps no copy of
+    /// for the observation rather than stored: the catalog keeps no copy of
     /// conversation content.
     pub preview: Option<String>,
     /// Last metadata/active-node publication instant.
@@ -928,14 +928,15 @@ impl SessionCatalog {
             // its first user message, so matching only identity and name
             // would hide exactly the rows a user has to recognize by their
             // content.
-            let preview = self.preview(session)?;
+            let summary = self.project_summary(session)?;
             let matches = query.as_ref().is_none_or(|query| {
                 session.id.as_str().to_lowercase().contains(query)
                     || session
                         .name
                         .as_ref()
                         .is_some_and(|name| name.to_lowercase().contains(query))
-                    || preview
+                    || summary
+                        .preview
                         .as_ref()
                         .is_some_and(|preview| preview.to_lowercase().contains(query))
             });
@@ -950,20 +951,44 @@ impl SessionCatalog {
                 has_more = true;
                 break;
             }
-            page.push(SessionSummary {
-                cwd: session.state.cwd.clone(),
-                id: session.id.clone(),
-                name: session.name.clone(),
-                preview,
-                updated_at: session.updated_at,
-                active_node: session.active_node.clone(),
-            });
+            page.push(summary);
             matching += 1;
         }
         let next_offset = has_more.then_some(offset + page.len());
         Ok(SessionListPage {
             sessions: page,
             next_offset,
+        })
+    }
+
+    /// Read display metadata by exact durable identity, without runtime composition.
+    ///
+    /// # Errors
+    /// Unknown/deleting identities and conversation storage failures are returned.
+    pub fn summary(&self, id: &SessionId) -> Result<SessionSummary, SessionError> {
+        if self.document.deletions.contains_key(id) {
+            return Err(SessionError::DeletingSession {
+                session_id: id.clone(),
+            });
+        }
+        let session =
+            self.document
+                .sessions
+                .get(id)
+                .ok_or_else(|| SessionError::UnknownSession {
+                    session_id: id.clone(),
+                })?;
+        self.project_summary(session)
+    }
+
+    fn project_summary(&self, session: &PersistedSession) -> Result<SessionSummary, SessionError> {
+        Ok(SessionSummary {
+            cwd: session.state.cwd.clone(),
+            id: session.id.clone(),
+            name: session.name.clone(),
+            preview: self.preview(session)?,
+            updated_at: session.updated_at,
+            active_node: session.active_node.clone(),
         })
     }
 
@@ -3399,6 +3424,74 @@ model = "provider/model"
                 .is_empty(),
             "new starts with only the intended empty bootstrap state"
         );
+    }
+
+    #[test]
+    fn exact_summary_is_not_a_fuzzy_search_page() {
+        let (_directory, mut catalog, _config) = open_catalog();
+        let mut earlier = vec![first_session(&catalog)];
+        for _ in 0..32 {
+            let prepared = catalog.prepare_session(&state(), &[]).unwrap();
+            catalog
+                .publish_session(&prepared, SessionNodeOrigin::New)
+                .unwrap();
+            earlier.push(prepared.session_id.clone());
+        }
+        let target = earlier.pop().unwrap();
+        for id in &earlier {
+            catalog
+                .rename(id, &format!("mentions {}", target.as_str()))
+                .unwrap();
+        }
+        let page = catalog.list_page(Some(target.as_str()), 0, 32).unwrap();
+        assert_eq!(page.sessions.len(), 32);
+        assert_eq!(page.next_offset, Some(32));
+        assert!(page.sessions.iter().all(|row| row.id != target));
+        assert_eq!(catalog.summary(&target).unwrap().id, target);
+        assert!(matches!(
+            catalog.summary(&super::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000099"
+            )),
+            Err(super::SessionError::UnknownSession { .. })
+        ));
+    }
+
+    #[test]
+    fn exact_and_list_summary_share_every_projected_field() {
+        for (text, name) in [(true, None), (true, Some("Manual name")), (false, None)] {
+            let (_directory, mut catalog, _config) = open_catalog();
+            let message = if text {
+                user("first", "  native\n preview  ")
+            } else {
+                MessageBlock::User(UserMessageBlock {
+                    id: MessageId::new("file-only"),
+                    content: vec![UserContentBlock::Image(
+                        crate::message::content::ImageReference {
+                            artifact_id: crate::runtime::identity::ArtifactId::new("artifact-1"),
+                            alt: None,
+                        },
+                    )],
+                    source: UserSource::Human,
+                    kind: InboundKind::Message,
+                    timestamp: None,
+                })
+            };
+            append_history(&catalog, &[message]);
+            let id = first_session(&catalog);
+            if let Some(name) = name {
+                catalog.rename(&id, name).unwrap();
+            }
+            let before = catalog.snapshot(&id).unwrap();
+            let exact = catalog.summary(&id).unwrap();
+            let listed = catalog.list_page(None, 0, 32).unwrap().sessions.remove(0);
+            assert_eq!(exact, listed);
+            assert_eq!(exact.name.as_deref(), name);
+            assert_eq!(exact.preview.as_deref(), text.then_some("native preview"));
+            assert_eq!(exact.cwd, state().cwd);
+            assert_eq!(exact.updated_at, before.updated_at);
+            assert_eq!(exact.active_node, before.active_node);
+            assert_eq!(catalog.snapshot(&id).unwrap(), before);
+        }
     }
 
     /// A Session carries no name until a user gives it one, so a `/resume`

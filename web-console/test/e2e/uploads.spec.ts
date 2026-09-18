@@ -1,3 +1,6 @@
+import { closeSessionView } from './shell-actions';
+import { expectSettled } from './shell-actions';
+import { unloadSession } from './shell-actions';
 import { showInspector } from './shell-actions';
 import { chooseWorkspace } from './shell-actions';
 import { expect, test } from '@playwright/test';
@@ -20,13 +23,13 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
     await page.getByLabel('Transport token').fill(fixture.token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.locator('.status strong')).toHaveText('connected'); await showInspector(page);
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0); await showInspector(page);
   };
   const submit = async (phase: string) => {
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await page.getByRole('button', { name: 'Allow once' }).click();
     await expect(canonical.getByText(`${phase} upload read through native Tool.`, { exact: true })).toBeVisible();
-    await expect(page.locator('.attempt-status')).toContainText('settled');
+    await expectSettled(page);
   };
   const root = (session: string) => join(fixture.workspaceA, '.agents/uploads', session);
   const paths = (session: string) => {
@@ -71,8 +74,9 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     expect(readFileSync(destinationPaths[1])).toEqual(png);
     // Release the source controller without abandoning the destination editor.
     // The actual TUI adapter cold/unload operation shares the native owner.
-    await page.getByRole('button', { name: `Close view ${source}` }).click();
-    await expect(page.locator(`button[data-session-id="${source}"]`)).toHaveAttribute('title', /detached/i);
+    const detached = wire.responses.filter(row => row.method === 'session/detach').length;
+    await closeSessionView(page, source);
+    await expect.poll(() => wire.responses.filter(row => row.method === 'session/detach').length).toBe(detached + 1);
     const observer = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     try {
       const attached = await observer.client.call('session/attach', { session_id: source }, 'attached');
@@ -82,7 +86,7 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     await page.locator(`button[data-session-actions="${source}"]`).click();
     await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('"status": "deleted"');
+    await expect(page.getByRole('alert')).toContainText('Session deleted.');
     expect(existsSync(root(source))).toBe(false);
     for (const path of destinationPaths) expect(existsSync(path)).toBe(true);
     await expect(message).toHaveValue('Use my uploaded files');
@@ -98,13 +102,13 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     await expect(canonical.getByText('Destination upload read through native Tool.', { exact: true })).toBeVisible();
     await expect(canonical.getByText('acceptance.txt', { exact: true })).toBeVisible();
     expect(wire.requests.filter(request => request.method === 'artifact/read')).toHaveLength(0);
-    await page.getByRole('button', { name: 'Unload runtime', exact: true }).click();
-    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('unloaded');
+    await unloadSession(page);
+    await expect(page.getByLabel('Session status').getByRole('button', { name: 'Open Session', exact: true })).toBeVisible();
     await page.locator(`button[data-session-id="${destination}"]`).hover();
     await page.locator(`button[data-session-actions="${destination}"]`).click();
     await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('"status": "deleted"');
+    await expect(page.getByRole('alert')).toContainText('Session deleted.');
     expect(existsSync(root(destination))).toBe(false);
     expect(errors).toEqual([]); passed = true;
   } finally { await page.close(); await fixture.stop(passed); }

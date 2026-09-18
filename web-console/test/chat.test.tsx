@@ -14,7 +14,7 @@ it('Chat uses the same rich Markdown through streaming and canonical settlement 
   committed.transcript = { entries: committed.messages.map(message => ({ cursor: '1', item: { type: 'message', message } })) };
   ui.rerender(<AgentTranscript snapshot={committed} />);
   expect(ui.getAllByRole('heading', { name: 'Answer' })).toHaveLength(1);
-  expect(ui.queryByLabelText('Streaming · answer')).toBeNull();
+  expect(ui.queryByLabelText('Streaming response')).toBeNull();
   expect(ui.getByRole('table')).toBeTruthy();
   expect(ui.container.querySelector('code')?.textContent).toContain('fn main()');
 });
@@ -83,7 +83,7 @@ it('Subagent and Workflow cards bind native identities and lifecycle facts witho
   ui.rerender(<RuntimeFacts snapshot={s} />);
   expect(ui.container.querySelector('[data-subagent-id="child-1"]')).toBe(child);
   expect(child?.textContent).toContain('Native failure');
-  expect(ui.getByText('Outcome: completed')).toBeTruthy();
+  expect(ui.getByText('completed')).toBeTruthy();
   expect(ui.container.querySelector('pre')).toBeNull();
   expect(ui.container.textContent).not.toMatch(/private-|Todo|Goal|Trace/);
 });

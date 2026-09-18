@@ -3,9 +3,11 @@ import { routeWorkspaceHost } from './workspace-host';
 import { expect, test, type Locator } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { startDogfood } from './dogfood-server';
+import { wireProbe } from './wire-probe';
 
 test('native Todo, Goal and Queue docks follow the real App Server through control, loss and reload', async ({ page }) => {
   const fixture = await startDogfood('web_composer_context');
+  const wire = await wireProbe(page);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -13,13 +15,13 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await page.getByLabel('WebSocket endpoint').fill(`${fixture.endpoint}/`);
     await page.getByLabel('Transport token').fill(fixture.token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
   };
   const message = page.getByRole('textbox', { name: 'Message', exact: true });
   const todo = page.getByRole('region', { name: 'To-dos' });
   const goal = page.getByRole('region', { name: 'Goal' });
   const queue = page.getByRole('region', { name: 'Queue' });
-  const revision = async () => Number(/ r(\d+)/.exec(await goal.innerText())![1]);
+  const revision = async () => Number(wire.responses.filter(row => row.result?.snapshot?.goal?.current).at(-1)?.result.snapshot.goal.current.reference.revision);
   const aligned = async (docks: Locator[]) => {
     // ResizeObserver and the Harness grid transition settle independently of
     // the viewport call. Observe the geometry contract, never sleep for it.
@@ -38,7 +40,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await page.goto('/'); await connect();
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
-    await expect(page.getByLabel('Session location and attachment', { exact: true })).toHaveText(`${fixture.workspaceA} · attached`);
+    await expect(page.getByLabel('Session location', { exact: true })).toHaveText(`${fixture.workspaceA}`);
     // Composed Todo with no current list is its own bounded fact; no Goal and no queue take space.
     await expect(todo).toHaveAttribute('data-todo-state', 'empty');
     await expect(goal).toHaveCount(0); await expect(queue).toHaveCount(0);
@@ -135,10 +137,10 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toMatch(/Verify the composer docks|Bind native Todo|Queued during/);
 
     await connectionAction(page, 'Disconnect');
-    await expect(page.locator('.status strong')).toHaveText('disconnected');
+    await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
     await expect(goal.getByRole('button', { name: 'Resume goal' })).toBeDisabled();
     await connectionAction(page, 'Reconnect');
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
     await expect(goal).toContainText('Paused Goal'); await expect(goal).toContainText('1/3 rounds');
     expect(await revision()).toBe(settled);
     await expect(todo.locator('li')).toHaveCount(2);

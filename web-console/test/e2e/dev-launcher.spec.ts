@@ -46,7 +46,7 @@ compat = { chat_reasoning_replay = "omit" }
     await page.getByLabel('WebSocket endpoint').fill(ready.endpoint);
     await page.getByLabel('Transport token').fill(token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Select Workspace workspace with spaces' })).toBeVisible();
     const catalog = await (await page.request.post(`${ready.url}product-host/list`, { data: {} })).json();
     expect(catalog.endpoint).toBe(ready.endpoint);
@@ -56,7 +56,7 @@ compat = { chat_reasoning_replay = "omit" }
     expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain(token);
     await chooseWorkspace(page, 'workspace with spaces');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
-    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('attached');
+    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     expect(errors).toEqual([]);
     expect(pids).toHaveLength(2);
     expect(await launcher.settle(130)).toBe(130);

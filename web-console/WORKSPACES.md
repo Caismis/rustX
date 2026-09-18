@@ -95,13 +95,13 @@ creation and Fork/branch/retry/tree continuations. No policy means refusal. Befo
 attach, it reads `settings/read` from the native durable owner, classifies that
 current cwd through the Host for the current connection endpoint, and checks
 navigation/generation fences. Summary classifications only describe the list;
-they never authorize attachment. Saved localStorage tabs are hints, not admission.
+they never authorize attachment. Saved localStorage openViews are hints, not admission.
 Already-attached focus does not require a new runtime claim or hot revocation.
 Fork additionally checks its source's current cwd before creating a child; its
 result still passes normal attachment admission.
 
 App's `focusSession` transition publishes one Session/Workspace pair. Every Session
-focus path, including top tabs, restored focus, command results, close/deletion
+focus path, including Sidebar selection, restored focus, command results, close/deletion
 fallback and reconnect, clears the previous Workspace while reading current native
 cwd and Host classification. Only its current continuation publishes the matching
 registration. Authorized-unregistered focus has no Workspace. `/new` consumes this

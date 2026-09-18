@@ -1,4 +1,8 @@
-# App Server protocol v6
+# App Server protocol v7
+
+App Server v7 identifies one complete mandatory vocabulary, including exact
+`session/summary`. v6 initialization and WebSocket admission are rejected; there
+is no downgrade or compatibility path.
 
 The App Server protocol is rustX's public client boundary for the TUI,
 Developer Web Console, future Web UI, and SDKs. Rust DTOs in
@@ -103,13 +107,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v6",
+  "rustx.app-server.v7",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v6` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v7` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -214,7 +218,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v6; pipeline individual requests instead. This limitation is
+supported in v7; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -222,7 +226,7 @@ explicitly rejected as an invalid request before any action occurs.
 | Methods | Owner and semantics |
 | --- | --- |
 | `initialize`, `server/info` | Connection negotiation and server capabilities |
-| `session/list`, `session/read`, `session/name`, `session/tree` | Durable controller; bounded pages; no runtime composition |
+| `session/list`, `session/read`, `session/summary`, `session/name`, `session/tree` | Durable controller; bounded pages / exact identity reads; no runtime composition |
 | `session/create` | Durable creation from explicit Session selections |
 | `session/fork`, `session/branch` | Exact native Surface revision and optional user-message boundary; fork without a boundary clones the revision into an independent Session |
 | `session/deletePreview`, `session/delete`, `session/recoverDeletion` | Native revision-confirmed deletion/recovery; no client-supplied cleanup workset |
@@ -307,7 +311,7 @@ cannot remove a newly installed route.
 
 ## Attachment and observation lifetime
 
-Protocol v6 admits at most one writable external controller per resident
+Protocol v7 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -386,8 +390,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v6.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v6.ts`: TypeScript generated from that schema using pinned
+- `v7.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v7.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -652,7 +656,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v6; no compatibility path is provided.
+This remains mandatory protocol v7; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -682,7 +686,7 @@ The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 39 carries this vocabulary;
 version 38 clients are rejected by strict negotiation. This remains mandatory
-App Server protocol v6, with no compatibility field and no activation mode.
+App Server protocol v7, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
 `Paused` and `Blocked` offer Resume, and there is no separate Play/arm control
@@ -697,7 +701,7 @@ boundary.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v6 adds `inbound/edit { target, expected, text }` and
+Protocol v7 includes `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and controller attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -771,6 +775,17 @@ metadata. App Server does not allocate Workspaces, accept Host ACLs, or persist
 Workspace IDs. Browser path strings are not authorization. The local adapter and
 its same-origin Host contract are documented in [Web Workspaces](../web-console/WORKSPACES.md).
 
+`session/summary { session_id }` returns `{ type: "session_summary", summary: SessionSummary }`
+by exact durable identity. Unknown IDs return native `unknown_session`; deleting IDs
+retain the native deletion error. This controller read does not attach, load, change
+residency, resolve configuration or admit execution. List and exact read share one
+native summary projection, including root-lineage first-user-message preview.
+`session/list` remains bounded searchable/paginated browsing: its query matches ID,
+name or preview substrings and must never be used as exact identity resolution.
+Web `view.summary` is a replaceable exact observation, not durable/catalog authority.
+After canonical first-user-message observation, only successful exact reads complete
+preview convergence (including `preview: null`); failed reads remain retryable.
+
 `session/list` now includes `SessionSummary.cwd`, projected by the native catalog
 from `SessionPersistentState`, and `residencies`, a native manager observation for
 exactly the returned page. The existing bounded pagination/query semantics remain;
@@ -799,7 +814,7 @@ old generation authoritative. Session and node fields use strict typed UUIDv7
 identities in public and native Session projections.
 Reconnect reads authoritative snapshots and never replays mutations.
 
-Protocol 6 refuses obsolete development versions; no dual decoding exists.
+Protocol 7 refuses obsolete development versions; no dual decoding exists.
 
 ## Agent read projections (#346)
 

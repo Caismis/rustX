@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v6 envelope and method vocabulary.
+//! Rust authority for the App Server v7 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 6;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -168,6 +168,8 @@ pub enum Method {
     SessionCreate { settings: SessionPersistentState },
     #[serde(rename = "session/read")]
     SessionRead { session_id: SessionId },
+    #[serde(rename = "session/summary")]
+    SessionSummary { session_id: SessionId },
     #[serde(rename = "session/name")]
     SessionName { session_id: SessionId, name: String },
     #[serde(rename = "session/tree")]
@@ -433,6 +435,9 @@ pub enum MethodResult {
         session: crate::local_runtime::session::SessionSnapshot,
         editor_content: Option<Vec<crate::local_runtime::session::uploads::UserInputBlock>>,
         durability_diagnostic: Option<String>,
+    },
+    SessionSummary {
+        summary: crate::local_runtime::session::SessionSummary,
     },
     Sessions {
         /// Point-in-time runtime observation for exactly this bounded catalog page.

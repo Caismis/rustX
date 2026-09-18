@@ -8,11 +8,11 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { contentPreview, inboundOrigin, type InboundRow } from '../../bindings/composer-context';
 import type { InboundControlOutcome, Submission } from '../../client/app-server';
 import { IconChevronDownOutline14, IconQueueOutline14 } from '../../presentation/primitives/icons';
-import type { PendingInboundRef, RuntimeClientSnapshot } from '../../../../protocol/app-server/v6';
+import type { PendingInboundRef, RuntimeClientSnapshot } from '../../../../protocol/app-server/v7';
 import css from './QueueDock.module.css';
 
 const QueueGlyph = () => <span className={css.lead} aria-hidden><IconQueueOutline14 /></span>;
-const ACCEPTED = 'Accepted · awaiting projection';
+const ACCEPTED = 'Queued · updating…';
 
 export function QueueDock({ rows, submissions, running, disabled = false, edit, remove, observation }: {
   rows: readonly InboundRow[];
@@ -70,7 +70,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
   useEffect(() => { if (count === 0) setCollapsed(true); }, [count]);
   if (count === 0 && !draft && !notice) return null;
   const listed = count === 1 || !collapsed || !!draft || !!operation;
-  const status = running ? 'next safe boundary of the running attempt' : 'awaiting admission';
+  const status = running ? 'Queued' : 'Waiting to start';
   const hiddenEchoes = !listed && echoes.length > 0;
   return <section className={css.dock} aria-label="Queue" data-queue-dock="">
     <div className={css.panel}>
@@ -93,7 +93,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
                 onClick={() => { setDraft({ expected: expected(row), text: row.message.content[0].type === 'text' ? row.message.content[0].text : '' }); setNotice(''); }}>Edit</button>
               <button type="button" className={css.action} disabled={locked || !remove} onClick={() => { if (remove) void apply(() => remove(expected(row))); }}>Remove</button>
             </div>}
-            <span className={css.status}>{count === 1 ? `#${row.sequence} · ${status}` : `#${row.sequence}`}</span>
+            {count === 1 && <span className={css.status}>{status}</span>}
           </li>;
         })}
         {echoes.map(submission => <li key={`accepted:${submission.messageId}`} className={`${css.row} ${css.pendingRow}`} data-submission-echo="" data-accepted-message-id={submission.messageId}>
@@ -103,7 +103,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
         </li>)}
       </ul>}
       {draft && <div className={css.editPanel}>
-        <label>Editing #{draft.expected.sequence}<input className={css.editor} aria-label="Edit queued message" value={draft.text} disabled={locked}
+        <label>Edit queued message<input className={css.editor} aria-label="Edit queued message" value={draft.text} disabled={locked}
           onChange={event => setDraft({ ...draft, text: event.currentTarget.value })}
           onKeyDown={event => {
             if (event.key === 'Escape' && !locked) setDraft(undefined);
@@ -112,9 +112,9 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
         <div className={css.actions}>
           <button type="button" className={css.action} disabled={locked || staleDraft || !draft.text.trim() || !edit} onClick={() => { if (edit) void apply(() => edit(draft.expected, draft.text), true); }}>Save</button>
           <button type="button" className={css.action} disabled={locked} onClick={() => { setDraft(undefined); setNotice(''); }}>Cancel edit</button>
-          {staleDraft && currentDraft && <button type="button" className={css.action} disabled={locked} onClick={() => setDraft({ ...draft, expected: expected(currentDraft) })}>Use current revision</button>}
+          {staleDraft && currentDraft && <button type="button" className={css.action} disabled={locked} onClick={() => setDraft({ ...draft, expected: expected(currentDraft) })}>Use latest version</button>}
         </div>
-        {staleDraft && <p role="status">{currentDraft ? 'The current row has changed. Review it before using its revision.' : 'This occurrence is no longer pending.'}</p>}
+        {staleDraft && <p role="status">{currentDraft ? 'This queued message changed. Review the latest version before saving.' : 'This message is no longer queued.'}</p>}
       </div>}
       {operation?.status === 'pending' && <p className={css.notice} role="status">Updating queue…</p>}
       {notice && <p className={css.notice} role="status">{notice}</p>}
