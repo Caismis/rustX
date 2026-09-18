@@ -60,7 +60,7 @@ Host policy, independent of browser authentication and native socket admission.
 | Native transport token | Launcher 0600 scratch file; carrier/page memory, never browser storage | Composition/page |
 | Browser launch token | Launcher 0600 bootstrap config, initial URL, carrier memory; never browser storage | Composition |
 | Browser session proof | Exact-origin sessionStorage only; carrier memory registration | Tab storage; accepted only by minting carrier activation |
-| Remote transport token | Settings/controller memory only | Page; discarded when returning Local |
+| Remote transport token | Settings/controller memory only | Page; retained across mode changes |
 | Endpoint-scoped navigation/presentation hints | Browser localStorage | Preference lifetime; never connection material |
 | Provider/MCP credentials | Existing native owners | Unchanged |
 
@@ -73,15 +73,41 @@ browser launch URL is printed, once; transport details belong in advanced Settin
 
 ConnectionController owns source selection: **LocalManaged** fetches authenticated
 same-origin bootstrap, while **RemoteExplicit** requires a Settings gesture and
-explicit endpoint/token. Neither failure changes mode. Reconnect stays mode-local.
+explicit endpoint/token. Reconnect stays in the committed mode; no failure triggers fallback.
 Reload starts Local and re-bootstraps; Remote tokens and mode are not persisted.
 Standalone component servers without bootstrap fail closed into product recovery.
 
-Selecting Remote disconnects Local before accepting remote material. Selecting
-Local disconnects Remote and waits for socket closure before fetching bootstrap.
-AppServerClient retains endpoint/token validation and socket replacement, waiting
-for the old close event before creating a replacement. Generations fence obsolete
-continuations. No mutations are replayed and Session authority remains native.
+Selecting Remote opens material entry without touching the current authority. If a
+Remote endpoint/token has already been supplied, selecting Remote explicitly uses
+that remembered material. Selecting Local fetches and validates bootstrap before
+requesting a transition. `selectedMode` describes the material-entry selection;
+`mode` describes committed ownership and never changes on admission refusal.
+
+AppServerClient owns endpoint/token validation and replacement admission. Its
+side-effect-free admission check runs immediately before synchronous fencing, with
+no intervening await. Unresolved deletion verification/recovery, eight detached
+evidence batches, or more than 64 current/reserved Session diagnostic rows refuse
+replacement without changing generation, socket, views, evidence, or credentials.
+Same normalized endpoint reconnects bypass replacement admission.
+
+Admission reserves one detached batch for the old authority, including any evidence
+created by close. The request pump transmits at most eight pending operations; only
+sent mutations become uncertain, exactly once. Unsent requests are discarded. The
+request admission bound keeps existing uncertainty plus pending mutations at most
+64. Session capacity includes the union of diagnostic rows and pending Session IDs,
+including queued operations. After fencing, generation guards prevent new diagnostic
+rows from old continuations; model/cancellation continuations only update reserved
+rows. Once close settles, the client collects that final evidence before retiring
+old views. No close-time capacity refusal can strand an admitted transition.
+
+Ownership commits after old-socket settlement and authority retirement, immediately
+before the target socket is created. The client notifies the controller at this
+point to commit mode. A subsequent connection failure leaves that target selected
+and does not reconnect the old authority. A close timeout retains old authority
+state and mode but fails closed with a disconnected transport. Remote endpoint/token
+remain in page memory across refusal, Local success, and Local failure, allowing an
+explicit user-selected return; neither is persisted. New Remote material replaces
+the remembered material only when its ownership commits.
 
 Browser Session/control state belongs to one concrete App Server authority: the
 exact normalized WebSocket endpoint (scheme, host, port and root path). This is a
@@ -109,8 +135,8 @@ eight detached batches, each with the client's bounded operations and up to 64
 Session diagnostics. Capacity refuses replacement rather than evicting evidence;
 explicit acknowledgement removes a batch. Wire observations are replaceable logs
 and clear on authority replacement. Unresolved deletion verification or committed
-deletion recovery refuses replacement with a visible error: reconnect the original
-authority and resolve it first. It is neither dropped nor sent to another server.
+deletion recovery refuses replacement with a visible error before disconnect:
+resolve it on the still-current authority and retry. It is neither dropped nor sent to another server.
 
 Ordinary Settings opens **Overview**. Recovery **Show details** and connection
 recovery actions explicitly open **Connection**; transport is never the default.

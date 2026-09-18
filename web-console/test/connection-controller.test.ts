@@ -13,20 +13,20 @@ it('local bootstrap is the only local material source; no remembered remote fall
   expect(owner.getSnapshot().mode).toBe('local'); expect(server.sockets).toHaveLength(2);
   expect(owner.getSnapshot().error).toContain('No local managed');
 });
-it('explicit switches await exactly one old socket close, and local bootstrap waits for remote closure', async () => {
+it('selecting Remote only opens material entry; ownership commits after exactly one close', async () => {
   const server = new Server(), fetcher = vi.fn(bootstrap), owner = new ConnectionController(server.client, fetcher);
   await owner.start();
   const old = server.socket, close = vi.spyOn(old, 'close').mockImplementation(() => {});
-  const selecting = owner.select('remote');
-  expect(owner.getSnapshot().mode).toBe('remote'); expect(close).toHaveBeenCalledTimes(1);
-  const connecting = owner.connectRemote(endpoint, TOKEN);
+  await owner.select('remote');
+  expect(owner.getSnapshot().mode).toBe('local'); expect(close).not.toHaveBeenCalled();
+  expect(owner.getSnapshot().selectedMode).toBe('remote');
+  const connecting = owner.connectRemote('wss://remote.example/', TOKEN);
+  expect(owner.getSnapshot().mode).toBe('local'); expect(close).toHaveBeenCalledTimes(1);
   expect(server.sockets).toHaveLength(1);
-  old.onclose?.(new CloseEvent('close')); await selecting; await connecting;
-  expect(server.sockets).toHaveLength(2); expect(close).toHaveBeenCalledTimes(1);
-  const remote = server.socket, remoteClose = vi.spyOn(remote, 'close').mockImplementation(() => {});
-  const local = owner.select('local');
-  expect(fetcher).toHaveBeenCalledTimes(1); expect(remoteClose).toHaveBeenCalledTimes(1);
-  remote.onclose?.(new CloseEvent('close')); await local;
+  old.onclose?.(new CloseEvent('close')); await connecting;
+  expect(owner.getSnapshot().mode).toBe('remote'); expect(server.sockets).toHaveLength(2);
+  const remote = server.socket, remoteClose = vi.spyOn(remote, 'close');
+  await owner.select('local');
   expect(fetcher).toHaveBeenCalledTimes(2); expect(server.sockets).toHaveLength(3);
   expect(remoteClose).toHaveBeenCalledTimes(1); expect(owner.getSnapshot().mode).toBe('local');
   await owner.disconnect();
@@ -36,7 +36,7 @@ it('invalid remote inputs use client validation and never activate local mode', 
   await owner.select('remote');
   for (const url of ['http://example.com/', 'ws://user:pass@example.com/', 'wss://example.com/path', 'ws://example.com/?token=x', 'ws://example.com/#x']) await owner.connectRemote(url, TOKEN);
   await owner.connectRemote(endpoint, 'bad');
-  expect(server.sockets).toHaveLength(0); expect(fetcher).not.toHaveBeenCalled(); expect(owner.getSnapshot().mode).toBe('remote');
+  expect(server.sockets).toHaveLength(0); expect(fetcher).not.toHaveBeenCalled(); expect(owner.getSnapshot().mode).toBe('local');
   await owner.connectRemote('wss://remote.example/', TOKEN); expect(server.sockets).toHaveLength(1);
   expect(JSON.stringify({ ...localStorage })).not.toContain(TOKEN); expect(JSON.stringify({ ...sessionStorage })).not.toContain(TOKEN);
   await owner.disconnect();
@@ -57,4 +57,17 @@ it('competing replacements behind one close barrier create only the newest socke
   old.onclose?.(new CloseEvent('close')); await Promise.all([first, second]);
   expect(server.sockets).toHaveLength(2); expect(server.client.getSnapshot().endpoint).toBe('wss://second.example/');
   await server.client.disconnect();
+});
+
+it('invalid replacement material leaves the active Local connection untouched', async () => {
+  const server = new Server(), owner = new ConnectionController(server.client, bootstrap);
+  await owner.start(); await owner.select('remote');
+  const before = server.client.getSnapshot(), close = vi.spyOn(server.socket, 'close');
+  await owner.connectRemote('https://remote.example/', TOKEN);
+  expect(owner.getSnapshot().error).toContain('Use a ws://');
+  await owner.connectRemote('wss://remote.example/', 'bad');
+  expect(owner.getSnapshot().error).toContain('transport token');
+  expect(close).not.toHaveBeenCalled(); expect(server.sockets).toHaveLength(1);
+  expect(server.client.getSnapshot()).toBe(before); expect(owner.getSnapshot().mode).toBe('local');
+  await server.client.listSessions(); await owner.disconnect();
 });

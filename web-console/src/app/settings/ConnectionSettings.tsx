@@ -10,12 +10,12 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
   const [endpoint, setEndpoint] = useState(''), [token, setToken] = useState('');
   return <section className="connection-form" aria-label="Connection Settings">
     <h2>Connection</h2>
-    <label>Mode<select aria-label="Connection mode" value={selection.mode} onChange={event => { setToken(''); void connection.select(event.target.value as 'local' | 'remote'); }}>
+    <label>Mode<select aria-label="Connection mode" value={selection.selectedMode} onChange={event => { setToken(''); void connection.select(event.target.value as 'local' | 'remote'); }}>
       <option value="local">Local managed connection</option><option value="remote">Remote App Server</option>
     </select></label>
     <p role="status">Active mode: {selection.mode === 'local' ? 'Local managed connection' : 'Remote App Server'}</p>
     <p className="connection-status">{transport.connection === 'connected' ? 'Connected' : selection.busy ? 'Connecting…' : 'Disconnected'}</p>
-    {selection.mode === 'remote' ? <>
+    {selection.selectedMode === 'remote' ? <>
       <label>WebSocket endpoint<Input aria-label="WebSocket endpoint" value={endpoint} onChange={event => setEndpoint(event.target.value)} /></label>
       <label>Transport token<Input type="password" autoComplete="off" aria-label="Transport token" value={token} onChange={event => setToken(event.target.value)} /></label>
       <p>Transport credentials stay in page memory. Remote attachment grants no Workspace filesystem access.</p>

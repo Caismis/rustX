@@ -189,7 +189,7 @@ export class AppServerClient {
   // Browser transport authority, not a durable server identity. Reconnect alone
   // can restore wanted Session intent; replacement must retire it after fencing.
   isSameAuthority(endpoint: string) { return !this.state.endpoint || new URL(endpoint).href === this.state.endpoint; }
-  async connect(endpoint: string, token: string, transition: 'reconnect' | 'replace-authority' = 'reconnect') {
+  async connect(endpoint: string, token: string, transition: 'reconnect' | 'replace-authority' = 'reconnect', committed?: () => void) {
     const url = new URL(endpoint);
     if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== '/') {
       throw new Error('Use a ws:// or wss:// endpoint at / with no credentials, query, or fragment.');
@@ -197,10 +197,7 @@ export class AppServerClient {
     if (!/^[A-Za-z0-9_-]{43,128}$/.test(token)) throw new Error('Enter the dedicated 43–128 character App Server transport token.');
     const replacing = !this.isSameAuthority(url.href);
     if (replacing && transition !== 'replace-authority') throw new Error('Different App Server authority requires explicit replacement.');
-    if (replacing && Object.values(this.state.views).some(view => view.deleting)) throw new Error('Resolve pending Session deletion verification/recovery on the current App Server before replacing its authority.');
-    // Capacity refusal precedes fencing; unresolved evidence is never evicted.
-    if (replacing && (this.state.detached?.length ?? 0) >= 8) throw new Error('Review and acknowledge detached authority diagnostics before replacing another App Server.');
-    if (replacing && Object.values(this.state.views).filter(view => view.error || view.modelMutation || view.cancellation).length > 64) throw new Error('Too many unresolved Session diagnostics. Review the current authority before replacing it.');
+    if (replacing) this.admitAuthorityReplacement();
     const attempt = ++this.connectionAttempt;
     if (this.socket) this.endConnection('disconnected');
     const generation = this.state.generation;
@@ -209,8 +206,9 @@ export class AppServerClient {
     if (replacing) {
       const sessions = Object.values(this.state.views).filter(view => view.error || view.modelMutation || view.cancellation)
         .map(({ id, error, modelMutation, cancellation }) => ({ id, error, modelMutation, cancellation }));
-      // Rejected pending continuations can add evidence while close is settling.
-      if (sessions.length > 64) throw new Error('Too many unresolved Session diagnostics. Reconnect and review the current authority before replacing it.');
+      // Admission reserved capacity for close-time evidence before synchronous fencing.
+      // Generation-guarded continuations cannot create new Session diagnostics;
+      // model/cancellation continuations only update already-reserved Session rows.
       const detached = [...(this.state.detached ?? [])];
       if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, operations: this.state.uncertain, sessions });
       this.attachmentEpochs.clear(); this.previewChecked.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear();
@@ -220,6 +218,8 @@ export class AppServerClient {
         authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
     }
     this.publish({ endpoint: url.href, connection: transition === 'reconnect' ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
+    // Ownership commits after close/retirement, before attempting the new transport.
+    committed?.();
     try {
       const socket = this.socketFactory(url.href, ['rustx.app-server.v8', `rustx-token.${token}`]);
       this.socket = socket;
@@ -269,6 +269,20 @@ export class AppServerClient {
       this.publish({ connection: incompatible ? 'incompatible' : 'error', error: String(error) });
       throw error;
     }
+  }
+  /** Side-effect-free policy, called immediately before fencing with no intervening await.
+   * One replacement detaches at most one authority batch. pump transmits at most
+   * eight requests; only sent mutations become uncertain, each exactly once.
+   * request admission already bounds uncertain + pending to 64 for mutations.
+   * Reserve Session rows for pending continuations too, including unsent work.
+   */
+  private admitAuthorityReplacement() {
+    const views = Object.values(this.state.views);
+    if (views.some(view => view.deleting)) throw new Error('Resolve pending Session deletion verification/recovery on the current App Server before replacing its authority.');
+    if ((this.state.detached?.length ?? 0) >= 8) throw new Error('Review and acknowledge detached authority diagnostics before replacing another App Server.');
+    const sessions = new Set(views.filter(view => view.error || view.modelMutation || view.cancellation).map(view => view.id));
+    for (const pending of this.pending.values()) if (pending.context.sessionId) sessions.add(pending.context.sessionId);
+    if (sessions.size > 64) throw new Error('Too many unresolved Session diagnostics. Review the current authority before replacing it.');
   }
   private current(generation: number) { return generation === this.state.generation && !!this.socket; }
   /** Explicit transport loss only; never dispatches semantic cancellation or unload. */
