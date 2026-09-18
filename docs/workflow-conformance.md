@@ -103,8 +103,9 @@ across ordinary rounds. Scheduler #85 = WHEN a target becomes eligible.
 
 Workflow requires neither Goal nor Scheduler. A Goal-driven normal Agent round may call a
 discovered Workflow Tool. Loop exhaustion never automatically admits another round;
-Goal-level accounting/manual continuation belongs to #84. Pausing/disarming future
-rounds differs from cancelling current work. A pending Review/question is not
+Goal-level accounting/continuation belongs to #84 as revised by #351. Pausing
+future rounds is a durable Goal transition and differs from cancelling current
+work; runtime shutdown is neither. A pending Review/question is not
 implicitly Goal Blocked. Recovering Goal state cannot recover old Workflow continuation
 or human authority. Scheduler owns time eligibility, never graph execution. This change
 keeps Workflow independent of Goal authority and adds no Scheduler placeholders.

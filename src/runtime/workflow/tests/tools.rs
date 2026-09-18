@@ -227,8 +227,7 @@ fn context_with_workspace_policy(
 #[tokio::test]
 async fn goal84_workflow_completion_and_goal_completion_are_independent() {
     let plane = workflow_test_plane(1);
-    let domain =
-        crate::goal::GoalDomain::new(plane.store.clone(), Arc::new(tokio::sync::Notify::new()));
+    let domain = crate::goal::GoalDomain::new(plane.store.clone());
     let created = domain
         .write(crate::goal::GoalWrite::Create {
             objective: "Deliver the whole objective".into(),

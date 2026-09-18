@@ -8319,7 +8319,7 @@
       ]
     },
     "GoalPhase": {
-      "description": "Durable phase, independent of automatic continuation activation.",
+      "description": "The single durable Goal lifecycle authority.\n\n- `Active`: continuation is authorized when runtime admission is eligible.\n- `Paused` / `Blocked`: continuation is not authorized.\n- `Complete`: terminal.",
       "type": "string",
       "enum": [
         "active",
@@ -9682,7 +9682,7 @@
       ]
     },
     "GoalView": {
-      "description": "The current read model; observing it never arms continuation.",
+      "description": "The current read model; observing it never starts or authorizes work.\n\nThe wrapper is retained deliberately, not to minimize a diff: an\n`Option<GoalView>` distinguishes *the Goal extension is not composed*\n(`None`) from *composed with no current Goal* (`Some` with `current:\nNone`). A bare `Option<Option<GoalSnapshot>>` cannot spell that\ndistinction on the wire. It carries durable state only — there is no\nactivation member, so `Active + inert` is unrepresentable.",
       "type": "object",
       "properties": {
         "current": {
@@ -9694,14 +9694,8 @@
               "type": "null"
             }
           ]
-        },
-        "armed": {
-          "type": "boolean"
         }
-      },
-      "required": [
-        "armed"
-      ]
+      }
     },
     "RuntimeClientBackgroundExecution": {
       "description": "The external background execution read model.\n\nProjected from the authoritative [`ConversationBackgroundRegistry`]\n([`crate::tools::background::ConversationBackgroundRegistry`]); the\ncontainer shape belongs to the Runtime Client protocol while the\nlifecycle, progress, and result leaf types are stable runtime-owned\nvalue contracts. No internal task handles or process ids ever appear.",
@@ -11083,7 +11077,7 @@
           "default": null
         },
         "goal": {
-          "description": "Goal read model at this projection cursor; absent when disabled. Journal facts never reconstruct it.",
+          "description": "Durable Goal read model at this projection cursor; absent when the\nextension is not composed. Journal facts never reconstruct it.",
           "anyOf": [
             {
               "$ref": "#/$defs/GoalView"
@@ -16162,7 +16156,7 @@
           "additionalProperties": false
         },
         {
-          "description": "Bounded authoritative Goal view, including activation-only changes.",
+          "description": "Bounded authoritative durable Goal view. Every emission follows a\ncommitted durable transition; there is no activation-only form.",
           "type": "object",
           "properties": {
             "view": {

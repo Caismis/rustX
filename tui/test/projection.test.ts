@@ -1337,20 +1337,24 @@ describe("presentation projection", () => {
 });
 
 
-it("goal84 folds live Goal and activation changes at their stream cursors", () => {
+it("goal351 folds every durable Goal phase change at its stream cursor", () => {
   const goal: import("../src/protocol/app-server.ts").GoalSnapshot = {
     reference: { id: "goal-1", revision: "1" }, objective: "Deliver", phase: "active",
     blocked_reason: null, autonomous_round_budget: 2, autonomous_rounds_consumed: 0,
     origin: { kind: "runtime_control" }, last_round_message_id: null,
   };
-  const seed = snapshot({ goal: { current: null, armed: false } });
+  const paused = { ...goal, reference: { id: "goal-1", revision: "2" }, phase: "paused" as const };
+  const seed = snapshot({ goal: { current: null } });
   const initialState = replaceFromSnapshot(seed, runtimeCursor(0));
-  const created = fold(initialState, [{ type: "goal_changed", view: { current: goal, armed: true } }]);
-  const disarmed = fold(created, [{ type: "goal_changed", view: { current: goal, armed: false } }]);
+  const created = fold(initialState, [{ type: "goal_changed", view: { current: goal } }]);
+  const stopped = fold(created, [{ type: "goal_changed", view: { current: paused } }]);
   assert.equal(initialState.goal?.current, null);
-  assert.equal(created.goal?.armed, true);
-  assert.equal(disarmed.goal?.armed, false);
-  assert.deepEqual(disarmed.goal?.current, created.goal?.current);
-  assert.ok(disarmed.cursor > created.cursor);
-  assert.deepEqual(replaceFromSnapshot(snapshot({ goal: disarmed.goal }), disarmed.cursor).goal, disarmed.goal);
+  // Issue #351: every folded Goal change is a durable phase/revision change.
+  // The view has no activation member, so no cut can describe an Active Goal
+  // that is not actually active.
+  assert.equal(created.goal?.current?.phase, "active");
+  assert.equal(stopped.goal?.current?.phase, "paused");
+  assert.ok(!Object.hasOwn(stopped.goal!, "armed"));
+  assert.ok(stopped.cursor > created.cursor);
+  assert.deepEqual(replaceFromSnapshot(snapshot({ goal: stopped.goal }), stopped.cursor).goal, stopped.goal);
 });

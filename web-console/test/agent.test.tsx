@@ -192,3 +192,15 @@ it('live foreground overlays only its exact canonical occurrence when historical
  expect(oldRow.getByLabelText('Tool status').textContent).toBe('assembled');
  expect(newRow.getByLabelText('Tool status').textContent).toBe('running');
 });
+it('Goal Tool labels reflect native outcomes and retain exact diagnostic identity', () => {
+ const tool: ForegroundToolExecution = { message_id: 'a', block_index: 0, call_id: 'goal-call', tool_id: 'native.create_goal', name: 'create_goal', state: { type: 'running', arguments: '{}' } };
+ const ui = render(<Tool tool={tool}/>);
+ expect(ui.container.querySelector('[data-tool-name="create_goal"]')).toBeTruthy();
+ expect(toolCard(tool).title).toBe('Start Goal');
+ tool.state = { type: 'settled', arguments: '{}', result: { status: { type: 'failed', error: 'native rejection' }, duration_ms: 0 } };
+ expect(toolCard(tool).title).toBe('Start Goal');
+ tool.state.result.status = { type: 'success' };
+ expect(toolCard(tool).title).toBe('Goal started');
+ expect(toolCard({ ...tool, name: 'update_goal' }).title).toBe('Goal updated');
+ expect(toolCard({ ...tool, name: 'get_goal' }).title).toBe('Read Goal');
+});

@@ -62,11 +62,30 @@ describe("Goal commands", () => {
     });
     h.transport.respond(control.id, {
       type: "goal",
-      view: { current: null, armed: true },
+      view: {
+        current: {
+          reference: { id: "goal-1", revision: "1" },
+          objective: "finish delivery",
+          phase: "active" as const,
+          autonomous_round_budget: 10,
+          autonomous_rounds_consumed: 0,
+          blocked_reason: null,
+          origin: { kind: "runtime_control" as const },
+          last_round_message_id: null,
+        },
+      },
     });
-    assert.equal((await creating).kind, "inspect");
+    const created = await creating;
+    if (created.kind !== "inspect") throw new Error(`expected an inspect outcome, got ${created.kind}`);
+    // Issue #351: the surface is derived from durable GoalPhase alone. An
+    // Active Goal continues on its own; there is no arm/play/start step to
+    // report and no second control to send.
+    assert.match(created.body, /Status: Active/);
+    assert.match(created.body, /Progress: 0\/10 autonomous rounds/);
+    assert.doesNotMatch(created.body, /\barm|disarm|Inactive/i);
     // Creating a Goal is a typed control, never a conversation message.
     assert.equal(h.transport.log.count("turn/start"), 0);
+    assert.equal(h.transport.log.count("goal/control"), 1);
   });
 
   it("uses the observed revision for pause and never retries stale state", async () => {
@@ -85,7 +104,7 @@ describe("Goal commands", () => {
     };
     h.transport.respond(read.id, {
       type: "goal",
-      view: { current, armed: true },
+      view: { current },
     });
 
     const mutate = await nextRequest(h, "goal/control");

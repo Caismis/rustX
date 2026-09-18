@@ -480,6 +480,14 @@ pub(crate) enum DurableOperation {
     AdoptPendingBatch,
     /// Atomic Goal accounting/inbound failure seals admission rather than silently retrying.
     GoalRoundAdmission,
+    /// The durable `Active -> Paused` commit of an explicit Goal-attempt
+    /// interrupt did not win (Issue #351).
+    ///
+    /// Non-transient on purpose: the interrupt is a one-shot user act, and a
+    /// Goal whose pause did not commit must never be able to admit another
+    /// autonomous round. Sealing admission is what makes the failure safe
+    /// without rewriting truthful durable Goal state.
+    GoalPause,
     /// Preparing the canonical adoption transition (in-memory validation):
     /// a semantic contract failure, not a transient storage failure.
     PrepareAdoption,
@@ -524,6 +532,7 @@ impl DurableOperation {
             Self::SelectPendingBatch => "select_pending_batch",
             Self::AdoptPendingBatch => "adopt_pending_batch",
             Self::GoalRoundAdmission => "goal_round_admission",
+            Self::GoalPause => "goal_pause",
             Self::PrepareAdoption => "prepare_adoption",
             Self::IncompleteToolTurn => "incomplete_tool_turn",
             Self::CanonicalCommit => "canonical_commit",

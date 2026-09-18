@@ -1,4 +1,11 @@
 //! Revisioned Goal authority. History and events are observations, never state.
+//!
+//! `GoalPhase` is the one product-visible Goal lifecycle authority (Issue
+//! #351). `GoalPhase::Active` **is** durable authorization to continue: the
+//! owning `ConversationRuntime` may admit an autonomous round whenever it
+//! reaches an eligible safe idle boundary. There is no second, process-local
+//! activation state, so no reader can observe an Active Goal that is
+//! silently inert.
 
 use std::sync::{Arc, Mutex};
 
@@ -22,7 +29,11 @@ pub struct GoalRef {
     pub revision: u64,
 }
 
-/// Durable phase, independent of automatic continuation activation.
+/// The single durable Goal lifecycle authority.
+///
+/// - `Active`: continuation is authorized when runtime admission is eligible.
+/// - `Paused` / `Blocked`: continuation is not authorized.
+/// - `Complete`: terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
@@ -60,11 +71,17 @@ pub struct GoalSnapshot {
     pub last_round_message_id: Option<MessageId>,
 }
 
-/// The current read model; observing it never arms continuation.
+/// The current read model; observing it never starts or authorizes work.
+///
+/// The wrapper is retained deliberately, not to minimize a diff: an
+/// `Option<GoalView>` distinguishes *the Goal extension is not composed*
+/// (`None`) from *composed with no current Goal* (`Some` with `current:
+/// None`). A bare `Option<Option<GoalSnapshot>>` cannot spell that
+/// distinction on the wire. It carries durable state only — there is no
+/// activation member, so `Active + inert` is unrepresentable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GoalView {
     pub current: Option<GoalSnapshot>,
-    pub armed: bool,
 }
 
 /// Explicit user/control mutations. Model adapters expose only Block/Complete.
@@ -189,8 +206,13 @@ pub(crate) fn transition(current: Option<&GoalSnapshot>, write: GoalWrite) -> Go
                 GoalMutation::Pause if goal.phase == GoalPhase::Active => {
                     goal.phase = GoalPhase::Paused;
                 }
-                GoalMutation::Resume => {
-                    // Active + disarmed is explicitly re-armable with CAS.
+                // Resume is a real state transition, never a re-arm:
+                // `Active -> Active` no longer exists, so a resume against an
+                // already-Active Goal is rejected rather than silently
+                // advancing the revision.
+                GoalMutation::Resume
+                    if matches!(goal.phase, GoalPhase::Paused | GoalPhase::Blocked) =>
+                {
                     goal.phase = GoalPhase::Active;
                     goal.blocked_reason = None;
                 }
@@ -239,9 +261,6 @@ pub enum GoalFact {
         current: GoalRef,
         round: u32,
         message_id: MessageId,
-    },
-    ActivationChanged {
-        armed: bool,
     },
 }
 
@@ -297,14 +316,19 @@ pub(crate) struct GoalToolContext<'a> {
     pub mailbox: crate::runtime::inbound::ConversationInboundMailbox,
 }
 
-/// Leaf observer called under the domain mutex; never acquires coordinator locks.
+/// Leaf observer called under the domain publication mutex; never acquires
+/// coordinator locks.
 pub(crate) trait GoalObserver: Send + Sync {
     fn changed(&self, view: GoalView);
-    fn disarmed(&self);
 }
 
-/// One durable state owner, with separate process-local activation.
-/// The mutex orders disarm/mutation against a driver's local reservation.
+/// One durable state owner.
+///
+/// The domain owns Goal identity, revision, objective, phase, blocker, round
+/// budget, round consumption and origin evidence — and nothing else. Runtime
+/// availability, admission, cancellation and synchronization belong to
+/// `ConversationRuntime`; this type holds no process-local lifecycle state
+/// that could change what `Active` means.
 #[derive(Clone)]
 pub struct GoalDomain {
     inner: Arc<GoalDomainInner>,
@@ -312,27 +336,33 @@ pub struct GoalDomain {
 
 struct GoalDomainInner {
     store: Arc<dyn ConversationStore>,
-    armed: Mutex<bool>,
+    /// Orders each durable Goal commit with the authoritative observation it
+    /// publishes, so a projection can never fold a newer Goal revision before
+    /// an older one, and a read-then-CAS interrupt pause cannot interleave
+    /// with another domain commit.
+    ///
+    /// This is publication/commit ordering only. It holds no value, is never
+    /// observed, and never decides whether continuation is authorized — that
+    /// answer lives exclusively in the durable `GoalSnapshot.phase`.
+    publication: Mutex<()>,
     observer: std::sync::OnceLock<Arc<dyn GoalObserver>>,
     #[cfg(test)]
     before_tool_commit: crate::runtime::conversation_runtime::Gate,
     #[cfg(test)]
     during_write: crate::runtime::conversation_runtime::Gate,
-    wake: Arc<tokio::sync::Notify>,
 }
 
 impl GoalDomain {
-    pub(crate) fn new(store: Arc<dyn ConversationStore>, wake: Arc<tokio::sync::Notify>) -> Self {
+    pub(crate) fn new(store: Arc<dyn ConversationStore>) -> Self {
         Self {
             inner: Arc::new(GoalDomainInner {
                 store,
-                armed: Mutex::new(false),
+                publication: Mutex::new(()),
                 observer: std::sync::OnceLock::new(),
                 #[cfg(test)]
                 before_tool_commit: crate::runtime::conversation_runtime::Gate::default(),
                 #[cfg(test)]
                 during_write: crate::runtime::conversation_runtime::Gate::default(),
-                wake,
             }),
         }
     }
@@ -361,23 +391,31 @@ impl GoalDomain {
         mailbox.with_running_commit(|| self.write_if(write, || !cancellation.is_cancelled()))
     }
 
-    /// Reads phase and activation without changing either.
+    /// Reads durable phase without changing it. Reading is never a start
+    /// authority: it opens no round and wakes no admission owner.
     ///
     /// # Errors
     /// Returns a durable read failure.
-    ///
-    /// # Panics
-    /// Panics if the activation lock was poisoned.
     pub fn view(&self) -> Result<GoalView, ConversationStoreError> {
-        let armed = self
-            .inner
-            .armed
-            .lock()
-            .expect("Goal activation lock poisoned");
         Ok(GoalView {
             current: self.inner.store.load_goal()?,
-            armed: *armed,
         })
+    }
+
+    /// Whether durable Goal state still authorizes future autonomous work.
+    ///
+    /// This is a projection of `GoalSnapshot` alone — `Active` with budget
+    /// remaining — not a second lifecycle bit. `Paused`, `Blocked`,
+    /// `Complete`, an absent Goal, and an Active Goal whose autonomous budget
+    /// is exhausted all own no future continuation.
+    ///
+    /// # Errors
+    /// Returns a durable read failure.
+    pub(crate) fn authorizes_continuation(&self) -> Result<bool, ConversationStoreError> {
+        Ok(self.inner.store.load_goal()?.is_some_and(|goal| {
+            goal.phase == GoalPhase::Active
+                && goal.autonomous_rounds_consumed < goal.autonomous_round_budget
+        }))
     }
 
     /// Installed at the inactive `ConversationRuntime` bootstrap cut. Model
@@ -390,15 +428,6 @@ impl GoalDomain {
         );
     }
 
-    // Process-local activation facts are best-effort audit, after the winning
-    // mutex transition. Failure cannot undo activation or hide its live view.
-    fn activation_fact(&self, armed: bool) {
-        let _ = self.inner.store.append_event(journal_envelope(
-            self.inner.store.conversation_id(),
-            GoalFact::ActivationChanged { armed },
-        ));
-    }
-
     pub(crate) fn write(&self, write: GoalWrite) -> Result<GoalResult, ConversationStoreError> {
         self.write_if(write, || true)
     }
@@ -408,11 +437,11 @@ impl GoalDomain {
         write: GoalWrite,
         allowed: impl FnOnce() -> bool,
     ) -> Result<GoalResult, ConversationStoreError> {
-        let mut armed = self
+        let _publication = self
             .inner
-            .armed
+            .publication
             .lock()
-            .expect("Goal activation lock poisoned");
+            .expect("Goal publication lock poisoned");
         if !allowed() {
             return Ok(Err(reject(
                 "Goal command cancelled",
@@ -421,73 +450,76 @@ impl GoalDomain {
         }
         #[cfg(test)]
         self.inner.during_write.enter();
-        let rearm = matches!(
-            write,
-            GoalWrite::Create { .. }
-                | GoalWrite::Mutate {
-                    mutation: GoalMutation::Resume,
-                    ..
-                }
-        );
+        self.commit(write)
+    }
+
+    /// Durably commits `Active -> Paused` for the current Goal.
+    ///
+    /// This is the durable half of the runtime's interrupt contract, and it
+    /// is an ordinary CAS transition, not an activation bit: the
+    /// authoritative reference is read and compare-and-set inside the one
+    /// publication boundary, so no concurrent domain commit can interleave.
+    /// A Goal that is absent or not `Active` is left exactly as it is and
+    /// `Ok(None)` is returned — the runtime proved which attempt it is
+    /// interrupting, and the durable state decides the rest.
+    ///
+    /// # Errors
+    /// Returns a durable read/write failure. A rejected CAS is reported as
+    /// `Err(ConversationStoreError::InvalidReference)`; the caller must never
+    /// report a pause that did not commit.
+    pub(crate) fn pause_current(&self) -> Result<Option<GoalSnapshot>, ConversationStoreError> {
+        let _publication = self
+            .inner
+            .publication
+            .lock()
+            .expect("Goal publication lock poisoned");
+        let Some(current) = self
+            .inner
+            .store
+            .load_goal()?
+            .filter(|goal| goal.phase == GoalPhase::Active)
+        else {
+            return Ok(None);
+        };
+        match self.commit(GoalWrite::Mutate {
+            expected: current.reference.clone(),
+            mutation: GoalMutation::Pause,
+        })? {
+            Ok(goal) => Ok(Some(goal)),
+            Err(rejection) => Err(ConversationStoreError::InvalidReference(rejection.reason)),
+        }
+    }
+
+    /// The one durable commit + authoritative observation, under the held
+    /// publication boundary.
+    fn commit(&self, write: GoalWrite) -> Result<GoalResult, ConversationStoreError> {
         let result = self.inner.store.write_goal(write)?;
-        if let Ok(goal) = &result {
-            let was_armed = *armed;
-            if goal.phase != GoalPhase::Active {
-                *armed = false;
-            } else if rearm {
-                *armed = true;
-            }
-            if was_armed != *armed {
-                self.activation_fact(*armed);
-            }
-            if let Some(observer) = self.inner.observer.get() {
-                observer.changed(GoalView {
-                    current: Some(goal.clone()),
-                    armed: *armed,
-                });
-            }
-            self.inner.wake.notify_one();
+        if let Ok(goal) = &result
+            && let Some(observer) = self.inner.observer.get()
+        {
+            observer.changed(GoalView {
+                current: Some(goal.clone()),
+            });
         }
         Ok(result)
     }
 
-    /// Armed activation owns authority to admit future autonomous work.
-    /// Capability presence and recovered durable Goal state do not.
-    pub(crate) fn owns_autonomous_work(&self) -> bool {
-        *self
-            .inner
-            .armed
-            .lock()
-            .expect("Goal activation lock poisoned")
-    }
-
-    pub(crate) fn disarm(&self) {
-        let mut armed = self
-            .inner
-            .armed
-            .lock()
-            .expect("Goal activation lock poisoned");
-        if *armed {
-            *armed = false;
-            self.activation_fact(false);
-            if let Some(observer) = self.inner.observer.get() {
-                observer.disarmed();
-            }
-        }
-    }
-
+    /// The Goal-round durable frontier: Goal CAS/accounting and ordinary
+    /// durable Pending Inbound acceptance commit in one transaction.
+    ///
+    /// Eligibility is durable phase plus remaining budget — nothing else.
+    /// Runtime coordination conditions (idle boundary, owned background and
+    /// Subagent work, human priority, lifecycle) are proven by the caller
+    /// before this frontier is reached.
     pub(crate) fn reserve_and_accept(
         &self,
         draft: impl FnOnce(GoalRef) -> InboundDraft,
     ) -> Result<Option<AcceptedInbound>, ConversationStoreError> {
-        let armed = self
+        let _publication = self
             .inner
-            .armed
+            .publication
             .lock()
-            .expect("Goal activation lock poisoned");
-        if !*armed {
-            return Ok(None);
-        }
+            .expect("Goal publication lock poisoned");
         let Some(mut goal) = self.inner.store.load_goal()? else {
             return Ok(None);
         };
@@ -502,15 +534,14 @@ impl GoalDomain {
             .store
             .accept_goal_round(&expected, draft(expected.clone()))?;
         if let Some(accepted) = &accepted {
-            // Exact result of the atomic CAS under this domain mutex. No
-            // fallible post-commit read and no competing domain write.
+            // Exact result of the atomic CAS under this publication boundary.
+            // No fallible post-commit read and no competing domain write.
             goal.reference.revision += 1;
             goal.autonomous_rounds_consumed += 1;
             goal.last_round_message_id = Some(accepted.message_id.clone());
             if let Some(observer) = self.inner.observer.get() {
                 observer.changed(GoalView {
                     current: Some(goal),
-                    armed: *armed,
                 });
             }
         }
@@ -545,7 +576,7 @@ mod tests {
             ))
             .unwrap(),
         );
-        let domain = GoalDomain::new(store.clone(), Arc::new(tokio::sync::Notify::new()));
+        let domain = GoalDomain::new(store.clone());
         (store, domain)
     }
 
@@ -575,20 +606,23 @@ mod tests {
         }
     }
 
+    /// Issue #351: `GoalPhase` is the one lifecycle authority. Create lands
+    /// Active, Resume is a real `Paused|Blocked -> Active` transition rather
+    /// than a re-arm, Complete is terminal, and every successful mutation
+    /// advances the revision exactly once under CAS.
     #[test]
-    fn goal84_cas_state_machine_revision_and_terminal_authority() {
+    fn goal351_phase_is_the_only_lifecycle_authority_under_cas() {
         let (store, domain) = fixture();
-        assert_eq!(
-            domain.view().unwrap(),
-            GoalView {
-                current: None,
-                armed: false
-            }
-        );
+        assert_eq!(domain.view().unwrap(), GoalView { current: None });
+        assert!(!domain.authorizes_continuation().unwrap());
         let mut goal = create(&domain);
         assert_eq!(goal.reference.revision, 1);
+        assert_eq!(goal.phase, GoalPhase::Active);
         assert_eq!(goal.autonomous_rounds_consumed, 0);
-        assert!(domain.view().unwrap().armed);
+        assert!(
+            domain.authorizes_continuation().unwrap(),
+            "a created Goal is durably authorized to continue, with no second operation"
+        );
         assert!(
             domain
                 .write(GoalWrite::Create {
@@ -599,19 +633,37 @@ mod tests {
                 .unwrap()
                 .is_err()
         );
+        // `Active -> Active` no longer exists: Resume against an Active Goal
+        // is a rejected transition, not a silent revision bump.
+        let rejected = domain
+            .write(GoalWrite::Mutate {
+                expected: goal.reference.clone(),
+                mutation: GoalMutation::Resume,
+            })
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(rejected.current, Some(goal.clone()));
+        assert_eq!(store.load_goal().unwrap().unwrap().reference.revision, 1);
+
         let stale = goal.reference.clone();
-        for mutation in [
-            GoalMutation::Pause,
-            GoalMutation::Edit {
-                objective: "new objective".into(),
-            },
-            GoalMutation::Budget { rounds: 3 },
-            GoalMutation::Resume,
-            GoalMutation::Block {
-                reason: "need access".into(),
-            },
-            GoalMutation::Resume,
-            GoalMutation::Complete,
+        for (mutation, phase) in [
+            (GoalMutation::Pause, GoalPhase::Paused),
+            (GoalMutation::Resume, GoalPhase::Active),
+            (
+                GoalMutation::Block {
+                    reason: "need access".into(),
+                },
+                GoalPhase::Blocked,
+            ),
+            (GoalMutation::Resume, GoalPhase::Active),
+            (
+                GoalMutation::Edit {
+                    objective: "new objective".into(),
+                },
+                GoalPhase::Active,
+            ),
+            (GoalMutation::Budget { rounds: 3 }, GoalPhase::Active),
+            (GoalMutation::Complete, GoalPhase::Complete),
         ] {
             let before = goal.reference.revision;
             goal = domain
@@ -622,10 +674,15 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(goal.reference.revision, before + 1);
+            assert_eq!(goal.phase, phase);
+            // Authorization is exactly the durable phase plus remaining
+            // budget. Nothing else can make an Active Goal inert.
             assert_eq!(
-                domain.view().unwrap().armed,
-                goal.phase == GoalPhase::Active
+                domain.authorizes_continuation().unwrap(),
+                phase == GoalPhase::Active
             );
+            assert_eq!(goal.blocked_reason.is_some(), phase == GoalPhase::Blocked);
+            // A stale GoalRef can never overwrite the newer transition.
             let rejected = domain
                 .write(GoalWrite::Mutate {
                     expected: stale.clone(),
@@ -657,8 +714,100 @@ mod tests {
         assert_ne!(create(&domain).reference.id, goal.reference.id);
     }
 
+    /// Issue #351: no phase but `Active` — and no exhausted budget — can
+    /// cross the Goal-round frontier. Zero autonomous rounds are admitted and
+    /// no journal fact is written.
     #[test]
-    fn goal84_journal_failure_rolls_back_durable_write_but_not_activation() {
+    fn goal351_paused_blocked_complete_and_exhausted_admit_zero_rounds() {
+        for mutation in [
+            GoalMutation::Pause,
+            GoalMutation::Block {
+                reason: "need access".into(),
+            },
+            GoalMutation::Complete,
+        ] {
+            let (store, domain) = fixture();
+            let goal = create(&domain);
+            let stopped = domain
+                .write(GoalWrite::Mutate {
+                    expected: goal.reference,
+                    mutation,
+                })
+                .unwrap()
+                .unwrap();
+            let facts = store.read_events(None, 64).unwrap().events;
+            assert!(!domain.authorizes_continuation().unwrap());
+            assert!(domain.reserve_and_accept(draft).unwrap().is_none());
+            assert!(store.load_pending().unwrap().is_empty());
+            assert_eq!(store.load_goal().unwrap(), Some(stopped));
+            assert_eq!(store.read_events(None, 64).unwrap().events, facts);
+        }
+        // Budget exhaustion: Active, but nothing left to authorize. The
+        // frontier refuses without a durable write, so repeated eligible idle
+        // boundaries cannot busy-loop.
+        let (store, domain) = fixture();
+        let goal = domain
+            .write(GoalWrite::Create {
+                objective: "One round only".into(),
+                budget: 1,
+                origin: GoalOrigin::RuntimeControl,
+            })
+            .unwrap()
+            .unwrap();
+        assert!(domain.reserve_and_accept(draft).unwrap().is_some());
+        let consumed = store.load_goal().unwrap().unwrap();
+        assert_eq!(consumed.phase, GoalPhase::Active);
+        assert_eq!(consumed.autonomous_rounds_consumed, 1);
+        assert!(!domain.authorizes_continuation().unwrap());
+        let facts = store.read_events(None, 64).unwrap().events;
+        for _ in 0..4 {
+            assert!(domain.reserve_and_accept(draft).unwrap().is_none());
+        }
+        assert_eq!(store.load_goal().unwrap(), Some(consumed));
+        assert_eq!(store.read_events(None, 64).unwrap().events, facts);
+        assert_ne!(
+            goal.reference,
+            store.load_goal().unwrap().unwrap().reference
+        );
+    }
+
+    /// Issue #351: an explicit interrupt's durable half. `pause_current`
+    /// reads and compare-and-sets inside one publication boundary, pauses
+    /// only an Active Goal, and never fabricates a transition.
+    #[test]
+    fn goal351_interrupt_pause_commits_active_to_paused_and_nothing_else() {
+        let (store, domain) = fixture();
+        assert_eq!(domain.pause_current().unwrap(), None, "no Goal to pause");
+        let goal = create(&domain);
+        let paused = domain.pause_current().unwrap().unwrap();
+        assert_eq!(paused.phase, GoalPhase::Paused);
+        assert_eq!(paused.reference.revision, goal.reference.revision + 1);
+        assert_eq!(store.load_goal().unwrap(), Some(paused.clone()));
+        // Already Paused, Blocked and Complete are left exactly as they are.
+        assert_eq!(domain.pause_current().unwrap(), None);
+        assert_eq!(store.load_goal().unwrap(), Some(paused.clone()));
+        let resumed = domain
+            .write(GoalWrite::Mutate {
+                expected: paused.reference,
+                mutation: GoalMutation::Resume,
+            })
+            .unwrap()
+            .unwrap();
+        let blocked = domain
+            .write(GoalWrite::Mutate {
+                expected: resumed.reference,
+                mutation: GoalMutation::Block {
+                    reason: "needs a human".into(),
+                },
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(domain.pause_current().unwrap(), None);
+        assert_eq!(store.load_goal().unwrap(), Some(blocked));
+    }
+
+    #[test]
+    fn goal351_journal_failure_rolls_back_the_durable_write() {
         let (store, domain) = fixture();
         store.arm_fail_event_times(1);
         assert!(
@@ -670,13 +819,7 @@ mod tests {
                 })
                 .is_err()
         );
-        assert_eq!(
-            domain.view().unwrap(),
-            GoalView {
-                current: None,
-                armed: false
-            }
-        );
+        assert_eq!(domain.view().unwrap(), GoalView { current: None });
         assert!(store.read_events(None, 64).unwrap().events.is_empty());
         let goal = create(&domain);
         let before = store.read_events(None, 64).unwrap().events;
@@ -689,15 +832,17 @@ mod tests {
                 })
                 .is_err()
         );
-        assert_eq!(store.load_goal().unwrap(), Some(goal));
+        assert_eq!(store.load_goal().unwrap(), Some(goal.clone()));
         assert_eq!(store.read_events(None, 64).unwrap().events, before);
-        store.arm_fail_event_times(1);
-        domain.disarm();
-        assert!(
-            !domain.view().unwrap().armed,
-            "audit failure cannot undo a won disarm"
+        // The rolled-back mutation left durable phase untouched, so the Goal
+        // is still exactly as authorized to continue as it was.
+        assert!(domain.authorizes_continuation().unwrap());
+        assert_eq!(
+            domain.view().unwrap(),
+            GoalView {
+                current: Some(goal)
+            }
         );
-        assert_eq!(store.read_events(None, 64).unwrap().events, before);
         assert!(
             !serde_json::to_string(&before)
                 .unwrap()
@@ -705,8 +850,12 @@ mod tests {
         );
     }
 
+    /// Issue #351 recovery: a fresh process-local domain owner over the same
+    /// durable store inherits the phase and nothing else. A durably Active
+    /// Goal is still authorized — the old "recovers disarmed" contract is
+    /// gone — while accepted rounds are never refunded or replayed.
     #[test]
-    fn goal84_atomic_round_frontier_failure_recovery_and_no_refund() {
+    fn goal351_atomic_round_frontier_survives_a_fresh_domain_owner() {
         let (store, domain) = fixture();
         let goal = create(&domain);
         let facts_before = store.read_events(None, 64).unwrap().events;
@@ -725,13 +874,33 @@ mod tests {
         assert_eq!(committed.reference.revision, 2);
         assert_eq!(committed.autonomous_rounds_consumed, 1);
         assert_eq!(committed.last_round_message_id, Some(accepted.message_id));
-        domain.disarm();
-        assert_eq!(store.load_goal().unwrap(), Some(committed.clone()));
-        let recovered = GoalDomain::new(store.clone(), Arc::new(tokio::sync::Notify::new()));
-        assert!(!recovered.view().unwrap().armed);
+        let recovered = GoalDomain::new(store.clone());
+        assert_eq!(
+            recovered.view().unwrap(),
+            GoalView {
+                current: Some(committed.clone())
+            },
+            "recovery restores durable phase and invents no second lifecycle"
+        );
+        assert!(
+            recovered.authorizes_continuation().unwrap(),
+            "durable Active still authorizes continuation after recovery"
+        );
+        // The committed round's inbound is still pending, so the frontier
+        // refuses a second round: the accepted work is recovered through
+        // ordinary durable inbound, never replayed by a Goal mechanism.
         assert!(recovered.reserve_and_accept(draft).unwrap().is_none());
         assert_eq!(store.load_pending().unwrap().len(), 1);
-        assert_eq!(store.load_goal().unwrap(), Some(committed));
+        assert_eq!(store.load_goal().unwrap(), Some(committed.clone()));
+        // Pausing the recovered Goal ends authorization with no refund.
+        recovered.pause_current().unwrap().unwrap();
+        let paused = store.load_goal().unwrap().unwrap();
+        assert_eq!(paused.phase, GoalPhase::Paused);
+        assert_eq!(
+            paused.autonomous_rounds_consumed, committed.autonomous_rounds_consumed,
+            "a later pause never refunds a committed round"
+        );
+        assert!(!recovered.authorizes_continuation().unwrap());
     }
 
     #[test]
@@ -963,6 +1132,8 @@ mod tests {
             GoalMutation::Resume,
             GoalMutation::Complete,
         ] {
+            // Pause -> Resume -> Block -> Resume -> Complete is the complete
+            // #351 machine; each step is a legal transition from the last.
             goal = domain
                 .write(GoalWrite::Mutate {
                     expected: goal.reference,
@@ -1041,14 +1212,17 @@ mod tests {
         );
     }
 
+    /// Issue #351: durable Goal state is the only recovery authority. Even
+    /// with the Event Journal deleted, reopening the file reconstructs exactly
+    /// the same Active Goal, still authorized to continue.
     #[test]
-    fn goal84_file_reopen_uses_domain_even_when_goal_journal_is_removed() {
+    fn goal351_file_reopen_uses_durable_state_even_without_the_journal() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("conversation.sqlite");
         let id = ConversationId::new("conv_79ab74f6-cf62-7a14-81c8-c0ed4b54ea9d");
         let original = {
             let store = Arc::new(SqliteConversationStore::open(id.clone(), &path).unwrap());
-            let domain = GoalDomain::new(store.clone(), Arc::new(tokio::sync::Notify::new()));
+            let domain = GoalDomain::new(store.clone());
             let goal = create(&domain);
             let facts = store.read_events(None, 64).unwrap().events;
             assert!(facts.iter().any(|event| matches!(
@@ -1060,21 +1234,21 @@ mod tests {
                     }
                 }
             )));
-            assert!(facts.iter().any(|event| matches!(
-                event.event,
-                crate::events::types::RuntimeEvent::Goal {
-                    fact: GoalFact::ActivationChanged { armed: true }
-                }
-            )));
-            // Arm evidence exists, yet recovering below must start disarmed.
-            let recovered = GoalDomain::new(store.clone(), Arc::new(tokio::sync::Notify::new()));
+            // The bounded audit vocabulary carries state writes and committed
+            // round admissions only. There is no activation fact to record.
+            assert!(
+                !serde_json::to_string(&facts)
+                    .unwrap()
+                    .contains("activation")
+            );
+            let recovered = GoalDomain::new(store.clone());
             assert_eq!(
                 recovered.view().unwrap(),
                 GoalView {
-                    current: Some(goal.clone()),
-                    armed: false
+                    current: Some(goal.clone())
                 }
             );
+            assert!(recovered.authorizes_continuation().unwrap());
             goal
         };
         rusqlite::Connection::open(&path)
@@ -1083,13 +1257,13 @@ mod tests {
             .unwrap();
         let disabled_store = Arc::new(SqliteConversationStore::open(id, &path).unwrap());
         assert_eq!(disabled_store.load_goal().unwrap(), Some(original.clone()));
-        let enabled = GoalDomain::new(disabled_store, Arc::new(tokio::sync::Notify::new()));
+        let enabled = GoalDomain::new(disabled_store);
         assert_eq!(
             enabled.view().unwrap(),
             GoalView {
-                current: Some(original),
-                armed: false
+                current: Some(original)
             }
         );
+        assert!(enabled.authorizes_continuation().unwrap());
     }
 }

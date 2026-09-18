@@ -88,8 +88,9 @@
 //! fact. The mapping is defined here, in one place, so internal
 //! `RuntimeEvent` evolution cannot silently break the Runtime Client protocol.
 //! Goal is seeded at the same runtime bootstrap cut and all live Goal changes
-//! fold through this owner. Goal journal facts stay audit-only; activation-only
-//! changes advance the client cursor without changing a durable Goal revision.
+//! fold through this owner. Goal journal facts stay audit-only. Every folded
+//! Goal change is a durable phase/revision change: there is no activation-only
+//! Goal event, and no snapshot or event can represent an Active-but-inert Goal.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -526,13 +527,6 @@ impl RuntimeClientProjection {
                 }
                 self.snapshot.goal = Some(view.clone());
                 vec![RuntimeClientEvent::GoalChanged { view }]
-            }
-            ConversationObservation::GoalDisarmed => {
-                let Some(view) = self.snapshot.goal.as_mut().filter(|view| view.armed) else {
-                    return Vec::new();
-                };
-                view.armed = false;
-                vec![RuntimeClientEvent::GoalChanged { view: view.clone() }]
             }
             ConversationObservation::Event { attempt_id, event } => {
                 self.fold_event(&attempt_id, &event)
@@ -1299,7 +1293,7 @@ impl RuntimeClientProjection {
                 Vec::new()
             }
             // Goal journal facts are audit-only. The authoritative bounded
-            // view enters through GoalChanged/GoalDisarmed, never replay.
+            // view enters through GoalChanged, never replay.
             RuntimeEvent::Goal { .. } => Vec::new(),
             // Workflow lifecycle/join facts are best-effort observability;
             // the successful child value and native terminal pair are the

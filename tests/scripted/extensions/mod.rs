@@ -82,7 +82,6 @@ async fn goal84_natural_intent_creates_from_human_with_stable_tools_and_current_
         "unchanged state is still sampled for the new step"
     );
     let goal = runtime.goal().unwrap().view().unwrap();
-    assert!(!goal.armed);
     let goal = goal.current.unwrap();
     assert_eq!(goal.phase, rustx::goal::GoalPhase::Blocked);
     assert_eq!(goal.autonomous_rounds_consumed, 0);
@@ -95,8 +94,16 @@ async fn goal84_natural_intent_creates_from_human_with_stable_tools_and_current_
     );
 }
 
+/// Issue #351 requirements 1, 15, 16 and 17.
+///
+/// An explicit typed Create while the runtime is safely idle makes ordinary
+/// admission eligible with no second operation: exactly one Goal continuation
+/// crosses the durable frontier and reaches the Agent Loop through ordinary
+/// inbound. Runtime shutdown then closes admission without touching the
+/// durable phase — `Active` survives drain, no post-drain round is admitted,
+/// and the preserved Goal is what a later reopen would resume.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn goal84_driver_uses_ordinary_admission_consumes_one_and_drain_disarms() {
+async fn goal351_create_while_idle_admits_one_continuation_and_drain_preserves_active() {
     let extensions = NativeAgentExtensions::none().and_goal();
     let (_dir, tools) = todo_tool_runtime("conv_5970e081-a90a-73aa-b7cb-3639af4f1113", &extensions);
     let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
@@ -128,7 +135,11 @@ async fn goal84_driver_uses_ordinary_admission_consumes_one_and_drain_disarms() 
             budget: 2,
         })
         .unwrap();
-    assert_eq!(created.current.unwrap().autonomous_rounds_consumed, 0);
+    let created = created.current.unwrap();
+    assert_eq!(created.phase, rustx::goal::GoalPhase::Active);
+    assert_eq!(created.autonomous_rounds_consumed, 0);
+    // No play, arm or start operation follows the Create: the ordinary
+    // admission owner was woken and admitted the continuation itself.
     tokio::time::timeout(Duration::from_secs(10), parked.wait_for(|parked| *parked))
         .await
         .unwrap()
@@ -142,38 +153,57 @@ async fn goal84_driver_uses_ordinary_admission_consumes_one_and_drain_disarms() 
     assert!(admitted_cursor > created_cursor);
     assert_eq!(admitted_event, view);
     assert_eq!(host.snapshot().unwrap().0.goal, Some(view.clone()));
+    // Ordinary durable inbound carried it; there is no Goal -> model path.
     assert!(model.requests()[0].messages.iter().any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if matches!(user.kind, InboundKind::GoalContinuation(_)))));
+
     composed.runtime.shutdown().await.unwrap();
     let after = composed.runtime.goal_view().unwrap().unwrap();
-    assert!(!after.armed);
-    let (disarmed_event, disarmed_cursor) = goal_event(&subscription).await;
-    assert_eq!(disarmed_event, after);
-    assert!(disarmed_cursor > admitted_cursor);
     assert_eq!(
         after.current, view.current,
-        "shutdown never rewrites phase or refunds accepted work"
+        "runtime shutdown is not Goal pause: phase, revision and accepted rounds are untouched"
     );
+    assert_eq!(
+        after.current.as_ref().unwrap().phase,
+        rustx::goal::GoalPhase::Active
+    );
+    // Drain published no Goal observation of its own, because no durable Goal
+    // transition happened.
     assert!(
-        composed
-            .runtime
-            .control_goal(rustx::goal::GoalControl::Mutate {
-                expected: after.current.unwrap().reference,
-                mutation: rustx::goal::GoalMutation::Resume
-            })
+        tokio::time::timeout(Duration::from_millis(50), goal_event(&subscription))
+            .await
             .is_err()
     );
-    assert_eq!(model.requests().len(), 1);
+    composed.runtime.admit_now_for_test();
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "no post-drain Goal round may be admitted"
+    );
+    assert_eq!(
+        composed.runtime.goal_view().unwrap().unwrap(),
+        after,
+        "the preserved Active Goal is exactly what a later reopen resumes"
+    );
 }
 
 use super::{common, support};
 
+/// Issue #351 requirements 12 and 14: both stoppers that can win *before* the
+/// Goal-round durable frontier.
+///
+/// The admission gate parks the coordinator before it takes the lock, so the
+/// contending commit provably linearizes first. An explicit Pause commits
+/// `Active -> Paused`, and a runtime drain closes admission without touching
+/// the phase. In both orders the frontier is never crossed: no round is
+/// consumed, nothing is durably pending, no model request exists, and no
+/// later Goal round is admitted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn goal84_cancel_and_drain_win_before_the_gated_admission_frontier() {
-    for draining in [false, true] {
+async fn goal351_pause_or_drain_before_the_round_frontier_consumes_no_round() {
+    for pausing in [true, false] {
         let extensions = NativeAgentExtensions::none().and_goal();
         let (_dir, tools) =
             todo_tool_runtime("conv_401bc8ab-5b35-78af-a36a-7996717e35b4", &extensions);
-        tools
+        let seed = tools
             .goal()
             .unwrap()
             .write(rustx::goal::GoalWrite::Create {
@@ -192,17 +222,27 @@ async fn goal84_cancel_and_drain_win_before_the_gated_admission_frontier() {
         let gate = Arc::new(rustx::runtime::conversation_runtime::Gate::default());
         let release = gate.arm_scoped();
         composed.runtime.install_admission_gate(gate.clone());
-        let host = rustx::runtime_client::RuntimeClientHost::new(
-            rustx::runtime_client::RuntimeClientHostConfig {
-                runtime: composed.runtime.clone(),
-                replay_limit: None,
-            },
-        )
-        .unwrap();
         let runtime = composed.runtime.clone();
         let activation = std::thread::spawn(move || runtime.activate());
         gate.wait_entered();
-        if draining {
+        if pausing {
+            // The interrupt half a user's explicit `/goal pause` commits. It
+            // wins the coordinator boundary while admission is parked.
+            let paused = composed
+                .runtime
+                .control_goal(rustx::goal::GoalControl::Mutate {
+                    expected: seed.reference.clone(),
+                    mutation: rustx::goal::GoalMutation::Pause,
+                })
+                .unwrap();
+            assert_eq!(
+                paused.current.unwrap().phase,
+                rustx::goal::GoalPhase::Paused
+            );
+            drop(release);
+            activation.join().unwrap();
+            composed.runtime.shutdown().await.unwrap();
+        } else {
             let mut shutdown = Box::pin(composed.runtime.shutdown());
             assert!(
                 futures_util::poll!(&mut shutdown).is_pending(),
@@ -211,38 +251,30 @@ async fn goal84_cancel_and_drain_win_before_the_gated_admission_frontier() {
             drop(release);
             activation.join().unwrap();
             shutdown.await.unwrap();
-        } else {
-            let (attachment, _) = host
-                .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
-                .unwrap();
-            let response = attachment.handle_request(
-                rustx::runtime_client::RuntimeClientRequest::CancelCurrentAttempt {
-                    id: rustx::runtime_client::RequestId::new(84),
-                },
-            );
-            assert!(
-                response.error.is_some(),
-                "no current attempt, but automation is disarmed"
-            );
-            assert!(!tools.goal().unwrap().view().unwrap().armed);
-            drop(release);
-            activation.join().unwrap();
-            composed.runtime.shutdown().await.unwrap();
         }
         composed.runtime.admit_now_for_test();
-        let view = tools.goal().unwrap().view().unwrap();
-        assert!(!view.armed);
-        let goal = view.current.unwrap();
-        assert_eq!(goal.phase, rustx::goal::GoalPhase::Active);
-        assert_eq!(goal.reference.revision, 1);
-        assert_eq!(goal.autonomous_rounds_consumed, 0);
+        let goal = tools.goal().unwrap().view().unwrap().current.unwrap();
+        assert_eq!(
+            goal.phase,
+            if pausing {
+                rustx::goal::GoalPhase::Paused
+            } else {
+                // Drain closed admission; it did not rewrite user intent.
+                rustx::goal::GoalPhase::Active
+            }
+        );
+        assert_eq!(goal.reference.revision, if pausing { 2 } else { 1 });
+        assert_eq!(
+            goal.autonomous_rounds_consumed, 0,
+            "a winner before the frontier consumes no autonomous round"
+        );
         assert!(tools.durable_store().load_pending().unwrap().is_empty());
         assert!(model.requests().is_empty());
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn goal84_owned_background_is_awaited_without_polling_or_blocking_goal() {
+async fn goal351_owned_background_is_awaited_without_polling_or_blocking_goal() {
     let extensions = NativeAgentExtensions::none().and_goal();
     let (_dir, tools) = todo_tool_runtime("conv_f99aedc7-a14e-7e14-9415-5dc73929b70c", &extensions);
     let capability =
@@ -264,10 +296,14 @@ async fn goal84_owned_background_is_awaited_without_polling_or_blocking_goal() {
     let view = composed.runtime.goal_view().unwrap().unwrap();
     assert_eq!(
         view.current.as_ref().unwrap().phase,
-        rustx::goal::GoalPhase::Active
+        rustx::goal::GoalPhase::Active,
+        "waiting for owned work is not Blocked; the Goal stays Active and authorized"
     );
     assert_eq!(view.current.as_ref().unwrap().autonomous_rounds_consumed, 0);
-    assert!(model.requests().is_empty());
+    assert!(
+        model.requests().is_empty(),
+        "an Active Goal never opens a polling round to discover whether owned work finished"
+    );
     composed.runtime.shutdown().await.unwrap();
     composed.runtime.admit_now_for_test();
     assert_eq!(
@@ -284,13 +320,13 @@ async fn goal84_owned_background_is_awaited_without_polling_or_blocking_goal() {
     assert!(model.requests().is_empty());
 }
 
+/// Issue #351 requirement 6: a Paused Goal admits zero autonomous rounds,
+/// and the ordinary Human turn that runs beside it charges no Goal budget.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn goal84_cancellation_before_admission_consumes_zero_and_human_turn_does_not_charge_budget()
-{
+async fn goal351_paused_goal_admits_zero_rounds_and_a_human_turn_charges_no_budget() {
     let extensions = NativeAgentExtensions::none().and_goal();
     let (_dir, tools) = todo_tool_runtime("conv_c2830545-37a2-79bf-b07a-d53ea15dd88e", &extensions);
-    // A recovered Active snapshot: disarmed before ConversationRuntime owns admission.
-    tools
+    let seed = tools
         .goal()
         .unwrap()
         .write(rustx::goal::GoalWrite::Create {
@@ -300,7 +336,17 @@ async fn goal84_cancellation_before_admission_consumes_zero_and_human_turn_does_
         })
         .unwrap()
         .unwrap();
-    tools.goal().unwrap().disarm();
+    // Paused is the only thing that stops continuation; there is no
+    // activation bit to clear.
+    tools
+        .goal()
+        .unwrap()
+        .write(rustx::goal::GoalWrite::Mutate {
+            expected: seed.reference,
+            mutation: rustx::goal::GoalMutation::Pause,
+        })
+        .unwrap()
+        .unwrap();
     let capability =
         extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
             .published()
@@ -348,22 +394,37 @@ async fn goal84_cancellation_before_admission_consumes_zero_and_human_turn_does_
     assert_eq!(model.requests().len(), 1);
 }
 
+/// Issue #351 requirements 4, 5, 29 and 30 — the complete recovery contract.
+///
+/// - durable Active + a storage read alone starts nothing;
+/// - durable Active + Runtime Client attach/reconnect alone is not an
+///   independent start authority;
+/// - a Goal-disabled composition never executes stored Goal state, even
+///   when its runtime is explicitly opened;
+/// - a composed runtime that is explicitly opened over the same stored Active
+///   Goal resumes it automatically at the first eligible idle boundary,
+///   through ordinary durable inbound and the one admission owner.
+///
+/// Opening/activating the runtime is the product act that makes the
+/// conversation live again. Nothing here scans, schedules or polls.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn goal84_disabled_reenabled_and_reconnect_never_rearm_or_start_a_request() {
+async fn goal351_recovery_starts_only_when_a_composed_runtime_is_explicitly_opened() {
     let enabled = NativeAgentExtensions::none().and_goal();
     let (dir, initial) = todo_tool_runtime("conv_7b91cff3-13ea-7ca4-86dc-14dc50d19831", &enabled);
-    let goal = initial
+    let stored = initial
         .goal()
         .unwrap()
         .write(rustx::goal::GoalWrite::Create {
             objective: "Persist this objective".into(),
-            budget: 2,
+            budget: 1,
             origin: rustx::goal::GoalOrigin::RuntimeControl,
         })
         .unwrap()
         .unwrap();
     drop(initial);
+
     for extensions in [NativeAgentExtensions::none(), enabled] {
+        let composed_goal = extensions.goal().is_some();
         let tools = rustx::tools::runtime::ConversationToolRuntime::from_config(
             rustx::runtime::identity::ConversationId::new(
                 "conv_7b91cff3-13ea-7ca4-86dc-14dc50d19831",
@@ -375,11 +436,17 @@ async fn goal84_disabled_reenabled_and_reconnect_never_rearm_or_start_a_request(
             .with_extensions(extensions.clone()),
         )
         .unwrap();
+        // Reading durable state is not a start authority.
+        assert_eq!(
+            tools.durable_store().load_goal().unwrap(),
+            Some(stored.clone())
+        );
         let capability =
             extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
                 .published()
                 .await;
-        let model = fake_model(Vec::new());
+        let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
+        let mut parked = model.parked();
         let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
         let host = rustx::runtime_client::RuntimeClientHost::new(
             rustx::runtime_client::RuntimeClientHostConfig {
@@ -388,7 +455,10 @@ async fn goal84_disabled_reenabled_and_reconnect_never_rearm_or_start_a_request(
             },
         )
         .unwrap();
-        composed.runtime.activate();
+
+        // Attach, read a coherent snapshot, detach and reattach — all before
+        // the runtime is opened. A client is an observer, never a start
+        // authority, so none of this may admit a round.
         let (attachment, initialized) = host
             .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .unwrap();
@@ -399,11 +469,13 @@ async fn goal84_disabled_reenabled_and_reconnect_never_rearm_or_start_a_request(
             panic!("initialized")
         };
         assert_eq!(cursor.get(), 0);
+        // The Goal projection reports the conversation's durable Goal state
+        // authority, which survives composition changes. It carries phase and
+        // nothing else: there is no activation member to read.
         assert_eq!(
             snapshot.goal,
             Some(rustx::goal::GoalView {
-                current: Some(goal.clone()),
-                armed: false,
+                current: Some(stored.clone()),
             })
         );
         drop(attachment);
@@ -411,35 +483,69 @@ async fn goal84_disabled_reenabled_and_reconnect_never_rearm_or_start_a_request(
             .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .unwrap();
         drop(reattached);
-        let view = composed.runtime.goal_view().unwrap();
-        assert_eq!(
-            view,
-            Some(rustx::goal::GoalView {
-                current: Some(goal.clone()),
-                armed: false
-            })
+        composed.runtime.admit_now_for_test();
+        assert!(
+            model.requests().is_empty(),
+            "storage reads and client attach/reconnect start nothing on their own"
         );
         assert_eq!(
-            composed
+            tools.durable_store().load_goal().unwrap(),
+            Some(stored.clone())
+        );
+
+        // The product act: explicitly open the runtime.
+        composed.runtime.activate();
+        if composed_goal {
+            tokio::time::timeout(Duration::from_secs(10), parked.wait_for(|value| *value))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(model.requests().len(), 1);
+            assert!(model.requests()[0].messages.iter().any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if matches!(user.kind, InboundKind::GoalContinuation(_)))));
+            let resumed = composed
                 .runtime
-                .control_goal(rustx::goal::GoalControl::Show)
-                .unwrap(),
-            view.unwrap()
-        );
+                .goal_view()
+                .unwrap()
+                .unwrap()
+                .current
+                .unwrap();
+            assert_eq!(resumed.phase, rustx::goal::GoalPhase::Active);
+            assert_eq!(resumed.autonomous_rounds_consumed, 1);
+            assert_eq!(resumed.objective, stored.objective);
+        } else {
+            // A Goal-disabled composition owns no Goal capability at all.
+            composed.runtime.admit_now_for_test();
+            assert!(
+                model.requests().is_empty(),
+                "a Goal-disabled composition never executes stored Goal state"
+            );
+            assert_eq!(
+                composed.runtime.goal_view().unwrap(),
+                Some(rustx::goal::GoalView {
+                    current: Some(stored.clone())
+                }),
+                "disabling the extension changes runtime capability, not stored state"
+            );
+        }
         assert_eq!(
             tools
                 .extension_tool_plane_for(&extensions)
                 .tool_names()
                 .iter()
                 .any(|name| name == "get_goal"),
-            extensions.goal().is_some()
+            composed_goal
         );
         composed.runtime.shutdown().await.unwrap();
-        assert!(model.requests().is_empty());
-        assert_eq!(
-            tools.durable_store().load_goal().unwrap(),
-            Some(goal.clone())
-        );
+        // Whatever ran, the durable objective and phase survive the runtime.
+        let after = tools.durable_store().load_goal().unwrap().unwrap();
+        assert_eq!(after.objective, stored.objective);
+        assert_eq!(after.phase, rustx::goal::GoalPhase::Active);
+        // A Goal-disabled runtime consumed nothing; the composed one consumed
+        // exactly its single budgeted round and, being exhausted, admits no
+        // more — an Active Goal never busy-loops.
+        assert_eq!(after.autonomous_rounds_consumed, u32::from(composed_goal));
+        composed.runtime.admit_now_for_test();
+        assert_eq!(model.requests().len(), usize::from(composed_goal));
     }
 }
 
@@ -2871,7 +2977,7 @@ async fn goal_safe_boundary_origin(source: UserSource, newer_human: bool) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn goal84_runtime_client_projection_same_cursor_controls_activation_and_replay() {
+async fn goal351_runtime_client_projection_same_cursor_controls_and_replay() {
     use rustx::goal::{GoalControl, GoalMutation};
     let extensions = NativeAgentExtensions::none().and_goal();
     let (_dir, tools) = todo_tool_runtime("conv_daf85bf4-ff53-7400-afbf-d4e4d8b4dc5b", &extensions);
@@ -2902,13 +3008,7 @@ async fn goal84_runtime_client_projection_same_cursor_controls_activation_and_re
         .unwrap()
         .unwrap();
     let (baseline, cursor) = host.snapshot().unwrap();
-    assert_eq!(
-        baseline.goal,
-        Some(rustx::goal::GoalView {
-            current: None,
-            armed: false
-        })
-    );
+    assert_eq!(baseline.goal, Some(rustx::goal::GoalView { current: None }));
     let subscription = attachment.subscribe_events(cursor).unwrap();
     let inner = host.weak_inner().upgrade().unwrap();
     inner.park_projection_worker();
@@ -2996,34 +3096,33 @@ async fn goal84_runtime_client_projection_same_cursor_controls_activation_and_re
             .is_err()
     );
     assert_eq!(inner.queued_observations(), 0, "stale CAS emits no change");
-    let before_disarm = expected.current.clone();
-    composed.runtime.disarm_goal();
+    // Issue #351 requirement 25: no Runtime Client snapshot or event can
+    // carry an activation flag, so `Active + disarmed` is unrepresentable.
     let (frozen, frozen_cursor) = host.snapshot().unwrap();
-    assert!(frozen.goal.unwrap().armed);
     assert_eq!(frozen_cursor, last_cursor);
-    let (disarmed, disarm_cursor) = loop {
-        let (snapshot, cursor) = inner.fold_one_observation().expect("queued disarm");
-        assert_eq!(snapshot.goal.as_ref().unwrap().current, before_disarm);
-        if !snapshot.goal.as_ref().unwrap().armed {
-            break (snapshot, cursor);
-        }
-    };
-    let view = disarmed.goal.unwrap();
-    assert!(!view.armed);
+    let projected = frozen.goal.clone().unwrap();
+    assert_eq!(projected, expected);
     assert_eq!(
-        view.current, before_disarm,
-        "activation does not invent a durable revision"
+        projected.current.as_ref().unwrap().phase,
+        rustx::goal::GoalPhase::Active
     );
-    assert!(disarm_cursor > last_cursor);
-    assert_eq!(
-        goal_event(&subscription).await,
-        (view.clone(), disarm_cursor)
-    );
+    for wire in [
+        serde_json::to_string(&frozen).unwrap(),
+        serde_json::to_string(&rustx::runtime_client::RuntimeClientEvent::GoalChanged {
+            view: projected.clone(),
+        })
+        .unwrap(),
+    ] {
+        assert!(!wire.contains("armed"), "{wire}");
+        assert!(!wire.contains("disarm"), "{wire}");
+    }
+    // Replay from the original cursor reproduces exactly the same five
+    // durable Goal generations; there is no activation-only event among them.
     let replay = attachment.subscribe_events(cursor).unwrap();
-    for _ in 0..5 {
+    for _ in 0..4 {
         goal_event(&replay).await;
     }
-    assert_eq!(goal_event(&replay).await, (view, disarm_cursor));
+    assert_eq!(goal_event(&replay).await, (projected, last_cursor));
     composed.runtime.shutdown().await.unwrap();
 }
 
@@ -3072,14 +3171,13 @@ async fn goal84_runtime_client_subscriber_sees_model_create_block_and_complete()
             .submit_inbound(inbound("unused", "Keep working until deployment succeeds").content)
             .unwrap();
         let (created, cursor1) = goal_event(&subscription).await;
-        assert!(created.armed);
         let created = created.current.unwrap();
+        assert_eq!(created.phase, rustx::goal::GoalPhase::Active);
         assert!(
             matches!(created.origin, rustx::goal::GoalOrigin::HumanAttempt { message_id, .. } if message_id == accepted.message_id)
         );
         let (updated, cursor2) = goal_event(&subscription).await;
         assert!(cursor2 > cursor1);
-        assert!(!updated.armed);
         assert_eq!(
             updated.current.as_ref().unwrap().phase,
             if complete {
@@ -3093,8 +3191,514 @@ async fn goal84_runtime_client_subscriber_sees_model_create_block_and_complete()
     }
 }
 
+/// The conversation identity every Goal interrupt test below uses, so the
+/// deterministic attempt ordinals can be named without an observation bridge.
+fn goal_runtime(
+    label: &'static str,
+    budget: u32,
+    phase: Option<rustx::goal::GoalMutation>,
+) -> (
+    tempfile::TempDir,
+    rustx::tools::runtime::ConversationToolRuntime,
+    Option<rustx::goal::GoalSnapshot>,
+) {
+    let extensions = NativeAgentExtensions::none().and_goal();
+    let (dir, tools) = todo_tool_runtime(label, &extensions);
+    let created = tools
+        .goal()
+        .unwrap()
+        .write(rustx::goal::GoalWrite::Create {
+            objective: "Deliver the objective".into(),
+            budget,
+            origin: rustx::goal::GoalOrigin::RuntimeControl,
+        })
+        .unwrap()
+        .unwrap();
+    let seeded = match phase {
+        None => created,
+        Some(mutation) => tools
+            .goal()
+            .unwrap()
+            .write(rustx::goal::GoalWrite::Mutate {
+                expected: created.reference,
+                mutation,
+            })
+            .unwrap()
+            .unwrap(),
+    };
+    (dir, tools, Some(seeded))
+}
+
+/// Issue #351 requirements 10, 13 and 14: explicit interruption of an
+/// autonomous Goal attempt.
+///
+/// The interrupt has one ordering. Under the coordinator lock the runtime
+/// proves — from its own admission provenance — that the current attempt is a
+/// Goal continuation, durably commits `Active -> Paused`, and only then
+/// requests cancellation of that exact attempt. Acceptance is reported after
+/// both boundaries are won, so the Goal is never "Active but inert".
+///
+/// The round that already crossed the durable frontier stays consumed: a
+/// later interrupt refunds nothing. While Paused, no further Goal round is
+/// admitted even though budget remains.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn goal84_model_mutation_and_drain_have_one_owned_commit_order() {
+async fn goal351_interrupting_a_goal_continuation_pauses_it_and_cancels_that_attempt() {
+    let label = "conv_1d2b0fca-0a63-7bd4-9c3f-4d9a6b7c1e20";
+    let (_dir, tools, seeded) = goal_runtime(label, 3, None);
+    let seeded = seeded.unwrap();
+    let capability =
+        extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
+            .published()
+            .await;
+    let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
+    let mut parked = model.parked();
+    let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
+    composed.runtime.activate();
+    tokio::time::timeout(Duration::from_secs(10), parked.wait_for(|value| *value))
+        .await
+        .unwrap()
+        .unwrap();
+    // The Goal round crossed the durable frontier before this attempt was
+    // published, so the round is already consumed.
+    let running = composed
+        .runtime
+        .goal_view()
+        .unwrap()
+        .unwrap()
+        .current
+        .unwrap();
+    assert_eq!(running.phase, rustx::goal::GoalPhase::Active);
+    assert_eq!(running.autonomous_rounds_consumed, 1);
+    assert_eq!(running.reference.revision, seeded.reference.revision + 1);
+
+    // Park the settlement-driven admission before interrupting, so the test
+    // can prove the runtime actually *reached* its next eligible idle
+    // boundary with the Goal paused, rather than inferring it from timing.
+    let boundary = Arc::new(rustx::runtime::conversation_runtime::Gate::default());
+    let release = boundary.arm_scoped();
+    composed.runtime.install_admission_gate(boundary.clone());
+    let attempt = rustx::runtime::identity::AttemptId::for_conversation(
+        &rustx::runtime::identity::ConversationId::new(label),
+        0,
+    );
+    let cancelled = composed.runtime.cancel_current_attempt(&attempt).unwrap();
+    assert_eq!(cancelled, attempt, "exactly the attempt that was running");
+    // Acceptance means both halves committed: the durable pause is already
+    // visible on this thread, with no settlement await.
+    let paused = composed
+        .runtime
+        .goal_view()
+        .unwrap()
+        .unwrap()
+        .current
+        .unwrap();
+    assert_eq!(paused.phase, rustx::goal::GoalPhase::Paused);
+    assert_eq!(
+        paused.autonomous_rounds_consumed, 1,
+        "a committed round is never refunded by a later interrupt"
+    );
+    assert_eq!(paused.reference.revision, running.reference.revision + 1);
+    assert_eq!(paused.autonomous_round_budget, 3, "budget is untouched");
+
+    // The cancelled attempt settles and the runtime reaches its next
+    // eligible idle boundary. The Paused Goal admits nothing there.
+    let entered = boundary.clone();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || entered.wait_entered()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!composed.runtime.has_current_attempt());
+    drop(release);
+    composed.runtime.admit_now_for_test();
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "no subsequent Goal round while Paused"
+    );
+    assert_eq!(
+        composed
+            .runtime
+            .goal_view()
+            .unwrap()
+            .unwrap()
+            .current
+            .unwrap(),
+        paused
+    );
+    composed.runtime.shutdown().await.unwrap();
+}
+
+/// Issue #351 requirement 11: cancelling an ordinary Human attempt never
+/// pauses an Active Goal merely because one exists.
+///
+/// The runtime decides from its own admission provenance, not from "some Goal
+/// is Active". The Human attempt is admitted while the Goal-round frontier is
+/// unreachable (pending inbound wins), so the current attempt is provably not
+/// a Goal continuation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn goal351_cancelling_an_unrelated_human_attempt_never_pauses_an_active_goal() {
+    let label = "conv_2f7c1a55-5f80-7ad1-b0c2-8a1d3e5f9b41";
+    let (_dir, tools, seeded) = goal_runtime(label, 3, None);
+    let seeded = seeded.unwrap();
+    let capability =
+        extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
+            .published()
+            .await;
+    let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
+    let mut parked = model.parked();
+    let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
+    // Park admission before its lock, accept the Human message while parked,
+    // then release: the released cycle finds pending inbound and never
+    // reaches the Goal-round frontier.
+    let gate = Arc::new(rustx::runtime::conversation_runtime::Gate::default());
+    let release = gate.arm_scoped();
+    composed.runtime.install_admission_gate(gate.clone());
+    let activating = composed.runtime.clone();
+    let activation = std::thread::spawn(move || activating.activate());
+    gate.wait_entered();
+    composed
+        .runtime
+        .submit_inbound(inbound("unused", "An ordinary Human turn").content)
+        .unwrap();
+    drop(release);
+    activation.join().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), parked.wait_for(|value| *value))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        composed
+            .runtime
+            .goal_view()
+            .unwrap()
+            .unwrap()
+            .current
+            .unwrap(),
+        seeded,
+        "the Human turn consumed no Goal round"
+    );
+
+    // Park the settlement-driven admission so the assertions below observe a
+    // stable cut instead of racing the next eligible idle boundary.
+    let after = Arc::new(rustx::runtime::conversation_runtime::Gate::default());
+    let release = after.arm_scoped();
+    composed.runtime.install_admission_gate(after.clone());
+    let attempt = rustx::runtime::identity::AttemptId::for_conversation(
+        &rustx::runtime::identity::ConversationId::new(label),
+        0,
+    );
+    composed.runtime.cancel_current_attempt(&attempt).unwrap();
+    let entered = after.clone();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || entered.wait_entered()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        composed
+            .runtime
+            .goal_view()
+            .unwrap()
+            .unwrap()
+            .current
+            .unwrap(),
+        seeded,
+        "cancelling an unrelated Human attempt changed no Goal state at all"
+    );
+    drop(release);
+    composed.runtime.shutdown().await.unwrap();
+}
+
+/// Issue #351 requirement 2: a model `create_goal` inside a Human attempt
+/// starts no nested execution.
+///
+/// The tool-commit gate parks inside the durable Goal write, proving that the
+/// Human attempt is still the only attempt and that it consumed zero
+/// autonomous rounds. Continuation is admitted only after that attempt
+/// reaches the ordinary settlement/admission handoff.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn goal351_model_create_goal_starts_no_nested_attempt_and_continues_after_settlement() {
+    let label = "conv_3a5e7d91-6b24-70ce-9d13-5c2f8b4a1e73";
+    let extensions = NativeAgentExtensions::none().and_goal();
+    let (_dir, tools) = todo_tool_runtime(label, &extensions);
+    let capability =
+        extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
+            .published()
+            .await;
+    let model = fake_model(vec![
+        tool_turn(&[goal_create_call()]),
+        stop_turn(),
+        vec![FakeStep::ParkUntilCancelled],
+    ]);
+    let mut parked = model.parked();
+    let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
+    let domain = tools.goal().unwrap().clone();
+    domain.tool_commit_gate(false).arm();
+    composed.runtime.activate();
+    composed
+        .runtime
+        .submit_inbound(inbound("unused", "Keep working until deployment succeeds").content)
+        .unwrap();
+    let waiter = domain.clone();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || waiter.tool_commit_gate(false).wait_entered()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        composed.runtime.has_current_attempt(),
+        "the Human attempt still holds the one execution slot"
+    );
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "no nested Agent Loop was started for the Goal"
+    );
+    assert_eq!(domain.view().unwrap().current, None);
+    domain.tool_commit_gate(false).release();
+
+    // The Human attempt settles; the ordinary handoff then admits the first
+    // Goal continuation through durable inbound.
+    tokio::time::timeout(Duration::from_secs(10), parked.wait_for(|value| *value))
+        .await
+        .unwrap()
+        .unwrap();
+    let requests = model.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[2].messages.iter().any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if matches!(user.kind, InboundKind::GoalContinuation(_)))));
+    let goal = domain.view().unwrap().current.unwrap();
+    assert_eq!(goal.phase, rustx::goal::GoalPhase::Active);
+    assert_eq!(
+        goal.autonomous_rounds_consumed, 1,
+        "the Human attempt charged nothing; the continuation charged one"
+    );
+    assert!(matches!(
+        goal.origin,
+        rustx::goal::GoalOrigin::HumanAttempt { .. }
+    ));
+    composed.runtime.shutdown().await.unwrap();
+}
+
+/// Issue #351 requirements 6, 7, 8 and 9.
+///
+/// Paused, Blocked and Complete each admit zero autonomous rounds at an
+/// eligible idle boundary. A single explicit Resume then restores
+/// continuation eligibility with no second operation — no arm, play or start
+/// — while Complete stays terminal and refuses Resume outright.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal351_stopped_phases_admit_nothing_and_resume_alone_restores_eligibility() {
+    for (label, mutation) in [
+        (
+            "conv_4c8b2e17-7f31-79a2-8e45-6d0a9c3b2f18",
+            rustx::goal::GoalMutation::Pause,
+        ),
+        (
+            "conv_5d9c3f28-8042-7ab3-9f56-7e1b0d4c3a29",
+            rustx::goal::GoalMutation::Block {
+                reason: "needs a human decision".into(),
+            },
+        ),
+        (
+            "conv_6eadf039-9153-7bc4-a067-8f2c1e5d4b3a",
+            rustx::goal::GoalMutation::Complete,
+        ),
+    ] {
+        let terminal = matches!(mutation, rustx::goal::GoalMutation::Complete);
+        let (_dir, tools, seeded) = goal_runtime(label, 2, Some(mutation));
+        let seeded = seeded.unwrap();
+        let capability =
+            extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
+                .published()
+                .await;
+        let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
+        let mut parked = model.parked();
+        let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
+        composed.runtime.activate();
+        composed.runtime.admit_now_for_test();
+        assert!(
+            model.requests().is_empty(),
+            "{:?} admits zero autonomous rounds",
+            seeded.phase
+        );
+        assert_eq!(
+            tools.durable_store().load_goal().unwrap(),
+            Some(seeded.clone())
+        );
+
+        let resume = rustx::goal::GoalControl::Mutate {
+            expected: seeded.reference.clone(),
+            mutation: rustx::goal::GoalMutation::Resume,
+        };
+        if terminal {
+            assert!(
+                composed.runtime.control_goal(resume).is_err(),
+                "Complete is terminal"
+            );
+            composed.runtime.admit_now_for_test();
+            assert!(model.requests().is_empty());
+        } else {
+            let resumed = composed
+                .runtime
+                .control_goal(resume)
+                .unwrap()
+                .current
+                .unwrap();
+            assert_eq!(resumed.phase, rustx::goal::GoalPhase::Active);
+            assert_eq!(resumed.blocked_reason, None, "resume clears the blocker");
+            // One operation. Nothing else is called before the continuation
+            // reaches the model through ordinary admission.
+            tokio::time::timeout(Duration::from_secs(10), parked.wait_for(|value| *value))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(model.requests().len(), 1);
+            assert!(model.requests()[0].messages.iter().any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if matches!(user.kind, InboundKind::GoalContinuation(_)))));
+        }
+        composed.runtime.shutdown().await.unwrap();
+    }
+}
+
+/// Issue #351 requirements 21, 24 and 28.
+///
+/// A Goal-round durability failure is a runtime-health fact, not a Goal
+/// intent change: the runtime's existing absorbing durability authority
+/// fences all further admission while the durable phase stays truthfully
+/// `Active`. Because the fence is absorbing, the failure cannot become a hot
+/// retry loop — repeated idle boundaries admit nothing and write nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal351_a_round_durability_failure_fences_admission_without_changing_active() {
+    let label = "conv_7fbe1140-a264-7cd5-b178-9a3d2f6e5c4b";
+    let extensions = NativeAgentExtensions::none().and_goal();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("workspace")).unwrap();
+    let store = Arc::new(
+        rustx::durable::SqliteConversationStore::in_memory(
+            rustx::runtime::identity::ConversationId::new(label),
+        )
+        .unwrap(),
+    );
+    let tools = rustx::tools::runtime::ConversationToolRuntime::from_config(
+        rustx::runtime::identity::ConversationId::new(label),
+        rustx::tools::runtime::ConversationRuntimeConfig {
+            durable_binding: Some(rustx::durable::ConversationStoreBinding::new(store.clone())),
+            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
+                dir.path().join("workspace"),
+                dir.path().join("artifacts"),
+            )
+        }
+        .with_extensions(extensions.clone()),
+    )
+    .unwrap();
+    let seeded = tools
+        .goal()
+        .unwrap()
+        .write(rustx::goal::GoalWrite::Create {
+            objective: "Deliver the objective".into(),
+            budget: 3,
+            origin: rustx::goal::GoalOrigin::RuntimeControl,
+        })
+        .unwrap()
+        .unwrap();
+    let capability =
+        extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
+            .published()
+            .await;
+    let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
+    let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
+    // Exactly one atomic Goal-round acceptance fails. Nothing else is armed,
+    // so a retry would succeed — proving the runtime does not retry.
+    store.arm_fail_accept_times(1);
+    composed.runtime.activate();
+    composed.runtime.admit_now_for_test();
+    assert!(model.requests().is_empty());
+    assert_eq!(
+        store.load_goal().unwrap(),
+        Some(seeded.clone()),
+        "durable Goal intent is untouched by a runtime-health failure"
+    );
+    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        composed.runtime.idle_epoch(),
+        Err(rustx::runtime::conversation_runtime::IdleBusyReason::Durability),
+        "the absorbing durability fence closed admission"
+    );
+    // Repeated eligible boundaries change nothing: no round, no durable
+    // write, no hot loop.
+    for _ in 0..8 {
+        composed.runtime.admit_now_for_test();
+    }
+    assert!(model.requests().is_empty());
+    assert_eq!(store.load_goal().unwrap(), Some(seeded));
+    composed.runtime.shutdown().await.ok();
+}
+
+/// Issue #351 requirement 28: hiding internal Goal command tools from the
+/// primary product surface never erases their diagnostic provenance. The
+/// runtime's own Trace/debug projection still names the exact native Tool
+/// identity behind a semantic Goal transition.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal351_trace_still_identifies_the_exact_native_goal_tools() {
+    let extensions = NativeAgentExtensions::none().and_goal();
+    let (_dir, tools) = todo_tool_runtime("conv_8a0cf251-b375-7de6-9289-ab4e3a7f6d5c", &extensions);
+    let model = fake_model(vec![
+        tool_turn(&[goal_create_call()]),
+        tool_turn(&[goal_complete_call()]),
+        vec![FakeStep::ParkUntilCancelled],
+    ]);
+    let mut parked = model.parked();
+    let capability =
+        extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
+            .published()
+            .await;
+    let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
+    let host = rustx::runtime_client::RuntimeClientHost::new(
+        rustx::runtime_client::RuntimeClientHostConfig {
+            runtime: composed.runtime.clone(),
+            replay_limit: None,
+        },
+    )
+    .unwrap();
+    composed.runtime.activate();
+    composed
+        .runtime
+        .submit_inbound(inbound("unused", "Keep working until deployment succeeds").content)
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), parked.wait_for(|value| *value))
+        .await
+        .unwrap()
+        .unwrap();
+    let snapshot = host.snapshot().unwrap().0;
+    let traced: Vec<_> = snapshot
+        .trace
+        .entries
+        .iter()
+        .filter_map(|record| record.tool.as_ref())
+        .map(|tool| tool.tool_id.as_str().to_owned())
+        .collect();
+    for tool_id in ["native.create_goal", "native.update_goal"] {
+        assert!(
+            traced.iter().any(|id| id == tool_id),
+            "Trace must still identify {tool_id}: {traced:?}"
+        );
+    }
+    // The product-facing Goal surface, meanwhile, carries the semantic
+    // transition those tools produced — not the tool names.
+    assert_eq!(
+        snapshot.goal.unwrap().current.unwrap().phase,
+        rustx::goal::GoalPhase::Complete
+    );
+    composed.runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn goal351_model_mutation_and_drain_have_one_owned_commit_order() {
     for inside in [false, true] {
         for update in [false, true] {
             let extensions = NativeAgentExtensions::none().and_goal();
@@ -3112,7 +3716,6 @@ async fn goal84_model_mutation_and_drain_have_one_owned_commit_order() {
                     .unwrap()
                     .unwrap();
             }
-            tools.goal().unwrap().disarm();
             let call = if update {
                 ScriptedCall {
                     id: "complete",
@@ -3136,12 +3739,25 @@ async fn goal84_model_mutation_and_drain_have_one_owned_commit_order() {
                 .install_drain_signals(arrival.clone(), linearized.clone());
             let domain = tools.goal().unwrap().clone();
             domain.tool_commit_gate(inside).arm();
-            // The seed is explicitly disarmed; only this Human attempt runs.
-            composed.runtime.activate();
+            // Issue #351 requirement 18: accepted Human inbound wins over
+            // automatic Goal continuation. The admission gate parks the
+            // coordinator before it takes its lock, the Human message is
+            // durably accepted while it is parked, and the released
+            // admission therefore finds a non-empty pending batch — the Goal
+            // round frontier is never even reached, so this Human attempt is
+            // the only attempt that runs.
+            let gate = Arc::new(rustx::runtime::conversation_runtime::Gate::default());
+            let release = gate.arm_scoped();
+            composed.runtime.install_admission_gate(gate.clone());
+            let activating = composed.runtime.clone();
+            let activation = std::thread::spawn(move || activating.activate());
+            gate.wait_entered();
             composed
                 .runtime
                 .submit_inbound(inbound("unused", "Keep working until delivery").content)
                 .unwrap();
+            drop(release);
+            activation.join().unwrap();
             let waiter = domain.clone();
             tokio::time::timeout(
                 Duration::from_secs(10),
@@ -3167,7 +3783,6 @@ async fn goal84_model_mutation_and_drain_have_one_owned_commit_order() {
                 .unwrap()
                 .unwrap();
             let view = domain.view().unwrap();
-            assert!(!view.armed);
             if update {
                 let goal = view.current.unwrap();
                 assert_eq!(goal.reference.revision, if inside { 2 } else { 1 });

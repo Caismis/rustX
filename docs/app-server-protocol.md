@@ -517,13 +517,16 @@ eligibility excludes current attempts, compaction, accepted pending inbound,
 recovery continuation, pending interactions, background preparation/execution,
 unsettled subagents, and counted lifecycle owners (including Workflow,
 capability/MCP preparation, interaction callback authority and attempt tasks).
-Goal capability presence does not pin residency. The native GoalDomain's
-process-local armed activation owns authority to admit future autonomous work
-and blocks idle eviction. Enabled-but-inactive, recovered/disarmed, paused,
-blocked and completed Goals do not independently block eviction. Recovery starts
-activation disarmed. Goal create/resume commits through the existing native
-lifecycle boundary and changes its epoch; a stale idle probe cannot cross a
-later activation, even if that Goal disarms again before eviction claims.
+Goal capability presence does not pin residency. A composed Goal that is durably
+`Active` with autonomous budget remaining owns authority to admit future
+autonomous work and blocks idle eviction, because evicting it would race its own
+eligible continuation. An uncomposed extension, an absent Goal, paused, blocked,
+completed, and an `Active` Goal whose autonomous budget is exhausted do not
+independently block eviction — so an exhausted Goal cannot pin residency forever.
+Recovery restores the durable phase; opening the runtime is what lets an Active
+Goal continue. Goal create/resume commits through the existing native lifecycle
+boundary and changes its epoch, so a stale idle probe cannot cross a later
+continuation authorization.
 
 The native admission change token is invalidation only, not a second work-state
 registry. The reaper reads native owners outside the registry lock. At eviction
@@ -662,6 +665,35 @@ product Retry may branch, attach the exact returned node/Conversation, then subm
 that content once through `turn/start`. It must stop after any uncertain mutation
 response, without repeating the branch or admission. No command interpreter or
 additional retry endpoint is involved. These are the merged #319 v4 semantics.
+
+## Goal lifecycle (Issue #351)
+
+`GoalView` is `{ current: GoalSnapshot | null }`. Durable `GoalPhase` is the one
+product-visible Goal lifecycle authority:
+
+```text
+Active   = continuation is authorized when runtime admission is eligible
+Paused   = continuation is not authorized
+Blocked  = continuation is not authorized
+Complete = terminal
+```
+
+The obsolete `GoalView.armed` member and every activation-only observation are
+removed, so no snapshot and no `goal_changed` event can represent
+`Active + disarmed`. Native Runtime Client version 39 carries this vocabulary;
+version 38 clients are rejected by strict negotiation. This remains mandatory
+App Server protocol v6, with no compatibility field and no activation mode.
+
+Clients derive presentation from the phase alone: `Active` offers Pause,
+`Paused` and `Blocked` offer Resume, and there is no separate Play/arm control
+and no "Inactive Goal". `goal/control` `create` and `mutate` are the typed
+control path; a client never sends a model request to create, pause, resume,
+edit or re-budget a Goal, and never issues a second operation after Resume.
+
+Attach, reconnect and snapshot reads remain observations. None is an
+independent start authority: only explicitly opening/activating the runtime
+lets a durably Active Goal continue, at its first eligible safe idle admission
+boundary.
 
 ## Exact pending inbound controls (WEB-06)
 

@@ -978,7 +978,7 @@
     {
       "upstream": "packages/client/ui-goal/src/client/GoalBar.tsx",
       "destination": "web-console/src/app/composer/GoalDock.tsx",
-      "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds rustX GoalView armed flag, adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control",
+      "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds the rustX durable GoalPhase as the sole lifecycle authority (one Pause-or-Resume control, no activation flag), adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control",
       "upstream_sha256": "fcd9ec77f6e40cf4220a883f276d59be5641768a606ff128a5aa209222a637fa",
       "retained_dependencies": [
         "../../../../protocol/app-server/v6",
@@ -992,12 +992,13 @@
       "excluded_dependencies": [
         "dsh-goal client projection and GoalActivation source",
         "Remote goal reads and activation events",
+        "Upstream activation/armed rendering: rustX has no Goal activation state (Issue #351)",
         "Harness Tooltip and icon set",
         "Cordis slot injection",
         "clear/tombstone control"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "8e8798662911fd7fe1ad279131981eaab0a75c980ae0e7e34bc53848b4d4a64e"
+      "local_sha256": "4ea72fcf37d4911e18477c98f8084d44e0251bcecd731624797b322fcb7285ef"
     },
     {
       "upstream": "packages/client/ui-goal/src/client/GoalBar.module.css",
@@ -1910,7 +1911,7 @@
       "destination": "web-console/src/presentation/agent/ToolCard.tsx",
       "upstream_sha256": "df1dbc9771459eb5160a42d28fd284a54ff66b306562a2a3528bd717e42454f4",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
+      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. retain native Tool diagnostic identity independently of Goal display labels",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../primitives/DisclosureRow",
@@ -1926,7 +1927,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "fed9bf7a062a71865ef5d96eb40f1eff6e720fb6e55d50e4e78d37bef5f9d262"
+      "local_sha256": "75350fd0e9aa1a0e2c412bea885709444b26e4b14814e3e67e33e8dae6476442"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",

@@ -49,7 +49,8 @@ use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProg
 pub enum RuntimeClientEvent {
     /// Presentation invalidation only; fetch an authoritative snapshot.
     TraceChanged,
-    /// Bounded authoritative Goal view, including activation-only changes.
+    /// Bounded authoritative durable Goal view. Every emission follows a
+    /// committed durable transition; there is no activation-only form.
     GoalChanged { view: crate::goal::GoalView },
     /// Complete bounded replacement at one native Workflow revision.
     WorkflowsUpdated {

@@ -1288,7 +1288,11 @@ export type ContextKind =
       agent_status: AgentStatusGenerationMetadata;
     };
 /**
- * Durable phase, independent of automatic continuation activation.
+ * The single durable Goal lifecycle authority.
+ *
+ * - `Active`: continuation is authorized when runtime admission is eligible.
+ * - `Paused` / `Blocked`: continuation is not authorized.
+ * - `Complete`: terminal.
  */
 export type GoalPhase = 'active' | 'paused' | 'blocked' | 'complete';
 /**
@@ -5441,11 +5445,17 @@ export interface QuestionnaireSubmission1 {
   answers: QuestionnaireAnswerEntry[];
 }
 /**
- * The current read model; observing it never arms continuation.
+ * The current read model; observing it never starts or authorizes work.
+ *
+ * The wrapper is retained deliberately, not to minimize a diff: an
+ * `Option<GoalView>` distinguishes *the Goal extension is not composed*
+ * (`None`) from *composed with no current Goal* (`Some` with `current:
+ * None`). A bare `Option<Option<GoalSnapshot>>` cannot spell that
+ * distinction on the wire. It carries durable state only — there is no
+ * activation member, so `Active + inert` is unrepresentable.
  */
 export interface GoalView {
   current?: GoalSnapshot | null;
-  armed: boolean;
 }
 /**
  * The external background execution read model.
@@ -6354,7 +6364,8 @@ export interface RuntimeClientSnapshot {
    */
   todos?: TodoSnapshot | null;
   /**
-   * Goal read model at this projection cursor; absent when disabled. Journal facts never reconstruct it.
+   * Durable Goal read model at this projection cursor; absent when the
+   * extension is not composed. Journal facts never reconstruct it.
    */
   goal?: GoalView | null;
 }

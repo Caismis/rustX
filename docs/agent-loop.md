@@ -25,9 +25,14 @@ or explicit client Goal creation. This bounded restart limitation is detailed in
 Goal rounds enter as `InboundKind::GoalContinuation(GoalRef)` through ordinary
 durable Pending Inbound. The existing coordinator selects/adopts them and admits
 the ordinary Agent Loop. At idle, its synchronous GoalRoundDriver may request one
-round only when armed, Active, under budget, and without pending inbound or owned
-background/Subagent work. [Goal extension](goal-extension.md) specifies the atomic
-acceptance/accounting transaction and recovery/cancellation/drain behavior.
+round when the composed Goal is durably `Active`, under budget, and there is no
+pending inbound and no owned background/Subagent work. `GoalPhase::Active` **is**
+durable authorization to continue when runtime admission becomes eligible; there
+is no activation precondition and no separate arm step. Runtime stopped is not
+Goal paused — drain leaves `Active` intact — while explicit interruption of an
+autonomous active Goal attempt durably pauses the Goal and requests cancellation
+of that attempt. [Goal extension](goal-extension.md) specifies the atomic
+acceptance/accounting transaction and the recovery/interrupt/drain contracts.
 
 This document describes the runtime boundary implemented by the M3
 deterministic agent loop, mirroring the M2 model-plane documentation in
