@@ -131,11 +131,12 @@ pub struct AgentProfileDocument {
     pub agents: Vec<SubagentName>,
     #[serde(default)]
     pub workflows: Vec<WorkflowId>,
-    /// The bounded model-facing routing description.
-    #[serde(default)]
+    /// The bounded model-facing routing description. Empty defaults stay omitted
+    /// in native source projections and complete-resource serialization.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     /// Explicit primary Agent instructions authored as TOML data.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub instructions: String,
     /// The explicit model this agent runs on. Omit to inherit the invoking
     /// attempt's frozen effective model configuration.

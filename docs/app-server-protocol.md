@@ -855,3 +855,11 @@ source intent, not loaded/attempt authority. Source writes remain revision-CAS
 semantic-unit mutations. Explicit Reload publishes the generation; active attempts
 retain `attempt.execution_settings.approval_mode`. `effective_approval_mode` remains
 the loaded runtime fact. Neither field introduces a Session approval override.
+
+### Root metadata authoring (#347)
+
+`configuration/sourceWrite` accepts native `ConfigMutation` units
+`agent_identity` (`AgentId | null`) and `description` (`string | null`). They address
+independent Root metadata scalars through the same revision/CAS, validation,
+serialization and Save-versus-Reload boundary as `instructions`. `null` removes
+the authored unit in that scope. Clients never write whole config documents.

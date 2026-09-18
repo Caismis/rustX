@@ -632,6 +632,14 @@ export type ConfigMutation =
       unit: 'workflows';
     }
   | {
+      authored?: AgentId | null;
+      unit: 'agent_identity';
+    }
+  | {
+      authored?: string | null;
+      unit: 'description';
+    }
+  | {
       authored?: string | null;
       unit: 'instructions';
     }
@@ -808,6 +816,10 @@ export type AgentSkillSelection = AllTools | string[];
  * configuration boundary rather than normalized later.
  */
 export type SubagentName = string;
+/**
+ * Identifies an agent.
+ */
+export type AgentId = string;
 export type SummaryOutput =
   | {
       mode: 'model_limit';
@@ -2132,10 +2144,6 @@ export type CredentialSourceView =
       variable: string;
       type: 'environment';
     };
-/**
- * Identifies an agent.
- */
-export type AgentId = string;
 /**
  * Values are never included: provenance cannot expose credentials or environment values.
  */
@@ -3533,7 +3541,8 @@ export interface AgentProfileDocument {
   agents?: SubagentName[];
   workflows?: WorkflowId[];
   /**
-   * The bounded model-facing routing description.
+   * The bounded model-facing routing description. Empty defaults stay omitted
+   * in native source projections and complete-resource serialization.
    */
   description?: string;
   /**
@@ -4890,7 +4899,7 @@ export interface UserMessageBlock {
     | {
         agent: {
           /**
-           * Identity of the sending agent.
+           * Identifies an agent.
            */
           agent_id: string;
         };
@@ -5632,7 +5641,7 @@ export interface RuntimeClientSubagent {
    */
   subagent_id: string;
   /**
-   * The child agent identity (the provenance its answer carries).
+   * Identifies an agent.
    */
   child_agent_id: string;
   /**
@@ -6131,7 +6140,7 @@ export interface UserMessageBlock1 {
     | {
         agent: {
           /**
-           * Identity of the sending agent.
+           * Identifies an agent.
            */
           agent_id: string;
         };
@@ -6981,7 +6990,7 @@ export interface UserMessageBlock2 {
     | {
         agent: {
           /**
-           * Identity of the sending agent.
+           * Identifies an agent.
            */
           agent_id: string;
         };
@@ -8518,7 +8527,7 @@ export interface UserMessageBlock3 {
     | {
         agent: {
           /**
-           * Identity of the sending agent.
+           * Identifies an agent.
            */
           agent_id: string;
         };
@@ -8634,7 +8643,7 @@ export interface RuntimeClientSubagent1 {
    */
   subagent_id: string;
   /**
-   * The child agent identity (the provenance its answer carries).
+   * Identifies an agent.
    */
   child_agent_id: string;
   /**

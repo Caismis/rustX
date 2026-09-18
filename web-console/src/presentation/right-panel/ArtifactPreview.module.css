@@ -1,0 +1,8 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted TextPreview header/body/wrap; see PROVENANCE.md. */
+.preview { display: flex; flex: 1 1 auto; flex-direction: column; height: 100%; min-height: 0; }
+.header { display: flex; flex: 0 0 auto; gap: 4px; align-items: center; box-sizing: border-box; min-height: 38px; padding: 0 6px 0 16px; border-bottom: .5px solid var(--dsw-alias-border-l3); }
+.header strong { flex: 1; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.body { flex: 1 1 auto; min-height: 0; max-height: none; margin: 0; padding: 12px; overflow: auto; color: var(--dsw-alias-label-primary); font-family: var(--ds-font-family-code), monospace; font-size: 13px; line-height: 1.6; white-space: pre; }
+.body[data-wrap=true] { white-space: pre-wrap; overflow-wrap: anywhere; }
+.image { max-width: 100%; object-fit: contain; }
+.preview > :is(p, a, div) { padding: 10px 16px; font-size: 13px; }

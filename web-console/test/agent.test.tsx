@@ -8,7 +8,7 @@ import { Interactions } from '../src/app/agent/Interactions';
 import { Tool } from '../src/app/agent/Tool';
 import { RpcFailure } from '../src/client/app-server';
 import { toolCard } from '../src/bindings/tools';
-import { cfg3Effective, cfg3Source } from './cfg3-fixture';
+import { cfg3Effective, cfg3Source } from './cfg3-data';
 import { Server, snapshot, interaction } from './fixture';
 let server: Server;
 beforeEach(() => { server = new Server(); });

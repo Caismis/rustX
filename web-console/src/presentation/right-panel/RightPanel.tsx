@@ -7,7 +7,7 @@ export function RightPanel({ open, close, width, canShow, title, children }: {
 }) {
   return <aside className={css.panel} aria-label={title} inert={!open} data-sidebar-right-open={open || undefined}
     data-sidebar-right-panel={!canShow ? 'fullscreen' : 'normal'} style={{ width: canShow ? width : '100%' }}>
-    <header className={css.extensionHeader}><strong>{title}</strong><Button onClick={close} aria-label="Close Inspector">×</Button></header>
+    <header className={css.extensionHeader}><strong>{title}</strong><Button onClick={close} aria-label={title === 'Developer inspector' ? 'Close Inspector' : `Close ${title}`}>×</Button></header>
     <div className={css.extensionBody}>{children}</div>
   </aside>;
 }

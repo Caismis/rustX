@@ -44,7 +44,6 @@ test('CFG3 committed write and reload response loss reconstructs native state wi
     await reconnect();
     await settings.getByRole('tab', { name: 'User', exact: true }).click();
     await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();
-    await settings.getByRole('button', { name: 'Edit Model fixture/console-model', exact: true }).click();
     await expect(settings.getByLabel('Context window')).toHaveValue('250000');
     expect(writes()).toHaveLength(2);
     await settings.getByRole('button', { name: 'MCP', exact: true }).click();

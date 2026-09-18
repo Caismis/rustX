@@ -3159,6 +3159,48 @@
           "type": "object",
           "properties": {
             "authored": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AgentId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "unit": {
+              "type": "string",
+              "const": "agent_identity"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "unit"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "authored": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "unit": {
+              "type": "string",
+              "const": "description"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "unit"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "authored": {
               "type": [
                 "string",
                 "null"
@@ -4119,6 +4161,10 @@
       "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
       "type": "string"
     },
+    "AgentId": {
+      "description": "Identifies an agent.",
+      "type": "string"
+    },
     "AgentProjectInstructionsDocument": {
       "description": "Project-instruction selection from admitted workspace resources.",
       "type": "object",
@@ -4476,14 +4522,12 @@
           "default": []
         },
         "description": {
-          "description": "The bounded model-facing routing description.",
-          "type": "string",
-          "default": ""
+          "description": "The bounded model-facing routing description. Empty defaults stay omitted\nin native source projections and complete-resource serialization.",
+          "type": "string"
         },
         "instructions": {
           "description": "Explicit primary Agent instructions authored as TOML data.",
-          "type": "string",
-          "default": ""
+          "type": "string"
         },
         "model": {
           "description": "The explicit model this agent runs on. Omit to inherit the invoking\nattempt's frozen effective model configuration.",
@@ -8146,10 +8190,6 @@
           "additionalProperties": false
         }
       ]
-    },
-    "AgentId": {
-      "description": "Identifies an agent.",
-      "type": "string"
     },
     "CertifiedExtensionIdentity": {
       "description": "The stable logical key of one certified extension.\n\nPackage/content attestation is intentionally not part of this type.  A\npackage may be upgraded while preserving its logical ordering identity;\nthe assembly generation records the attestation separately.",

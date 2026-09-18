@@ -1,15 +1,20 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { CapabilityInspection, EffectiveConfiguration, SourceSettings, SourceMutation, SourceScope } from '../../../../protocol/app-server/v6';
+import type { EffectiveConfiguration, SourceSettings, SourceMutation, SourceScope } from '../../../../protocol/app-server/v6';
 import { RpcFailure, isOutcomeUncertain, type AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
+import { ResourceInventory } from './ResourceInventory';
+import { NativeFacts } from '../components/NativeFacts';
+import { Badge, Facts, SettingsCard } from '../../presentation/settings/SettingsContent';
 import { CatalogEditor } from './CatalogEditor';
 import { AgentEditor } from './AgentEditor';
 import { Integrations } from './Integrations';
 import { RootEditor, type RootSection } from './RootEditor';
 import { RuntimeEditor } from './RuntimeEditor';
 import type { SaveSource } from './controls';
-import css from './Settings.module.css';
+import css from '../../presentation/settings/SettingsContent.module.css';
+import { SettingsDrafts } from './drafts';
+import { navigateTabs } from '../../presentation/primitives/tabs';
 import { SettingsPanel } from '../../presentation/settings/SettingsRoot';
 
 const sections = [
@@ -32,13 +37,13 @@ function nativeDiagnostic(cause: unknown): string {
   return cause.error.message;
 }
 
-export function Settings({ client, sessionId, onClose = () => {}, theme = 'light', setTheme, onConnection }: { client: AppServerClient; sessionId?: string; onClose?: () => void; theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void; onConnection?: () => void }) {
+function SettingsContent({ client, sessionId, onClose = () => {}, theme = 'light', setTheme, onConnection }: { client: AppServerClient; sessionId?: string; onClose?: () => void; theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void; onConnection?: () => void }) {
   const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const target = sessionId ? transport.views[sessionId]?.target : undefined;
   const [scope, setScope] = useState<'effective' | SourceScope>('effective'), [section, setSection] = useState<Section>('overview');
   const [source, setSource] = useState<SourceSettings>(), [effective, setEffective] = useState<EffectiveConfiguration>();
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
-  const writing = useRef(false), epoch = useRef(0);
+  const writing = useRef(false), epoch = useRef(0), readSequence = useRef(0);
   const read = useCallback(async () => {
     if (!sessionId) return { source: undefined, effective: undefined };
     const [authored, published] = await Promise.all([
@@ -47,24 +52,30 @@ export function Settings({ client, sessionId, onClose = () => {}, theme = 'light
     ]);
     return { source: authored.projection, effective: published?.projection };
   }, [client, sessionId, target]);
-  const refresh = useCallback(async () => {
-    const at = epoch.current;
-    const next = await read();
-    if (at === epoch.current) { setSource(next.source); setEffective(next.effective); }
-    return next;
+  const refresh = useCallback(async (reportFailure = false) => {
+    const at = epoch.current, sequence = ++readSequence.current;
+    try {
+      const next = await read();
+      if (at === epoch.current && sequence === readSequence.current) { setSource(next.source); setEffective(next.effective); }
+      return next;
+    } catch (cause) {
+      if (reportFailure && at === epoch.current && sequence === readSequence.current) setError(nativeDiagnostic(cause));
+      throw cause;
+    }
   }, [read]);
   useEffect(() => {
-    const at = ++epoch.current;
-    void read().then(next => { if (epoch.current === at) { setSource(next.source); setEffective(next.effective); } }).catch(cause => { if (epoch.current === at) setError(nativeDiagnostic(cause)); });
+    const at = ++epoch.current, sequence = ++readSequence.current;
+    void read().then(next => { if (epoch.current === at && sequence === readSequence.current) { setSource(next.source); setEffective(next.effective); } }).catch(cause => { if (epoch.current === at && sequence === readSequence.current) setError(nativeDiagnostic(cause)); });
     return () => { ++epoch.current; };
   }, [read, transport.generation]);
   const save: SaveSource = async (mutation, expected_revision) => {
-    if (writing.current) return undefined;
+    if (writing.current || transport.connection !== 'connected') return undefined;
     writing.current = true; setBusy(true); setError(''); setMessage('');
     const at = epoch.current;
     try {
       const result = await client.request({ method: 'configuration/sourceWrite', params: { session_id: sessionId!, expected_revision, mutation } }, 'source_settings');
       if (at !== epoch.current) return undefined;
+      ++readSequence.current; // A read begun before this commit cannot replace its acknowledgement.
       setSource(result.projection);
       setMessage('Source saved. The loaded runtime is unchanged; Reload publishes a new generation.');
       return sourceRevision(result.projection, mutation);
@@ -77,7 +88,7 @@ export function Settings({ client, sessionId, onClose = () => {}, theme = 'light
     } finally { writing.current = false; setBusy(false); }
   };
   const reload = async () => {
-    if (!target || writing.current) return;
+    if (!target || writing.current || transport.connection !== 'connected') return;
     const at = epoch.current, old = effective?.generation;
     let published = false;
     writing.current = true; setBusy(true); setError(''); setMessage('');
@@ -97,19 +108,20 @@ export function Settings({ client, sessionId, onClose = () => {}, theme = 'light
       }
     } finally { writing.current = false; setBusy(false); }
   };
-  const frame = (children: import('react').ReactNode) => <SettingsPanel rows={[{ id: 'appearance', label: 'Appearance' }, ...sections.map(([id, label]) => ({ id, label }))]} activeId={section} onSelect={id => setSection(id as Section)} onClose={onClose} actions={onConnection && <Button onClick={onConnection}>Connection</Button>}>{children}</SettingsPanel>;
-  if (section === 'appearance') return frame(<section><h2>Appearance</h2><label>Theme<select aria-label="Theme" value={theme} onChange={event => setTheme?.(event.target.value as 'light' | 'dark')}><option value="light">Light</option><option value="dark">Dark</option></select></label></section>);
-  if (!source) return frame(<section className={css.settings} aria-label="Settings">{error ? <p role="alert">{error}</p> : <p role="status">{sessionId ? 'Loading configuration…' : 'Open a Session to inspect its native configuration.'}</p>}<Button onClick={() => void refresh().catch(cause => setError(nativeDiagnostic(cause)))}>Read current sources</Button></section>);
+  const frame = (children: import('react').ReactNode) => <SettingsPanel rows={[{ id: 'appearance', label: 'Appearance' }, ...sections.map(([id, label, group]) => ({ id, label, group }))]} activeId={section} onSelect={id => setSection(id as Section)} onClose={onClose} actions={onConnection && <Button onClick={onConnection}>Connection</Button>}>{children}</SettingsPanel>;
+  if (section === 'appearance') return frame(<section className={css.settings}><h2>Appearance</h2><p className={css.hint}>Presentation preferences are saved in this browser. Runtime configuration remains native.</p><label>Theme<select aria-label="Theme" value={theme} onChange={event => setTheme?.(event.target.value as 'light' | 'dark')}><option value="light">Light</option><option value="dark">Dark</option></select></label></section>);
+  if (!source) return frame(<section className={css.settings} aria-label="Settings">{error ? <p role="alert">{error}</p> : <p role="status">{sessionId ? 'Loading configuration…' : 'Open a Session to inspect its native configuration.'}</p>}<Button onClick={() => void refresh(true).catch(() => { /* Current failures are reported inside the read fence. */ })}>Read current sources</Button></section>);
   const selected = scope === 'effective' ? undefined : source[scope];
-  const models = Object.keys(effective?.document.models ?? {});
+  const models = [...new Set([...Object.keys(effective?.document.models ?? {}), ...Object.keys(source.user.authored?.models ?? {}), ...Object.keys(source.workspace.authored?.models ?? {})])];
   const roots = [`${source.user_resource_root}/skills`, `${source.workspace_resource_root}/skills`];
   return frame(<section className={css.settings} aria-label="Settings" aria-busy={busy}>
-    <header><h2>Configuration</h2><Button disabled={busy} onClick={() => void refresh().catch(cause => setError(nativeDiagnostic(cause)))}>Read current sources</Button></header>
-    <div role="tablist" aria-label="Configuration scope" className={css.tabs}>{(['effective', 'user', 'workspace'] as const).map(value => <button key={value} role="tab" aria-selected={scope === value} onClick={() => setScope(value)}>{value[0].toUpperCase() + value.slice(1)}</button>)}</div>
+    <header><h2>{sections.find(([id]) => id === section)?.[1]}</h2><Button disabled={busy} onClick={() => void refresh(true).catch(() => { /* Current failures are reported inside the read fence. */ })}>Read current sources</Button></header>
+    <div role="tablist" aria-label="Configuration scope" className={css.tabs} onKeyDown={navigateTabs}>{(['effective', 'user', 'workspace'] as const).map(value => <button key={value} role="tab" tabIndex={scope === value ? 0 : -1} aria-selected={scope === value} onClick={() => setScope(value)}>{value[0].toUpperCase() + value.slice(1)}</button>)}</div>
       <div className={css.content}>
         <div className={css.generation}><span>Runtime generation {effective?.generation ?? source.loaded?.generation ?? 'not loaded'} · {source.loaded?.pending_reload ? 'Pending reload' : 'Sources unchanged'}</span><Button variant="primary" disabled={busy || !target} onClick={() => void reload()}>Reload</Button></div>
+        {transport.connection !== 'connected' && <p role="status">Connection {transport.connection}. Values are the last native observation; drafts are retained. Reconnect rereads authority without replaying mutations.</p>}
         {message && <p role="status">{message}</p>}{error && <p className={css.error} role="alert">{error}</p>}
-        <h3>{sections.find(([id]) => id === section)?.[1]}</h3>
+
         {selected && <><p className={css.hint}>{scope === 'user' ? 'User' : 'Workspace'} source: {selected.path}<br />Revision: {selected.revision}</p>{selected.diagnostic && <p role="alert">{selected.diagnostic}</p>}<p className={css.hint}>Edits contain authored intent only. Remove a unit to expose the lower scope; save an empty selection to select none.</p></>}
         {scope === 'effective' ? effective ? <EffectiveView value={effective} source={source} section={section} /> : <p>Attach to a loaded Session to inspect its published configuration.</p> : <fieldset disabled={busy} className={css.editor}>
           {section === 'catalog' && <CatalogEditor key={scope} document={selected?.authored ?? {}} scope={scope} revision={selected!.revision} save={save} />}
@@ -122,20 +134,20 @@ export function Settings({ client, sessionId, onClose = () => {}, theme = 'light
           {section === 'overview' && <p>User &lt; Workspace resolution applies native semantic units. Save commits authored bytes. Reload publishes a complete runtime generation. Restart rereads current files and process bindings.</p>}
           {section === 'advanced' && <details><summary>Authored source facts (redacted)</summary><pre>{JSON.stringify(selected?.authored, null, 2)}</pre></details>}
         </fieldset>}
-        <footer><h4>Source paths</h4><dl><dt>User config</dt><dd>{source.user.path}</dd><dt>User resources</dt><dd>{source.user_resource_root}</dd><dt>Workspace config</dt><dd>{source.workspace.path}</dd><dt>Workspace resources</dt><dd>{source.workspace_resource_root}</dd><dt>Runtime root</dt><dd>{source.runtime_root} · fixed for this process</dd></dl></footer>
+        <footer><details><summary>Source paths</summary><dl><dt>User config</dt><dd>{source.user.path}</dd><dt>User resources</dt><dd>{source.user_resource_root}</dd><dt>Workspace config</dt><dd>{source.workspace.path}</dd><dt>Workspace resources</dt><dd>{source.workspace_resource_root}</dd><dt>Runtime root</dt><dd>{source.runtime_root} · fixed for this process</dd></dl></details></footer>
       </div>
   </section>);
 }
 function EffectiveView({ value, source, section }: { value: EffectiveConfiguration; source: SourceSettings; section: Section }) {
   return <section aria-label="Effective configuration"><p>Read-only published configuration · generation {value.generation}</p>
     {section === 'overview' && <dl><dt>Root default model</dt><dd>{value.root_agent.model?.model}</dd><dt>Session explicit model</dt><dd>{value.session_model?.model ?? 'None'}</dd><dt>Effective model</dt><dd>{value.effective_model.effective.model}</dd><dt>Admitted Attempt</dt><dd>{value.admitted_attempt ? `${value.admitted_attempt.attempt} · generation ${value.admitted_attempt.generation} · ${value.admitted_attempt.model.effective.model}` : 'None'}</dd></dl>}
-    {section === 'overview' && value.admitted_attempt && <details><summary>Admitted Attempt resources · frozen generation {value.admitted_attempt.generation}</summary><pre>{JSON.stringify(value.admitted_attempt.resources.main, null, 2)}</pre></details>}
-    {section === 'catalog' && <><h4>Providers</h4><table><thead><tr><th>Identity</th><th>Endpoint</th><th>Origin</th></tr></thead><tbody>{Object.entries(value.document.providers ?? {}).map(([id, provider]) => <tr key={id}><td>{id}</td><td>{provider.base_url}</td><td><Origin value={value} field={`providers.${id}`} /></td></tr>)}</tbody></table><h4>Models</h4><table><thead><tr><th>Identity</th><th>Provider</th><th>Wire model</th><th>Origin</th></tr></thead><tbody>{Object.entries(value.document.models ?? {}).map(([id, model]) => <tr key={id}><td>{id}</td><td>{model.provider}</td><td>{model.id}</td><td><Origin value={value} field={`models.${id}`} /></td></tr>)}</tbody></table></>}
-    {section.startsWith('root-') && <><RootFacts value={value} section={section} />{section === 'root-skills' && <p>Prompt visibility, not filesystem access.<br />User Skill root: {source.user_resource_root}/skills<br />Workspace Skill root: {source.workspace_resource_root}/skills</p>}</>}
-    {section === 'general' && <dl><dt>Approval mode</dt><dd>{value.approval_mode}</dd><dt>Context</dt><dd>{JSON.stringify(value.context)}</dd><dt>Model timeout</dt><dd>{JSON.stringify(value.model_timeout)}</dd><dt>Tool deadline</dt><dd>{JSON.stringify(value.tool_deadline)}</dd><dt>Child capacity</dt><dd>{value.child_capacity.maxConcurrent}</dd></dl>}
+    {section === 'overview' && value.admitted_attempt && <details><summary>Admitted Attempt resources · frozen generation {value.admitted_attempt.generation}</summary><NativeFacts value={value.admitted_attempt.resources.main} /></details>}
+    {section === 'catalog' && <><h4>Providers</h4><div className={css.rows}>{Object.entries(value.document.providers ?? {}).map(([id, provider]) => <SettingsCard key={id} title={id} meta={<Badge><Origin value={value} field={`providers.${id}`} /></Badge>}><Facts rows={[["Endpoint", provider.base_url], ["Credential source", provider.credential.type === 'environment' ? `Environment: ${provider.credential.variable}` : 'Literal secret (redacted)']]} /></SettingsCard>)}</div><h4>Models</h4><div className={css.rows}>{Object.entries(value.document.models ?? {}).map(([id, model]) => <SettingsCard key={id} title={id} meta={<Badge><Origin value={value} field={`models.${id}`} /></Badge>}><NativeFacts value={model} /></SettingsCard>)}</div></>}
+    {section.startsWith('root-') && <><RootFacts value={value} section={section} /><details><summary>Prepared Root capabilities and native diagnostics</summary><NativeFacts value={value.resources.main} /></details>{section === 'root-skills' && <p>Prompt visibility, not filesystem access.<br />User Skill root: {source.user_resource_root}/skills<br />Workspace Skill root: {source.workspace_resource_root}/skills</p>}</>}
+    {section === 'general' && <><Facts rows={[["Root identity", value.document.agent_id], ["Root description", value.root_agent.description], ["Instructions", value.root_agent.instructions], ["Approval mode", value.approval_mode]]} />{Object.entries({ Context: value.context, 'Model timeout': value.model_timeout, 'Tool deadline': value.tool_deadline, 'Subagent capacity': value.child_capacity, 'Authored environment': value.document.environment }).map(([title, fact]) => <SettingsCard key={title} title={title}><NativeFacts value={fact} /></SettingsCard>)}<SettingsCard title="App Server process policy"><p>User-only · restart required. Authored policy below is not evidence of a live process change.</p><NativeFacts value={source.user.authored?.app_server} /></SettingsCard></>}
     {section === 'policies' && <table><thead><tr><th>Tool</th><th>Execution</th><th>Concurrency</th><th>Approval</th><th>Policy origin</th></tr></thead><tbody>{value.available_tools.map(tool => <tr key={tool.id}><td>{tool.name}</td><td>{JSON.stringify(tool.execution_policy)}</td><td>{JSON.stringify(tool.concurrency_policy)}</td><td>{JSON.stringify(tool.approval_policy)}</td><td><Origin value={value} field={tool.origin === 'builtin' ? `native_tools.${tool.name}` : 'mcp' in tool.origin ? `mcp_tool_policies.${tool.origin.mcp.server_id}` : 'python-native-policy'} /></td></tr>)}</tbody></table>}
     {['mcp', 'python', 'skills', 'agents', 'workflows'].includes(section) && <ResourceInventory resources={value.resources} family={section} />}
-    {section === 'advanced' && <><h4>Diagnostics</h4>{value.resources.resource_diagnostics.map((diagnostic, index) => <p key={index}>{diagnostic.identity}: {diagnostic.reason} {diagnostic.file}</p>)}<details><summary>Native provenance and source revisions</summary><pre>{JSON.stringify({ provenance: value.provenance, source_revisions: value.source_revisions }, null, 2)}</pre></details></>}
+    {section === 'advanced' && <><h4>Diagnostics</h4>{value.resources.resource_diagnostics.map((diagnostic, index) => <p key={index}>{diagnostic.identity}: {diagnostic.reason} {diagnostic.file}</p>)}<details open><summary>Native provenance and source revisions</summary><NativeFacts value={{ provenance: value.provenance, source_revisions: value.source_revisions }} /></details></>}
   </section>;
 }
 function RootFacts({ value, section }: { value: EffectiveConfiguration; section: Section }) {
@@ -146,20 +158,9 @@ function RootFacts({ value, section }: { value: EffectiveConfiguration; section:
     : section === 'root-skills' ? [['Skill prompt visibility', root.skills ?? [], 'agent.skills']]
     : section === 'root-agents' ? [['Named Agents', root.agents ?? [], 'agent.agents'], ['Workflows', root.workflows ?? [], 'agent.workflows']]
     : [['Model', root.model, 'agent.model'], ['Instructions', root.instructions, 'agent.instructions'], ['Project guidance', root.agents_md, 'agent.agents_md']];
-  return <dl>{facts.map(([name, fact, field]) => <div key={field}><dt>{name}</dt><dd>{typeof fact === 'string' ? fact : JSON.stringify(fact)} · <Origin value={value} field={field} /></dd></div>)}</dl>;
+  return <dl>{facts.map(([name, fact, field]) => <div key={field}><dt>{name}</dt><dd>{<NativeFacts value={fact} />} · <Origin value={value} field={field} /></dd></div>)}</dl>;
 }
 function Origin({ value, field }: { value: EffectiveConfiguration; field: string }) { const origin = value.provenance[field]; return <span>{origin ? origin.kind === 'builtin' ? 'Product default' : origin.kind === 'process' ? 'Process binding' : `${origin.kind}: ${origin.document}` : 'Native domain default'}</span>; }
-function ResourceInventory({ resources, family, scope }: { resources: CapabilityInspection; family: string; scope?: SourceScope }) {
-  const nativeFamily = ({ agents: 'agent', workflows: 'workflow', python: 'managed_python', skills: 'skill', mcp: 'mcp' } as const)[family as 'agents' | 'workflows' | 'python' | 'skills' | 'mcp'];
-  const entries = resources.definitions.filter(entry => entry.family === nativeFamily && (!scope || entry.location.scope === scope || (scope === 'user' && entry.location.shadowed != null)));
-  return <ul>{entries.map(entry => {
-    if (scope === 'user' && entry.location.scope === 'workspace') return <li key={entry.name}>{entry.name} · user · {entry.location.shadowed} · Shadowed by Workspace · {entry.location.path}</li>;
-    const sourceId = entry.family === 'managed_python' ? `python:${entry.name}` : entry.name;
-    const selected = entry.family === 'skill' ? resources.main?.skills.some(skill => skill.name === entry.name)
-      : entry.family === 'agent' ? resources.main?.agents.includes(entry.name)
-      : entry.family === 'workflow' ? resources.main?.workflows.includes(entry.name)
-      : resources.main?.tool_selection.some(selection => selection.origin !== 'builtin' && selection.source_id === sourceId);
-    const readiness = entry.family === 'mcp' || entry.family === 'managed_python' ? resources.sources[sourceId]?.status ?? 'unprepared' : entry.family === 'workflow' ? resources.workflows[entry.name]?.status : undefined;
-    return <li key={entry.name}>{entry.name} · {entry.location.scope} · {entry.location.path} · {entry.valid ? 'Valid definition' : 'Invalid definition'} · {selected ? entry.family === 'skill' ? 'Root visible' : 'Root selected' : 'Defined only'}{readiness && ` · ${readiness}`}{entry.location.shadowed && <p>Shadows {entry.location.shadowed}</p>}</li>;
-  })}</ul>;
+export function Settings(props: Parameters<typeof SettingsContent>[0]) {
+  return <SettingsDrafts key={props.sessionId}><SettingsContent {...props} /></SettingsDrafts>;
 }

@@ -208,7 +208,6 @@ bounded reused capabilities, not a second Agent presentation architecture.
 | `src/workspaces/WorkspaceNavigation.tsx` | `packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx` |
 | `src/app/settings/Settings.tsx` | `packages/client/ui-settings-general/src/client/SettingsRoot.tsx` |
 | `src/app/settings/CatalogEditor.tsx` | `packages/client/ui-settings-models/src/client/ProviderEditor.tsx` |
-| `src/app/settings/Settings.module.css` | `packages/client/ui-settings-models/src/client/ModelsSection.module.css` |
 | `src/app/settings/Integrations.tsx` | `packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx` |
 
 ## Inspected-only current dependencies
@@ -302,3 +301,36 @@ node scripts/provenance.ts --reference /path/to/deepseek-harness
 It compares original bytes using `git show <recorded-commit>:<recorded-path>`.
 Neither this command nor normal validation fetches, syncs or executes Harness.
 There is no automatic upstream-sync framework.
+
+## WEB-RESET-03 Settings and native auxiliary surfaces
+
+The same immutable `ddefc45fbc7f8e46dd73185e68295696d1297887` baseline supplies:
+
+- `presentation/settings/SettingsContent.module.css`: adapted ModelsSection
+  outlined Provider rows/filled detail editor, Plugin field styles, and inventory
+  badges/diagnostics. It replaces the deleted app Settings sheet.
+- `presentation/primitives/Switch.tsx` and `.module.css`: controlled accessible
+  toggle and token-based appearance, with the retained MIT notice.
+- `presentation/right-panel/ArtifactPreview.module.css`: bounded adaptation of
+  TextPreview header, scroll body and wrap treatment. Host filesystem operations,
+  registry, resource store, slots, automatic reload and binary renderer framework
+  are excluded. The TS preview component is rustX-authored.
+
+The existing SettingsRoot gains optional section grouping, and the existing
+RightPanel gains occupant-appropriate close labels. The current ToolCard preserves
+exact native Tool names separately from display labels when reconciling #351.
+Native Settings adapters retain their historical attribution and record their
+new modifications; they are not relabelled as freshly copied upstream code.
+`SettingsContent.tsx`, ResourceInventory, NativeFacts, draft ownership and native
+artifact adapters are rustX-authored composition/props, not copied Harness sources.
+
+Every changed derived destination has an explicit treatment update and local hash.
+Upstream hashes remain immutable. Normal checks/builds read checked-in source only;
+`node scripts/provenance.ts --reference /tmp/rustx-345-harness` additionally audits
+against the clean pinned external checkout. No upstream synchronization was added.
+
+The PR #357 review repair keeps the same pins. `Settings.tsx` records symmetric
+read-result/error fencing, and `Integrations.tsx` records the new pure rustX MCP
+transport display adapter. Their reviewed local hashes/imports were updated
+explicitly. Shared Summary controls in `AgentEditor.tsx` and `bindings/mcp.ts`
+are rustX-authored; no additional Harness source or business authority was imported.

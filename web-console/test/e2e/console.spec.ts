@@ -80,7 +80,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.locator('.status strong')).toHaveText('connected'); await showInspector(page);
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     await reload(); await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
-    const incarnationA = JSON.parse(await page.getByLabel('Runtime facts').innerText()).runtime_incarnation;
+    const incarnationA = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).runtime_incarnation;
     await page.getByRole('button', { name: `Close view ${idA}` }).click();
     await expect(page.getByRole('tab', { name: idA, exact: true })).toHaveCount(0);
     await expect(page.locator(`button[data-session-id="${idA}"]`)).toHaveAttribute('title', /detached/i);
@@ -89,7 +89,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await fixture.control('observations/await?kind=response_completed&count=2&timeoutMs=30000');
     await page.locator(`button[data-session-id="${idA}"]`).click();
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
-    expect(JSON.parse(await page.getByLabel('Runtime facts').innerText()).runtime_incarnation).toBe(incarnationA);
+    expect(JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).runtime_incarnation).toBe(incarnationA);
     // Alternate more than the native 32-attachment capacity on one connection.
     // Every close is acknowledged as detached, and every reopen keeps residency.
     for (let i = 0; i < 34; i++) {
@@ -102,10 +102,10 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     }
     await page.getByRole('tab', { name: idA, exact: true }).click();
     await send('Approval please'); await expect(page.getByRole('button', { name: 'Allow once' })).toBeEnabled();
-    const pendingApproval = JSON.parse(await page.getByLabel('Runtime facts').innerText()).pending_interactions[0].interaction;
+    const pendingApproval = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).pending_interactions[0].interaction;
     await connectionAction(page, 'Disconnect'); await reload();
     await expect(page.getByRole('button', { name: 'Allow once' })).toBeEnabled();
-    expect(JSON.parse(await page.getByLabel('Runtime facts').innerText()).pending_interactions[0].interaction).toEqual(pendingApproval);
+    expect(JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).pending_interactions[0].interaction).toEqual(pendingApproval);
     await page.getByRole('button', { name: 'Allow once' }).click();
     // Observe the real provider continuation before asserting its presentation.
     // Native Tool completion and provider response completion are separate boundaries.
@@ -129,14 +129,14 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByRole('region', { name: 'Questionnaire' })).toBeVisible();
     await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit answers' }).click();
     await expect(page.getByText('Detached question completed.', { exact: true })).toBeVisible();
-    await expect(page.getByLabel('Runtime facts')).toContainText('console-model');
+    await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
     fixture.writeSettings('second-model');
     await page.getByRole('button', { name: 'Resync', exact: true }).click();
-    await expect(page.getByLabel('Runtime facts')).toContainText('console-model');
+    await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
     await page.getByRole('button', { name: 'Unload runtime', exact: true }).click();
     await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('unloaded');
     await page.getByRole('button', { name: 'Attach / cold resume' }).click();
-    await expect(page.getByLabel('Runtime facts')).toContainText('second-model');
+    await expect(page.getByLabel('Native diagnostic JSON')).toContainText('second-model');
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
     await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText(fixture.workspaceA);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('second-model');

@@ -1131,6 +1131,7 @@ fn named_agent_save_validates_complete_definition_before_committing() {
     let name = rustx::runtime::subagent::SubagentName::parse("reviewer").unwrap();
     let mut profile = rustx::local_runtime::config::AgentProfileDocument {
         description: "Review changes".into(),
+        instructions: "x".repeat(64 * 1024 + 1),
         ..Default::default()
     };
     let mutation = |authored| SourceMutation::Agent {
@@ -1204,4 +1205,82 @@ fn agent_permission_projection_uses_native_resolution_and_source_cas() {
             .prospective_approval_mode,
         None
     );
+}
+
+#[test]
+fn named_agent_optional_text_survives_independent_complete_profile_edits() {
+    use rustx::local_runtime::configuration::settings::{SourceMutation, SourceScope};
+    use rustx::runtime::subagent::SubagentName;
+    for text in ["", "description = 'Review'\n", "instructions = 'Inspect'\n"] {
+        let root = tempfile::tempdir().unwrap();
+        let (host, request) = sources(root.path(), &format!("{PROVIDER}{MODEL}{ROOT}"), "");
+        let (owner, input) = request.session_input(&host).unwrap();
+        let path = input.cwd.join(".agents/agents/optional.toml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, text).unwrap();
+        let before = owner.read_source_settings(&input).unwrap();
+        let definition_is_valid =
+            |source: &rustx::local_runtime::configuration::settings::SourceSettings| {
+                source
+                    .prospective_resources
+                    .as_ref()
+                    .unwrap()
+                    .definitions
+                    .iter()
+                    .any(|entry| entry.name == "optional" && entry.valid)
+            };
+        assert!(definition_is_valid(&before));
+        let source = &before
+            .agents
+            .iter()
+            .find(|agent| agent.name.as_str() == "optional")
+            .unwrap()
+            .source;
+        let mut profile = source.authored.clone().unwrap();
+        let original_text = (profile.description.clone(), profile.instructions.clone());
+        let projected = serde_json::to_value(&profile).unwrap();
+        assert_eq!(
+            projected.get("description").is_some(),
+            !original_text.0.is_empty()
+        );
+        assert_eq!(
+            projected.get("instructions").is_some(),
+            !original_text.1.is_empty()
+        );
+        profile.tools.builtin = vec!["read".into()];
+        let saved = owner
+            .write_source_settings(
+                &input,
+                &source.revision,
+                SourceMutation::Agent {
+                    scope: SourceScope::Workspace,
+                    name: SubagentName::parse("optional").unwrap(),
+                    authored: Some(profile),
+                },
+            )
+            .unwrap();
+        assert!(definition_is_valid(&saved));
+        let saved_source = &saved
+            .agents
+            .iter()
+            .find(|agent| agent.name.as_str() == "optional")
+            .unwrap()
+            .source;
+        assert_ne!(saved_source.revision, source.revision);
+        let saved_profile = saved_source.authored.as_ref().unwrap();
+        assert_eq!(
+            (&saved_profile.description, &saved_profile.instructions),
+            (&original_text.0, &original_text.1)
+        );
+        assert_eq!(saved_profile.tools.builtin, ["read"]);
+        let saved_text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            saved_text.contains("description ="),
+            !original_text.0.is_empty()
+        );
+        assert_eq!(
+            saved_text.contains("instructions ="),
+            !original_text.1.is_empty()
+        );
+    }
 }

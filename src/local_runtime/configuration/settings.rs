@@ -212,6 +212,12 @@ pub enum ConfigMutation {
     Workflows {
         authored: Option<Vec<crate::runtime::workflow::WorkflowId>>,
     },
+    AgentIdentity {
+        authored: Option<crate::runtime::identity::AgentId>,
+    },
+    Description {
+        authored: Option<String>,
+    },
     Instructions {
         authored: Option<String>,
     },
@@ -535,6 +541,10 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
         }
         M::Agents { authored } => document.agent.get_or_insert_default().agents = authored,
         M::Workflows { authored } => document.agent.get_or_insert_default().workflows = authored,
+        M::AgentIdentity { authored } => document.agent_id = authored,
+        M::Description { authored } => {
+            document.agent.get_or_insert_default().description = authored;
+        }
         M::Instructions { authored } => {
             document.agent.get_or_insert_default().instructions = authored;
         }

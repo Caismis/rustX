@@ -439,12 +439,10 @@
       "description": "The project-instruction policy of this agent."
     },
     "description": {
-      "default": "",
-      "description": "The bounded model-facing routing description.",
+      "description": "The bounded model-facing routing description. Empty defaults stay omitted\nin native source projections and complete-resource serialization.",
       "type": "string"
     },
     "instructions": {
-      "default": "",
       "description": "Explicit primary Agent instructions authored as TOML data.",
       "type": "string"
     },

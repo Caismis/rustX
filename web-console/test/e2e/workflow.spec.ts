@@ -30,6 +30,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     const childId = await child.getAttribute('data-subagent-id');
     const runId = await run.getAttribute('data-workflow-run-id');
     await expect(run).toContainText('review_pr');
+    await page.screenshot({ path: test.info().outputPath('native-workflow-subagent.png') });
     await page.reload(); await connect();
     await expect(child).toHaveAttribute('data-subagent-id', childId!);
     await expect(run).toHaveAttribute('data-workflow-run-id', runId!);
@@ -51,11 +52,12 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(settings).toContainText('reviewer');
     await settings.getByRole('button', { name: 'Workflows', exact: true }).click();
     await expect(settings).toContainText('review_pr');
+    await settings.screenshot({ path: test.info().outputPath('native-workflow-inventory.png') });
     await settings.getByRole('button', { name: 'Skills', exact: true }).click();
     await expect(settings).toContainText('acceptance');
     await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
     await settings.getByRole('button', { name: 'Agents & Workflows', exact: true }).click();
-    await settings.getByLabel('workflows', { exact: true }).fill('');
+    await settings.getByRole('button', { name: 'Remove workflows 1', exact: true }).click();
     await settings.getByRole('button', { name: 'Save Workflow allowlist', exact: true }).click();
     await expect(settings.getByText(/Source saved. The loaded runtime/)).toBeVisible();
     expect(readFileSync(workflowPath, 'utf8')).toBe(workflow);

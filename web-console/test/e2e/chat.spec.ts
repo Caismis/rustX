@@ -6,6 +6,7 @@ import { AppServerHost } from '../../../tui/src/app-server/host';
 
 test('native history, rich settlement, real image decode/lightbox, reconnect and native upload receipts', async ({ page }) => {
   const fixture = await startDogfood('web_chat_history');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.addInitScript(() => {
     const urls = new Set<string>();
     const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);
@@ -148,6 +149,15 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     expect(await urlCount()).toBe(0);
     await decode();
     expect(await urlCount()).toBe(1);
+    await canonical.getByRole('button', { name: /^Preview / }).click();
+    const preview = page.getByRole('complementary', { name: 'Artifact preview', exact: true });
+    await expect(preview.getByRole('img')).toBeVisible();
+    await expect.poll(() => preview.getByRole('img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+    expect(await urlCount()).toBe(2);
+    expect(await preview.evaluate(el => el.getBoundingClientRect().right <= innerWidth && el.getBoundingClientRect().left >= 0)).toBe(true);
+    await page.screenshot({ path: 'test-results/native-artifact-preview.png' });
+    await preview.getByRole('button', { name: 'Close Artifact preview' }).click();
+    await expect.poll(urlCount).toBe(1);
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     await expect.poll(urlCount).toBe(0);
     await trajectory.getByLabel('Search loaded Trace').fill('chat-image');

@@ -163,3 +163,14 @@ it.each(['picker', 'drop', 'paste'] as const)('explicitly refuses a second %s se
   expect(ui.getByRole('button', { name: 'Remove second.txt' })).toBeTruthy();
   expect(ui.queryByRole('alert')).toBeNull();
 });
+
+it('reads inert text preview through the bounded native artifact API without allocating a URL', async () => {
+  await server.attached('A'); server.held.add('artifact/read');
+  const resources = new ArtifactResources(server.client, 'A');
+  const read = resources.readText('report');
+  server.socket.success(server.requests.at(-1)!.request, { type: 'artifact_bytes', data: btoa('<script>inert</script>') });
+  expect(await read).toBe('<script>inert</script>'); expect(create).not.toHaveBeenCalled();
+  const obsolete = resources.readText('late'); resources.dispose();
+  server.socket.success(server.requests.at(-1)!.request, { type: 'artifact_bytes', data: 'aGk=' });
+  await expect(obsolete).rejects.toThrow('Obsolete');
+});
