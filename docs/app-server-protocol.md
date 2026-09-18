@@ -1,8 +1,8 @@
 # App Server protocol v8
 
 App Server v8 identifies one complete mandatory vocabulary, including exact
-`session/summary`. v6 initialization and WebSocket admission are rejected; there
-is no downgrade or compatibility path.
+`session/summary`. v7 and all earlier initialization and WebSocket admission
+versions are rejected; there is no downgrade or compatibility path.
 
 The App Server protocol is rustX's public client boundary for the TUI,
 Developer Web Console, future Web UI, and SDKs. Rust DTOs in
@@ -218,7 +218,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v7; pipeline individual requests instead. This limitation is
+supported in v8; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -232,7 +232,6 @@ explicitly rejected as an invalid request before any action occurs.
 | `session/deletePreview`, `session/delete`, `session/recoverDeletion` | Native revision-confirmed deletion/recovery; no client-supplied cleanup workset |
 | `session/attach`, `session/detach` | Load/reuse a runtime and acquire/release its external control attachment |
 | `session/switchNode` | Switch to a selected branch; manager owns retirement and composition |
-| `session/restart` | Reconstruct the current branch from current composition configuration |
 | `session/snapshot`, `session/subscribe`, `session/transcript`, `session/boundaries` | Authoritative projection, bounded replay, durable transcript and revision-bound user-message pages |
 | `turn/start`, `turn/steer`, `turn/cancel` | Native inbound and attempt-cancellation owners; acceptance is not terminal execution |
 | `interaction/respond`, `interaction/cancel` | Originating runtime/coordinator, including routed child interactions |
@@ -682,7 +681,7 @@ Complete = terminal
 
 The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
-`Active + disarmed`. Native Runtime Client version 39 carries this vocabulary;
+`Active + disarmed`. Native Runtime Client version 40 carries this vocabulary;
 version 38 clients are rejected by strict negotiation. This remains mandatory
 App Server protocol v8, with no compatibility field and no activation mode.
 

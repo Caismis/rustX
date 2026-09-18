@@ -162,8 +162,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v7 (`rustx.app-server.v8` and generated
-`protocol/app-server/v8.ts` / `v8.schema.json`). v1 initialization and v1-only
+The mandatory App Server vocabulary is v8 (`rustx.app-server.v8` and generated
+`protocol/app-server/v8.ts` / `v8.schema.json`). v7 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 

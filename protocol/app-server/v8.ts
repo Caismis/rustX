@@ -32,12 +32,6 @@ export type Request1 =
       };
     }
   | {
-      method: 'session/restart';
-      params: {
-        target: AttachmentTarget;
-      };
-    }
-  | {
       method: 'session/switchNode';
       params: {
         target: AttachmentTarget;

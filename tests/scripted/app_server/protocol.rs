@@ -559,7 +559,7 @@ async fn cancelled_attach_releases_reservation_but_not_manager_owned_load() {
             flight.clone()
         };
         probe.before_compose.release();
-        let resident = flight.wait().await.unwrap().unwrap();
+        let resident = flight.wait().await.operation_result().unwrap().unwrap();
         assert_eq!(
             f.manager.residency(resident.conversation_id()),
             super::ResidencyState::Loaded

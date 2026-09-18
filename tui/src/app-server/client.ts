@@ -135,7 +135,6 @@ export class UncertainOutcomeError extends Error {
 /** Every generated method must deliberately classify a lost response. */
 export type ResponseLossClass = "read" | "side_effecting" | "connection_local";
 export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
-  "session/restart": "side_effecting",
   "session/switchNode": "side_effecting",
   "session/transcript": "read",
   "session/trace": "read",

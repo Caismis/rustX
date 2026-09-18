@@ -95,9 +95,6 @@ pub enum Method {
         target: AttachmentTarget,
         files: Vec<UploadBytes>,
     },
-    /// Reconstruct the current Session composition from current configuration.
-    #[serde(rename = "session/restart")]
-    SessionRestart { target: AttachmentTarget },
     #[serde(rename = "session/switchNode")]
     SessionSwitchNode {
         target: AttachmentTarget,

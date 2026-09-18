@@ -298,6 +298,19 @@ impl SessionController {
     ) -> Result<SessionAccess, SessionError> {
         self.catalog.lock().await.acquire_session(id, node)
     }
+    /// Resolve durable identity without taking allocation authority. The runtime
+    /// manager must register its flight before acquiring the selected allocation.
+    pub(crate) async fn resolve_session_target(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+    ) -> Result<SessionNode, SessionError> {
+        self.catalog
+            .lock()
+            .await
+            .lineage(id, node)
+            .map(|(node, _)| node)
+    }
     /// Explicit cold storage recovery for one Session's graph and owned children.
     /// Never performed by opening, listing or reading the catalog.
     /// # Errors
@@ -638,6 +651,8 @@ impl SessionController {
     }
     /// # Errors
     /// A pre-visibility catalog error leaves the Session live.
+    // Durable primitive: production callers must be SessionRuntimeManager after
+    // writer-absence proof. Direct callers in tests isolate catalog durability.
     pub(crate) async fn delete_session(
         &self,
         id: &SessionId,

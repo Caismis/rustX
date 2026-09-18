@@ -46,20 +46,19 @@ resurrection even if physical cleanup remains pending.
 
 | Boundary | Authority and exact cut |
 | --- | --- |
-| Load claim | Registry mutex: Session admission check, `by_session` claim and `Entry::Loading` installation in one critical section. |
+| Load claim | Allocation-free durable identity resolution, then registry mutex: Session admission check, `by_session` claim and `Entry::Loading` installation. Only the registered flight acquires ConversationAccess. |
 | Runtime publication | `TerminalGuard::finish`, under that same mutex: fence check and Loaded/ready publication. A fenced candidate instead enters Unloading on the original flight. |
 | Runtime operation | `ManagedRuntimeClient::admit_operation`: same mutex checks fence/current incarnation and increments the operation lease count. |
 | Attach | Operation admission plus same-mutex current/fence validation and pin acquisition; existing host route publication/connection-close cut remains authoritative. |
 | Loaded → Unloading | Manager registry claim; native coordinator Running → Draining then owns execution cancellation/settlement. |
-| Replacement/restart | Same registry claim and terminal publication; exact-incarnation restart rechecks its target at the claim. Branch switching internally retires the addressed incarnation then performs normal fenced admission for the selected node. |
+| Replacement | Same registry claim and terminal publication. Branch switching internally retires the addressed incarnation then performs normal fenced admission for the selected node. |
 | Idle eviction | Existing epoch-validated native idle claim and registry transition; deletion joins that flight. |
 | Delete admission | Session-ID insertion in `retiring_sessions` under the registry mutex, including when no Conversation entry exists. |
 | Preview | Ownership snapshot acquired before finite durable graph/revision derivation; no allocation exclusions retained. |
 | Destructive authority | Last successful sorted `ConversationExclusion` acquisition, after managed writer retirement. |
 | Logical/durable deletion | Existing catalog generation CAS and atomic rename publish live removal plus frozen cleanup record; file/parent barriers prove durability before cleanup. |
 
-No registry lock spans native shutdown, storage traversal or cleanup. Load/replacement
-waiters drop their redundant allocation handles before awaiting the owner flight.
+No registry lock spans native shutdown, storage traversal or cleanup. Load/replacement waiters acquire no allocation handles.
 No App Server mutex or UI state grants deletion authority.
 
 ## Deterministic concurrency evidence
@@ -74,7 +73,7 @@ no sleeps establish a race winner. Liveness timeouts only fail tests.
 | Active native attempt | `deletion_settles_an_active_native_attempt`: provider response is parked after request arrival. Native shutdown-arrival and Running → Draining notifications are installed. | Delete invokes native drain while provider remains parked; successful completion releases the runtime before durable removal. No bypass of native settlement. |
 | Operation first | `admitted_async_operation_drains_before_delete_releases_resources`: operation parked after manager lease admission, before native dispatch. Watch observes retirement waiting for leases. | Operation owns pre-delete settlement; deletion cannot release resources early. A later operation is rejected. |
 | Delete first / operation, attach, open | `deletion_fence_rejects_late_operation_attach_and_replacement`: deletion parked immediately after Session fence, before shutdown. | Late submission, attach, load and replacement cannot enter the old runtime. Releasing the gate permits deletion. |
-| Absent vs load | `deletion_fences_absent_session_before_a_new_load_claim`: park immediately after Session fence with no registry Conversation entry. | Delete wins; late load composes zero runtimes. B remains usable. |
+| Absent vs load | `deletion_fence_before_load_prevents_allocation_acquisition`: park immediately after Session fence with no registry Conversation entry. | Delete wins; late load composes zero runtimes. B remains usable. |
 | Loading publication | `deletion_fence_prevents_loading_publication_and_isolates_other_sessions`: composition parked after Loading claim; a second load joins; deletion parked after its fence, then composition released. | Delete wins publication. Original and joining loads return no usable writer; the candidate drains on the existing flight, deletion succeeds, and B remains usable. |
 | Replacement already claimed | `deletion_joins_replacement_without_publishing_its_candidate`: replacement parked after Unloading claim, before native shutdown; deletion then wins the Session fence. | Delete joins the transition; replacement's candidate cannot publish a usable incarnation. No second writer. |
 | Replacement after delete | `deletion_fence_rejects_late_operation_attach_and_replacement`: late replacement issued while the delete fence is parked. | Replacement claim is rejected under the same mutex. Existing ordinary replacement tests retain publication-first and stale-incarnation coverage. |
@@ -97,7 +96,7 @@ initialization/transport, fixtures, schema generation and drift checking all use
 The previous version is rejected, with no fallback.
 
 - Removed `session/unload`, its `unloaded` result, list `residencies`, and deletion blockers `current_session` / residency-only `in_use`.
-- Added semantic `session/switchNode` and `session/restart`. Restart fully reconstructs the exact addressed branch from current configuration; it never leaves the Session merely unloaded. Existing safe live configuration reload remains unchanged.
+- Added semantic `session/switchNode`. The speculative `session/restart` method was removed during review because neither product client consumes it. Internal manager replacement and safe live configuration reload remain.
 - Generated `protocol/app-server/v8.ts`, `v8.schema.json`, `fixtures.ts`, `fixtures.json`; removed v7 files under the single-current-version convention.
 - TUI: removed `/unload`, registration/help/completion, selector residency badges and switch-away deletion restriction; branch confirmation says “Switch to this branch”. Focused deletion and reconnect verification use native outcomes.
 - Web: removed public unload/advanced residency controls and `sessionResidencies`; Close view only detaches, Open Session implicitly acquires residency. Current deletion disables controls and removes the view after authoritative completion. Settings uses semantic Open/Reload wording.
@@ -106,10 +105,11 @@ The previous version is rejected, with no fallback.
 Vocabulary review classified remaining Loaded/Loading/Unloading/Unloaded references
 as internal manager/diagnostic contracts or their safety tests. Removed-method strings
 remaining in client tests are negative assertions, not registrations or compatibility
-paths. Local Runtime Client protocol history and UUIDv7 formats are unrelated to App
-Server versioning and remain unchanged.
+paths. Native Runtime Client protocol 39 → 40 removes the obsolete delete/recover
+mutations with strict version rejection. Its read-only preview remains. UUIDv7
+identity formats are unrelated to protocol versioning.
 
-## Validation commands and results
+## Initial implementation validation (reviewed head e2e1ce69)
 
 Commands run from the dedicated worktree unless a directory is shown. Repeated
 checks below report their final result; the development failures are recorded afterward.
@@ -168,3 +168,88 @@ the explicit committed-fixture regeneration test. They were not executed or clai
 as passing. Linux CI-equivalent checks ran locally; macOS CI was not run locally.
 No required Linux check was blocked by the environment. No known implementation
 follow-up is required for #359.
+
+## PR #362 ownership review corrections
+
+The load owner resolves Session/node identity without allocation access, then checks
+admission and atomically installs the Session claim and Loading flight under the
+registry mutex. Only the registered transition acquires ConversationAccess. Warm
+loads and flight joiners acquire none. Replacement follows the same boundary.
+There is no managed allocation that deletion cannot identify through the registry.
+
+Flight terminals are `Resident`, `WriterAbsent(operation_result)` and
+`RetirementUnproven(error)`. Native shutdown, projection drain and composition
+release establish the old writer-transfer proof. New composition failure preserves
+that proof; deletion can continue despite the failed operation. Shutdown uncertainty
+retains the exact Unloading slot and Session fence. No error-based registry inference
+or deletion retry substitutes for writer certainty.
+
+The obsolete native SessionDelete/SessionDeleteRecover requests, mutation mapping,
+attachment handling and supervisor dispatch are removed. The manager is the only
+production caller of SessionController's durable delete primitive. Other direct
+callers are explicitly low-level durability/ownership tests; the similarly named
+MCP transport operation concerns a remote MCP session, not a rustX Session.
+
+The speculative App Server `session/restart` API has no product caller and was
+removed from v8 and generated artifacts. Existing internal targeted replacement,
+branch switching and safe live reload retain their owners. Process acceptance now
+proves persisted selection and current-source composition across process restart.
+
+| Deterministic test | Parked boundary, winner and proof |
+| --- | --- |
+| `load_claim_is_visible_to_delete_before_allocation_acquisition` | Load parks after registry claim and before ConversationAccess. Delete joins that flight; the second load is a joiner, acquisition count is zero while parked, B remains usable. Release yields exactly one acquisition/composition, no usable writer publication and successful durable deletion. |
+| `deletion_fence_before_load_prevents_allocation_acquisition` | Delete parks after absent-Session fence. Later load is rejected with zero acquisitions/compositions; B remains usable. |
+| `deletion_joining_failed_loading_receives_proven_writer_absence` | Composition parks while holding allocation under Loading. Delete joins before injected failure. Flight returns WriterAbsent(Err), allocation/slot release precedes successful deletion, and no retirement fence remains. |
+| `deletion_joins_replacement_failure_after_proven_writer_transfer` | Replacement parks after shutdown, projection drain and old composition release, before reacquisition. Old native weak handle is gone. Delete joins; new composition fails, terminal is WriterAbsent(Err), deletion commits, and no fence remains. |
+| `deletion_retirement_failure_retains_writer_slot_and_session_fence` | Forced native settlement uncertainty returns RetirementUnproven, retains the old slot and fence, preserves durable Session, and rejects load/replacement. |
+
+The operation/attach, Loading/replacement publication, active-work settlement,
+current deletion, workspace blockers, stale confirmation and lost-response tests
+listed above remain in the full acceptance suites. The three new tests and two
+strengthened tests assert transition facts, counts and terminal outcomes without sleeps.
+
+Self-review: no managed acquisition is invisible to deletion; managed loads cannot
+produce ResourceConflict through an unregistered transition; only unproven writer
+retirement retains the fail-closed runtime fence; no native product delete mutation
+bypasses the manager; all publication/retirement paths preserve one writable incarnation.
+
+### Revision validation
+
+All commands below ran in the existing issue worktree. The latest fetch retained
+base `5d0d9ae998577cfa00a07fab1610bd1be3dce127`; no rebase was necessary.
+
+| Command | Final result |
+| --- | --- |
+| `git fetch origin` | Passed; main unchanged. |
+| `cargo check --lib --all-features` | Passed. |
+| `cargo check --all-targets --all-features` | Passed. |
+| `cargo fmt --all` | Passed. |
+| `cargo fmt --all -- --check` | Passed. |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed. |
+| `cargo test --all-targets --all-features` | 3,705 passed, zero failures, six existing ignored tests. |
+| `cargo test --lib --all-features local_runtime::session_runtime_manager::tests` | 91 passed. |
+| `cargo test --lib --all-features local_runtime::session::tests::deletion_tests` | 52 passed. |
+| `cargo test --test process --all-features app_server` | 13 passed. |
+| `cargo build --bins` | Passed. |
+| `pnpm --dir protocol/app-server generate` | Passed; v8 TypeScript/schema regenerated. |
+| `pnpm --dir protocol/app-server check` | Passed; no drift from staged artifacts. |
+| `pnpm --dir protocol/app-server typecheck` | Passed. |
+| `pnpm --dir tui typecheck` | Passed. |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | 788 passed, none skipped. |
+| `pnpm --dir web-console typecheck` | Passed. |
+| `pnpm --dir web-console test` | 432 passed in 29 files. |
+| `pnpm --dir web-console build` | Passed; existing chunk-size advisory. |
+| `pnpm --dir web-console check:provenance` | Passed; 104 source records and 100 package notices. |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | 39 passed against real App Server/Product Hosts; unchanged pinned browser references. |
+| `pnpm --dir dev typecheck` | Passed. |
+| `pnpm --dir dev test` | 30 passed. |
+| `uv run --frozen --directory test-support/fake-provider pytest` | 51 passed. |
+| `git diff --check` | Passed. |
+
+Intermediate checks caught remaining references to the removed restart method and
+old Flight Result access, a singleton fixture loop rejected by Clippy, and two
+future-version rejection expectations still using native version 40. Those were
+corrected; the checks and full Rust suite above were rerun successfully. No tests
+were skipped, timeouts increased or synchronization weakened to obtain a pass.
+The existing six ignored tests remain the credential probes/fixture regeneration
+listed above. macOS validation runs in CI, not this Linux worktree.

@@ -38,8 +38,8 @@ gates and committed observations establish ordering.
 | B: ordinary local TUI | TUI `runs Session A while Session B is visible…` and child/focus tests | Typed client/focus; same PID, no cancel/unload call, authoritative resync; explicit child drain on exit |
 | C: external disconnect | Same process test as A | Connection detach observed with zero external attachments; provider released, root execution settles while detached; reconnect sees result once |
 | D: interactions | Browser `console.spec.ts`; scripted `headless_approval_and_questionnaire_survive_detach_and_settle_once` and `adapter_disconnect_cannot_settle_approval_or_questionnaire` | Native coordinator; same pending identity after reconnect, exact continuation count; provider gate permits headless publication; stdio EOF cannot settle |
-| E: canonical sources | Process `app_server_current_sources_persisted_selection_and_targeted_cold_replacement` | Resolver + Session settings; TOML edit after provider admission, live/admitted A frozen, cold B sees edit, cold A combines current defaults and explicit model |
-| F: target replacement | Same process configuration test; scripted `replacement_waits_for_active_attempt_task_and_changes_only_incarnation_a`, `unload_claim_rejects_late_operations_and_old_incarnations` | Manager writer claim and endpoint fence; semantic reconstruction completes before reattach, only A incarnation changes; native gates prove no second writer |
+| E: canonical sources | Process `app_server_current_sources_and_persisted_selection_survive_process_reconstruction` | Resolver + Session settings; TOML edit after provider admission, live/admitted A frozen, cold B sees edit, cold A combines current defaults and explicit model |
+| F: target replacement | Scripted `replacement_waits_for_active_attempt_task_and_changes_only_incarnation_a`, `unload_claim_rejects_late_operations_and_old_incarnations` | Manager writer claim and endpoint fence; semantic reconstruction completes before reattach, only A incarnation changes; native gates prove no second writer |
 | G: idle unload | Scripted `idle_grace_detach_eviction_cold_resume_and_session_independence` | Existing manual clock + unload claim; durable list/read/settings/history survive; B remains resident |
 | H: two users/processes | Reference-host process test above | Separate native controllers/roots/config/env; real tool cwd and environment, per-process catalog/read, B death leaves gated A alive |
 | I: transport parity | `tests/support/app_server_conformance.rs::representative_scenario` through direct/stdio/WebSocket; TUI parity | Same DTO version, model/domain vocabulary, snapshot/event transitions and stale attachment rejection |
@@ -133,8 +133,9 @@ raw protocol log and Runtime facts panel to inspect attachment/incarnation/curso
 and authoritative state; never resubmit a mutation merely because its reply was lost.
 
 Edit the printed canonical TOML source after a runtime is loaded. Resync must keep
-that runtime's composition. Use the existing configuration reload owner, or reconstruct with `session/restart`
-when composition requires it to see current defaults plus persisted selections.
+that runtime's composition. Use the existing configuration reload owner for safe
+live changes. Composition-only changes take effect on reconstruction by the
+process owner, using current defaults plus persisted selections.
 To dogfood automatic idle residency, configure `[app_server] idle_grace_ms` before
 server startup, detach every view/controller of an idle Session, and inspect
 `server/diagnostics` until it reports unloaded. The catalog remains visible and a

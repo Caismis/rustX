@@ -524,34 +524,14 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
     else {
         panic!("finite deletion preview");
     };
-    let response = endpoint
-        .handle_request_async(RuntimeClientRequest::SessionDelete {
-            id: RequestId::new(4),
-            session_id: b.id.clone(),
-            expected_target_revision: preview.target_revision,
-        })
-        .await;
-    assert!(matches!(
-        response.result,
-        Some(RuntimeClientResult::SessionDeletion {
-            result: SessionDeleteResult::Deleted { .. }
-        })
-    ));
-    assert!(!database.exists());
-    assert_eq!(
-        emulator.requests().await.len(),
-        1,
-        "deletion emits no model request"
+    assert_eq!(preview.session_id, b.id);
+    assert!(
+        database.exists(),
+        "read-only native inspection preserves the Session"
     );
+    assert_eq!(emulator.requests().await.len(), 1);
     assert_eq!(product.supervisor().current().await.unwrap().id, a.id);
     assert!(product.runtime().is_activated());
-    assert!(
-        product
-            .supervisor()
-            .select(b.id.clone(), None)
-            .await
-            .is_err()
-    );
     product.runtime().shutdown().await.unwrap();
     emulator.finish().await;
 }

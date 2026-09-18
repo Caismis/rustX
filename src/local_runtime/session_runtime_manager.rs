@@ -81,7 +81,27 @@ fn error(e: impl std::fmt::Display) -> RuntimeManagerError {
     RuntimeManagerError::TransitionFailed(e.to_string())
 }
 
-type Outcome = Result<Option<Arc<ManagedRuntime>>, RuntimeManagerError>;
+/// Operation failure is independent of writer retirement certainty.
+#[derive(Clone, Debug)]
+enum Outcome {
+    Resident(Arc<ManagedRuntime>),
+    WriterAbsent(Result<(), RuntimeManagerError>),
+    RetirementUnproven(RuntimeManagerError),
+}
+impl Outcome {
+    fn operation_result(self) -> Result<Option<Arc<ManagedRuntime>>, RuntimeManagerError> {
+        match self {
+            Self::Resident(runtime) => Ok(Some(runtime)),
+            Self::WriterAbsent(result) => result.map(|()| None),
+            Self::RetirementUnproven(error) => Err(error),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+enum WriterCertainty {
+    Absent,
+    Unproven,
+}
 type CompositionOutcome = Result<Option<Arc<ResidentRuntime>>, RuntimeManagerError>;
 
 #[derive(Debug)]
@@ -112,7 +132,6 @@ impl Flight {
 #[derive(Debug)]
 pub struct ManagedRuntime {
     conversation: ConversationId,
-    node: SessionNodeId,
     incarnation: RuntimeIncarnationId,
     workspace_identity: String,
     resident: Weak<ResidentRuntime>,
@@ -1015,9 +1034,13 @@ impl SessionRuntimeManager {
                 .await;
         }
         if let Some(id) = resident {
-            self.unload(&id).await?;
+            match self.retire(&id).await {
+                Outcome::WriterAbsent(_) => {} // Composition errors cannot undo absence proof.
+                Outcome::RetirementUnproven(error) => return Err(error),
+                Outcome::Resident(_) => unreachable!("retirement joins every published writer"),
+            }
         }
-        // A successful unload is proof, not a timeout. Only now may catalog
+        // WriterAbsent is proof even if composition failed. Only now may catalog
         // deletion acquire destructive Conversation exclusion.
         let result = self
             .sessions
@@ -1050,14 +1073,14 @@ impl SessionRuntimeManager {
         node: Option<&SessionNodeId>,
     ) -> Result<Arc<ManagedRuntime>, RuntimeManagerError> {
         loop {
-            // Native allocation exclusion precedes trusting cold settings. No
-            // catalog guard survives this call. Warm loads never resolve config.
-            let access = self
+            // Identity resolution takes no ConversationAccess. Only a registered
+            // flight may acquire allocation authority and compose a runtime.
+            let target = self
                 .sessions
-                .acquire_session(session, node)
+                .resolve_session_target(session, node)
                 .await
                 .map_err(error)?;
-            let id = access.node.conversation_id.clone();
+            let id = target.conversation_id.clone();
             #[cfg(test)]
             let id_for_probe = id.clone();
             let flight = {
@@ -1066,9 +1089,6 @@ impl SessionRuntimeManager {
                 match registry.entries.get(&id) {
                     Some(Entry::Loaded(runtime)) => return Ok(runtime.identity.clone()),
                     Some(Entry::Loading(flight) | Entry::Unloading { flight, .. }) => {
-                        // The flight owns allocation access. A waiter must not
-                        // retain a redundant handle across retirement proof.
-                        drop(access);
                         flight.clone()
                     }
                     None => {
@@ -1081,14 +1101,14 @@ impl SessionRuntimeManager {
                         registry
                             .entries
                             .insert(id.clone(), Entry::Loading(flight.clone()));
-                        self.spawn_load(id, access, flight.clone());
+                        self.spawn_load(id, session.clone(), target.id, flight.clone());
                         flight
                     }
                 }
             };
             #[cfg(test)]
             self.probe(&id_for_probe).joined.send_modify(|n| *n += 1);
-            if let Some(runtime) = flight.wait().await? {
+            if let Some(runtime) = flight.wait().await.operation_result()? {
                 self.registry
                     .0
                     .lock()
@@ -1098,15 +1118,45 @@ impl SessionRuntimeManager {
             }
         }
     }
-    fn spawn_load(&self, id: ConversationId, access: SessionAccess, flight: Arc<Flight>) {
+    fn spawn_load(
+        &self,
+        id: ConversationId,
+        session: SessionId,
+        node: SessionNodeId,
+        flight: Arc<Flight>,
+    ) {
         let owner = self.clone();
-        let terminal = TerminalGuard::new(self, id, flight);
-        // Explicitly owned transition: terminal guard retains registry and sends
-        // failure even on panic/task destruction. No caller owns an abort handle.
+        let terminal = TerminalGuard::new(self, id, flight, WriterCertainty::Absent);
+        // The flight is registered before this task can acquire allocation access.
         tokio::spawn(async move {
-            let result = owner.compose(access).await.map(Some);
+            let result = owner.acquire_and_compose(&session, &node).await.map(Some);
             terminal.finish(result);
         });
+    }
+    async fn acquire_and_compose(
+        &self,
+        session: &SessionId,
+        node: &SessionNodeId,
+    ) -> Result<Arc<ResidentRuntime>, RuntimeManagerError> {
+        #[cfg(test)]
+        {
+            let target = self
+                .sessions
+                .resolve_session_target(session, Some(node))
+                .await
+                .map_err(error)?;
+            let probe = self.probe(&target.conversation_id);
+            probe.before_allocation.park().await;
+            probe
+                .acquisitions
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        let access = self
+            .sessions
+            .acquire_session(session, Some(node))
+            .await
+            .map_err(error)?;
+        self.compose(access).await
     }
     async fn compose(
         &self,
@@ -1119,6 +1169,12 @@ impl SessionRuntimeManager {
                 .compositions
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             probe.before_compose.park().await;
+            if probe
+                .fail_compose_once
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(error("injected composition failure before writer creation"));
+            }
             assert!(
                 !probe
                     .panic_once
@@ -1188,7 +1244,6 @@ impl SessionRuntimeManager {
             activity: AtomicU64::new(0),
             idle: Mutex::new(None),
             identity: Arc::new(ManagedRuntime {
-                node: access.node.id,
                 conversation: access.node.conversation_id,
                 incarnation,
                 workspace_identity: identity,
@@ -1205,11 +1260,14 @@ impl SessionRuntimeManager {
     /// # Panics
     /// Panics if an internal residency mutex was poisoned.
     pub async fn unload(&self, id: &ConversationId) -> Result<(), RuntimeManagerError> {
+        self.retire(id).await.operation_result().map(|_| ())
+    }
+    async fn retire(&self, id: &ConversationId) -> Outcome {
         loop {
             let flight = {
                 let mut registry = self.registry.0.lock().expect("registry mutex");
                 match registry.entries.get(id) {
-                    None => return Ok(()),
+                    None => return Outcome::WriterAbsent(Ok(())),
                     Some(Entry::Loading(flight) | Entry::Unloading { flight, .. }) => {
                         #[cfg(test)]
                         if let Some(probe) = registry.probes.get(id) {
@@ -1236,8 +1294,9 @@ impl SessionRuntimeManager {
             };
             // Joining replacement must also unload its resulting incarnation;
             // a replacement publication is not a successful unload result.
-            if flight.wait().await?.is_none() {
-                return Ok(());
+            match flight.wait().await {
+                Outcome::Resident(_) => {}
+                terminal => return terminal,
             }
         }
     }
@@ -1273,7 +1332,7 @@ impl SessionRuntimeManager {
             self.spawn_unload(id.clone(), runtime, flight.clone(), None);
             flight
         };
-        flight.wait().await.map(|_| ())
+        flight.wait().await.operation_result().map(|_| ())
     }
     /// Explicit targeted replacement. Old shutdown must succeed before cold
     /// resolution/composition; failure after that boundary leaves Unloaded.
@@ -1286,51 +1345,16 @@ impl SessionRuntimeManager {
         session: &SessionId,
         node: Option<&SessionNodeId>,
     ) -> Result<Arc<ManagedRuntime>, RuntimeManagerError> {
-        self.replace_expected(session, node, None).await
-    }
-    /// Reconstruct exactly the addressed branch using current configuration.
-    pub(crate) async fn restart(
-        &self,
-        session: &SessionId,
-        conversation: &ConversationId,
-        incarnation: RuntimeIncarnationId,
-    ) -> Result<Arc<ManagedRuntime>, RuntimeManagerError> {
-        let node = {
-            let registry = self.registry.0.lock().expect("registry mutex");
-            registry.check_session(session, conversation)?;
-            let Some(Entry::Loaded(runtime)) = registry.entries.get(conversation) else {
-                return Err(RuntimeManagerError::StaleIncarnation);
-            };
-            if runtime.identity.incarnation != incarnation {
-                return Err(RuntimeManagerError::StaleIncarnation);
-            }
-            runtime.identity.node.clone()
-        };
-        self.replace_expected(session, Some(&node), Some(incarnation))
-            .await
-    }
-    async fn replace_expected(
-        &self,
-        session: &SessionId,
-        node: Option<&SessionNodeId>,
-        expected: Option<RuntimeIncarnationId>,
-    ) -> Result<Arc<ManagedRuntime>, RuntimeManagerError> {
         loop {
-            let access = self
+            let target = self
                 .sessions
-                .acquire_session(session, node)
+                .resolve_session_target(session, node)
                 .await
                 .map_err(error)?;
-            let id = access.node.conversation_id.clone();
+            let id = target.conversation_id.clone();
             let (flight, claimed) = {
                 let mut registry = self.registry.0.lock().expect("registry mutex");
                 registry.check_session(session, &id)?;
-                if let Some(expected) = expected
-                    && !matches!(registry.entries.get(&id), Some(Entry::Loaded(runtime)) if runtime.identity.incarnation == expected)
-                {
-                    return Err(RuntimeManagerError::StaleIncarnation);
-                }
-
                 match registry.entries.get(&id) {
                     None => {
                         registry.reserve()?;
@@ -1339,11 +1363,10 @@ impl SessionRuntimeManager {
                         registry
                             .entries
                             .insert(id.clone(), Entry::Loading(flight.clone()));
-                        self.spawn_load(id, access, flight.clone());
+                        self.spawn_load(id, session.clone(), target.id, flight.clone());
                         (flight, true)
                     }
                     Some(Entry::Loading(flight) | Entry::Unloading { flight, .. }) => {
-                        drop(access);
                         (flight.clone(), false)
                     }
                     Some(Entry::Loaded(runtime)) => {
@@ -1356,12 +1379,17 @@ impl SessionRuntimeManager {
                                 flight: flight.clone(),
                             },
                         );
-                        self.spawn_unload(id, runtime, flight.clone(), Some(access));
+                        self.spawn_unload(
+                            id,
+                            runtime,
+                            flight.clone(),
+                            Some((session.clone(), target.id)),
+                        );
                         (flight, true)
                     }
                 }
             };
-            let outcome = flight.wait().await?;
+            let outcome = flight.wait().await.operation_result()?;
             if claimed {
                 return outcome.ok_or_else(|| error("replacement did not publish a runtime"));
             }
@@ -1372,10 +1400,11 @@ impl SessionRuntimeManager {
         id: ConversationId,
         runtime: Arc<ResidentRuntime>,
         flight: Arc<Flight>,
-        replacement: Option<SessionAccess>,
+        replacement: Option<(SessionId, SessionNodeId)>,
     ) {
         let owner = self.clone();
-        let terminal = TerminalGuard::new(self, id.clone(), flight.clone());
+        let mut terminal =
+            TerminalGuard::new(self, id.clone(), flight.clone(), WriterCertainty::Unproven);
         tokio::spawn(async move {
             #[cfg(test)]
             owner.probe(&id).before_shutdown.park().await;
@@ -1413,26 +1442,18 @@ impl SessionRuntimeManager {
                 .lock()
                 .expect("composition mutex")
                 .take();
-            if let Some(access) = replacement {
+            terminal.writer = WriterCertainty::Absent;
+            if let Some((session, node)) = replacement {
                 owner
                     .registry
                     .0
                     .lock()
                     .expect("registry mutex")
                     .entries
-                    .insert(id, Entry::Loading(flight));
-                // Refresh exact persisted selections after settlement while the
-                // original allocation remains retained across the handoff.
-                let fresh = owner
-                    .sessions
-                    .acquire_session(&access.session.id, Some(&access.node.id))
-                    .await
-                    .map_err(error);
-                drop(access);
-                let result = match fresh {
-                    Ok(access) => owner.compose(access).await.map(Some),
-                    Err(e) => Err(e),
-                };
+                    .insert(id.clone(), Entry::Loading(flight));
+                #[cfg(test)]
+                owner.probe(&id).after_writer_transfer.park().await;
+                let result = owner.acquire_and_compose(&session, &node).await.map(Some);
                 terminal.finish(result);
             } else {
                 terminal.finish(Ok(None));
@@ -1451,9 +1472,15 @@ struct TerminalGuard {
     flight: Arc<Flight>,
     finished: bool,
     candidate: Option<Arc<ResidentRuntime>>,
+    writer: WriterCertainty,
 }
 impl TerminalGuard {
-    fn new(owner: &SessionRuntimeManager, id: ConversationId, flight: Arc<Flight>) -> Self {
+    fn new(
+        owner: &SessionRuntimeManager,
+        id: ConversationId,
+        flight: Arc<Flight>,
+        writer: WriterCertainty,
+    ) -> Self {
         Self {
             owner: owner.clone(),
             registry: owner.registry.clone(),
@@ -1461,6 +1488,7 @@ impl TerminalGuard {
             flight,
             finished: false,
             candidate: None,
+            writer,
         }
     }
     fn finish(mut self, result: CompositionOutcome) {
@@ -1470,6 +1498,7 @@ impl TerminalGuard {
             // recovered work (including SQLite), so never hold the map lock.
             // No await separates activation and Loaded/result publication.
             self.candidate = Some(runtime.clone());
+            self.writer = WriterCertainty::Unproven;
             runtime
                 .composition
                 .lock()
@@ -1505,7 +1534,7 @@ impl TerminalGuard {
                 .insert(self.id.clone(), Entry::Loaded(runtime.clone()));
             self.flight
                 .result
-                .send_replace(Some(Ok(Some(runtime.identity.clone()))));
+                .send_replace(Some(Outcome::Resident(runtime.identity.clone())));
             self.finished = true;
             return;
         }
@@ -1514,18 +1543,19 @@ impl TerminalGuard {
     }
     fn publish(&self, result: Result<(), RuntimeManagerError>) {
         let mut registry = self.registry.0.lock().expect("registry mutex");
-        match &result {
-            Ok(()) => {
+        let outcome = match self.writer {
+            WriterCertainty::Absent => {
                 registry.remove(&self.id);
+                Outcome::WriterAbsent(result)
             }
-            Err(_) if matches!(registry.entries.get(&self.id), Some(Entry::Loading(_))) => {
-                registry.remove(&self.id);
-            }
-            Err(_) => {
+            WriterCertainty::Unproven => {
                 registry.unload_failures += 1;
-            } // Retain unproven writer.
-        }
-        self.flight.result.send_replace(Some(result.map(|()| None)));
+                Outcome::RetirementUnproven(
+                    result.expect_err("unproven writer cannot report retirement success"),
+                )
+            }
+        };
+        self.flight.result.send_replace(Some(outcome));
     }
 }
 impl Drop for TerminalGuard {

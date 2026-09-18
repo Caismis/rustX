@@ -124,16 +124,18 @@ explicit disposal and continue to block deletion.
 
 `LocalSessionClient::compose` recovers pending records after controller admission
 and before ordinary live-store recovery or runtime composition.
-`session_delete_recover` is the explicit asynchronous retry boundary. Neither
+`session/deleteRecover` is the explicit asynchronous retry boundary. Neither
 recovery path activates a deleted Conversation, processes Pending Inbound, restores
 agents, calls a model, or initializes semantic services. Cancellation can leave a
 worker running or an unfinalized record; both converge at the next recovery
 boundary. No queue, timer, distributed worker, or retention policy is introduced.
 
-## Bounded Runtime Client contract
+## Bounded deletion control contract
 
-Protocol **28** adds `session_delete_preview`, `session_delete`
-(`session_id` + `expected_target_revision` only), and `session_delete_recover`.
+App Server v8 owns the public `session/deletePreview`, `session/delete`
+(`session_id` + `expected_target_revision` only), and `session/deleteRecover` methods.
+The obsolete native Runtime Client delete/recover mutation requests were removed
+in native protocol 40; only its finite read-only preview remains.
 `runtime_client::session_deletion` owns independent DTOs:
 `RuntimeClientSessionDeletePreview`, `RuntimeClientSessionDeletionBlocker`, and
 `RuntimeClientSessionDeletionResult`. The Session-control owner explicitly maps
@@ -141,12 +143,15 @@ native outcomes in `supervisor::project_session_deletion`.
 
 The frozen deletion workset is recovery authority, not public control-plane data.
 Native deletion types and raw supervisor operations are crate-private. Public
-Session deletion control is provided by `RuntimeClientSessionControl`.
+Session deletion control is provided by App Server through `SessionRuntimeManager`.
+The only production caller of the crate-private `SessionController::delete_session`
+primitive is the manager after writer-absence proof. Direct durable-owner tests
+exercise catalog publication/cleanup without a live product runtime.
 
 Only a successful fresh preview supplies an externally usable `target_revision`.
 A stale execution response invalidates the old confirmation but never supplies
 the replacement execution token. It contains only `status: stale` and
-`session_id`. The caller must obtain a new `session_delete_preview`, present its
+`session_id`. The caller must obtain a new `session/deletePreview`, present its
 updated scope summary for confirmation, and then execute with that revision.
 Repeated stale executions cannot obtain the replacement token. Internal execute
 still recomputes and compares the current semantic revision.
@@ -197,7 +202,7 @@ conformance remain part of validation.
 `/resume` exposes Ctrl+D for preview-first confirmed historical deletion. Cancel
 is the default focused action. The TUI submits only the captured SessionId and
 native target revision, then reconciles paginated visibility from the native
-boundary. Cleanup retry uses `session_delete_recover`; no client storage or
+boundary. Cleanup retry uses `session/deleteRecover`; no client storage or
 model-visible operation participates. See [TUI deletion help](../tui/README.md#delete-historical-sessions-inside-resume).
 
 ## Product and client behavior (App Server v8)

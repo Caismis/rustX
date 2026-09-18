@@ -265,8 +265,6 @@ impl RuntimeAttachment {
             RuntimeClientRequest::ModelGet { .. } => inner.model_get(),
             RuntimeClientRequest::ModelSet { config, .. } => inner.model_set(*config),
             RuntimeClientRequest::SessionDeletePreview { .. }
-            | RuntimeClientRequest::SessionDelete { .. }
-            | RuntimeClientRequest::SessionDeleteRecover { .. }
             | RuntimeClientRequest::SessionList { .. }
             | RuntimeClientRequest::SessionGet { .. }
             | RuntimeClientRequest::SessionTreeGet { .. }

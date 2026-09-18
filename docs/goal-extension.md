@@ -201,7 +201,7 @@ this observation along with normal request inputs. History may show older
 observations; those never supply current Goal authority. Provider adapters only
 project the existing provider-neutral messages and Tool definitions.
 
-Runtime Client protocol 39 includes the typed `goal` operation (Show/Create/Mutate)
+Runtime Client protocol 40 includes the typed `goal` operation (Show/Create/Mutate)
 and bounded `goal_changed { view: GoalView }` event. `GoalView` carries durable
 state only — `{ current: GoalSnapshot | null }` — so no snapshot and no event can
 represent `Active + disarmed`, and there is no activation-only `goal_changed`.

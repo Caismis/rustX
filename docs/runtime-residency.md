@@ -92,15 +92,15 @@ same completion, not an empty notification or a second composition attempt.
 
 ## Load
 
-1. `SessionController::acquire_session` resolves the explicit Session/node,
-   acquires native `ConversationAccess`, and returns the exact persisted settings
-   and revision while the catalog transaction remains coherent. The catalog
-   mutex is then released. Allocation is retained through resolution and native
-   composition and passed into the tool/storage/workspace owners.
-2. Installing `Loading(flight)` under the registry mutex is the same-id load
-   claim linearization point. Other callers observing that entry join its result.
-   The Session claim is installed in that same critical section. Only the claimant
-   starts composition.
+1. `SessionController::resolve_session_target` reads the durable Session/node and
+   Conversation identity without `ConversationAccess`. No managed allocation
+   authority exists before the registry claim.
+2. Under the registry mutex, the manager checks the Session fence and installs
+   `by_session` plus `Loading(flight)` atomically. Only that flight's owner may
+   call `acquire_session` for the exact resolved node, obtaining current persisted
+   settings and native allocation access. Other callers join without acquiring
+   redundant allocation handles. Deletion can identify every blocking managed
+   acquisition, including one parked before storage acquisition.
 3. The manager resolves current sources using `UserConfigManager`, converts the
    acquired persisted selections to `SessionConfigInput`, and performs ordinary
    trust/credential admission. Effective configuration is never durable authority.
@@ -152,6 +152,10 @@ the manager cannot claim successful unload or publish a new writer without prove
 quiescence. This is an isolated Conversation failure, not a poisoned manager.
 
 A load racing unload joins the unload flight, then retries cold load after success.
+Flight terminals explicitly distinguish `Resident`, `WriterAbsent(operation_result)`
+and `RetirementUnproven(error)`. Deletion requires absence proof, not operation
+success: an acquisition/composition error after proven retirement does not poison
+delete. Native shutdown/projection uncertainty retains the unproven writer and fence.
 An unload racing load waits for the load result and then drains that incarnation.
 An unload racing replacement waits for replacement and drains its resulting
 incarnation. Concurrent explicit replacements serialize: each explicit replacement
@@ -160,8 +164,9 @@ must cross its own quiescence boundary; ordinary load only reuses or waits.
 Replacement retains allocation through old shutdown. Successful native quiescence
 is the writer-transfer boundary: the old incarnation's admission is permanently
 closed before a new composition can exist. The manager removes the old core,
-changes the entry to Loading, reacquires exact persisted settings while retaining
-the original allocation, then resolves/composes/recover/binds/publishes/activates.
+marks writer absence proven and changes the entry to Loading, then reacquires
+the exact node and current persisted settings. The registered flight spans this
+allocation-free handoff through new composition and publication.
 Failure after old shutdown leaves Unloaded and retryable, never a fictional
 rollback to the old composition. Other Conversations remain unchanged.
 

@@ -400,40 +400,6 @@ impl AppServerConnection {
                     .await
                     .map_err(|_| domain(ErrorData::OperationFailed))?
             }
-            Method::SessionRestart { target } => {
-                let route = self.route(&target)?;
-                route.client.validate().map_err(manager_error)?;
-                let manager = self.host.manager().clone();
-                let routes = self.routes.clone();
-                let changed = self.changed.clone();
-                let (sender, receiver) = tokio::sync::oneshot::channel();
-                tokio::spawn(async move {
-                    let _request = request_owner;
-                    let result = async {
-                        let session = manager
-                            .session_controller()
-                            .read_session(&target.session_id)
-                            .await
-                            .map_err(session_error)?;
-                        manager
-                            .restart(
-                                &target.session_id,
-                                &target.conversation_id,
-                                target.runtime_incarnation,
-                            )
-                            .await
-                            .map_err(manager_error)?;
-                        Ok(MethodResult::Session { session })
-                    }
-                    .await;
-                    release_route(&routes, &route);
-                    changed.notify_one();
-                    let _ = sender.send(result);
-                });
-                receiver
-                    .await
-                    .map_err(|_| domain(ErrorData::OperationFailed))?
-            }
             Method::SessionSwitchNode { target, node_id } => {
                 let route = self.route(&target)?;
                 let manager = self.host.manager().clone();

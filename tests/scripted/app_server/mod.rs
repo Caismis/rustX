@@ -52,8 +52,12 @@ pub(super) struct Probe {
     pub(super) idle_after_claim: Arc<crate::runtime::conversation_runtime::Gate>,
     pub(super) activation: Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
     pub(super) compositions: AtomicUsize,
+    pub(super) acquisitions: AtomicUsize,
+    pub(super) before_allocation: AsyncGate,
+    pub(super) after_writer_transfer: AsyncGate,
     pub(super) joined: watch::Sender<usize>,
     pub(super) unloads_joined: watch::Sender<usize>,
+    pub(super) fail_compose_once: std::sync::atomic::AtomicBool,
     pub(super) panic_once: std::sync::atomic::AtomicBool,
     pub(super) before_compose: AsyncGate,
     pub(super) after_delete_fence: AsyncGate,
@@ -68,8 +72,12 @@ impl Default for Probe {
             idle_after_claim: Arc::default(),
             activation: Mutex::new(None),
             compositions: AtomicUsize::new(0),
+            acquisitions: AtomicUsize::new(0),
+            before_allocation: AsyncGate::default(),
+            after_writer_transfer: AsyncGate::default(),
             joined: watch::channel(0).0,
             unloads_joined: watch::channel(0).0,
+            fail_compose_once: std::sync::atomic::AtomicBool::new(false),
             panic_once: std::sync::atomic::AtomicBool::new(false),
             before_compose: AsyncGate::default(),
             after_delete_fence: AsyncGate::default(),
@@ -814,7 +822,26 @@ async fn deletion_retirement_failure_retains_writer_slot_and_session_fence() {
             .unwrap()
             .fail_residency_settlement();
         let result = f.manager.delete_session(&f.sessions[0].id, &revision).await;
-        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("residency test settlement failure")
+        );
+        let flight = {
+            let registry = f.manager.registry.0.lock().unwrap();
+            assert!(registry.retiring_sessions.contains(&f.sessions[0].id));
+            let Some(Entry::Unloading { flight, .. }) =
+                registry.entries.get(runtime.conversation_id())
+            else {
+                panic!("unproven writer slot")
+            };
+            flight.clone()
+        };
+        assert!(matches!(
+            flight.wait().await,
+            Outcome::RetirementUnproven(_)
+        ));
         assert!(
             f.manager
                 .sessions
@@ -1438,7 +1465,7 @@ async fn session_claim_survives_replacement_handoff_and_clears_on_failed_loading
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn deletion_fences_absent_session_before_a_new_load_claim() {
+async fn deletion_fence_before_load_prevents_allocation_acquisition() {
     bounded(async {
         use crate::local_runtime::session::deletion::SessionDeleteResult;
         let f = Fixture::new().await;
@@ -1449,6 +1476,7 @@ async fn deletion_fences_absent_session_before_a_new_load_claim() {
         let delete = delete_task(&f, 0, revision);
         probe.after_delete_fence.entered().await;
         assert!(f.load(0).await.unwrap().is_err());
+        assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 0);
         assert_eq!(probe.compositions.load(Ordering::SeqCst), 0);
         assert!(f.load(1).await.unwrap().is_ok());
         probe.after_delete_fence.release();
@@ -1456,6 +1484,196 @@ async fn deletion_fences_absent_session_before_a_new_load_claim() {
             delete.await.unwrap().unwrap(),
             SessionDeleteResult::Deleted { .. }
         ));
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn load_claim_is_visible_to_delete_before_allocation_acquisition() {
+    bounded(async {
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
+        let f = Fixture::new().await;
+        let id = f.id(0).await;
+        let revision = deletion_revision(&f, 0).await;
+        let probe = f.manager.probe(&id);
+        probe.before_allocation.arm();
+        let load = f.load(0);
+        probe.before_allocation.entered().await;
+        assert_eq!(f.manager.residency(&id), ResidencyState::Loading);
+        assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 0);
+        let joined = f.load(0);
+        probe.joined(2).await;
+        let delete = delete_task(&f, 0, revision);
+        // This watch fires only when delete sees and joins the registered flight.
+        probe
+            .unloads_joined
+            .subscribe()
+            .wait_for(|n| *n == 1)
+            .await
+            .unwrap();
+        assert!(!delete.is_finished());
+        assert!(
+            f.manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .retiring_sessions
+                .contains(&f.sessions[0].id)
+        );
+        assert!(
+            f.load(1)
+                .await
+                .unwrap()
+                .unwrap()
+                .client()
+                .validate()
+                .is_ok()
+        );
+        probe.before_allocation.release();
+        assert!(load.await.unwrap().is_err());
+        assert!(joined.await.unwrap().is_err());
+        assert!(matches!(
+            delete.await.unwrap().unwrap(),
+            SessionDeleteResult::Deleted { .. }
+        ));
+        assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 1);
+        assert!(f.provider.request_bodies().is_empty());
+        assert!(
+            f.manager
+                .sessions
+                .read_session(&f.sessions[0].id)
+                .await
+                .is_err()
+        );
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deletion_joining_failed_loading_receives_proven_writer_absence() {
+    bounded(async {
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
+        let f = Fixture::new().await;
+        let id = f.id(0).await;
+        let revision = deletion_revision(&f, 0).await;
+        let probe = f.manager.probe(&id);
+        probe.before_compose.arm();
+        probe.fail_compose_once.store(true, Ordering::SeqCst);
+        let load = f.load(0);
+        probe.before_compose.entered().await;
+        let flight = {
+            let registry = f.manager.registry.0.lock().unwrap();
+            let Some(Entry::Loading(flight)) = registry.entries.get(&id) else {
+                panic!("Loading")
+            };
+            flight.clone()
+        };
+        let delete = delete_task(&f, 0, revision);
+        probe
+            .unloads_joined
+            .subscribe()
+            .wait_for(|n| *n == 1)
+            .await
+            .unwrap();
+        assert!(!delete.is_finished());
+        probe.before_compose.release();
+        assert!(load.await.unwrap().is_err());
+        assert!(matches!(flight.wait().await, Outcome::WriterAbsent(Err(_))));
+        assert!(matches!(
+            delete.await.unwrap().unwrap(),
+            SessionDeleteResult::Deleted { .. }
+        ));
+        assert_eq!(f.manager.residency(&id), ResidencyState::Unloaded);
+        assert!(
+            !f.manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .retiring_sessions
+                .contains(&f.sessions[0].id)
+        );
+        assert!(
+            f.manager
+                .sessions
+                .read_session(&f.sessions[0].id)
+                .await
+                .is_err()
+        );
+        assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 1);
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deletion_joins_replacement_failure_after_proven_writer_transfer() {
+    bounded(async {
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
+        let f = Fixture::new().await;
+        let old = f.load(0).await.unwrap().unwrap();
+        let id = old.conversation_id();
+        let weak = old.inspect_runtime().unwrap().weak_inner();
+        let revision = deletion_revision(&f, 0).await;
+        let probe = f.manager.probe(id);
+        probe.after_writer_transfer.arm();
+        probe.fail_compose_once.store(true, Ordering::SeqCst);
+        let replace = replace_task(&f, 0);
+        probe.after_writer_transfer.entered().await;
+        assert!(
+            weak.upgrade().is_none(),
+            "old native writer released before replacement acquisition"
+        );
+        assert!(old.inspect_runtime().is_none());
+        assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 1);
+        let flight = {
+            let registry = f.manager.registry.0.lock().unwrap();
+            let Some(Entry::Loading(flight)) = registry.entries.get(id) else {
+                panic!("replacement Loading")
+            };
+            flight.clone()
+        };
+        let delete = delete_task(&f, 0, revision);
+        probe
+            .unloads_joined
+            .subscribe()
+            .wait_for(|n| *n == 1)
+            .await
+            .unwrap();
+        assert!(!delete.is_finished());
+        probe.after_writer_transfer.release();
+        assert!(replace.await.unwrap().is_err());
+        assert!(matches!(flight.wait().await, Outcome::WriterAbsent(Err(_))));
+        assert!(matches!(
+            delete.await.unwrap().unwrap(),
+            SessionDeleteResult::Deleted { .. }
+        ));
+        assert_eq!(f.manager.residency(id), ResidencyState::Unloaded);
+        assert!(
+            !f.manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .retiring_sessions
+                .contains(&f.sessions[0].id)
+        );
+        assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 2);
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 2);
+        assert!(f.provider.request_bodies().is_empty());
+        assert!(
+            f.manager
+                .sessions
+                .read_session(&f.sessions[0].id)
+                .await
+                .is_err()
+        );
         f.close().await;
     })
     .await;
