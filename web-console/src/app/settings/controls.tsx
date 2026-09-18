@@ -27,7 +27,9 @@ export function UnitForm<T>({ title, initial, revision, mutation, save, children
     }
   }, [initial, revision, dirty, drafts, identity]);
   const commit = async (remove = false) => {
-    setBusy(true); setSaved(false);
+    // Save and Remove both freeze the revision, including an otherwise clean form.
+    // A rejected removal must never adopt the reread revision implicitly.
+    setDirty(true); setBusy(true); setSaved(false);
     try { const next = await save(mutation(remove ? null : value), base); if (next) { drafts?.delete(identity); committed.current = next; setBase(next); setSaved(true); } }
     finally { setBusy(false); }
   };

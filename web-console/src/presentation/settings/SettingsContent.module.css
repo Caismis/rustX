@@ -46,3 +46,6 @@
 .names { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
 .names input { flex: 1; }
 @media (max-width: 680px) { .grid, .settings dl { grid-template-columns: minmax(0, 1fr); } .actions { align-items: stretch; } .settings th, .settings td { padding: 4px; } }
+
+.model fieldset > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.model fieldset > div label { padding: 4px 0; }

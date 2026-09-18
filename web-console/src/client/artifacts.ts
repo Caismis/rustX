@@ -9,7 +9,7 @@ export class ArtifactResources {
   private active = 0;
   private disposed = false;
   constructor(private client: AppServerClient, private sessionId: string) {}
-  private async readBytes(id: string): Promise<Uint8Array<ArrayBuffer>> {
+  private async transfer<T>(id: string, consume: (bytes: Uint8Array<ArrayBuffer>) => T): Promise<T> {
     if (this.disposed) throw new Error('Obsolete artifact view');
     if (this.active >= ARTIFACT_MAX_TRANSFERS || this.urls.size + this.active >= ARTIFACT_MAX_URLS) throw new Error('Artifact capacity reached; close a preview and retry.');
     const target = this.client.target(this.sessionId);
@@ -21,17 +21,18 @@ export class ArtifactResources {
       const decoded = atob(result.data);
       if (decoded.length > ARTIFACT_MAX_BYTES) throw new Error('Artifact exceeds 256 KiB');
       const bytes = Uint8Array.from(decoded, c => c.charCodeAt(0));
-      return bytes;
+      return consume(bytes);
     } finally { this.active--; }
   }
-  async read(id: string, mimeType?: string): Promise<string> {
-    const bytes = await this.readBytes(id);
-    const url = URL.createObjectURL(new Blob([bytes], { type: safeArtifactMime(mimeType) }));
-    this.urls.add(url);
-    return url;
+  read(id: string, mimeType?: string): Promise<string> {
+    return this.transfer(id, bytes => {
+      const url = URL.createObjectURL(new Blob([bytes], { type: safeArtifactMime(mimeType) }));
+      this.urls.add(url);
+      return url;
+    });
   }
-  async readText(id: string): Promise<string> {
-    return new TextDecoder('utf-8', { fatal: true }).decode(await this.readBytes(id));
+  readText(id: string): Promise<string> {
+    return this.transfer(id, bytes => new TextDecoder('utf-8', { fatal: true }).decode(bytes));
   }
   release(url: string) { if (this.urls.delete(url)) URL.revokeObjectURL(url); }
   dispose() { this.disposed = true; for (const url of this.urls) URL.revokeObjectURL(url); this.urls.clear(); }

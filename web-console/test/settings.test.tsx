@@ -162,3 +162,72 @@ it('keeps contributor default intent unspecified when enabling the closed Agent 
   const write = subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')![0];
   expect(JSON.stringify(write)).not.toMatch(/"time"|"background"|npm|cordis/);
 });
+
+it('reconnect rereads native sources without replaying a dirty draft', async () => {
+  const subject = cfg3Client(); const ui = render(<Settings client={subject.client} sessionId={cfg3Session} />);
+  await screen.findByText('server-frozen-model'); fireEvent.click(screen.getByRole('tab', { name: 'Workspace' })); fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+  fireEvent.click(screen.getByLabelText('read'));
+  const snapshot = { ...subject.state, generation: 2 };
+  subject.client.getSnapshot = () => snapshot;
+  ui.rerender(<Settings client={subject.client} sessionId={cfg3Session} />);
+  await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead')).toHaveLength(2));
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
+  expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
+});
+
+it('an older authoritative read cannot replace a newer read', async () => {
+  let release: (value: import('../../protocol/app-server/v6').MethodResult) => void = () => {};
+  let count = 0;
+  const subject = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++count === 2) return new Promise(resolve => { release = resolve; }); });
+  render(<Settings client={subject.client} sessionId={cfg3Session} />); await screen.findByText('server-frozen-model');
+  const stale = structuredClone(subject.source);
+  fireEvent.click(screen.getByRole('button', { name: 'Read current sources' }));
+  await waitFor(() => expect(count).toBe(2));
+  subject.source.workspace.revision = 'newest';
+  fireEvent.click(screen.getByRole('button', { name: 'Read current sources' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Workspace' }));
+  await screen.findByText(/Revision: newest/);
+  release({ type: 'source_settings', projection: stale, session_revision: '1', session_selection: null });
+  await waitFor(() => expect(screen.getByText(/Revision: newest/)).toBeTruthy());
+});
+
+it('removes literal credentials from a successful Provider draft using the redacted native acknowledgement', async () => {
+  const subject = cfg3Client(async (op, source) => {
+    if (op.method === 'configuration/sourceWrite' && op.params.mutation.kind === 'config' && op.params.mutation.mutation.unit === 'provider') {
+      source.workspace.authored = { providers: { secret: { base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
+    }
+  });
+  await open(subject, 'Providers & Models');
+  fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } }); fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
+  fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } }); fireEvent.change(screen.getByLabelText('Credential source'), { target: { value: 'literal' } });
+  fireEvent.change(screen.getByLabelText('New literal credential'), { target: { value: 'SECRET_SENTINEL' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
+  await screen.findByText(/Source saved. The loaded runtime/);
+  await waitFor(() => expect(screen.queryByLabelText('New literal credential')).toBeNull());
+  expect(document.body.innerHTML).not.toContain('SECRET_SENTINEL');
+  fireEvent.click(screen.getByRole('button', { name: 'Back to catalog' })); fireEvent.click(screen.getByRole('button', { name: 'Edit Provider secret' }));
+  expect((screen.getByLabelText('Credential source') as HTMLSelectElement).value).toBe('retain');
+});
+
+it('retains a Model draft when native validation rejects its semantic unit', async () => {
+ const subject = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite') throw new RpcFailure({ code: -32000, message: 'Native validation failed', data: { kind: 'configuration_failed', diagnostic: 'Invalid provider reference' } }); });
+ await open(subject, 'Providers & Models'); fireEvent.change(screen.getByLabelText('New Model identity'), { target: { value: 'draft-model' } }); fireEvent.click(screen.getByRole('button', { name: 'Add Model' }));
+ fireEvent.change(screen.getByLabelText('Wire model identity'), { target: { value: 'wire' } }); fireEvent.change(screen.getByLabelText('Provider identity'), { target: { value: 'missing' } });
+ fireEvent.click(screen.getByRole('button', { name: 'Save Model draft-model' }));
+ expect((await screen.findByRole('alert')).textContent).toContain('Invalid provider reference'); expect((screen.getByLabelText('Provider identity') as HTMLInputElement).value).toBe('missing');
+ expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/reload')).toHaveLength(0);
+});
+it('preserves the original revision when removing an otherwise clean unit conflicts', async () => {
+  const subject = cfg3Client(async (op, source) => {
+    if (op.method === 'configuration/sourceWrite') {
+      source.workspace.revision = 'external-removal-conflict';
+      throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: op.params.expected_revision, actual: source.workspace.revision } });
+    }
+  });
+  await open(subject, 'Tools');
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Native Tools' }));
+  await screen.findByRole('button', { name: 'Use reviewed revision' });
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Native Tools' }));
+  await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { mutation: { authored: null } } } });
+});

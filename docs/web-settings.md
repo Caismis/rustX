@@ -17,7 +17,8 @@ replacement edits complete objects. Native Tools use an explicit checkbox whitel
 MCP, Python and Skill selections have all/exact/none controls. Skill guidance explains
 prompt visibility and displays absolute collection roots. Plugins default off.
 Named-Agent editing writes the complete resource profile, including its independent
-Tools/Skills/Plugins, model inheritance, timeout and worktree settings.
+Tools/Skills/Plugins, delegation lists, model inheritance, timeout and worktree settings.
+General also edits the native Root identity and description semantic units.
 
 **Save** submits a native typed semantic-unit mutation with the exact source revision.
 It preserves an unsaved draft on conflict and does not reload. The native response
@@ -40,3 +41,18 @@ These captures come from the real App Server/provider-emulator acceptance suite:
 - [External-edit CAS conflict preserving the draft](images/cfg3-cas-conflict.png)
 - [Failed reload retaining the published generation](images/cfg3-reload-failed.png)
 - [Mobile named-Agent editor after publication](images/cfg3-settings-mobile.png)
+
+## Harness integration
+
+[Settings architecture](../web-console/SETTINGS-ARCHITECTURE.md) describes the one
+Harness shell, grouped sections, Provider/Model drill-down, structured exact-identity
+rows, native resource cards and session-scoped unsaved drafts. General uses native
+runtime units; process settings are explicitly User-only/restart-required. Theme
+is an intentionally browser-local preference. Resource discovery never implies
+Root selection or native preparation.
+
+The current image references are under
+[`settings-presentation.spec.ts-snapshots`](../web-console/test/e2e/settings-presentation.spec.ts-snapshots).
+The earlier CFG3 captures above document the native contracts before the Harness
+presentation migration. Real-server browser runs continue to capture Save, CAS,
+publication failure and narrow Settings evidence in `web-console/test-results`.

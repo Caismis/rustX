@@ -26,11 +26,16 @@ test('CFG3 atomic Provider and Model editing, Root selections, Save and reload f
     await settings.getByLabel('Endpoint', { exact: true }).fill('http://127.0.0.1:1/v1');
     await settings.getByLabel('Environment variable', { exact: true }).fill('RUSTX_CONSOLE_FIXTURE_KEY');
     await settings.getByRole('button', { name: 'Save Provider acceptance', exact: true }).click(); await saved();
+    await settings.getByRole('heading', { name: 'Providers & Models', exact: true }).scrollIntoViewIfNeeded();
+    await settings.screenshot({ path: test.info().outputPath('cfg3-user-provider-pending.png') });
+    await settings.getByRole('button', { name: 'Back to catalog' }).click();
     await settings.getByLabel('New Model identity').fill('independent');
     await settings.getByRole('button', { name: 'Add Model', exact: true }).click();
     await settings.getByLabel('Wire model identity').fill('wire-a');
     await settings.getByLabel('Provider identity', { exact: true }).fill('acceptance');
     await settings.getByRole('button', { name: 'Save Model independent', exact: true }).click(); await saved();
+    await settings.getByRole('heading', { name: 'Providers & Models', exact: true }).scrollIntoViewIfNeeded();
+    await settings.screenshot({ path: test.info().outputPath('cfg3-user-model.png') });
     await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
     await settings.getByLabel('New Model identity').fill('independent');
     await settings.getByRole('button', { name: 'Add Model', exact: true }).click();
@@ -38,6 +43,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, Save and reload f
     await settings.getByLabel('Wire model identity').fill('wire-workspace');
     await settings.getByLabel('Provider identity', { exact: true }).fill('acceptance');
     await settings.getByRole('button', { name: 'Save Model independent', exact: true }).click(); await saved();
+    await settings.getByRole('button', { name: 'Back to catalog' }).click();
     await settings.getByLabel('New Provider identity').fill('acceptance');
     await settings.getByRole('button', { name: 'Add Provider', exact: true }).click();
     await expect(settings.getByLabel('Endpoint', { exact: true })).toHaveValue('');
@@ -66,7 +72,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, Save and reload f
       const source = settings.getByRole('group', { name: `Source ${name}`, exact: true });
       await source.getByRole('combobox', { name: 'Selection', exact: true }).selectOption('all');
       await source.getByRole('combobox', { name: 'Selection', exact: true }).selectOption('exact');
-      await source.getByLabel(`${name} identities 1`).fill('inspect');
+      await source.getByRole('textbox', { name: `${name} identities 1`, exact: true }).fill('inspect');
       await source.getByRole('combobox', { name: 'Selection', exact: true }).selectOption('none');
       await source.getByRole('button', { name: `Save Source ${name}`, exact: true }).click(); await saved();
     }
@@ -79,6 +85,8 @@ test('CFG3 atomic Provider and Model editing, Root selections, Save and reload f
     await expect(settings.getByLabel('Enable todo', { exact: true })).not.toBeChecked();
     await settings.getByRole('switch', { name: 'Enable todo', exact: true }).click();
     await settings.getByRole('button', { name: 'Save todo Plugin', exact: true }).click(); await saved();
+    await settings.getByRole('heading', { name: 'Plugins', exact: true }).scrollIntoViewIfNeeded();
+    await settings.screenshot({ path: test.info().outputPath('cfg3-native-plugins.png') });
     await settings.getByRole('button', { name: 'Agents & Workflows', exact: true }).click();
     await expect(settings.getByRole('group', { name: 'agents', exact: true }).getByRole('textbox')).toHaveCount(0);
     await settings.getByRole('button', { name: 'Save Agent allowlist', exact: true }).click(); await saved();
@@ -97,6 +105,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, Save and reload f
     await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();
     await settings.getByRole('button', { name: 'Edit Model independent', exact: true }).click();
     await settings.getByRole('button', { name: 'Remove Model independent', exact: true }).click(); await saved();
+    await settings.getByRole('button', { name: 'Back to catalog' }).click();
     await settings.getByRole('button', { name: 'Edit Provider acceptance', exact: true }).click();
     await settings.getByRole('button', { name: 'Remove Provider acceptance', exact: true }).click(); await saved();
     expect(errors).toEqual([]);

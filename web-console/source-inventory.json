@@ -1099,7 +1099,7 @@
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "destination": "web-console/src/app/settings/Settings.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell.",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities.",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
         "../../../../protocol/app-server/v6",
@@ -1134,12 +1134,12 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "228cc5776a5f4402eb2f233c23b3a779f7558b68ea32af2d8d0487de9105d82c"
+      "local_sha256": "77977826cdbd5d7de96a6702d7ac41529d2458592a8318caaab4cea58136adb8"
     },
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
       "destination": "web-console/src/app/settings/CatalogEditor.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery.",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery. Dedicated Provider/Model drill-down with explicit return to the native catalog; unsaved units retained by app draft owner.",
       "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
       "retained_dependencies": [
         "../../../../protocol/app-server/v6",
@@ -1164,7 +1164,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "5653c3a5fb3b4ffbab19388ffe2796587e0f252a384850a3b3dc428f284b0929"
+      "local_sha256": "1ce9ef854eb4f5c27d38fac28065b24ec68fbeda944ca513a5bccef6f868ea18"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -1549,7 +1549,7 @@
       "destination": "web-console/src/presentation/settings/SettingsRoot.tsx",
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: upstream overlay/nav/content DOM with explicit section seats, body portal and modal focus isolation; native CFG3 editors and Appearance content supplied by app adapter",
+      "treatment": "B: upstream overlay/nav/content DOM with explicit section seats, body portal and modal focus isolation; native CFG3 editors and Appearance content supplied by app adapter WEB-RESET-03: optional native section group labels; unchanged single modal geometry, focus and close ownership.",
       "upstream_sha256": "7ce55121345e28bed96b01c2e08641162d7bee4569083bad46b98c1574577ecb",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1566,14 +1566,14 @@
         "react",
         "react-dom"
       ],
-      "local_sha256": "ef5a75093dadffa672ed49da3d18fa0ce7f203b0cc5577cf2489a90a1438d4eb",
+      "local_sha256": "070c6d2c2b0d317b76dc57f494f015d6bce09c0abfc386dcd7953167107a2cd9",
       "classification": "B"
     },
     {
       "destination": "web-console/src/presentation/settings/SettingsRoot.module.css",
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation WEB-RESET-03: bounded category labels hidden in horizontal narrow navigation.",
       "upstream_sha256": "52a665b2c19ce30b35811c7b8b4c73e4ee94342d86e8e6fec77e61e1ced5738b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1582,7 +1582,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "ed4b09bb78d14b32cb7a521f190fa93c9c66d04ed568001785f3a1e3d7b5e803",
+      "local_sha256": "96f78f5ce33a37b88285c815a2b97f3a1c7e10e1117b05c68c92e496eacaa302",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -1651,7 +1651,7 @@
       "destination": "web-console/src/presentation/right-panel/RightPanel.tsx",
       "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection",
+      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection WEB-RESET-03: accessible close label follows the supplied occupant; same single right-panel seat.",
       "upstream_sha256": "718c0b7d21d48d32dba1676c91c9715c524a6ed23d9fdbe29d7b2c24bce55c60",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1665,7 +1665,7 @@
         "./SidebarRight.module.css",
         "react"
       ],
-      "local_sha256": "240afe3eb47abfaf2da28a89f32d5bb8f264c60da7fbdfda0aa7a8f426f8f48d",
+      "local_sha256": "28b346123bfa7b9403ccfd0ecda10ae896336d47a66e1f183052162ad4e246a8",
       "classification": "B"
     },
     {
@@ -2062,9 +2062,9 @@
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/presentation/settings/SettingsContent.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership.",
+      "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "3a87965517828c67e01d76bf34054439d3ab813dbde0be4119bed76385e2574d",
+      "local_sha256": "77dd01a46d76b59eef27ab7a0c5a8ac1a03a4bc25f35a7814b9f225805a0bfa6",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2085,6 +2085,54 @@
           "upstream_sha256": "fcde749f0cc6dba596f52875501d0872d019d558f7ee76b52aafbc813aebad17",
           "treatment": "Adapted field, badge, card and diagnostic styles only."
         }
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/Switch.tsx",
+      "destination": "web-console/src/presentation/primitives/Switch.tsx",
+      "treatment": "Direct controlled accessible Switch; caller owns only a local native CFG3 draft.",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "9f0f6db0de338793711b4333e87dcd2b82d06d8ad43aa362eb67efc63573ccb1",
+      "local_sha256": "6dc107fb1867c0ee082aaf20eb5c23900f6d2568c73820c32816abc6d43f7c0f",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "./Switch.module.css",
+        "clsx"
+      ],
+      "excluded_dependencies": [
+        "Host filesystem ownership",
+        "Cordis/plugin lifecycle",
+        "Harness configuration and runtime stores"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/Switch.module.css",
+      "destination": "web-console/src/presentation/primitives/Switch.module.css",
+      "treatment": "Direct theme-token switch track/thumb styling.",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "9baa1cfa828e5806cf59d88b82bbde6d9ba5f795c1105a2e819476388f734149",
+      "local_sha256": "13f11d90a28e7e4bf69a66260a2e5cf5bcb42b5bf18ecad168f9259dcf49071f",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Host filesystem ownership",
+        "Cordis/plugin lifecycle",
+        "Harness configuration and runtime stores"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/TextPreview.module.css",
+      "destination": "web-console/src/presentation/right-panel/ArtifactPreview.module.css",
+      "treatment": "Adapted header, bounded scrolling text and wrap styling; excludes Host filesystem, slots, registry and automatic reload.",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "792d87ed962b3fcbe39a50fca6f29faf4ca92dec4b63b6b260b14b74378e1e82",
+      "local_sha256": "ca616fa89fa860fb4db4d4bc123abffc6355dee497dba6a3170498551752eb97",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Host filesystem ownership",
+        "Cordis/plugin lifecycle",
+        "Harness configuration and runtime stores"
       ]
     }
   ],

@@ -6,6 +6,7 @@ import { startDogfood } from './dogfood-server';
 
 test('native Todo, Goal and Queue docks follow the real App Server through control, loss and reload', async ({ page }) => {
   const fixture = await startDogfood('web_composer_context');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const connect = async () => {
@@ -81,6 +82,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await message.fill('Queued during the Goal round'); await page.getByRole('button', { name: 'Queue', exact: true }).click();
     await expect(queue.locator('[data-inbound-sequence]')).toContainText('Queued during the Goal round');
     await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator('[data-harness-frame]')).toHaveAttribute('data-sidebar-collapsed', 'true');
     await aligned([todo, goal, queue]);
     await expect(queue.getByRole('button', { name: 'Edit', exact: true })).toBeVisible();
     await expect(queue.getByRole('button', { name: 'Remove', exact: true })).toBeVisible();
@@ -149,6 +151,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(queue).toHaveCount(0);
     await aligned([todo, goal]);
     await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator('[data-harness-frame]')).toHaveAttribute('data-sidebar-collapsed', 'true');
     await aligned([todo, goal]);
     await expect(goal.getByRole('button', { name: 'Resume goal' })).toBeVisible();
     await page.screenshot({ path: 'test-results/composer-mobile.png', fullPage: true });

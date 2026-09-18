@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Integrations } from '../src/app/settings/Integrations';
 import type { SaveSource } from '../src/app/settings/controls';
-import { cfg3Source } from './cfg3-fixture';
+import { cfg3Source } from './cfg3-data';
 afterEach(cleanup);
 it('edits MCP definition independently from Root selection and retains exact source revision', async () => {
   const source = cfg3Source();

@@ -75,6 +75,12 @@ test('CFG3 structured source authoring, inert definitions, CAS and explicit publ
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: test.info().outputPath('cfg3-settings-mobile.png'), fullPage: true });
+    await settings.getByRole('button', { name: 'Appearance', exact: true }).click();
+    await settings.getByLabel('Theme', { exact: true }).selectOption('dark');
+    await settings.getByRole('button', { name: 'Agents', exact: true }).click();
+    await settings.getByRole('button', { name: 'Edit Agent reviewer', exact: true }).click();
+    await settings.getByRole('form', { name: 'Agent reviewer', exact: true }).evaluate(el => el.scrollIntoView({ block: 'start' }));
+    await page.screenshot({ path: test.info().outputPath('cfg3-agent-mobile-dark.png') });
     expect(errors).toEqual([]);
     expect(existsSync(join(fixture.directory, 'mcp-started'))).toBe(false);
   } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }

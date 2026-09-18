@@ -14,7 +14,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const message = page.getByRole('textbox', { name: 'Message', exact: true });
-  const facts = page.getByLabel('Runtime facts', { exact: true });
+  const facts = page.getByLabel('Native diagnostic JSON', { exact: true });
   const command = async (name: string) => { await message.fill(`/${name}`); await message.press('Enter'); return page.getByRole('dialog', { name: `/${name}`, exact: true }); };
   const settled = () => expect(page.locator('.attempt-status')).toContainText('settled');
   try {

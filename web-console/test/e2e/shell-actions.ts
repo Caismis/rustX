@@ -21,4 +21,6 @@ export async function showInspector(page: Page) {
   const panel = page.getByRole('complementary', { name: 'Developer inspector' });
   if (!await panel.isVisible()) await page.getByRole('button', { name: 'Toggle Inspector' }).click();
   await expect(panel).toBeVisible();
+  const details = panel.getByText('Complete native runtime facts', { exact: true });
+  if (!await panel.getByLabel('Native diagnostic JSON').isVisible()) await details.click();
 }

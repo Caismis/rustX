@@ -15,7 +15,7 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const message = page.getByRole('textbox', { name: 'Message', exact: true });
   const canonical = page.getByLabel('Canonical conversation');
-  const id = async () => JSON.parse(await page.getByLabel('Runtime facts').innerText()).SessionId as string;
+  const id = async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId as string;
   const connect = async () => {
     await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
     await page.getByLabel('Transport token').fill(fixture.token);

@@ -12,7 +12,7 @@ export function ModelSelectionFields({ value, change, models }: { value: ModelLa
     {value.reasoning_profile?.mode === 'profile' && <TextField label="Profile identity" required value={value.reasoning_profile.name} change={name => change({ ...value, reasoning_profile: { mode: 'profile', name } })} />}
     <label>Output limit<input type="number" min="1" value={value.max_output_tokens?.mode === 'limit' ? value.max_output_tokens.tokens : ''} onChange={e => change({ ...value, max_output_tokens: e.target.value ? { mode: 'limit', tokens: Number(e.target.value) } : { mode: 'catalog_default' } })} /></label>
     <RequestPolicy value={value.request_params ?? {}} change={request_params => change({ ...value, request_params })} />
-    <label>Summary model<select value={value.summary_model?.mode === 'explicit' ? value.summary_model.model : ''} onChange={e => change({ ...value, summary_model: e.target.value ? { mode: 'explicit', model: e.target.value } : { mode: 'session' } })}><option value="">Follow selected model</option>{models.map(id => <option key={id}>{id}</option>)}</select></label>
+    <label>Summary model<select value={value.summary_model?.mode === 'explicit' ? value.summary_model.model : ''} onChange={e => change({ ...value, summary_model: e.target.value ? { mode: 'explicit', model: e.target.value } : { mode: 'session' } })}><option value="">Follow selected model</option>{[...new Set([...models, ...(value.summary_model?.mode === 'explicit' ? [value.summary_model.model] : [])])].map(id => <option key={id}>{id}</option>)}</select></label>
   </>;
 }
 export function SourceSelections({ value, change }: { value: Record<string, 'all' | string[]>; change: (value: Record<string, 'all' | string[]>) => void }) {

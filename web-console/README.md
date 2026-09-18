@@ -307,3 +307,7 @@ User config path and fixed User resource root are displayed separately.
 See [the complete Settings contract](../docs/web-settings.md) and
 [configuration reference](../docs/configuration.md). Browser regressions exercise
 Save/Reload, CAS external edits, named-Agent editing and desktop/mobile views.
+
+The [Settings/native auxiliary architecture](SETTINGS-ARCHITECTURE.md) documents CFG3 ownership, draft recovery, resource cards, appearance and bounded artifact preview.
+
+Reset #347 validation and browser evidence: [acceptance record](RESET-347-VALIDATION.md).

@@ -5,7 +5,7 @@ import { CatalogEditor } from '../src/app/settings/CatalogEditor';
 import { RootEditor } from '../src/app/settings/RootEditor';
 import { RuntimeEditor } from '../src/app/settings/RuntimeEditor';
 import { AgentEditor } from '../src/app/settings/AgentEditor';
-import { cfg3Effective, cfg3Source } from './cfg3-fixture';
+import { cfg3Effective, cfg3Source } from './cfg3-data';
 import type { SaveSource } from '../src/app/settings/controls';
 afterEach(cleanup);
 const save = () => vi.fn<SaveSource>().mockResolvedValue(undefined);
@@ -52,4 +52,37 @@ it('round-trips an independent Agent profile with delegation, guidance, model an
   render(<AgentEditor source={source} scope="workspace" models={['main']} save={write} />);
   fireEvent.click(screen.getByRole('button', { name: 'Edit Agent reviewer' })); fireEvent.click(screen.getByRole('button', { name: 'Save Agent reviewer' }));
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'agent', scope: 'workspace', name: 'reviewer', authored }, 'agent-r1'));
+});
+it.each(['search', 'python:analysis'])('keeps all, none and exact Tool selection distinct for %s', async id => {
+  const write = save(); render(<RootEditor document={{ agent: { tools: { sources: { [id]: [] } } } }} scope="user" revision="tools-r1" save={write} section="root-tools" models={[]} skillRoots={[]} />);
+  const form = within(screen.getByRole('form', { name: `Source ${id}` }));
+  for (const mode of ['all', 'none', 'exact']) {
+    fireEvent.change(form.getByLabelText('Selection'), { target: { value: mode } });
+    if (mode === 'exact') fireEvent.change(form.getByRole('textbox', { name: `${id} identities 1` }), { target: { value: 'inspect' } });
+    fireEvent.click(form.getByRole('button', { name: `Save Source ${id}` }));
+    await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', scope: 'user', mutation: { unit: 'source_tools', id, authored: mode === 'all' ? 'all' : mode === 'none' ? [] : ['inspect'] } }, 'tools-r1'));
+  }
+});
+it('replaces Root model intent and project guidance as independent native units', async () => {
+  const write = save();
+  render(<RootEditor document={{ agent: { model: { model: 'main', request_params: { temperature: .4 } } } }} scope="workspace" revision="root-r1" save={write} section="root-model" models={['main', 'summary']} skillRoots={[]} />);
+  const model = within(screen.getByRole('form', { name: 'Root model' }));
+  fireEvent.change(model.getByLabelText('Reasoning profile'), { target: { value: 'profile' } });
+  fireEvent.change(model.getByLabelText('Profile identity'), { target: { value: 'deep' } });
+  fireEvent.change(model.getByLabelText('Output limit'), { target: { value: '4096' } });
+  fireEvent.change(model.getByLabelText('Summary model'), { target: { value: 'summary' } });
+  fireEvent.click(model.getByRole('button', { name: 'Save Root model' }));
+  await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', scope: 'workspace', mutation: { unit: 'root_model', authored: { model: 'main', request_params: { temperature: .4 }, reasoning_profile: { mode: 'profile', name: 'deep' }, max_output_tokens: { mode: 'limit', tokens: 4096 }, summary_model: { mode: 'explicit', model: 'summary' } } } }, 'root-r1'));
+  fireEvent.change(model.getByLabelText('Reasoning profile'), { target: { value: 'catalog_default' } });
+  fireEvent.change(model.getByLabelText('Output limit'), { target: { value: '' } });
+  fireEvent.click(model.getByRole('button', { name: 'Save Root model' }));
+  await waitFor(() => expect(write.mock.calls.at(-1)?.[0]).toMatchObject({ mutation: { authored: { reasoning_profile: { mode: 'catalog_default' }, max_output_tokens: { mode: 'catalog_default' } } } }));
+  const guidance = within(screen.getByRole('form', { name: 'Project guidance' }));
+  fireEvent.click(guidance.getByLabelText('Include project guidance'));
+  fireEvent.click(guidance.getByRole('button', { name: 'Save Project guidance' }));
+  await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', scope: 'workspace', mutation: { unit: 'project_guidance', authored: { inherit: false } } }, 'root-r1'));
+  fireEvent.click(guidance.getByRole('button', { name: 'Add Guidance files' }));
+  fireEvent.change(guidance.getByRole('textbox', { name: 'Guidance files 1' }), { target: { value: 'REVIEW.md' } });
+  fireEvent.click(guidance.getByRole('button', { name: 'Save Project guidance' }));
+  await waitFor(() => expect(write.mock.calls.at(-1)?.[0]).toMatchObject({ mutation: { authored: { inherit: false, files: ['REVIEW.md'] } } }));
 });

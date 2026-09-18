@@ -1,4 +1,3 @@
-import { NativeFacts } from './components/NativeFacts';
 import { SettingsCard, Facts } from '../presentation/settings/SettingsContent';
 import css from '../presentation/settings/SettingsContent.module.css';
 import { useState, useSyncExternalStore } from 'react';
@@ -35,7 +34,7 @@ export function Inspector({ client, state, view }: { client: AppServerClient; st
     <div className="eyebrow">RUSTX / INSPECTOR</div>
     <h2>Runtime facts</h2>
     <p className="muted">Read from the selected Session. Stale values describe the last observation.</p>
-    <SettingsCard title="Identity & execution"><Facts rows={[["Connection", state.connection], ["Session", view?.id], ["Conversation", facts.ConversationId], ["Attachment", view?.attachment], ["Resource generation", facts.resource_revision], ["Capabilities revision", facts.capability_revision], ["Approval mode", facts.approval_mode]]} /><details><summary>Complete native runtime facts</summary><div aria-label="Runtime facts"><NativeFacts value={facts} /></div></details></SettingsCard>
+    <SettingsCard title="Identity & execution"><Facts rows={[["Connection", state.connection], ["Session", view?.id], ["Conversation", facts.ConversationId], ["Attachment", view?.attachment], ["Resource generation", facts.resource_revision], ["Capabilities revision", facts.capability_revision], ["Approval mode", facts.approval_mode]]} /><details><summary>Complete native runtime facts</summary><pre aria-label="Native diagnostic JSON">{json(facts)}</pre></details></SettingsCard>
     <details><summary>Server capabilities</summary><pre>{json(state.capabilities)}</pre></details>
     <details><summary>Explicit Session selections</summary><pre>{json(view?.settings)}</pre></details>
     <h2>Wire protocol</h2>
