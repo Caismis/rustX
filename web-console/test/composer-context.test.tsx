@@ -396,14 +396,17 @@ describe('Queue dock binds the native inbound mailbox', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Steer' })).toBeNull();
     await update(running());
-    expect(screen.getByRole('button', { name: 'Cancel turn' })).toBeTruthy();
-    expect(screen.getByText('Queue and Steer enter the native mailbox at a safe boundary')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
+    expect(screen.queryByText('Queue and Steer enter the native mailbox at a safe boundary')).toBeNull();
+    expect(screen.queryByLabelText('Delivery')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull();
     await sendQueued('While running');
     await server.waitFor('turn/start', 1);
     expect(methods()).not.toContain('turn/steer');
-    fireEvent.change(screen.getByLabelText('Delivery'), { target: { value: 'steer' } });
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Steer running attempt' } });
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Steer' })));
+    expect(screen.getByRole('button', { name: 'Queue' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+    await act(async () => fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter', ctrlKey: true }));
     const steered = await server.waitFor('turn/steer', 1);
     expect(steered.params).toMatchObject({ target: server.target('A'), content: [{ type: 'text', text: 'Steer running attempt' }] });
     await update(snapshot());
@@ -418,7 +421,8 @@ describe('Queue dock binds the native inbound mailbox', () => {
     server.held.add('turn/start');
     await sendQueued('Queued draft');
     const turn = await server.waitFor('turn/start', 1);
-    expect(screen.getByRole('button', { name: 'Awaiting acknowledgement…' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
+    expect(screen.getByText('Awaiting acknowledgement…')).toBeTruthy();
     // No count header: the in-flight request is not counted as queued.
     expect(within(dock('Queue')).queryByRole('button', { expanded: false })).toBeNull();
     expect(dock('Queue').querySelectorAll('li')).toHaveLength(1);
@@ -454,6 +458,7 @@ describe('Queue dock binds the native inbound mailbox', () => {
     await sendQueued('Lost acknowledgement');
     await server.waitFor('turn/start', 1);
     act(() => server.socket.close());
+    expect(screen.getByLabelText('Message')).toHaveProperty('value', 'Lost acknowledgement');
     expect(region('Queue')).toBeNull();
     expect(server.client.getSnapshot().uncertain.map(item => item.method)).toEqual(['turn/start']);
     expect(screen.getByText('Outcome uncertain: turn/start')).toBeTruthy();
@@ -464,6 +469,7 @@ describe('Queue dock binds the native inbound mailbox', () => {
     await waitFor(() => expect(dock('Queue').querySelector('[data-message-id="accepted-user"]')).toBeTruthy());
     expect(dock('Queue').querySelector('[data-submission-echo]')).toBeNull();
     expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+    expect(screen.getByLabelText('Message')).toHaveProperty('value', 'Lost acknowledgement');
   });
 });
 
@@ -473,21 +479,29 @@ describe('Composer context stack lifecycle', () => {
     const ui = await mount(full);
     const order = () => [...ui.container.querySelector('[data-composer-context-stack]')!.children].map(node => node.getAttribute('aria-label') ?? (node.querySelector('[data-composer-card]') ? 'Composer' : 'unknown'));
     expect(order()).toEqual(['To-dos', 'Goal', 'Queue', 'Composer']);
+    const message = screen.getByLabelText('Message');
+    fireEvent.change(message, { target: { value: 'Independent composer draft' } });
     fireEvent.click(within(dock('To-dos')).getByRole('button', { expanded: false }));
     fireEvent.click(goalButton('Edit goal objective'));
     fireEvent.change(within(dock('Goal')).getByRole('textbox'), { target: { value: 'Kept draft' } });
     // Queue disappears: Todo disclosure and Goal draft are unaffected.
     await update(running(withGoal(goal(), withTodos([task('1', 'pending')]))));
     expect(order()).toEqual(['To-dos', 'Goal', 'Composer']);
+    expect(screen.getByLabelText('Message')).toBe(message);
+    expect(message).toHaveProperty('value', 'Independent composer draft');
     expect(within(dock('To-dos')).getByRole('button', { expanded: true })).toBeTruthy();
     expect(within(dock('Goal')).getByRole('textbox')).toHaveProperty('value', 'Kept draft');
     // Todo disappears and Queue returns collapsed; Goal keeps its own draft.
     await update(running(withQueue([inbound('3', 'three'), inbound('4', 'four')], withGoal(goal()))));
     expect(order()).toEqual(['Goal', 'Queue', 'Composer']);
+    expect(screen.getByLabelText('Message')).toBe(message);
+    expect(message).toHaveProperty('value', 'Independent composer draft');
     expect(within(dock('Queue')).getByRole('button', { expanded: false })).toBeTruthy();
     expect(within(dock('Goal')).getByRole('textbox')).toHaveProperty('value', 'Kept draft');
     await update(withTodos([task('1', 'pending')]));
     expect(order()).toEqual(['To-dos', 'Composer']);
+    expect(screen.getByLabelText('Message')).toBe(message);
+    expect(message).toHaveProperty('value', 'Independent composer draft');
     expect(within(dock('To-dos')).getByRole('button', { expanded: false })).toBeTruthy();
   });
   it('the stack composes fixed seats regardless of which docks render', () => {
@@ -499,7 +513,9 @@ describe('Composer context stack lifecycle', () => {
     server.snapshots.set('B', withTodos([task('1', 'pending')], snapshot('B')));
     await mount(withTodos([task('1', 'pending')]), 'B');
     fireEvent.click(within(dock('To-dos')).getByRole('button', { expanded: false }));
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Only Session A' } });
     fireEvent.click(screen.getByRole('tab', { name: 'Session B' }));
+    expect(screen.getByLabelText('Message')).toHaveProperty('value', '');
     expect(within(dock('To-dos')).getByRole('button', { expanded: false })).toBeTruthy();
   });
   it('disconnect clears only accepted presentation echoes; reconnect rebuilds docks from the new authoritative snapshot', async () => {

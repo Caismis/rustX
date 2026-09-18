@@ -255,7 +255,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
         composer={<AgentComposer key={`${view.snapshot?.conversation_id ?? view.id}:${restored?.conversation === view.snapshot?.conversation_id ? 'restored' : 'draft'}`} initialContent={restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined}
           disabled={composerDisabled} busy={sending[view.id] === state.generation} active={activeAttempt(view.snapshot)}
           lineageSwitchSafe={lineageSwitchSafe(view)} hasGoal={!!goalDock(view.snapshot)} onCommand={id => invokeCommand({ id })}
-          consumed={consumed} stopDisabled={!!view.cancellation}
+          consumed={consumed} cancellationAvailable={attached && !view.cancellation && !view.snapshot?.shutting_down && !view.snapshot?.durability_failure}
           model={<AgentControls key={`model:${view.id}`} client={client} view={view} kind="model"/>}
           permission={<AgentControls key={`permission:${view.id}`} client={client} view={view} kind="permission"/>}
           onCancel={() => run(() => client.cancelTurn(view.id))} onUpload={files => client.upload(view.id, files)} onSend={async (text, receipts, delivery) => {

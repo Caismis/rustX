@@ -28,7 +28,7 @@ as history; they never feed a dock.
 | Dock | Native owner | Projection | Controls |
 | --- | --- | --- | --- |
 | Todo | Conversation-owned `ConversationTodoList` | `snapshot.todos` | none |
-| Goal | `GoalDomain` (durable) + process-local activation | `snapshot.goal` (`GoalView`) | `goal/control` pause, resume, edit objective, edit budget |
+| Goal | `GoalDomain` durable phase | `snapshot.goal` (`GoalView`) | `goal/control` pause, resume, edit objective, edit budget |
 | Queue | Conversation inbound mailbox | `snapshot.inbound.pending`, `snapshot.attempt` | exact pending edit/remove (WEB-06) |
 
 No App Server protocol change was needed: all three facts were already typed in
@@ -141,11 +141,34 @@ never reorders or adopts mailbox entries.
 
 `turn/start` and `turn/steer` dispatch to the same native `submit_inbound`
 (`src/app_server/connection.rs`). **Send** while idle dispatches `turn/start`.
-While the authoritative attempt is running, the delivery selector offers **Queue**
-(`turn/start`) and **Steer (same mailbox)** (`turn/steer`). Both enter the same
-native mailbox and drain at a safe boundary; Steer does not promise interruption,
-priority, or a separate execution mode. Returning to idle always uses `turn/start`,
-even if Steer was previously selected. The selected delivery is presentation only.
+The pure `app/composer/submission-policy.ts` boundary derives the primary seat
+from the authoritative running state, actionable draft, typed command/discovery
+classification, upload readiness, acknowledgement state, message block and
+cancellation availability. It returns an action kind, truthful label/tooltip,
+disabled state and, for ordinary messages, the existing client delivery argument.
+
+| Current facts | Primary seat | Operation |
+| --- | --- | --- |
+| Idle, actionable message | Send | `turn/start` (`send`) |
+| Idle, empty | disabled Send | none |
+| Running, empty or owner-blocked | Stop, disabled if cancellation unavailable/pending | existing `cancelTurn` |
+| Running, ready message | Queue | `turn/start` (`send`) |
+| Slash/discovery draft | Run command or Review command | typed selection/adjudication; never message delivery |
+| Upload unresolved or acknowledgement pending | disabled submit; acknowledgement status below card | none |
+
+Plain Enter and clicking the message primary button use the same policy. While
+running, Ctrl/Cmd+Enter selects **Steer** (`turn/steer`) through that function;
+while idle it remains Send. Shift+Enter is a newline, and IME/keyCode 229 bypasses
+the key handling. Empty Enter never invokes Stop. Both message transports enter
+the existing native mailbox; Steer promises neither interruption nor priority.
+There is no local delivery selector, durable busy-Enter setting or browser queue.
+The current Web binding addresses root Sessions, with no continuable-child input
+scope; it therefore has no independent Stop + Send exception.
+
+A Stop click only requests cancellation. The existing client fences repeated
+requests through acknowledgement/uncertainty until an authoritative attempt
+snapshot settles it. Message readiness and cancellation availability are separate:
+a pending model change can block messages without disabling native cancellation.
 
 A submission passes three presentation stages:
 
@@ -181,6 +204,33 @@ Every dock is the composer card width minus four 8px dock insets and centred on 
 same axis, in normal flow (no fixed or sticky positioning). Todo and Queue lists are
 bounded at 180px; Goal text ellipsizes and wraps below its actions on narrow
 viewports. The real-server browser test measures the alignment at 1440px and 390px.
+
+### Editor and toolbar (WEB-11)
+
+The native textarea starts at the Harness **36px** one-line floor. `rows={1}`
+only supplies the initial native fallback; `useTextareaAutosize` measures content
+before paint on mount/draft changes, and ResizeObserver measures width changes
+(including mobile/sidebar and hidden interaction takeover restoration). Deletion
+shrinks it again. CSS owns the existing `--dsh-composer-text-max-height` cap
+(336px in the Conversation seat); the textarea is the **only draft scrollport**.
+The inset, card and attachment rail do not become nested vertical draft scrollers.
+The existing theme typography is inherited; current Appearance exposes theme only,
+not a composer font-size setting. Session/conversation keys and restored-input
+validation are unchanged. Drafts are not persisted or replayed on remount.
+
+The card retains its width axis, 22px corners, elevation, 12px gap and toolbar
+rhythm. Left: compact `+` command launcher, quiet paperclip intake accessory and
+permission control (effective policy is available on its tooltip; pending Reload
+keeps the effective/desired distinction and action visible). Right: bounded model control and one primary action. The
+paperclip remains keyboard/touch accessible because rustX has no typed file-intake
+slash command; it uses an unfilled accessory treatment instead of a second `+`
+launcher. The receipt rail appears inside the card only when populated. Controls
+wrap when needed on narrow widths; desktop remains one toolbar row.
+
+Permanent mailbox explanation and keyboard hint chrome are removed. Only an
+in-flight acknowledgement occupies the low-priority status seat below the card.
+Upload errors, ordered-input refusal, App-level uncertainty, durability failure
+and reconnect diagnostics remain visible.
 
 ## Uploads
 
@@ -265,8 +315,8 @@ stack and accepted-MessageId echo contract remain intact. Exact accepted queue e
 `AgentComposer` binds native draft/upload/command operations to the pinned Harness
 editor, tools, modes and trailing seats. IME composition (including keyCode 229),
 Enter/Shift+Enter, focus restoration, upload receipts and command discovery keep
-one implementation. The active empty editor exposes Stop; a nonempty draft adds
-Queue/Steer submission. Stop acknowledgement only records a cancellation request.
+one implementation. The active empty editor exposes Stop; a ready message replaces that seat with
+Queue submission (Ctrl/Cmd+Enter selects Steer). Stop acknowledgement only records a cancellation request.
 The native attempt phase alone supplies terminal presentation; disconnect is inert.
 
 `AgentControls` reads exact `settings/models` and `settings/model` data. Both the

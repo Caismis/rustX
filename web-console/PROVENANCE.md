@@ -334,3 +334,34 @@ read-result/error fencing, and `Integrations.tsx` records the new pure rustX MCP
 transport display adapter. Their reviewed local hashes/imports were updated
 explicitly. Shared Summary controls in `AgentEditor.tsx` and `bindings/mcp.ts`
 are rustX-authored; no additional Harness source or business authority was imported.
+
+## WEB-11 composer convergence (#355)
+
+Both `c291e7961a515f6d7af9304e7fd1d257929aef26` (Epic baseline) and
+`ddefc45fbc7f8e46dd73185e68295696d1297887` (current issue reference) were
+inspected for `InputBar.tsx`, `InputBar.module.css`,
+`ConversationRoot.module.css`, `contract/slots.ts`, `input/submission-policy.ts`
+and `submission-settings.ts` under `packages/client/ui-conversation/src/`
+(the first three are under `client/skeleton/`; the next two under `client/`).
+
+The repository already used `ddefc45…` for AgentComposer and its stylesheet.
+Their existing source records now describe removal of the local tall-input and
+delivery-selector overrides, the one primary seat, and native textarea scroll
+adaptation. **No WebUI repin or unrelated source resync occurs.**
+
+`src/app/composer/submission-policy.ts` materially adapts the gesture mapping from
+current `client/input/submission-policy.ts` and root-seat decision from
+`client/skeleton/InputBar.tsx`; its new record includes both exact upstream
+SHA-256 hashes, the local hash, treatment, dependencies and exclusions. The
+settings file was inspected for the Queue default, not imported. The existing
+`PermissionSelect.tsx` record also tracks its bounded effective-policy tooltip
+prop; its upstream pin and hash are unchanged. The settings
+store, Lexical, slot/plugin system, continuable-child transport and queued-item
+steering remain excluded. rustX's typed client/native owners replace those
+runtime boundaries. The textarea measurement hook is rustX code.
+
+All twelve reviewed source versions are recorded in the inspection inventory
+unless already present. MIT/DeepSeek copyright is retained in the adapted policy;
+the existing complete Harness license and production third-party notices remain
+unchanged. `check:provenance` checks local hashes/import closure; the optional
+`--reference` audit verifies original hashes against the exact external checkout.

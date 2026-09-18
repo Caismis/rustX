@@ -8,12 +8,14 @@ import { commands, available, discoveryQuery, parseCommand, type CommandId } fro
 import { matchCommands } from '../commands/matching';
 import { CommandMenu } from '../commands/CommandMenu';
 import { editableContent } from '../composer/editor-content';
+import { composerSubmissionPolicy, type SubmitGesture } from '../composer/submission-policy';
+import { useTextareaAutosize } from '../composer/useTextareaAutosize';
 import { isOutcomeUncertain } from '../../client/app-server';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
-export function AgentComposer({ disabled, busy, active, onSend, onUpload, onCancel, onCommand, hasGoal = false, lineageSwitchSafe = false, initialContent = [], consumed, model, permission, stopDisabled = false }: {
-  disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode; stopDisabled?: boolean;
+export function AgentComposer({ disabled, busy, active, onSend, onUpload, onCancel, onCommand, hasGoal = false, lineageSwitchSafe = false, initialContent = [], consumed, model, permission, cancellationAvailable = !disabled }: {
+  disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode; cancellationAvailable?: boolean;
   onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer') => Promise<boolean>;
   onUpload: (files: readonly File[]) => Promise<UploadedFile[]>; onCancel: () => void;
   onCommand?: (id: CommandId) => void; hasGoal?: boolean; lineageSwitchSafe?: boolean; initialContent?: UserInputBlock[];
@@ -57,12 +59,18 @@ export function AgentComposer({ disabled, busy, active, onSend, onUpload, onCanc
   }, [consumed]);
   const [restored, setRestored] = useState(() => restoreSupported ? initialContent.flatMap(block => block.type === 'upload' ? [block] : []) : []);
   const [dismissed, setDismissed] = useState(false), [highlight, setHighlight] = useState(0);
-  const [delivery, setDelivery] = useState<'send' | 'steer'>('send');
   const picker = useRef<HTMLInputElement>(null);
   const input = useRef<HTMLTextAreaElement>(null), root = useRef<HTMLDivElement>(null);
+  useTextareaAutosize(input, draft);
   const query = discoveryQuery(draft);
   const menu = onCommand && query !== undefined && !dismissed && !disabled && !busy;
   const rows = matchCommands(query ?? '', commands.filter(command => available(command, active, hasGoal, lineageSwitchSafe)));
+  const parsed = parseCommand(draft);
+  const selectedCommand = menu && rows[highlight] ? rows[highlight].id : parsed.type === 'command' ? parsed.id : undefined;
+  const facts = { running: active, actionable: !!draft.trim() || files.length > 0 || restored.length > 0,
+    draftKind: parsed.type === 'text' ? 'message' as const : selectedCommand ? 'command' as const : 'unsupported-command' as const,
+    blocked: disabled, acknowledging: busy, uploadsPending: pending, cancellationAvailable };
+  const primary = composerSubmissionPolicy(facts);
   const invoke = (id: CommandId) => {
     if (disabled || busy) return;
     if (files.length || restored.length) { setError('Remove draft attachments before invoking a command.'); return; }
@@ -77,16 +85,17 @@ export function AgentComposer({ disabled, busy, active, onSend, onUpload, onCanc
     document.addEventListener('pointerdown', outside);
     return () => document.removeEventListener('pointerdown', outside);
   }, [menu]);
-  const submit = async () => {
-    if (disabled || busy || pending || (!draft.trim() && !files.length && !restored.length)) return;
-    const parsed = parseCommand(draft);
-    if (parsed.type !== 'text') {
-      if (parsed.type === 'command') invoke(parsed.id);
+  const submit = async (gesture: SubmitGesture = 'enter') => {
+    const action = composerSubmissionPolicy(facts, gesture);
+    // Enter submits a draft; it never cancels an empty running Session.
+    if (action.disabled || action.kind === 'stop') return;
+    if (action.kind === 'command') {
+      if (selectedCommand) invoke(selectedCommand);
       else setError('Unsupported command. Edit the draft; it will not be sent as a prompt.');
       return;
     }
     const submitted = draft;
-    if (await onSend(submitted, [...restored, ...files.map(file => file.receipt!)], active ? delivery : 'send')) { setDraft(current => current === submitted ? '' : current); setFiles([]); setRestored([]); input.current?.focus(); }
+    if (await onSend(submitted, [...restored, ...files.map(file => file.receipt!)], action.delivery)) { setDraft(current => current === submitted ? '' : current); setFiles([]); setRestored([]); input.current?.focus(); }
   };
   return <div ref={root} className={css.root} onDragOver={event => { if (!disabled && !busy && event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(true); } }}
     onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
@@ -94,41 +103,43 @@ export function AgentComposer({ disabled, busy, active, onSend, onUpload, onCanc
     {dragging && <div className="attachment-drop" role="status">Drop attachments · 8 files · 256 KiB each</div>}
     {error && <p role="alert">{error}</p>}
     {!restoreSupported && <p role="alert">Cannot restore this ordered native input in the flat Web editor. Only uploads followed by at most one nonempty text block are editable. No input was reordered or sent; use an ordered-block client for this history.</p>}
-    {restored.map((receipt, index) => <div key={JSON.stringify([receipt.batch_id, receipt.token])}><span>Native restored upload batch {receipt.batch_id}</span><Button onClick={() => setRestored(current => current.filter((_, at) => at !== index))}>Remove draft upload</Button></div>)}
-    <div className="attachment-rail" aria-label="Draft attachments">{files.map(item => <div key={item.id}><DraftAttachment file={item.file} remove={() => setFiles(current => current.filter(file => file.id !== item.id))} /><small role="status">{item.status === 'complete' ? 'Uploaded' : item.status === 'uploading' ? 'Uploading…' : item.status === 'uncertain' ? 'Upload outcome uncertain. Reconnect and inspect authoritative state; do not replay.' : item.error}</small></div>)}</div>
     <div className={css.card} data-composer-card>
       {menu && <CommandMenu rows={rows} active={highlight} select={invoke} highlight={setHighlight} />}
-      <div className={css.scroll}><div className={css.grow}>
+      {restored.map((receipt, index) => <div key={JSON.stringify([receipt.batch_id, receipt.token])}><span>Native restored upload batch {receipt.batch_id}</span><Button onClick={() => setRestored(current => current.filter((_, at) => at !== index))}>Remove draft upload</Button></div>)}
+      <div className={css.attachments} aria-label="Draft attachments">{files.map(item => <div key={item.id}><DraftAttachment file={item.file} remove={() => setFiles(current => current.filter(file => file.id !== item.id))} /><small role="status">{item.status === 'complete' ? 'Uploaded' : item.status === 'uploading' ? 'Uploading…' : item.status === 'uncertain' ? 'Upload outcome uncertain. Reconnect and inspect authoritative state; do not replay.' : item.error}</small></div>)}</div>
+      <div className={css.editor}>
         <textarea ref={input} className={css.input} aria-label="Message" placeholder="Give this Session a task…"
           aria-controls={menu ? 'composer-commands' : undefined} aria-expanded={!!menu} aria-activedescendant={menu && rows[highlight] ? `command-${rows[highlight].id}` : undefined}
-          value={draft} disabled={disabled || busy} rows={3} onChange={event => { setDraft(event.target.value); setDismissed(false); setHighlight(0); setError(''); }}
+          value={draft} disabled={disabled || busy} rows={1} onChange={event => { setDraft(event.target.value); setDismissed(false); setHighlight(0); setError(''); }}
           onPaste={event => { const pasted = Array.from(event.clipboardData.files); if (pasted.length) { event.preventDefault(); pick(pasted); } }}
           onKeyDown={event => {
             if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
             if (menu && event.key === 'Escape') { event.preventDefault(); setDismissed(true); return; }
             if (menu && rows.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); setHighlight(index => (index + (event.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length); return; }
-            if (menu && rows[highlight] && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); invoke(rows[highlight].id); return; }
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
-              event.preventDefault(); void submit();
+              event.preventDefault(); void submit(event.ctrlKey || event.metaKey ? 'accelerated' : 'enter');
             }
           }} />
-      </div></div>
+      </div>
       <div className={css.row}>
         <div className={css.tools}>
-          {onCommand && <button type="button" className={css.add} aria-label="Commands" disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={() => { if (draft.trim() && discoveryQuery(draft) === undefined) { setError('Type / in an empty composer to discover commands. Your draft is preserved.'); return; } setDraft('/'); setDismissed(false); setHighlight(0); input.current?.focus(); }}>+</button>}
+          {onCommand && <button type="button" className={css.add} aria-label="Commands" title="Commands" aria-haspopup="listbox" aria-expanded={!!menu} disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={() => { if (draft.trim() && discoveryQuery(draft) === undefined) { setError('Type / in an empty composer to discover commands. Your draft is preserved.'); return; } setDraft('/'); setDismissed(false); setHighlight(0); input.current?.focus(); }}>+</button>}
           <input ref={picker} type="file" hidden multiple aria-label="Attach files" disabled={disabled || busy} onChange={event => { pick(Array.from(event.target.files ?? [])); event.target.value = ''; }}/>
-          <button type="button" className={css.add} aria-label="Add attachments" disabled={disabled || busy} onClick={() => picker.current?.click()}>↗</button>
+          <button type="button" className={css.attachment} aria-label="Add attachments" title="Add attachments" disabled={disabled || busy} onClick={() => picker.current?.click()}><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden><path d="m8 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9M6 14l8-8" /></svg></button>
           <div className={css.modes}>{permission}</div>
         </div>
         <div className={css.trailing}>
-          {active && <select aria-label="Delivery" title="Queue and Steer enter the native mailbox at a safe boundary" disabled={disabled || busy} value={delivery} onChange={event => setDelivery(event.target.value as 'send' | 'steer')}><option value="send">Queue</option><option value="steer">Steer (same mailbox)</option></select>}
           {model}
-          {active && <button type="button" className={css.primary} aria-label="Cancel turn" title="Stop" disabled={disabled || stopDisabled} onMouseDown={event => event.preventDefault()} onClick={onCancel}><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg></button>}
-          {(!active || !!draft.trim() || files.length > 0 || restored.length > 0) && <button type="button" className={css.primary} aria-label={busy ? 'Awaiting acknowledgement…' : active ? delivery === 'steer' ? 'Steer' : 'Queue' : 'Send'} disabled={disabled || busy || pending || (!draft.trim() && !files.length && !restored.length)} onMouseDown={event => event.preventDefault()} onClick={() => void submit()}><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><path d="M8 13V3m-4 4 4-4 4 4" fill="none" stroke="currentColor" strokeWidth="2"/></svg></button>}
+          <button type="button" className={css.primary} data-composer-primary={primary.kind} aria-label={primary.label} title={primary.title}
+            disabled={primary.disabled} onMouseDown={event => event.preventDefault()} onClick={() => { if (primary.kind === 'stop') onCancel(); else void submit(); }}>
+            {primary.kind === 'stop'
+              ? <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
+              : <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><path d="M8 13V3m-4 4 4-4 4 4" fill="none" stroke="currentColor" strokeWidth="2"/></svg>}
+          </button>
         </div>
       </div>
-      <span className="agent-composer-hint" data-delivery={active ? delivery === 'steer' ? 'steer' : 'queue' : 'send'}>{busy ? 'Awaiting acknowledgement…' : active ? 'Queue and Steer enter the native mailbox at a safe boundary' : 'Enter to send · Shift+Enter for newline'}</span>
     </div>
+    {busy && <div className={css.dock} role="status">Awaiting acknowledgement…</div>}
   </div>;
 }
 
