@@ -238,7 +238,12 @@ menu: only the explicit close releases its controller; neither action stops A.
 Use Sidebar View options → Close all views to release even restored views whose
 catalog rows are absent, then reopen a Session without an invisible capacity block.
 Verify empty labels say New session, unnamed committed work uses native preview,
-and manual names win permanently. No LLM naming is implemented. Check deletion
+and manual names win permanently. For an off-page unnamed view, interrupt the exact
+`session/summary` read after canonical user-message commit, then reconnect: the
+native preview must converge without rename or replay. A successful file-only read
+stays New session without repeated metadata IO. Sidebar `session/list` search/page
+must not change to resolve the header; `view.summary` is a replaceable observation.
+No LLM naming is implemented. Check deletion
 title and impact counts without raw identity/revision. With A healthy and B uncertain,
 verify B's visible row warning, A's clean status, and Inspector ownership separation.
 Read global uncertainty separately; review/acknowledge non-interaction notices only

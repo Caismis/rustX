@@ -122,6 +122,10 @@ export class Server {
     this.completed.set(request, response);
     return response;
   }
+  summary(id: string): SessionSummary {
+    if (!this.snapshots.has(id)) throw new RpcFailure({ code: -32000, message: 'Unknown Session', data: { kind: 'unknown_session', session_id: id } });
+    return { id, cwd: `/workspace/${id}`, name: `Session ${id}`, updated_at: '2026-09-14T00:00:00Z', active_node: `node-${id}`, ...this.summaries.get(id) };
+  }
   private execute(request: Request, socket: FakeSocket): MethodResult {
     const params = request.params;
     const id = 'target' in params ? params.target.session_id : 'session_id' in params ? params.session_id : 'A';
@@ -134,7 +138,8 @@ export class Server {
     switch (request.method) {
       case 'initialize': result = { type: 'initialized', protocol_version: this.version, capabilities: this.capabilities }; break;
       case 'server/info': result = { type: 'server_info', capabilities: this.capabilities }; break;
-      case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', residencies: Object.fromEntries([...this.snapshots.keys()].map(id => [id, this.loaded.has(id) ? 'Loaded' : 'Unloaded'])), sessions: [...this.snapshots.keys()].map(id => ({ id, cwd: `/workspace/${id}`, name: `Session ${id}`, updated_at: '2026-09-14T00:00:00Z', active_node: `node-${id}`, ...this.summaries.get(id) } satisfies SessionSummary)).filter(row => !request.params.query || [row.id, row.name, row.preview].some(text => text?.toLowerCase().includes(request.params.query!.toLowerCase()))).slice(request.params.offset, request.params.offset + request.params.limit) }; break;
+      case 'session/summary': result = { type: 'session_summary', summary: this.summary(request.params.session_id) }; break;
+      case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', residencies: Object.fromEntries([...this.snapshots.keys()].map(id => [id, this.loaded.has(id) ? 'Loaded' : 'Unloaded'])), sessions: [...this.snapshots.keys()].map(id => this.summary(id)).filter(row => !request.params.query || [row.id, row.name, row.preview].some(text => text?.toLowerCase().includes(request.params.query!.toLowerCase()))).slice(request.params.offset, request.params.offset + request.params.limit) }; break;
       case 'session/attach': {
         this.reservations.get(socket)?.delete(id);
         if (!this.loaded.has(id)) { this.loaded.add(id); this.coldLoads.set(id, (this.coldLoads.get(id) ?? 0) + 1); }

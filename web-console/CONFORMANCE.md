@@ -156,14 +156,24 @@ precedence, A/B and unscoped uncertainty, scoped interaction evidence, local-onl
 diagnostic acknowledgement and exact revision-confirmed deletion without raw DTOs.
 The former Session-tab selectors are removed; Chat/Trajectory keep tab semantics.
 
-Repair validation: 421 deterministic tests in 29 files; all 39 browser acceptance
+Exact metadata regressions use `session/summary`, never fuzzy `session/list(query=id)`.
+Native catalog tests prove a 32-row search collision cannot obscure exact identity,
+and exact/list projections agree. App Server tests prove exact reads and not-found
+errors do not compose runtimes or change residency. Web tests cover RPC/socket read
+failure followed by reconnect retry off-page, in-flight coalescing, successful
+file-only/no-preview completion, manual rename, and older-list/newer-summary fencing.
+`view.summary` remains a replaceable observation, not catalog membership authority.
+
+Product-surface baseline validation: 421 deterministic tests in 29 files; all 39 browser acceptance
 tests; 23 intentional snapshot/geometry update cases followed by normal zero-tolerance
 E2E. Keyboard acceptance now explicitly reaches Sidebar row actions/Close view and
 Inspector at all four widths. Reviewed rendered light/dark/narrow, native preview,
 manual name, empty Session, background work, scoped uncertainty, Inspector and deletion
 captures. Typecheck, production build, 104-source provenance/100-package notices,
-upstream reference audit and the 30-test development-launcher lane pass. No Rust or
-protocol source changes, skipped tests, screenshot tolerance changes or semantic sleeps.
+upstream reference audit and the 30-test development-launcher lane pass. The subsequent
+exact-summary repair adds one durable native protocol read and runs the complete
+Rust/protocol/TUI/Web lanes; it requires no visual snapshot changes, screenshot
+tolerance changes or semantic sleeps. Per-head validation is recorded in PR #361.
 The unlisted-restoration regression also fills all 32 view slots without matching
 catalog rows, then recovers through explicit Sidebar Close all views. Its companion
 proves bulk close only releases observed controllers and leaves running work intact.

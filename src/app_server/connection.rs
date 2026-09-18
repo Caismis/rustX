@@ -438,6 +438,13 @@ impl AppServerConnection {
                     next_offset: page.next_offset,
                 })
             }
+            Method::SessionSummary { session_id } => Ok(MethodResult::SessionSummary {
+                summary: self
+                    .sessions
+                    .read_session_summary(&session_id)
+                    .await
+                    .map_err(session_error)?,
+            }),
             Method::SessionRead { session_id } => Ok(MethodResult::Session {
                 session: self
                     .sessions

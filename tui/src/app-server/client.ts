@@ -161,6 +161,7 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "server/info": "read",
   "server/diagnostics": "read",
   "session/list": "read",
+  "session/summary": "read",
   "session/create": "side_effecting",
   "session/read": "read",
   "session/name": "side_effecting",

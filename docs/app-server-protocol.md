@@ -222,7 +222,7 @@ explicitly rejected as an invalid request before any action occurs.
 | Methods | Owner and semantics |
 | --- | --- |
 | `initialize`, `server/info` | Connection negotiation and server capabilities |
-| `session/list`, `session/read`, `session/name`, `session/tree` | Durable controller; bounded pages; no runtime composition |
+| `session/list`, `session/read`, `session/summary`, `session/name`, `session/tree` | Durable controller; bounded pages / exact identity reads; no runtime composition |
 | `session/create` | Durable creation from explicit Session selections |
 | `session/fork`, `session/branch` | Exact native Surface revision and optional user-message boundary; fork without a boundary clones the revision into an independent Session |
 | `session/deletePreview`, `session/delete`, `session/recoverDeletion` | Native revision-confirmed deletion/recovery; no client-supplied cleanup workset |
@@ -770,6 +770,17 @@ Product Host owns Workspace registration, authorization, location resolution and
 metadata. App Server does not allocate Workspaces, accept Host ACLs, or persist
 Workspace IDs. Browser path strings are not authorization. The local adapter and
 its same-origin Host contract are documented in [Web Workspaces](../web-console/WORKSPACES.md).
+
+`session/summary { session_id }` returns `{ type: "session_summary", summary: SessionSummary }`
+by exact durable identity. Unknown IDs return native `unknown_session`; deleting IDs
+retain the native deletion error. This controller read does not attach, load, change
+residency, resolve configuration or admit execution. List and exact read share one
+native summary projection, including root-lineage first-user-message preview.
+`session/list` remains bounded searchable/paginated browsing: its query matches ID,
+name or preview substrings and must never be used as exact identity resolution.
+Web `view.summary` is a replaceable exact observation, not durable/catalog authority.
+After canonical first-user-message observation, only successful exact reads complete
+preview convergence (including `preview: null`); failed reads remain retryable.
 
 `session/list` now includes `SessionSummary.cwd`, projected by the native catalog
 from `SessionPersistentState`, and `residencies`, a native manager observation for

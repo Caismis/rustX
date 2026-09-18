@@ -168,6 +168,8 @@ pub enum Method {
     SessionCreate { settings: SessionPersistentState },
     #[serde(rename = "session/read")]
     SessionRead { session_id: SessionId },
+    #[serde(rename = "session/summary")]
+    SessionSummary { session_id: SessionId },
     #[serde(rename = "session/name")]
     SessionName { session_id: SessionId, name: String },
     #[serde(rename = "session/tree")]
@@ -433,6 +435,9 @@ pub enum MethodResult {
         session: crate::local_runtime::session::SessionSnapshot,
         editor_content: Option<Vec<crate::local_runtime::session::uploads::UserInputBlock>>,
         durability_diagnostic: Option<String>,
+    },
+    SessionSummary {
+        summary: crate::local_runtime::session::SessionSummary,
     },
     Sessions {
         /// Point-in-time runtime observation for exactly this bounded catalog page.

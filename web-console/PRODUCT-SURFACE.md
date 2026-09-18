@@ -4,6 +4,13 @@ Base: `66475c83ed7ff1cbb2be880b040913023a463f55`.
 This audit precedes implementation. Native authority and WEB-11 composer behavior
 remain inputs, not redesign targets.
 
+Display metadata is native-owned: `session/list` is bounded fuzzy catalog browsing;
+`session/summary` is an exact SessionId read through the durable controller without
+runtime composition. Web `view.summary` is only a replaceable off-page observation,
+not catalog authority. A first canonical user message invalidates an unnamed label;
+the check completes only after a successful exact read (including no text preview).
+Failure remains retryable, without polling, mutation replay or LLM naming.
+
 | Current item | Classification | Final treatment | Reason |
 | --- | --- | --- | --- |
 | Session selection | Product | Sidebar Session browser only; top Session strip deleted | One selector, no duplicate tabs/dropdown |

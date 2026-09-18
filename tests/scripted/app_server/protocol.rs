@@ -767,6 +767,51 @@ async fn durable_session_operations_never_compose_a_runtime() {
             f.workspaces[0]
         );
         assert_eq!(residencies.get(&id), Some(&super::ResidencyState::Unloaded));
+        let residency_before = f.manager.diagnostics();
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            111,
+            Method::SessionSummary {
+                session_id: id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("exact summary")
+        };
+        assert_eq!(&summary, sessions.iter().find(|row| row.id == id).unwrap());
+        assert_eq!(f.manager.diagnostics(), residency_before);
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        assert!(f.provider.request_bodies().is_empty());
+        let MethodResult::Session { session: unchanged } = call(
+            &connection,
+            112,
+            Method::SessionRead {
+                session_id: id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("read")
+        };
+        assert_eq!(unchanged.active_node, summary.active_node);
+        assert_eq!(unchanged.updated_at, summary.updated_at);
+        let missing = crate::local_runtime::session::SessionId::new(
+            "ses_00000000-0000-7000-8000-000000000099",
+        );
+        let absent = connection
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(113),
+                call: Method::SessionSummary {
+                    session_id: missing.clone(),
+                },
+            })
+            .await;
+        assert!(matches!(absent, Response::Failure(Failure {
+            error: RpcError { data: Some(ErrorData::UnknownSession { session_id }), .. }, ..
+        }) if session_id == missing));
+        assert_eq!(f.manager.diagnostics(), residency_before);
         let MethodResult::Session { session } = call(
             &connection,
             101,
@@ -945,6 +990,43 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
         assert!(matches!(reply_a, MethodResult::InboundAccepted { .. }));
         assert!(matches!(reply_b, MethodResult::InboundAccepted { .. }));
         tokio::join!(f.gates[0].wait_entered(), f.gates[1].wait_entered());
+        let before = call(
+            &connection,
+            22,
+            Method::SessionSnapshot {
+                target: a.clone(),
+                trace_records: Vec::new(),
+            },
+        )
+        .await;
+        let residency_before = f.manager.diagnostics();
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            23,
+            Method::SessionSummary {
+                session_id: a.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("summary during execution")
+        };
+        assert_eq!(summary.id, a.session_id);
+        assert_eq!(summary.preview.as_deref(), Some("request-A"));
+        assert_eq!(f.manager.diagnostics(), residency_before);
+        let after = call(
+            &connection,
+            24,
+            Method::SessionSnapshot {
+                target: a.clone(),
+                trace_records: Vec::new(),
+            },
+        )
+        .await;
+        assert_eq!(
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(after).unwrap()
+        );
         let mut seen = std::collections::BTreeSet::new();
         while seen.len() != 2 {
             let NotificationMethod::Event { target, event, .. } =

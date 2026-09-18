@@ -246,6 +246,17 @@ describe("terminal settlement", () => {
     assert.ok(failure instanceof TransportClosedError);
     assert.ok(!isUncertainOutcome(failure));
   });
+
+  it("classifies a lost exact Session summary as a retryable read, never uncertain mutation", async () => {
+    const { client, transport } = await initialized();
+    const read = client.call("session/summary", { session_id: "ses_00000000-0000-7000-8000-000000000001" }, "session_summary");
+    await transport.log.awaitMethod("session/summary");
+    transport.fail("socket_error");
+    const failure = await read.then(() => undefined, (cause: unknown) => cause);
+    assert.ok(failure instanceof TransportClosedError);
+    assert.ok(!isUncertainOutcome(failure));
+    assert.equal(transport.log.count("session/summary"), 1);
+  });
 });
 
 describe("uncertain mutations", () => {
@@ -687,6 +698,7 @@ describe("generated-contract ingress", () => {
     await assert.rejects(pending, TransportClosedError);
     assert.equal(transport.log.count("initialize"), 1);
     assert.equal(METHOD_RESPONSE_LOSS_CLASS.initialize, "connection_local");
+    assert.equal(METHOD_RESPONSE_LOSS_CLASS["session/summary"], "read");
   });
 });
 

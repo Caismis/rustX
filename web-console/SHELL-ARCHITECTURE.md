@@ -36,9 +36,13 @@ observation and never releases, cancels or unloads work. Chat/Trajectory retain 
 Sidebar View options also offers explicit Close all views for unlisted/restored
 entries; missing catalog rows cannot make the finite capacity unmanageable.
 `sessionDisplayTitle` uses explicit name > native SessionSummary.preview > New session.
-No UUID fallback or automatic LLM naming exists. A bounded native catalog reread after
-canonical user-message observation refreshes unnamed labels; no draft or admission
-can generate a title. Cached native rows retain header identity across catalog pages.
+No UUID fallback or automatic LLM naming exists. After canonical user-message
+observation, an exact `session/summary(SessionId)` read refreshes unnamed labels;
+only success (including no preview) completes the check. Failed reads remain retryable
+at authoritative refresh/reconnect, with concurrent reads coalesced. No draft or
+admission can generate a title. `session/list` owns fuzzy paginated browsing, never
+identity lookup. `view.summary` is a replaceable exact observation across pages,
+not a second catalog. Read-order and connection fences reject stale observations.
 See [the complete classification](PRODUCT-SURFACE.md).
 
 `bindings/session-product.ts` is a pure projection, shared by Session status and

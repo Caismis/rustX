@@ -90,7 +90,7 @@ it('Connection shows product state without a generation counter', async () => {
 it.each([false, true])('refreshes native preview only after a committed canonical user message (file-only: %s)', async fileOnly => {
   server.summaries.set('A', { name: null, preview: null });
   await mount(['A']);
-  const lists = () => methods().filter(method => method === 'session/list').length;
+  const lists = () => methods().filter(method => method === 'session/summary').length;
   const baseline = lists();
   await act(async () => server.client.send('A', 'Local draft is not a title', [], 'send'));
   expect(lists()).toBe(baseline);
@@ -103,6 +103,53 @@ it.each([false, true])('refreshes native preview only after a committed canonica
   await act(async () => server.update('A', canonicalUser('Later text')));
   expect(lists()).toBe(baseline + 1);
   expect(methods()).not.toContain('session/name');
+});
+
+it.each(['rpc', 'socket'] as const)('failed exact first-message read stays retryable off-page after reconnect: %s', async failure => {
+  server.summaries.set('A', { name: null, preview: null });
+  server.handlers.set('session/list', () => ({ type: 'sessions', residencies: { B: 'Unloaded' }, sessions: [server.summary('B')] }));
+  await mount(['A']);
+  const reads = () => methods().filter(method => method === 'session/summary').length;
+  expect(reads()).toBe(1); // Exact off-page empty metadata, before canonical work.
+  await act(async () => server.client.send('A', 'Accepted is not committed', [], 'send'));
+  expect(reads()).toBe(1);
+  server.held.add('session/summary');
+  let refresh!: Promise<void>;
+  await act(async () => {
+    server.snapshots.set('A', canonicalUser('Canonical user message')); server.cursor++;
+    refresh = server.client.refresh('A');
+  });
+  const failed = await server.waitFor('session/summary', 2);
+  const oldSocket = server.socket;
+  // Concurrent readers share the exact request, not additional metadata IO.
+  const shared = server.client.readSessionSummary('A');
+  expect(server.client.readSessionSummary('A')).toBe(shared);
+  const observedFailure = shared.catch(() => {});
+  expect(reads()).toBe(2);
+  await act(async () => {
+    if (failure === 'rpc') oldSocket.deliver({ jsonrpc: '2.0', id: failed.id, error: { code: -32000, message: 'Transient metadata read failure' } });
+    else oldSocket.close();
+    await observedFailure; await refresh;
+  });
+  expect(screen.getByLabelText('Session title').textContent).toBe('New session');
+  expect(server.client.getSnapshot().uncertain).toEqual([]);
+  server.summaries.set('A', { name: null, preview: 'Native preview' });
+  let reconnect!: Promise<void>;
+  await act(async () => { reconnect = server.connect(); });
+  const retried = await server.waitFor('session/summary', 3);
+  await act(async () => {
+    // Obsolete-generation responses cannot publish metadata or finish the check.
+    oldSocket.deliver({ jsonrpc: '2.0', id: failed.id, result: { type: 'session_summary', summary: { ...server.summary('A'), preview: 'Obsolete preview' } } });
+    server.reply(retried); await reconnect;
+  });
+  expect(reads()).toBe(3);
+  expect(screen.getByLabelText('Session title').textContent).toBe('Native preview');
+  expect(server.client.getSnapshot().views.A.summary?.preview).toBe('Native preview');
+  expect(server.client.getSnapshot().sessions.map(item => item.id)).toEqual(['B']);
+  expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+  expect(methods().filter(method => ['session/name', 'turn/cancel', 'session/unload', 'session/detach'].includes(method))).toEqual([]);
+  expect(server.client.getSnapshot().uncertain).toEqual([]);
+  expect(server.requests.filter(({ request }) => request.method === 'session/list').every(({ request }) => request.method === 'session/list' && request.params.query === '')).toBe(true);
 });
 
 it('manual naming immediately wins and survives later messages and catalog pagination', async () => {
@@ -128,6 +175,7 @@ it('a delayed older Sidebar page cannot overwrite a newer committed native previ
   server.summaries.set('A', { name: null, preview: null });
   await mount(['A']);
   server.held.add('session/list');
+  server.held.add('session/summary');
   const baseline = methods().filter(method => method === 'session/list').length;
   const oldPage = server.client.listSessions();
   const oldRequest = await server.waitFor('session/list', baseline + 1);
@@ -135,22 +183,25 @@ it('a delayed older Sidebar page cannot overwrite a newer committed native previ
   server.summaries.set('A', { name: null, preview: 'Committed native preview' });
   let convergence!: Promise<void>;
   await act(async () => { convergence = server.update('A', canonicalUser('Different browser text')); });
-  const freshRequest = await server.waitFor('session/list', baseline + 2);
+  const freshRequest = await server.waitFor('session/summary', 1);
   await act(async () => { server.reply(freshRequest); await convergence; server.reply(oldRequest); await oldPage; });
   expect(screen.getByLabelText('Session title').textContent).toBe('Committed native preview');
   expect(row('A').getAttribute('aria-label')).toBe('Open Committed native preview');
+  expect(server.client.getSnapshot().views.A.summary?.preview).toBe('Committed native preview');
 });
 
 it('restores an explicitly named empty Session outside the current catalog page', async () => {
   server.handlers.set('session/list', request => {
     if (request.method !== 'session/list') throw new Error('wrong method');
-    const id = request.params.query === 'B' ? 'B' : 'A';
-    return { type: 'sessions', residencies: { [id]: 'Unloaded' }, sessions: [{ id, cwd: `/workspace/${id}`, name: id === 'B' ? 'Named empty Session' : 'Session A', active_node: `node-${id}`, updated_at: '2026-09-14T00:00:00Z' }] };
+    const id = 'A';
+    return { type: 'sessions', residencies: { [id]: 'Unloaded' }, sessions: [server.summary(id)] };
   });
+  server.summaries.set('B', { name: 'Named empty Session' });
   await mount(['B']);
   expect(screen.getByLabelText('Session title').textContent).toBe('Named empty Session');
   expect(server.client.getSnapshot().sessions.map(row => row.id)).toEqual(['A']);
-  expect(server.requests.filter(({ request }) => request.method === 'session/list').map(({ request }) => request.params)).toEqual([{ offset: 0, limit: 32, query: '' }, { offset: 0, limit: 32, query: 'B' }]);
+  expect(server.requests.filter(({ request }) => request.method === 'session/list').map(({ request }) => request.params)).toEqual([{ offset: 0, limit: 32, query: '' }]);
+  expect(server.requests.filter(({ request }) => request.method === 'session/summary').map(({ request }) => request.params)).toEqual([{ session_id: 'B' }]);
 });
 
 it('A stays healthy while B uncertainty remains visible, scoped and never replayed when switching', async () => {

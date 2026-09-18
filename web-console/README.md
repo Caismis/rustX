@@ -121,9 +121,14 @@ Every ordinary Session label uses `sessionDisplayTitle`: explicit native name >
 native `SessionSummary.preview` > **New session**. Session IDs stay in Inspector.
 Manual naming remains `session/name`; no LLM call, generated title, truncation or
 first-message summarizer exists in React. After authoritative canonical user-message
-observation, a previously unnamed view rereads its native catalog row once. Drafts,
-accepted inbound and optimistic submission never supply preview text. Native rows
-are retained with open views when Sidebar pagination/search changes.
+observation, a previously unnamed view reads exact native `session/summary` metadata.
+Only success marks the first-message check complete, including a file-only `preview: null`.
+Failures remain retryable on authoritative refresh/reconnect; concurrent reads coalesce.
+Drafts, accepted inbound and optimistic submission never supply preview text.
+`session/list` is fuzzy, bounded catalog browsing, never exact identity resolution.
+`view.summary` retains replaceable exact metadata for off-page/restored views without
+changing the Sidebar page or owning catalog membership. Read-order/generation fences
+prevent older observations overwriting newer summaries. Rename rereads the exact summary.
 
 Every new connection has a new generation. Socket callbacks, resolved request
 continuations and attachment workers are fenced. A fresh attach/snapshot replaces

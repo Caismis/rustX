@@ -650,6 +650,31 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "session/summary"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "session/name"
             },
             "params": {
@@ -5058,6 +5083,23 @@
           "required": [
             "type",
             "session"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "$ref": "#/$defs/SessionSummary"
+            },
+            "type": {
+              "type": "string",
+              "const": "session_summary"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "summary"
           ]
         },
         {
@@ -10530,7 +10572,7 @@
       ]
     },
     "SessionSummary": {
-      "description": "One bounded row in the `/resume` selector.",
+      "description": "Native display metadata, shared by exact identity reads and catalog rows.",
       "type": "object",
       "properties": {
         "cwd": {
@@ -10549,7 +10591,7 @@
           ]
         },
         "preview": {
-          "description": "The first user message of this Session's root lineage, bounded to one\nline. It is what an unnamed row is recognized by, and it is derived\nfor the page rather than stored: the catalog keeps no copy of\nconversation content.",
+          "description": "The first user message of this Session's root lineage, bounded to one\nline. It is what an unnamed row is recognized by, and it is derived\nfor the observation rather than stored: the catalog keeps no copy of\nconversation content.",
           "type": [
             "string",
             "null"

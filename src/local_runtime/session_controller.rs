@@ -1,7 +1,7 @@
 //! User-root durable Session controller. No runtime, resolver or client focus is owned here.
 use super::session::{
     SessionCatalog, SessionError, SessionId, SessionListPage, SessionNode, SessionNodeId,
-    SessionPersistentState, SessionSnapshot,
+    SessionPersistentState, SessionSnapshot, SessionSummary,
 };
 use crate::durable::ConversationStore;
 use crate::message::types::{MessageBlock, UserContentBlock};
@@ -201,6 +201,16 @@ impl SessionController {
     /// Unknown identities are rejected without configuration resolution.
     pub async fn read_session(&self, id: &SessionId) -> Result<SessionSnapshot, SessionError> {
         self.catalog.lock().await.snapshot(id)
+    }
+    /// Exact durable display metadata; does not resolve configuration or compose a runtime.
+    /// # Errors
+    /// Unknown/deleting identities and conversation storage failures are returned.
+    pub async fn read_session_summary(
+        &self,
+        id: &SessionId,
+    ) -> Result<SessionSummary, SessionError> {
+        let snapshot = self.catalog.lock().await.clone();
+        snapshot.summary(id)
     }
     /// # Errors
     /// Invalid pagination or storage errors are returned.

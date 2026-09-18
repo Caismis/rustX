@@ -104,7 +104,7 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
           : dialog.kind === 'remove' ? <><p>Only the navigation registration is removed. Sessions, cwd, history, and running work remain untouched.</p><Button disabled={busy} onClick={() => void mutate(() => host.removeWorkspace(dialog.id), dialog.id)}>Unregister</Button></>
             : <form onSubmit={event => { event.preventDefault(); const current = navigation.capture(); void mutate(async () => {
               if (dialog.kind === 'workspace') await host.renameWorkspace(dialog.id, name);
-              else { await client.request({ method: 'session/name', params: { session_id: dialog.id, name } }, 'session'); if (current()) { await client.refreshSessionSummary(dialog.id); await client.listSessions(offset, query, current); } }
+              else { await client.request({ method: 'session/name', params: { session_id: dialog.id, name } }, 'session'); if (current()) { await client.readSessionSummary(dialog.id); await client.listSessions(offset, query, current); } }
             }, dialog.kind === 'workspace'); }}><Input autoFocus aria-label="Name" value={name} onChange={event => setName(event.target.value)} /><Button type="submit" disabled={busy || !name.trim()}>Save name</Button></form>}
     </Modal>}
   </>;

@@ -159,6 +159,12 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/summary';
+      params: {
+        session_id: SessionId;
+      };
+    }
+  | {
       method: 'session/name';
       params: {
         session_id: SessionId;
@@ -930,6 +936,10 @@ export type MethodResult =
       editor_content?: UserInputBlock[] | null;
       durability_diagnostic?: string | null;
       type: 'session_transition';
+    }
+  | {
+      summary: SessionSummary;
+      type: 'session_summary';
     }
   | {
       /**
@@ -5978,7 +5988,7 @@ export interface SessionSnapshot {
   node_count: number;
 }
 /**
- * One bounded row in the `/resume` selector.
+ * Native display metadata, shared by exact identity reads and catalog rows.
  */
 export interface SessionSummary {
   /**
@@ -5996,7 +6006,7 @@ export interface SessionSummary {
   /**
    * The first user message of this Session's root lineage, bounded to one
    * line. It is what an unnamed row is recognized by, and it is derived
-   * for the page rather than stored: the catalog keeps no copy of
+   * for the observation rather than stored: the catalog keeps no copy of
    * conversation content.
    */
   preview?: string | null;
