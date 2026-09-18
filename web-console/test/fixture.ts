@@ -162,8 +162,8 @@ export class Server {
           throw new RpcFailure({ code: -32602, message: JSON.stringify({ reason: 'Stale GoalRef; observe current state before trying again', current }), data: { kind: 'invalid_params' } });
         }
         const mutation = control.mutation;
-        if (mutation.action === 'pause') { current.phase = 'paused'; next.goal.armed = false; }
-        else if (mutation.action === 'resume') { current.phase = 'active'; current.blocked_reason = null; next.goal.armed = true; }
+        if (mutation.action === 'pause') { current.phase = 'paused'; }
+        else if (mutation.action === 'resume') { current.phase = 'active'; current.blocked_reason = null; }
         else if (mutation.action === 'edit') current.objective = mutation.objective;
         else if (mutation.action === 'budget') {
           // GoalDomain, not the browser, owns the 1..=100 range and consumption floor.

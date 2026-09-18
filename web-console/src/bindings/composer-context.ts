@@ -12,15 +12,17 @@ export function todoDock(snapshot?: RuntimeClientSnapshot): TodoDockState {
   return { kind: 'current', tasks: (snapshot.todos.tasks ?? []).filter(task => task.status !== 'deleted') };
 }
 
+/** Durable `GoalPhase` is the one Goal lifecycle authority (Issue #351):
+ * `active` means rustX is authorized to continue pursuing the objective when
+ * the runtime reaches an eligible idle boundary. There is no activation bit,
+ * so the dock can never render an Active Goal that is silently inert. */
 export interface GoalDockState {
   goal: GoalSnapshot;
-  /** Process-local activation; it never implies a durable revision change. */
-  armed: boolean;
 }
 /** Extension absent, no Goal and terminal Complete occupy no composer space. */
 export function goalDock(snapshot?: RuntimeClientSnapshot): GoalDockState | undefined {
   const view = snapshot?.goal;
-  return view?.current && view.current.phase !== 'complete' ? { goal: view.current, armed: view.armed } : undefined;
+  return view?.current && view.current.phase !== 'complete' ? { goal: view.current } : undefined;
 }
 
 export type InboundRow = NonNullable<RuntimeClientSnapshot['inbound']['pending']>[number];

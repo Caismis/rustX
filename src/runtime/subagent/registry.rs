@@ -9684,10 +9684,7 @@ mod tests {
             SubagentLifecycle::PublishingTerminal,
         ] {
             let plane = plane(1);
-            let domain = crate::goal::GoalDomain::new(
-                plane.store.clone(),
-                Arc::new(tokio::sync::Notify::new()),
-            );
+            let domain = crate::goal::GoalDomain::new(plane.store.clone());
             let created = domain
                 .write(crate::goal::GoalWrite::Create {
                     objective: "Await the owned child result".into(),
@@ -9704,11 +9701,14 @@ mod tests {
                 None::<()>
             );
             let view = domain.view().unwrap();
-            assert!(view.armed);
             assert_eq!(
                 view.current,
                 Some(created),
                 "waiting neither consumes a round nor declares Blocked"
+            );
+            assert!(
+                domain.authorizes_continuation().unwrap(),
+                "the Goal stays Active and authorized; it simply may not poll"
             );
         }
         let plane = plane(1);

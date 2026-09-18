@@ -18,7 +18,7 @@ const goal = (extra: Partial<GoalSnapshot> = {}): GoalSnapshot => ({
   autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' }, ...extra,
 });
 const withTodos = (tasks: TodoTask[] | undefined, base = snapshot()): RuntimeClientSnapshot => ({ ...base, todos: tasks && { tasks, next_id: String(tasks.length + 1) } });
-const withGoal = (current: GoalSnapshot | null, armed = true, base = snapshot()): RuntimeClientSnapshot => ({ ...base, goal: { current, armed } });
+const withGoal = (current: GoalSnapshot | null, base = snapshot()): RuntimeClientSnapshot => ({ ...base, goal: { current } });
 const running = (base = snapshot()): RuntimeClientSnapshot => ({ ...base, attempt: { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1 } });
 const inbound = (sequence: string, text: string, message: { id?: string; source?: 'human' | 'runtime'; kind?: { goal_continuation: { id: string; revision: string } } } = {}) =>
   ({ revision: "0", sequence, message: { id: `message-${sequence}`, source: 'human' as const, content: [{ type: 'text' as const, text }], ...message } });
@@ -109,21 +109,21 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     expect(goalDock(withGoal(null))).toBeUndefined();
     expect(goalDock(withGoal(goal({ phase: 'complete' })))).toBeUndefined();
     await mount(withGoal(goal()));
-    expect(dock('Goal').textContent).toContain('Ongoing Goal');
+    expect(dock('Goal').textContent).toContain('Active Goal');
     expect(dock('Goal').textContent).toContain('Ship the docks');
     expect(dock('Goal').textContent).toContain('1/4 rounds · r3');
     expect(goalButton('Pause goal')).toBeTruthy();
     expect(within(dock('Goal')).queryByRole('button', { name: 'Resume goal' })).toBeNull();
     // Only controls GoalDomain assigns to users: no create, clear, complete or block.
     expect(within(dock('Goal')).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['Pause goal', 'Edit goal objective', 'Edit round budget']);
-    await update(withGoal(goal({ phase: 'paused', reference: { id: 'goal-1', revision: '4' } }), false));
+    await update(withGoal(goal({ phase: 'paused', reference: { id: 'goal-1', revision: '4' } })));
     expect(dock('Goal').textContent).toContain('Paused Goal');
     expect(goalButton('Resume goal')).toBeTruthy();
-    await update(withGoal(goal({ phase: 'blocked', blocked_reason: 'Need repository access', reference: { id: 'goal-1', revision: '5' } }), false));
+    await update(withGoal(goal({ phase: 'blocked', blocked_reason: 'Need repository access', reference: { id: 'goal-1', revision: '5' } })));
     expect(dock('Goal').textContent).toContain('Blocked Goal');
     expect(dock('Goal').textContent).toContain('Blocked: Need repository access');
     expect(goalButton('Resume goal')).toBeTruthy();
-    await update(withGoal(goal({ phase: 'complete', reference: { id: 'goal-1', revision: '6' } }), false));
+    await update(withGoal(goal({ phase: 'complete', reference: { id: 'goal-1', revision: '6' } })));
     expect(region('Goal')).toBeNull();
     await update(snapshot());
     expect(region('Goal')).toBeNull();
@@ -139,7 +139,7 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     // proxy, or the assertion lands inside that window.
     await waitFor(() => expect(goalButton('Resume goal')).toHaveProperty('disabled', false));
     fireEvent.click(goalButton('Resume goal'));
-    await waitFor(() => expect(dock('Goal').textContent).toContain('Ongoing Goal'));
+    await waitFor(() => expect(dock('Goal').textContent).toContain('Active Goal'));
     expect(goalControls()).toEqual([
       { action: 'mutate', expected: { id: 'goal-1', revision: '3' }, mutation: { action: 'pause' } },
       { action: 'mutate', expected: { id: 'goal-1', revision: '4' }, mutation: { action: 'resume' } },
@@ -156,7 +156,7 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     await failRead(await server.waitFor('session/snapshot', reads + 1));
     expect((await within(dock('Goal')).findByRole('status')).textContent).toContain('applied');
     // GoalDomain is at r4; the browser still renders its last authoritative observation.
-    expect(dock('Goal').textContent).toContain('Ongoing Goal');
+    expect(dock('Goal').textContent).toContain('Active Goal');
     expect(dock('Goal').textContent).toContain('r3');
     for (const name of ['Pause goal', 'Edit goal objective', 'Edit round budget']) expect(goalButton(name)).toHaveProperty('disabled', true);
     fireEvent.click(goalButton('Pause goal'));
@@ -251,7 +251,7 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     fireEvent.click(goalButton('Pause goal'));
     expect((await within(dock('Goal')).findByRole('alert')).textContent).toBe('Stale GoalRef; observe current state before trying again');
     expect(dock('Goal').textContent).toContain('Changed elsewhere');
-    expect(dock('Goal').textContent).toContain('Ongoing Goal');
+    expect(dock('Goal').textContent).toContain('Active Goal');
     expect(dock('Goal').textContent).toContain('r4');
     expect(goalButton('Pause goal')).toHaveProperty('disabled', false);
     expect(snapshotReads()).toBe(reads + 1);
@@ -283,33 +283,57 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
       const mutate = vi.fn(async () => outcome);
       const first = {};
       const props = { disabled: false, mutate };
-      const ui = render(<GoalDock state={{ goal: goal(), armed: true }} observation={first} {...props} />);
+      const ui = render(<GoalDock state={{ goal: goal() }} observation={first} {...props} />);
       await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Pause goal' })); });
       expect(ui.getByRole('button', { name: 'Pause goal' })).toHaveProperty('disabled', true);
       if (outcome.status === 'rejected') expect(ui.getByRole('alert').textContent).toBe('Refused by GoalDomain');
       fireEvent.click(ui.getByRole('button', { name: 'Pause goal' }));
-      ui.rerender(<GoalDock state={{ goal: goal(), armed: true }} observation={first} {...props} />);
+      ui.rerender(<GoalDock state={{ goal: goal() }} observation={first} {...props} />);
       expect(ui.getByRole('button', { name: 'Pause goal' })).toHaveProperty('disabled', true);
-      ui.rerender(<GoalDock state={{ goal: goal({ reference: { id: 'goal-1', revision: '4' } }), armed: true }} observation={{}} {...props} />);
+      ui.rerender(<GoalDock state={{ goal: goal({ reference: { id: 'goal-1', revision: '4' } }) }} observation={{}} {...props} />);
       expect(ui.getByRole('button', { name: 'Pause goal' })).toHaveProperty('disabled', false);
       expect(ui.queryByRole('status')).toBeNull();
       expect(mutate).toHaveBeenCalledOnce();
       cleanup();
     }
   });
-  it('activation-only change keeps the durable revision and an open draft', () => {
+  // Issue #351: the status and the one lifecycle control both derive from the
+  // durable phase. Active offers Pause and nothing else; Paused and Blocked
+  // offer Resume. "Inactive Goal" no longer exists, and no snapshot can spell
+  // an Active Goal that is not actually running.
+  it('status and the single lifecycle control derive from durable phase alone', () => {
+    const mutate = vi.fn(async (): Promise<GoalControlOutcome> => ({ status: 'applied', observed: true }));
+    for (const [phase, status, control, other] of [
+      ['active', 'Active Goal', 'Pause goal', 'Resume goal'],
+      ['paused', 'Paused Goal', 'Resume goal', 'Pause goal'],
+      ['blocked', 'Blocked Goal', 'Resume goal', 'Pause goal'],
+    ] as const) {
+      const ui = render(<GoalDock state={{ goal: goal({ phase }) }} observation={{}} disabled={false} mutate={mutate} />);
+      expect(ui.container.textContent).toContain(status);
+      expect(ui.container.textContent).not.toContain('Inactive');
+      expect(ui.getByRole('button', { name: control })).toBeTruthy();
+      expect(ui.queryByRole('button', { name: other })).toBeNull();
+      expect(ui.container.querySelector('[data-goal-armed]')).toBeNull();
+      expect(ui.container.querySelector(`[data-goal-phase="${phase}"]`)).toBeTruthy();
+      cleanup();
+    }
+    expect(mutate).not.toHaveBeenCalled();
+  });
+  it('an autonomous round advances the revision without disturbing an open draft', () => {
     const mutate = vi.fn(async (): Promise<GoalControlOutcome> => ({ status: 'applied', observed: true }));
     const current = goal();
-    const ui = render(<GoalDock state={{ goal: current, armed: true }} observation={{}} disabled={false} mutate={mutate} />);
+    const ui = render(<GoalDock state={{ goal: current }} observation={{}} disabled={false} mutate={mutate} />);
     fireEvent.click(ui.getByRole('button', { name: 'Edit goal objective' }));
     fireEvent.change(ui.getByRole('textbox'), { target: { value: 'Draft' } });
-    ui.rerender(<GoalDock state={{ goal: current, armed: false }} observation={{}} disabled={false} mutate={mutate} />);
+    // Same objective and budget, one more consumed round and a new revision:
+    // the ordinary shape of an admitted Goal continuation.
+    ui.rerender(<GoalDock state={{ goal: goal({ reference: { id: 'goal-1', revision: '4' }, autonomous_rounds_consumed: 1 }) }} observation={{}} disabled={false} mutate={mutate} />);
     expect(ui.getByRole('textbox')).toHaveProperty('value', 'Draft');
     fireEvent.keyDown(ui.getByRole('textbox'), { key: 'Escape' });
-    expect(ui.container.textContent).toContain('Inactive Goal');
-    expect(ui.container.textContent).toContain('r3');
-    expect(ui.getByRole('button', { name: 'Resume goal' })).toBeTruthy();
-    expect(ui.queryByRole('button', { name: 'Pause goal' })).toBeNull();
+    expect(ui.container.textContent).toContain('Active Goal');
+    expect(ui.container.textContent).toContain('r4');
+    expect(ui.getByRole('button', { name: 'Pause goal' })).toBeTruthy();
+    expect(ui.queryByRole('button', { name: 'Resume goal' })).toBeNull();
     expect(document.activeElement).toBe(ui.getByRole('button', { name: 'Edit goal objective' }));
     expect(mutate).not.toHaveBeenCalled();
   });
@@ -324,7 +348,7 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     await act(() => server.connect());
     await waitFor(() => expect(within(dock('Goal')).queryByRole('status')).toBeNull());
     expect(goalButton('Pause goal')).toHaveProperty('disabled', false);
-    expect(dock('Goal').textContent).toContain('Ongoing Goal');
+    expect(dock('Goal').textContent).toContain('Active Goal');
     expect(goalControls()).toHaveLength(1);
     expect(server.client.getSnapshot().uncertain.map(item => item.method)).toEqual(['goal/control']);
   });
@@ -339,7 +363,7 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     expect(await work).toEqual({ status: 'obsolete' });
     expect(server.client.getSnapshot().views.A).toMatchObject({ attachment: 'attached', error: undefined });
     const mutate = vi.fn(async (): Promise<GoalControlOutcome> => ({ status: 'obsolete' }));
-    const ui = render(<GoalDock state={{ goal: goal(), armed: true }} observation={{}} disabled={false} mutate={mutate} />);
+    const ui = render(<GoalDock state={{ goal: goal() }} observation={{}} disabled={false} mutate={mutate} />);
     await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Pause goal' })); });
     expect(ui.queryByRole('alert')).toBeNull(); expect(ui.queryByRole('status')).toBeNull();
     expect(ui.getByRole('button', { name: 'Pause goal' })).toHaveProperty('disabled', false);
@@ -445,7 +469,7 @@ describe('Queue dock binds the native inbound mailbox', () => {
 
 describe('Composer context stack lifecycle', () => {
   it('orders Todo, Goal, Queue, Composer and each card appears independently without state leakage', async () => {
-    const full = running(withQueue([inbound('1', 'one'), inbound('2', 'two')], withGoal(goal(), true, withTodos([task('1', 'pending')]))));
+    const full = running(withQueue([inbound('1', 'one'), inbound('2', 'two')], withGoal(goal(), withTodos([task('1', 'pending')]))));
     const ui = await mount(full);
     const order = () => [...ui.container.querySelector('[data-composer-context-stack]')!.children].map(node => node.getAttribute('aria-label') ?? (node.querySelector('[data-composer-card]') ? 'Composer' : 'unknown'));
     expect(order()).toEqual(['To-dos', 'Goal', 'Queue', 'Composer']);
@@ -453,7 +477,7 @@ describe('Composer context stack lifecycle', () => {
     fireEvent.click(goalButton('Edit goal objective'));
     fireEvent.change(within(dock('Goal')).getByRole('textbox'), { target: { value: 'Kept draft' } });
     // Queue disappears: Todo disclosure and Goal draft are unaffected.
-    await update(running(withGoal(goal(), true, withTodos([task('1', 'pending')]))));
+    await update(running(withGoal(goal(), withTodos([task('1', 'pending')]))));
     expect(order()).toEqual(['To-dos', 'Goal', 'Composer']);
     expect(within(dock('To-dos')).getByRole('button', { expanded: true })).toBeTruthy();
     expect(within(dock('Goal')).getByRole('textbox')).toHaveProperty('value', 'Kept draft');
@@ -479,21 +503,21 @@ describe('Composer context stack lifecycle', () => {
     expect(within(dock('To-dos')).getByRole('button', { expanded: false })).toBeTruthy();
   });
   it('disconnect clears only accepted presentation echoes; reconnect rebuilds docks from the new authoritative snapshot', async () => {
-    await mount(running(withQueue([inbound('1', 'Pending before loss')], withGoal(goal(), true, withTodos([task('1', 'in_progress')])))));
+    await mount(running(withQueue([inbound('1', 'Pending before loss')], withGoal(goal(), withTodos([task('1', 'in_progress')])))));
     await sendQueued('Echo only');
     const header = await within(dock('Queue')).findByRole('button', { expanded: false });
     fireEvent.click(header);
     expect(dock('Queue').querySelectorAll('[data-submission-echo]')).toHaveLength(1);
     const before = methods().length;
     act(() => server.socket.close());
-    // Last observations stay visible but inert; nothing was cancelled, disarmed or settled.
+    // Last observations stay visible but inert; nothing was cancelled or settled.
     expect(dock('Queue').querySelectorAll('[data-submission-echo]')).toHaveLength(0);
     expect(dock('Queue').textContent).toContain('Pending before loss');
     expect(dock('To-dos').textContent).toContain('1 in progress');
     expect(goalButton('Pause goal')).toHaveProperty('disabled', true);
     expect(methods().slice(before)).toEqual([]);
     // Native state moved on while this browser was away.
-    server.snapshots.set('A', withGoal(goal({ phase: 'paused', reference: { id: 'goal-1', revision: '9' } }), false, withTodos([task('1', 'completed')])));
+    server.snapshots.set('A', withGoal(goal({ phase: 'paused', reference: { id: 'goal-1', revision: '9' } }), withTodos([task('1', 'completed')])));
     await act(() => server.connect());
     await waitFor(() => expect(dock('Goal').textContent).toContain('Paused Goal'));
     expect(dock('Goal').textContent).toContain('r9');

@@ -348,7 +348,7 @@ pub enum RuntimeClientSessionRequest {
 ///
 /// Version 30 introduced the root Goal controls and snapshot member.
 /// Version 31 makes Goal part of the coherent projection bootstrap and adds
-/// `goal_changed` for bounded live updates, including activation-only changes.
+/// `goal_changed` for bounded live updates.
 /// The Goal durable revision is independent of the Runtime Client cursor;
 /// successful snapshots expose only the Goal view folded at that cursor.
 /// Version 34 removes the obsolete global `SessionSummaryView.active` field.
@@ -357,7 +357,12 @@ pub enum RuntimeClientSessionRequest {
 /// Version 34 clients are rejected; Trace introduces no execution authority.
 /// Version 36 adds typed Session workspace uploads to canonical presentation.
 /// Version 37 adds exact pending revisions and committed mutation projections.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 38;
+/// Version 39 removes `GoalView.armed` (Issue #351): durable `GoalPhase` is
+/// the one Goal lifecycle authority, so the wire can no longer spell
+/// `Active + disarmed` and clients derive every Goal control from the phase.
+/// Version 38 clients are rejected by strict negotiation; there is no
+/// compatibility field and no activation-only event.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 39;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1002,7 +1007,7 @@ pub enum RuntimeClientSubagentWorkspaceDisposalOutcome {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeClientResult {
-    /// Current Goal state and process-local activation after an operation.
+    /// Authoritative durable Goal state after an operation.
     Goal { view: crate::goal::GoalView },
     /// Native deletion control state, including post-commit uncertainty.
     SessionDeletion {
@@ -1385,7 +1390,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 38);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 39);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

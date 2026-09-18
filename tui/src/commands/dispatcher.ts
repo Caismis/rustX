@@ -427,11 +427,13 @@ export class CommandDispatcher {
     const text = words.join(" ");
     if (action === "create") {
       if (!text) return transient("error", "usage: /goal create <objective>");
-      const view = await session.goal({ action: "create", objective: text, budget: 10 });
-      return inspect("Goal", JSON.stringify(view, null, 2));
+      // A typed native Goal control. Creating a Goal never sends a model
+      // request, and nothing follows it: an Active Goal continues on its own
+      // whenever the runtime reaches an eligible idle boundary.
+      return inspect("Goal", goalSummary(await session.goal({ action: "create", objective: text, budget: 10 })));
     }
     const view = await session.goal({ action: "show" });
-    if (!action || action === "show") return inspect("Goal", JSON.stringify(view, null, 2));
+    if (!action || action === "show") return inspect("Goal", goalSummary(view));
     if (!view.current) return transient("error", "No current Goal. Use /goal create <objective>.");
     let mutation: import("../protocol/app-server.ts").GoalMutation;
     if ((action === "pause" || action === "resume") && !text) mutation = { action };
@@ -439,7 +441,7 @@ export class CommandDispatcher {
     else if (action === "budget" && /^\d+$/.test(text)) mutation = { action: "budget", rounds: Number(text) };
     else return transient("error", "usage: /goal [show | create <objective> | pause | resume | edit <objective> | budget <rounds>]");
     const updated = await session.goal({ action: "mutate", expected: view.current.reference, mutation });
-    return inspect("Goal", JSON.stringify(updated, null, 2));
+    return inspect("Goal", goalSummary(updated));
   }
 
   async #reload(
@@ -737,6 +739,26 @@ function parseInteractionRef(value: string): InteractionRef | undefined {
 
 function usage(spelling: string): CommandOutcome {
   return transient("error", `usage: ${spelling}`);
+}
+
+/** The product Goal surface, derived from durable `GoalPhase` alone.
+ *
+ * `Active` means rustX is authorized to continue pursuing the objective
+ * whenever the runtime reaches an eligible idle boundary — there is no
+ * separate arm/play/start step to report, and no inactive-but-active state
+ * to render. The exact revision is kept for the CAS token users pass back. */
+export function goalSummary(view: import("../protocol/app-server.ts").GoalView): string {
+  const goal = view.current;
+  if (!goal) return "No current Goal.";
+  const status = goal.phase[0]!.toUpperCase() + goal.phase.slice(1);
+  const lines = [
+    `Goal: ${goal.objective}`,
+    `Status: ${status}`,
+    `Progress: ${goal.autonomous_rounds_consumed}/${goal.autonomous_round_budget} autonomous rounds`,
+    `Revision: ${goal.reference.id} r${goal.reference.revision}`,
+  ];
+  if (goal.phase === "blocked" && goal.blocked_reason) lines.splice(2, 0, `Blocked: ${goal.blocked_reason}`);
+  return lines.join("\n");
 }
 
 function inspect(title: string, body: string): CommandOutcome {

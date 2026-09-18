@@ -1,11 +1,13 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Adapted from DeepSeek Harness ui-goal GoalBar: the strip, phase labels, icon
 // actions, single-flight controls and inline edit form. rustX GoalDomain owns
-// phase, revision, budget, activation, CAS and every value/transition limit;
-// this card owns only its draft, action feedback and a lock pending authority.
-// There is no create, clear or complete control here.
+// phase, revision, budget, CAS and every value/transition limit; this card owns
+// only its draft, action feedback and a lock pending authority. Durable
+// GoalPhase is the sole lifecycle authority (Issue #351), so an Active Goal
+// offers Pause and a stopped one offers Resume — never both, and never a
+// separate arm/play step. There is no create, clear or complete control here.
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import type { GoalMutation, GoalRef } from '../../../../protocol/app-server/v6';
+import type { GoalMutation, GoalRef, GoalSnapshot } from '../../../../protocol/app-server/v6';
 import type { GoalDockState } from '../../bindings/composer-context';
 import type { GoalControlOutcome } from '../../client/app-server';
 import {
@@ -32,6 +34,13 @@ function parseBudget(draft: string): number | undefined {
   const parsed = BigInt(draft);
   return parsed > U32_MAX ? undefined : Number(parsed);
 }
+
+/** The user-facing status word for each durable phase. `complete` never
+ * reaches this card — the dock is hidden for a finished Goal — but the map is
+ * total so a phase can never render as a blank label. */
+const STATUS: Record<GoalSnapshot['phase'], string> = {
+  active: 'Active', paused: 'Paused', blocked: 'Blocked', complete: 'Complete',
+};
 
 const AWAITING: Record<Awaiting['kind'], string> = {
   applied: 'Goal control applied. Controls stay locked until the authoritative Goal state is reread.',
@@ -62,7 +71,7 @@ export function GoalDock({ state, observation, disabled, mutate }: {
   const id = goal?.reference.id;
   useEffect(() => { setEditing(undefined); setError(undefined); }, [id]);
   // A draft is never saved over an authoritative value its author did not see.
-  // Revision-only changes (autonomous admission, activation) keep the draft.
+  // Revision-only changes (an admitted autonomous round) keep the draft.
   const objective = goal?.objective, budget = goal?.autonomous_round_budget;
   useEffect(() => { setEditing(current => current?.field === 'objective' ? undefined : current); }, [objective]);
   useEffect(() => { setEditing(current => current?.field === 'budget' ? undefined : current); }, [budget]);
@@ -108,9 +117,12 @@ export function GoalDock({ state, observation, disabled, mutate }: {
     if (event.key === 'Escape') { event.preventDefault(); cancel(); }
     else if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); save(); }
   };
-  const label = goal.phase === 'active' ? state.armed ? 'Ongoing Goal' : 'Inactive Goal' : goal.phase === 'paused' ? 'Paused Goal' : 'Blocked Goal';
+  // Issue #351: the status line is the durable phase and nothing else.
+  // `Active` is authorization to continue, so there is no Inactive Goal and
+  // no separate Play control beside it.
+  const label = `${STATUS[goal.phase]} Goal`;
 
-  return <section className={css.dock} aria-label="Goal" data-goal-phase={goal.phase} data-goal-armed={String(state.armed)}>
+  return <section className={css.dock} aria-label="Goal" data-goal-phase={goal.phase}>
     <div className={css.bar} title={goal.phase === 'blocked' ? goal.blocked_reason ?? undefined : undefined}>
       <span className={css.glyph} aria-hidden><IconGoalOutline16 size={14} /></span>
       {editing
@@ -123,7 +135,7 @@ export function GoalDock({ state, observation, disabled, mutate }: {
         <button type="button" className={css.iconButton} aria-label={editing.field === 'objective' ? 'Save goal objective' : 'Save round budget'} disabled={locked || !draftValid} onClick={save}><IconCheckOutline14 /></button>
         <button type="button" className={css.iconButton} aria-label="Cancel goal edit" disabled={pending} onClick={cancel}><IconCloseOutline16 size={14} /></button>
       </> : <>
-        {goal.phase === 'active' && state.armed
+        {goal.phase === 'active'
           ? <button type="button" className={css.iconButton} aria-label="Pause goal" disabled={locked} onClick={() => void run({ action: 'pause' })}><IconPauseOutline16 size={14} /></button>
           : <button type="button" className={css.iconButton} aria-label="Resume goal" disabled={locked} onClick={() => void run({ action: 'resume' })}><IconPlayOutline16 size={14} /></button>}
         <button ref={objectiveButton} type="button" className={css.iconButton} aria-label="Edit goal objective" disabled={locked} onClick={() => open('objective')}><IconEditOutline16 size={14} /></button>

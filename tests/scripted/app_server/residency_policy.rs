@@ -523,28 +523,34 @@ async fn goal_fixture() -> (
     (f, clock, a, native)
 }
 
+/// Issue #351: residency follows durable Goal semantics, not an activation
+/// bit. A composed Goal that is durably Active with budget remaining owns
+/// future autonomous work, so idle eviction must not race its continuation;
+/// every durable transition out of Active releases that ownership at the
+/// same commit that changes the phase.
 #[tokio::test]
-async fn armed_goal_owns_residency_until_native_disarm_transitions() {
+async fn active_goal_owns_residency_until_a_durable_phase_transition() {
     bounded(async {
         use crate::goal::{GoalControl, GoalMutation};
         for mutation in [
-            Some(GoalMutation::Pause),
-            Some(GoalMutation::Block {
+            GoalMutation::Pause,
+            GoalMutation::Block {
                 reason: "waiting".into(),
-            }),
-            Some(GoalMutation::Complete),
-            None,
+            },
+            GoalMutation::Complete,
         ] {
             let (f, clock, a, native) = goal_fixture().await;
-            // No await between activation and probe: the real driver has not
-            // consumed its wake. Armed future authority alone must pin residency.
+            // No await between the control commit and the probe: the real
+            // admission worker has not consumed its wake, so durable Active
+            // state alone is what pins residency here.
             let goal = native
                 .control_goal(GoalControl::Create {
                     objective: "test ownership".into(),
                     budget: 2,
                 })
                 .unwrap();
-            assert!(goal.armed);
+            let created = goal.current.unwrap();
+            assert_eq!(created.phase, crate::goal::GoalPhase::Active);
             assert!(!native.has_current_attempt());
             assert_eq!(
                 native.idle_epoch(),
@@ -557,17 +563,17 @@ async fn armed_goal_owns_residency_until_native_disarm_transitions() {
                 f.manager.residency(a.conversation_id()),
                 ResidencyState::Loaded
             );
-            if let Some(mutation) = mutation {
-                let view = native
-                    .control_goal(GoalControl::Mutate {
-                        expected: goal.current.unwrap().reference,
-                        mutation,
-                    })
-                    .unwrap();
-                assert!(!view.armed);
-            } else {
-                native.disarm_goal();
-            }
+            let view = native
+                .control_goal(GoalControl::Mutate {
+                    expected: created.reference,
+                    mutation,
+                })
+                .unwrap();
+            assert_ne!(
+                view.current.unwrap().phase,
+                crate::goal::GoalPhase::Active,
+                "the durable transition is the only thing that released ownership"
+            );
             assert!(native.idle_epoch().is_ok());
             f.manager.reap_idle();
             clock.advance(99);
@@ -589,8 +595,11 @@ async fn armed_goal_owns_residency_until_native_disarm_transitions() {
     .await;
 }
 
+/// Issue #351 recovery: a durably Active Goal is restored Active, so the
+/// reopened runtime owns its continuation and cannot be evicted out from
+/// under it. Pausing it — the explicit user act — releases residency.
 #[tokio::test]
-async fn recovered_durable_goal_is_disarmed_and_can_idle_unload() {
+async fn a_reopened_active_goal_owns_residency_until_it_is_paused() {
     bounded(async {
         let (f, clock, a, native) = goal_fixture().await;
         native
@@ -599,13 +608,61 @@ async fn recovered_durable_goal_is_disarmed_and_can_idle_unload() {
                 budget: 2,
             })
             .unwrap();
-        native.disarm_goal();
+        let paused = native
+            .control_goal(crate::goal::GoalControl::Mutate {
+                expected: native
+                    .goal_view()
+                    .unwrap()
+                    .unwrap()
+                    .current
+                    .unwrap()
+                    .reference,
+                mutation: crate::goal::GoalMutation::Pause,
+            })
+            .unwrap();
+        assert_eq!(
+            paused.current.unwrap().phase,
+            crate::goal::GoalPhase::Paused
+        );
         f.manager.unload(a.conversation_id()).await.unwrap();
+
+        // Reopening a Paused Goal owns nothing and may idle-unload.
         let recovered = f.load(0).await.unwrap().unwrap();
         let runtime = recovered.inspect_runtime().unwrap();
-        let goal = runtime.goal_view().unwrap().unwrap();
-        assert!(goal.current.is_some());
-        assert!(!goal.armed);
+        let view = runtime.goal_view().unwrap().unwrap();
+        let goal = view.current.unwrap();
+        assert_eq!(goal.phase, crate::goal::GoalPhase::Paused);
+        while runtime.idle_epoch().is_err() {
+            tokio::task::yield_now().await;
+        }
+        // Resuming through the ordinary typed control restores durable
+        // authorization, with no second "arm" operation, and residency
+        // ownership returns with it.
+        let resumed = runtime
+            .control_goal(crate::goal::GoalControl::Mutate {
+                expected: goal.reference,
+                mutation: crate::goal::GoalMutation::Resume,
+            })
+            .unwrap();
+        let resumed = resumed.current.unwrap();
+        assert_eq!(resumed.phase, crate::goal::GoalPhase::Active);
+        assert_eq!(
+            runtime.idle_epoch(),
+            Err(crate::runtime::conversation_runtime::IdleBusyReason::AutonomousExtension)
+        );
+        f.manager.reap_idle();
+        clock.advance(1000);
+        f.manager.reap_idle();
+        assert_eq!(
+            f.manager.residency(recovered.conversation_id()),
+            ResidencyState::Loaded
+        );
+        runtime
+            .control_goal(crate::goal::GoalControl::Mutate {
+                expected: resumed.reference,
+                mutation: crate::goal::GoalMutation::Pause,
+            })
+            .unwrap();
         while runtime.idle_epoch().is_err() {
             tokio::task::yield_now().await;
         }
@@ -622,11 +679,16 @@ async fn recovered_durable_goal_is_disarmed_and_can_idle_unload() {
     .await;
 }
 
+/// Issue #351: the resume-vs-idle-claim race has two deterministic winners
+/// and no activation bit on either side. A committed resume advances the
+/// runtime's activity token, so a claim holding the older epoch loses; a
+/// claim that wins first closes admission, so the later resume is refused by
+/// the ordinary lifecycle and the durable phase is unchanged.
 #[tokio::test]
-async fn goal_rearm_and_idle_claim_have_both_winner_orders() {
+async fn goal_resume_and_idle_claim_have_both_winner_orders() {
     bounded(async {
         use crate::goal::{GoalControl, GoalMutation};
-        for rearm_wins in [true, false] {
+        for resume_wins in [true, false] {
             let (f, _, a, native) = goal_fixture().await;
             let goal = native
                 .control_goal(GoalControl::Create {
@@ -634,32 +696,46 @@ async fn goal_rearm_and_idle_claim_have_both_winner_orders() {
                     budget: 1,
                 })
                 .unwrap();
-            native.disarm_goal();
-            // Drive both native commit orders without yielding to the driver.
+            let paused = native
+                .control_goal(GoalControl::Mutate {
+                    expected: goal.current.unwrap().reference,
+                    mutation: GoalMutation::Pause,
+                })
+                .unwrap()
+                .current
+                .unwrap();
+            // Drive both native commit orders without yielding to the worker.
             // The epoch is exactly the token the manager uses at idle claim.
             let epoch = native.idle_epoch().unwrap();
-            let rearm = GoalControl::Mutate {
-                expected: goal.current.unwrap().reference,
+            let resume = GoalControl::Mutate {
+                expected: paused.reference.clone(),
                 mutation: GoalMutation::Resume,
             };
-            if rearm_wins {
-                assert!(native.control_goal(rearm).unwrap().armed);
-                native.disarm_goal();
+            if resume_wins {
+                let view = native.control_goal(resume).unwrap();
+                assert_eq!(
+                    view.current.unwrap().phase,
+                    crate::goal::GoalPhase::Active,
+                    "resume alone restores continuation eligibility"
+                );
                 assert!(!native.has_current_attempt());
-                assert!(native.idle_epoch().is_ok());
                 assert!(
                     !native.claim_idle(epoch),
-                    "activation invalidates even after disarming again"
+                    "the committed resume invalidated the probed epoch"
                 );
             } else {
                 assert!(native.claim_idle(epoch));
                 assert!(
                     native
-                        .control_goal(rearm)
+                        .control_goal(resume)
                         .unwrap_err()
                         .contains("accepts no inbound")
                 );
-                assert!(!native.goal_view().unwrap().unwrap().armed);
+                assert_eq!(
+                    native.goal_view().unwrap().unwrap().current.unwrap(),
+                    paused,
+                    "a refused control never rewrites durable phase"
+                );
             }
             f.manager.unload(a.conversation_id()).await.unwrap();
             f.close().await;

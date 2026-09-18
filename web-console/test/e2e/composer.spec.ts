@@ -53,9 +53,12 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(todo.locator('li').nth(1)).toContainText('after #1');
 
     await message.fill('Keep working until the docks are verified'); await page.getByRole('button', { name: 'Send', exact: true }).click();
-    // The native driver admitted one autonomous round; its provider response is held open.
+    // The model created the Goal inside this Human attempt, which started no
+    // nested execution. After that attempt settled, the ordinary admission
+    // owner admitted exactly one autonomous round; its provider response is
+    // held open here.
     await fixture.gate('goal-round');
-    await expect(goal).toContainText('Ongoing Goal');
+    await expect(goal).toContainText('Active Goal');
     await expect(goal).toContainText('Verify the composer docks');
     await expect(goal).toContainText('1/1 rounds');
     await expect(page.getByRole('button', { name: 'Cancel turn', exact: true })).toBeVisible();
@@ -96,12 +99,19 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(queue).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
 
-    // Exhausted budget: resume re-arms without admitting provider work.
+    // Issue #351: Pause and Resume are the complete lifecycle vocabulary —
+    // one control at a time, derived from the durable phase, with no separate
+    // arm/play step and no "Inactive Goal". Resume restores Active; because
+    // the autonomous budget is already exhausted, no provider work follows.
     let before = await revision();
     await goal.getByRole('button', { name: 'Pause goal' }).click();
     await expect(goal).toContainText('Paused Goal'); expect(await revision()).toBe(before + 1);
+    await expect(goal.getByRole('button', { name: 'Pause goal' })).toHaveCount(0);
     await goal.getByRole('button', { name: 'Resume goal' }).click();
-    await expect(goal).toContainText('Ongoing Goal'); expect(await revision()).toBe(before + 2);
+    await expect(goal).toContainText('Active Goal'); expect(await revision()).toBe(before + 2);
+    // Active offers Pause and nothing else: no second activation control.
+    await expect(goal.getByRole('button', { name: 'Resume goal' })).toHaveCount(0);
+    await expect(goal.locator('[data-goal-armed]')).toHaveCount(0);
     await goal.getByRole('button', { name: 'Pause goal' }).click();
     await expect(goal).toContainText('Paused Goal');
     before = await revision();

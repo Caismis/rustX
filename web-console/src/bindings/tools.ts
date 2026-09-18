@@ -14,7 +14,7 @@ export function toolCard(tool: ForegroundToolExecution): ToolCardView {
   const string = (key: string) => typeof args[key] === 'string' ? args[key] as string : undefined;
   const output = result ? (result.content ?? []).flatMap(block => block.type === 'text' ? [block.text] : block.type === 'json' ? [json(block.value)] : []).join('\n') : tool.state.type === 'running' && tool.state.progress ? json(tool.state.progress) : undefined;
   const edits = variant === 'edit' && Array.isArray(args.edits) ? args.edits.filter((edit): edit is { oldText: string; newText: string } => !!edit && typeof edit.oldText === 'string' && typeof edit.newText === 'string') : [];
-  return { id: tool.call_id, title: tool.name, variant, state,
+  return { id: tool.call_id, nativeName: tool.name, title: tool.name === 'create_goal' ? state === 'success' ? 'Goal started' : 'Start Goal' : tool.name === 'update_goal' ? state === 'success' ? 'Goal updated' : 'Update Goal' : tool.name === 'get_goal' ? 'Read Goal' : tool.name, variant, state,
     summary: detail ?? string(variant === 'bash' ? 'command' : variant === 'search' ? 'pattern' : 'path') ?? tool.call_id,
     input: variant === 'bash' ? string('command') ?? tool.state.arguments : tool.state.arguments,
     output: [detail, output].filter(Boolean).join('\n') || undefined,

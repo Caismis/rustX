@@ -833,9 +833,6 @@ impl ClientInner {
     /// is currently cancellable.
     pub(crate) fn cancel_current_attempt(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
-        if let Some(runtime) = &self.runtime {
-            runtime.disarm_goal();
-        }
         let attempt_id = {
             let state = self.lock_state();
             let Some(attempt) = state.projection.snapshot_ref().attempt.as_ref() else {
@@ -860,6 +857,16 @@ impl ClientInner {
         {
             Ok(attempt_id) => Ok(RuntimeClientResult::AttemptCancellationAccepted { attempt_id }),
             Err(CancelAttemptError::NoCurrentAttempt) => Err(RuntimeClientError::NoCurrentAttempt),
+            // The attempt was cancelled, but the interrupt's durable Goal
+            // pause did not commit (Issue #351). The client is told the
+            // truth rather than shown a pause that does not exist.
+            Err(CancelAttemptError::GoalPauseFailed { diagnostic }) => {
+                Err(RuntimeClientError::InvalidState {
+                    message: format!(
+                        "the attempt was cancelled, but the Goal could not be durably paused: {diagnostic}"
+                    ),
+                })
+            }
         }
     }
 
@@ -6068,7 +6075,9 @@ mod tests {
         let (exited, exit) = std::sync::mpsc::channel();
         fixture.host.install_worker_exit_probe(exited);
         probe.arm_publish();
-        pending.push(ConversationObservation::GoalDisarmed);
+        pending.push(ConversationObservation::GoalChanged(
+            crate::goal::GoalView { current: None },
+        ));
         probe.wait_publish_entered(); // Worker holds the projection mutex inside a fold.
         drop(fixture.host);
         let host_released = weak.upgrade().is_none();

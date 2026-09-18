@@ -56,14 +56,38 @@ configuration control.
 ### Goal
 
 The dock renders the current `GoalSnapshot` — objective, durable phase, blocked
-reason, consumed/budget rounds and durable revision — plus `GoalView.armed`.
-Absent extension, no Goal and terminal `complete` occupy no composer space.
-`armed` is process-local activation: an activation-only change updates the label
-(`Ongoing` / `Inactive`) and never changes the displayed revision or an open draft.
+reason, consumed/budget rounds and durable revision. Absent extension, no Goal
+and terminal `complete` occupy no composer space.
 
-Controls are exactly the ones GoalDomain assigns to users: pause, resume
-(re-arm), edit objective and edit budget. Create, block and complete remain native
-model declarations; the Web `/goal` opens these existing controls, and there is no clear.
+Durable `GoalPhase` is the one Goal lifecycle authority (Issue #351):
+
+```text
+Active   = rustX is authorized to continue pursuing the objective whenever
+           the owning ConversationRuntime reaches an eligible safe idle
+           admission boundary
+Paused   = continuation is not authorized
+Blocked  = continuation is not authorized
+Complete = terminal
+```
+
+The status label is that phase and nothing else — `Active Goal`, `Paused Goal`,
+`Blocked Goal`. There is no activation flag on the wire, so the dock can never
+render an "Inactive Goal", and no `data-goal-armed` attribute exists. An
+admitted autonomous round advances the revision and the consumed count without
+disturbing an open draft.
+
+Controls are exactly the ones GoalDomain assigns to users: one lifecycle control
+chosen by the phase — Pause for `active`, Resume for `paused`/`blocked`, never
+both — plus edit objective and edit budget. There is no separate Play/arm step
+after Resume: a successful `Paused|Blocked -> Active` restores continuation
+eligibility by itself. Create, block and complete remain native model
+declarations; the Web `/goal` opens these existing controls, and there is no clear.
+
+Transcript rows for the internal Goal command tools show the semantic effect
+(`Goal started`, `Goal updated`) rather than the tool implementation names. The
+exact native Tool identity stays available for diagnostics: the row carries
+`data-tool-name`, and the Trace surface reports `native.create_goal` /
+`native.update_goal` with full arguments.
 
 Every mutation is `goal/control` `mutate` with the rendered authoritative
 `GoalRef` as its CAS token. Nothing is ever retried, and no newer revision is ever
@@ -144,7 +168,7 @@ idle send is admitted directly rather than queued.
 ## Lifecycle
 
 Disconnect, remount, route change and unmount send nothing: they do not cancel
-queued work, disarm or mutate Goal, modify Todo, settle a mutation or invent a
+queued work, pause or mutate Goal, modify Todo, settle a mutation or invent a
 terminal state. Connection loss clears only accepted provisional rows (presentation,
 never a claim about server work); the last observation stays visible but inert.
 Reconnect and reload rebuild every dock from the attach snapshot; disclosure state

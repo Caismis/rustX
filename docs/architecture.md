@@ -32,8 +32,10 @@ Goal joins the existing Runtime Client projection contract: the inactive bootstr
 cut seeds its bounded view, and native authoritative observations update that copy
 and publish `goal_changed` through the single cursor/replay owner. Journal Written
 and RoundAdmitted facts commit atomically with Goal state and ordinary round
-acceptance; ActivationChanged observes the won process-local transition. Journal
-facts never reconstruct Goal state or activation. See the [integration and drain
+acceptance; those two are the complete bounded fact vocabulary. Journal facts
+never reconstruct Goal state. Durable `GoalPhase` is the one Goal lifecycle
+authority, so no projected view can describe an Active Goal that is not actually
+authorized to continue. See the [integration and drain
 contracts](goal-extension.md#execution-facts-and-drain-ownership).
 
 

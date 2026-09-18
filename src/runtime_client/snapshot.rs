@@ -230,7 +230,8 @@ pub struct RuntimeClientSnapshot {
     /// [`ConversationTodoList`]: crate::tools::todo::ConversationTodoList
     #[serde(default)]
     pub todos: Option<TodoSnapshot>,
-    /// Goal read model at this projection cursor; absent when disabled. Journal facts never reconstruct it.
+    /// Durable Goal read model at this projection cursor; absent when the
+    /// extension is not composed. Journal facts never reconstruct it.
     pub goal: Option<crate::goal::GoalView>,
 }
 

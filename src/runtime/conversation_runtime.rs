@@ -663,6 +663,33 @@ struct CurrentAttempt {
     attempt_id: AttemptId,
     /// The attempt cancellation trigger observed by the loop.
     cancellation: AgentCancellation,
+    /// What this runtime admitted (Issue #351). Runtime-owned admission
+    /// provenance, never Goal lifecycle state.
+    provenance: AttemptProvenance,
+}
+
+/// What the coordinator admitted an attempt *for*.
+///
+/// This is runtime-owned admission provenance: it is decided once, at the one
+/// admission publication point, from the durable inbound the coordinator
+/// actually adopted. It is deliberately **not** Goal state — it is never
+/// persisted, never reaches `GoalView`, never reaches a Runtime Client
+/// snapshot or event, and disappears with the attempt it describes. It exists
+/// so an explicit interrupt can tell an autonomous Goal continuation apart
+/// from an ordinary Human attempt, including a Human attempt during which the
+/// model called `create_goal`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttemptProvenance {
+    /// Ordinary adopted inbound that contains no Goal continuation: Human
+    /// input, native results, and every other runtime-generated inbound.
+    Inbound,
+    /// The adopted batch carries the durable Goal continuation admitted at
+    /// the Goal-round frontier. Exactly this attempt is an autonomous Goal
+    /// continuation.
+    GoalContinuation,
+    /// Recovery continuation over already-canonical history: no fresh inbound
+    /// was adopted, so no Goal round was consumed for it.
+    RecoveredContinuation,
 }
 
 /// The runtime-owned manual compaction currently holding the conversation.
@@ -1443,10 +1470,15 @@ impl RuntimeInner {
         {
             return Err(Busy::Durability);
         }
+        // Issue #351: residency follows real semantics. A composed Goal that
+        // is durably Active with autonomous budget remaining still owns future
+        // work, so evicting it would race its own eligible continuation.
+        // Paused, Blocked, Complete, absent, an uncomposed extension, and an
+        // Active Goal whose budget is exhausted all own nothing — an
+        // exhausted Goal therefore cannot spin to pin residency forever.
         if self
-            .tool_runtime
-            .goal()
-            .is_some_and(crate::goal::GoalDomain::owns_autonomous_work)
+            .goal_owns_future_work(state)
+            .map_err(|_| Busy::Durability)?
         {
             return Err(Busy::AutonomousExtension);
         }
@@ -1470,6 +1502,38 @@ impl RuntimeInner {
             return Err(Busy::AdmissionChanged);
         }
         Ok(epoch)
+    }
+
+    /// Whether a composed Goal still owns future autonomous work.
+    ///
+    /// Both halves are required and neither is an activation bit: the current
+    /// resource generation must actually compose the Goal extension (a
+    /// Goal-disabled composition never executes stored Goal state), and the
+    /// durable snapshot must still authorize continuation. This is the same
+    /// answer the Goal-round admission decision uses, so residency and
+    /// admission can never disagree.
+    fn goal_owns_future_work(
+        &self,
+        state: &CoordinatorState,
+    ) -> Result<bool, crate::durable::ConversationStoreError> {
+        let Some(domain) = self.composed_goal(state) else {
+            return Ok(false);
+        };
+        domain.authorizes_continuation()
+    }
+
+    /// The Goal domain of the current composition, or `None` when this
+    /// runtime's frozen root profile does not compose the Goal extension.
+    fn composed_goal<'a>(
+        &'a self,
+        state: &CoordinatorState,
+    ) -> Option<&'a crate::goal::GoalDomain> {
+        self.tool_runtime.goal().filter(|_| {
+            state
+                .resources
+                .root_profile()
+                .is_some_and(|profile| profile.extensions.goal().is_some())
+        })
     }
 
     fn begin_drain(self: &Arc<Self>) -> Result<Arc<DrainCompletion>, ShutdownError> {
@@ -1529,9 +1593,10 @@ impl RuntimeInner {
                             .request_cancel(CancellationReason::RuntimeShutdown);
                         interaction_cancel_reason = current.cancellation.reason();
                     }
-                    if let Some(goal) = self.tool_runtime.goal() {
-                        goal.disarm();
-                    }
+                    // Issue #351: runtime shutdown is not Goal pause. Drain
+                    // closes runtime admission and supervises runtime-owned
+                    // work; the durable `GoalPhase` is untouched, so a later
+                    // explicit reopen resumes it through ordinary admission.
                     if let Some(compaction) = &state.manual_compaction {
                         let _ = compaction
                             .cancellation
@@ -2731,12 +2796,13 @@ impl RuntimeInner {
                     self.admit_continuation(state);
                     return;
                 }
-                if let Some(goal) = self.tool_runtime.goal().filter(|_| {
-                    state
-                        .resources
-                        .root_profile()
-                        .is_some_and(|profile| profile.extensions.goal().is_some())
-                }) {
+                // The one autonomous continuation decision (Issue #351).
+                // Eligibility here is: this is the ordinary safe idle
+                // admission boundary, no pending inbound won it, the Goal
+                // extension is composed, no owned background or Subagent work
+                // is outstanding, and the durable phase plus remaining budget
+                // authorize another round. There is no activation precondition.
+                if let Some(goal) = self.composed_goal(&state) {
                     let admission = self
                         .tool_runtime
                         .background()
@@ -2755,7 +2821,11 @@ impl RuntimeInner {
                         })
                         .flatten();
                     if let Some(Err(error)) = admission {
-                        goal.disarm();
+                        // Issue #351: a Goal-round durability failure is a
+                        // runtime-health fact, not a Goal intent change. The
+                        // absorbing durability fence closes further admission
+                        // — which is why this cannot become a hot retry loop —
+                        // while the durable Goal phase stays truthful.
                         self.record_durability_failure(
                             &mut state,
                             DurableOperation::GoalRoundAdmission,
@@ -2840,6 +2910,20 @@ impl RuntimeInner {
                 .collect(),
         )
         .expect("nonempty ordered committed identities");
+        // Issue #351: admission provenance is derived here, from the durable
+        // inbound this coordinator actually adopted — the only place that
+        // knows it. A Goal continuation is accepted into an empty pending
+        // queue at the Goal-round frontier, so a batch carrying one is
+        // pursuing that committed round even if ordinary inbound joined it
+        // before adoption.
+        let provenance = if adopted
+            .iter()
+            .any(|item| matches!(item.message().kind, InboundKind::GoalContinuation(_)))
+        {
+            AttemptProvenance::GoalContinuation
+        } else {
+            AttemptProvenance::Inbound
+        };
         // Durable adoption completes this finite admission cycle. The next
         // cycle starts with a fresh select/adopt retry allowance.
         Self::complete_admission_cycle(&mut state);
@@ -2862,7 +2946,7 @@ impl RuntimeInner {
                 transcript_cursor: item.transcript_cursor(),
             });
         }
-        self.publish_attempt(state, conversation, Some(fresh));
+        self.publish_attempt(state, conversation, Some(fresh), provenance);
     }
 
     /// Admits one **continuation** attempt over the already-canonical adopted
@@ -2880,7 +2964,12 @@ impl RuntimeInner {
             .conversation
             .take()
             .expect("the coordinator owns the conversation state while idle");
-        self.publish_attempt(state, conversation, None);
+        self.publish_attempt(
+            state,
+            conversation,
+            None,
+            AttemptProvenance::RecoveredContinuation,
+        );
     }
 
     /// The shared tail of every admission: allocate the attempt identity,
@@ -2895,6 +2984,7 @@ impl RuntimeInner {
         mut state: MutexGuard<'_, CoordinatorState>,
         conversation: ConversationState,
         fresh: Option<FreshInboundTurn>,
+        provenance: AttemptProvenance,
     ) {
         let attempt_id = AttemptId::for_conversation(&self.conversation_id, state.next_attempt_seq);
         state.next_attempt_seq = state.next_attempt_seq.saturating_add(1);
@@ -2923,6 +3013,7 @@ impl RuntimeInner {
             },
             attempt_id: attempt_id.clone(),
             cancellation: cancellation.clone(),
+            provenance,
         });
         // The one admission publication point is also where the admitted
         // attempt becomes countable (Issue #193): the subagent child driver
@@ -4833,7 +4924,8 @@ impl ConversationRuntime {
         })
     }
 
-    /// Requests cancellation of one named current attempt.
+    /// Requests cancellation of one named current attempt, durably pausing
+    /// the Goal when that attempt is an autonomous Goal continuation.
     ///
     /// Acceptance is not terminal settlement: actual settlement remains
     /// owned by the Agent Loop and is observed asynchronously. The
@@ -4841,15 +4933,40 @@ impl ConversationRuntime {
     /// cancellation signal is never delivered to a *different* attempt that
     /// was admitted after the named one settled.
     ///
+    /// # Ordering (Issue #351)
+    ///
+    /// Under the one coordinator lock, which also owns Goal-round admission
+    /// and the Goal control commit boundary:
+    ///
+    /// 1. prove the named attempt is the current attempt and read its
+    ///    runtime-owned [`AttemptProvenance`];
+    /// 2. if — and only if — it is an autonomous Goal continuation, durably
+    ///    commit `Active -> Paused`;
+    /// 3. request cancellation of that same attempt;
+    /// 4. report success only once both semantic actions have won.
+    ///
+    /// Because the durable pause commits **before** cancellation is
+    /// requested, there is no window in which the Goal is `Active` with a
+    /// cancelled attempt: the state "Active but inert" does not exist.
+    /// Because provenance decides step 2, cancelling an ordinary Human
+    /// attempt never pauses an Active Goal merely because one exists — not
+    /// even a Human attempt during which the model called `create_goal`.
+    ///
     /// # Errors
     ///
-    /// Returns [`CancelAttemptError::NoCurrentAttempt`] when no attempt
-    /// with the given identity is currently cancellable.
+    /// Returns [`CancelAttemptError::NoCurrentAttempt`] when no attempt with
+    /// the given identity is currently cancellable, and
+    /// [`CancelAttemptError::GoalPauseFailed`] when the durable pause did not
+    /// commit. The failure case never fabricates a pause: cancellation of
+    /// that exact attempt is still requested (containment), and a genuine
+    /// storage failure is recorded through the runtime's own absorbing
+    /// durability authority, which fences all further admission — so no later
+    /// Goal round can be admitted even though the phase still reads `Active`.
     pub fn cancel_current_attempt(
         &self,
         attempt_id: &AttemptId,
     ) -> Result<AttemptId, CancelAttemptError> {
-        let state = self.inner.lock_state();
+        let mut state = self.inner.lock_state();
         let Some(current) = state
             .current_attempt
             .as_ref()
@@ -4857,20 +4974,41 @@ impl ConversationRuntime {
         else {
             return Err(CancelAttemptError::NoCurrentAttempt);
         };
-        let _ = current
-            .cancellation
-            .request_cancel(CancellationReason::UserRequested);
-        if let Some(goal) = self.inner.tool_runtime.goal() {
-            goal.disarm();
-        }
-        Ok(current.attempt_id.clone())
-    }
-
-    /// Explicit cancellation disarms even when there is no current attempt to cancel.
-    pub(crate) fn disarm_goal(&self) {
-        let _state = self.inner.lock_state();
-        if let Some(goal) = self.inner.tool_runtime.goal() {
-            goal.disarm();
+        let attempt_id = current.attempt_id.clone();
+        let cancellation = current.cancellation.clone();
+        let goal_attempt = current.provenance == AttemptProvenance::GoalContinuation;
+        let pause = goal_attempt
+            .then(|| self.inner.composed_goal(&state))
+            .flatten()
+            .map(|domain| {
+                self.inner
+                    .mailbox
+                    .with_running_commit(|| domain.pause_current())
+            });
+        let failure = match pause {
+            None | Some(Ok(Ok(_))) => None,
+            // A genuine durable failure: fail closed through the existing
+            // absorbing runtime durability authority.
+            Some(Ok(Err(error))) => {
+                let diagnostic = error.to_string();
+                self.inner.record_durability_failure(
+                    &mut state,
+                    DurableOperation::GoalPause,
+                    diagnostic.clone(),
+                );
+                Some(diagnostic)
+            }
+            // The runtime no longer admits semantic commits, so it can no
+            // longer admit a Goal round either. This is a lifecycle refusal,
+            // not a storage fault, and earns no durability fact.
+            Some(Err(error)) => Some(error.to_string()),
+        };
+        // Containment is unconditional: the interrupted attempt is cancelled
+        // whether or not the durable pause committed.
+        let _ = cancellation.request_cancel(CancellationReason::UserRequested);
+        match failure {
+            None => Ok(attempt_id),
+            Some(diagnostic) => Err(CancelAttemptError::GoalPauseFailed { diagnostic }),
         }
     }
 
@@ -4899,7 +5037,7 @@ impl ConversationRuntime {
         &self,
         control: crate::goal::GoalControl,
     ) -> Result<crate::goal::GoalView, String> {
-        let _state = self.inner.lock_state();
+        let state = self.inner.lock_state();
         let domain = self
             .inner
             .tool_runtime
@@ -4920,7 +5058,8 @@ impl ConversationRuntime {
                 crate::goal::GoalWrite::Mutate { expected, mutation }
             }
         };
-        self.inner
+        let committed = self
+            .inner
             .mailbox
             .with_running_commit(|| domain.write(write))
             .map_err(|error| error.to_string())?
@@ -4928,7 +5067,20 @@ impl ConversationRuntime {
             .map_err(|rejection| {
                 serde_json::to_string(&rejection).expect("Goal rejection serializes")
             })?;
-        domain.view().map_err(|error| error.to_string())
+        let view = domain.view().map_err(|error| error.to_string())?;
+        drop(state);
+        // Issue #351: a successful Create or Resume commits durable
+        // authorization to continue, so the ordinary admission owner is woken
+        // here — by runtime control, not by Goal code holding a wake handle.
+        // If an attempt is already running the worker finds the runtime busy
+        // and changes nothing; the settlement handoff then reaches the next
+        // eligible idle boundary. This wake is a liveness notification only:
+        // every eligibility question is re-answered under the coordinator
+        // lock against durable state.
+        if committed.phase == crate::goal::GoalPhase::Active {
+            self.inner.wake.notify.notify_one();
+        }
+        Ok(view)
     }
 
     /// Commits a one-shot child cancellation intent into the runtime-owned
@@ -5852,6 +6004,16 @@ impl std::error::Error for RuntimeResourceReloadError {}
 pub enum CancelAttemptError {
     /// No attempt with the given identity is currently cancellable.
     NoCurrentAttempt,
+    /// The interrupted attempt was an autonomous Goal continuation and its
+    /// durable `Active -> Paused` commit did not win (Issue #351).
+    ///
+    /// The attempt was still cancelled. Nothing pretends the Goal is paused:
+    /// the durable phase is whatever storage actually holds, and a storage
+    /// fault has additionally fenced further runtime admission.
+    GoalPauseFailed {
+        /// The durable or lifecycle diagnostic that refused the pause.
+        diagnostic: String,
+    },
 }
 
 /// Metadata returned after one manual compaction committed successfully.
@@ -6091,9 +6253,6 @@ impl RuntimeObserver {
 impl crate::goal::GoalObserver for RuntimeObserver {
     fn changed(&self, view: crate::goal::GoalView) {
         self.push(ConversationObservation::GoalChanged(view));
-    }
-    fn disarmed(&self) {
-        self.push(ConversationObservation::GoalDisarmed);
     }
 }
 

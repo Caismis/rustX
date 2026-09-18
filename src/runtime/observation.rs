@@ -133,10 +133,10 @@ pub(crate) enum ConversationObservation {
     },
     /// A native Workflow cut published after its corresponding durable receipt.
     Workflow(Vec<crate::runtime::workflow::read_model::WorkflowSnapshot>),
-    /// Bounded authoritative replacement, ordered under the Goal mutex.
+    /// Bounded authoritative durable replacement, ordered under the Goal
+    /// publication boundary. Every Goal change is a durable phase/revision
+    /// change; there is no activation-only Goal observation.
     GoalChanged(crate::goal::GoalView),
-    /// Activation-only transition; the durable read-model copy is unchanged.
-    GoalDisarmed,
     /// One canonical internal runtime fact of an attempt.
     Event {
         /// The emitting attempt.

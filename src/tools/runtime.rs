@@ -511,10 +511,10 @@ impl ConversationToolRuntime {
             )
             .map_err(ConversationRuntimeError::TodoList)?,
         );
-        let goal = Some(crate::goal::GoalDomain::new(
-            durable_binding.full_store(),
-            mailbox.wake(),
-        ));
+        // The domain owns durable Goal semantics only. Waking the ordinary
+        // admission owner after a successful Create/Resume belongs to
+        // ConversationRuntime, so no Goal code holds the admission wake.
+        let goal = Some(crate::goal::GoalDomain::new(durable_binding.full_store()));
         Ok(Self {
             uploads: None,
             _lifecycle: config.lifecycle,
