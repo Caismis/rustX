@@ -139,6 +139,7 @@ export class AppServerClient {
   private attachmentChangeCount = 0;
   private attachmentEpochs = new Map<string, number>();
   private previewChecked = new Set<string>();
+  private summaryObservedEpoch = new Map<string, number>();
   private summaryInFlight = new Map<string, { generation: number; work: Promise<void> }>();
   private summaryReadSequence = 0;
   private summaryReads = new Map<string, number>();
@@ -380,14 +381,21 @@ export class AppServerClient {
       this.publish({ sessions, sessionResidencies: result.residencies, nextOffset: result.next_offset, views });
     }
   }
-  /** Missing off-page metadata or canonical user history invalidates the label.
-   * Admission/mailbox/drafts do not establish a preview. A successful exact read,
-   * not an attempt, completes the first-message check for this open view. */
+  /** Cached values remain renderable across transport loss. Each attachment
+   * establishes fresh exact metadata independently of its first-message check. */
   private async refreshDisplaySummary(id: string) {
-    const view = this.state.views[id];
-    const summary = this.state.sessions.find(row => row.id === id) ?? view?.summary;
-    if (!view || view.attachmentIntent !== 'wanted') return;
-    if (summary && (summary.name || summary.preview || this.previewChecked.has(id) || !this.hasCanonicalUser(id))) return;
+    const generation = this.state.generation, epoch = this.attachmentEpochs.get(id);
+    const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch
+      && this.state.views[id]?.attachmentIntent === 'wanted';
+    if (!current()) return;
+    const existing = this.summaryInFlight.get(id);
+    if (existing?.generation === generation) {
+      await existing.work.catch(() => {});
+      if (!current()) return;
+    }
+    const summary = this.state.sessions.find(row => row.id === id) ?? this.state.views[id]?.summary;
+    if (this.summaryObservedEpoch.get(id) === epoch && summary
+      && (summary.name || summary.preview || this.previewChecked.has(id) || !this.hasCanonicalUser(id))) return;
     await this.readSessionSummary(id).catch(() => {});
   }
   private hasCanonicalUser(id: string) {
@@ -403,14 +411,17 @@ export class AppServerClient {
     const epoch = this.attachmentEpochs.get(id), canonicalUser = this.hasCanonicalUser(id);
     const work = (async () => {
       const { summary } = await this.request({ method: 'session/summary', params: { session_id: id } }, 'session_summary');
-      if (!this.current(generation)) throw new Error('Obsolete Session summary read.');
+      if (!this.current(generation) || this.attachmentEpochs.get(id) !== epoch) throw new Error('Obsolete Session summary read.');
       if (summary.id !== id) throw new Error('Mismatched Session summary identity.');
       if ((this.summaryReads.get(id) ?? 0) <= summaryRead) {
         this.summaryReads.set(id, summaryRead);
         this.publish({ sessions: this.state.sessions.map(row => row.id === id ? summary : row),
           views: this.state.views[id] ? { ...this.state.views, [id]: { ...this.state.views[id], summary } } : this.state.views });
+        if (epoch !== undefined && this.state.views[id]?.attachmentIntent === 'wanted') {
+          this.summaryObservedEpoch.set(id, epoch);
+          if (canonicalUser) this.previewChecked.add(id);
+        }
       }
-      if (canonicalUser && this.attachmentEpochs.get(id) === epoch && this.state.views[id]?.attachmentIntent === 'wanted') this.previewChecked.add(id);
     })();
     const read = { generation, work };
     this.summaryInFlight.set(id, read);
@@ -443,6 +454,7 @@ export class AppServerClient {
       this.setSession(id, { attachment: 'attaching', error: undefined });
       const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
       this.attachmentEpochs.set(id, epoch);
+      this.previewChecked.delete(id);
       await this.performAttach(id, generation, epoch, navigationCurrent);
     });
   }
@@ -826,6 +838,7 @@ export class AppServerClient {
   }
   private retireAttachmentWork(id: string) {
     this.previewChecked.delete(id);
+    this.summaryObservedEpoch.delete(id);
     this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);
     this.setSession(id, { history: undefined, submissions: undefined });
   }

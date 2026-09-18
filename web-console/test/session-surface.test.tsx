@@ -92,6 +92,7 @@ it.each([false, true])('refreshes native preview only after a committed canonica
   await mount(['A']);
   const lists = () => methods().filter(method => method === 'session/summary').length;
   const baseline = lists();
+  expect(baseline).toBe(1);
   await act(async () => server.client.send('A', 'Local draft is not a title', [], 'send'));
   expect(lists()).toBe(baseline);
   expect(screen.getByLabelText('Session title').textContent).toBe('New session');
@@ -100,9 +101,27 @@ it.each([false, true])('refreshes native preview only after a committed canonica
   expect(lists()).toBe(baseline + 1);
   expect(screen.getByLabelText('Session title').textContent).toBe(fileOnly ? 'New session' : 'Native canonical preview');
   expect(row('A').getAttribute('aria-label')).toBe(`Open ${fileOnly ? 'New session' : 'Native canonical preview'}`);
-  await act(async () => server.update('A', canonicalUser('Later text')));
+  for (let i = 0; i < 3; i++) await act(async () => server.update('A', canonicalUser('Later text')));
   expect(lists()).toBe(baseline + 1);
   expect(methods()).not.toContain('session/name');
+});
+
+it('a summary begun before canonical history cannot complete its later preview check', async () => {
+  server.summaries.set('A', { name: null, preview: null });
+  await server.connect();
+  server.held.add('session/summary');
+  const attaching = server.client.attach('A');
+  const initial = await server.waitFor('session/summary', 1);
+  server.commit(initial);
+  server.snapshots.set('A', canonicalUser(null)); server.cursor++;
+  const refresh = server.client.refresh('A');
+  await server.waitFor('session/snapshot', 1);
+  server.reply(initial); await attaching;
+  const preview = await server.waitFor('session/summary', 2);
+  server.reply(preview); await refresh;
+  for (let i = 0; i < 3; i++) await server.client.refresh('A');
+  expect(methods().filter(method => method === 'session/summary')).toHaveLength(2);
+  expect(server.client.getSnapshot().views.A.summary?.preview).toBeNull();
 });
 
 it.each(['rpc', 'socket'] as const)('failed exact first-message read stays retryable off-page after reconnect: %s', async failure => {
@@ -152,6 +171,68 @@ it.each(['rpc', 'socket'] as const)('failed exact first-message read stays retry
   expect(server.requests.filter(({ request }) => request.method === 'session/list').every(({ request }) => request.method === 'session/list' && request.params.query === '')).toBe(true);
 });
 
+it.each([false, true])('repairs off-page cached metadata on reconnect (completed file-only preview: %s)', async fileOnly => {
+  server.summaries.set('A', { name: fileOnly ? null : 'Old name', preview: null });
+  if (fileOnly) server.snapshots.set('A', canonicalUser(null));
+  server.handlers.set('session/list', () => ({ type: 'sessions', residencies: { B: 'Unloaded' }, sessions: [server.summary('B')] }));
+  await mount(['A']);
+  const reads = () => methods().filter(method => method === 'session/summary').length;
+  expect(reads()).toBe(1);
+  const oldTitle = fileOnly ? 'New session' : 'Old name';
+  expect(screen.getByLabelText('Session title').textContent).toBe(oldTitle);
+  for (let i = 0; i < 3; i++) await act(async () => server.client.refresh('A'));
+  expect(reads()).toBe(1);
+  server.held.add('session/summary');
+  const oldRead = server.client.readSessionSummary('A').catch(() => {});
+  const oldRequest = await server.waitFor('session/summary', 2);
+  const oldSocket = server.socket;
+  server.commit(oldRequest);
+  await act(async () => { oldSocket.close(); await oldRead; });
+  expect(screen.getByLabelText('Session title').textContent).toBe(oldTitle);
+  const name = fileOnly ? 'Named elsewhere' : 'New name';
+  server.summaries.set('A', { name, preview: null });
+  let reconnect!: Promise<void>;
+  await act(async () => { reconnect = server.connect(); });
+  const repair = await server.waitFor('session/summary', 3);
+  expect(repair.params).toEqual({ session_id: 'A' });
+  expect(server.client.getSnapshot().sessions.map(row => row.id)).toEqual(['B']);
+  expect(screen.getByLabelText('Session title').textContent).toBe(oldTitle);
+  await act(async () => { server.reply(repair); await reconnect; server.reply(oldRequest, oldSocket); });
+  expect(server.client.getSnapshot().views.A.summary?.name).toBe(name);
+  expect(screen.getByLabelText('Session title').textContent).toBe(name);
+  for (let i = 0; i < 3; i++) await act(async () => server.client.refresh('A'));
+  expect(reads()).toBe(3);
+  expect(server.client.getSnapshot().uncertain).toEqual([]);
+  expect(methods().filter(method => ['session/name', 'turn/start', 'turn/cancel', 'session/unload', 'session/detach'].includes(method))).toEqual([]);
+  expect(server.requests.filter(({ request }) => request.method === 'session/list').every(({ request }) => request.method === 'session/list' && request.params.query === '')).toBe(true);
+});
+
+it('reopen repairs metadata on the same connection after an older-epoch read settles', async () => {
+  server.summaries.set('A', { name: 'Old name' });
+  await mount(['A']);
+  const socket = server.socket;
+  server.held.add('session/summary');
+  const oldRead = server.client.readSessionSummary('A').catch(() => {});
+  const oldRequest = await server.waitFor('session/summary', 2);
+  server.commit(oldRequest);
+  await act(async () => server.client.release('A', false));
+  server.summaries.set('A', { name: 'Reopened name' });
+  let reopened!: Promise<void>;
+  await act(async () => { reopened = server.client.attach('A'); });
+  await server.waitFor('settings/read', 2);
+  expect(methods().filter(method => method === 'session/summary')).toHaveLength(2);
+  await act(async () => { server.reply(oldRequest); await oldRead; });
+  const repair = await server.waitFor('session/summary', 3);
+  const shared = server.client.readSessionSummary('A');
+  expect(server.client.readSessionSummary('A')).toBe(shared);
+  await act(async () => { server.reply(repair); await reopened; });
+  expect(server.socket).toBe(socket);
+  expect(server.client.getSnapshot().views.A.summary?.name).toBe('Reopened name');
+  expect(screen.getByLabelText('Session title').textContent).toBe('Reopened name');
+  for (let i = 0; i < 3; i++) await act(async () => server.client.refresh('A'));
+  expect(methods().filter(method => method === 'session/summary')).toHaveLength(3);
+});
+
 it('manual naming immediately wins and survives later messages and catalog pagination', async () => {
   server.summaries.set('A', { name: null, preview: 'First native preview' });
   await mount();
@@ -183,7 +264,7 @@ it('a delayed older Sidebar page cannot overwrite a newer committed native previ
   server.summaries.set('A', { name: null, preview: 'Committed native preview' });
   let convergence!: Promise<void>;
   await act(async () => { convergence = server.update('A', canonicalUser('Different browser text')); });
-  const freshRequest = await server.waitFor('session/summary', 1);
+  const freshRequest = await server.waitFor('session/summary', 2);
   await act(async () => { server.reply(freshRequest); await convergence; server.reply(oldRequest); await oldPage; });
   expect(screen.getByLabelText('Session title').textContent).toBe('Committed native preview');
   expect(row('A').getAttribute('aria-label')).toBe('Open Committed native preview');
