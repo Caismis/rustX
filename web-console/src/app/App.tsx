@@ -38,6 +38,9 @@ import { AgentTranscript } from './agent/AgentTranscript';
 import { Interactions } from './agent/Interactions';
 import { RuntimeFacts } from './agent/Activity';
 import { Inspector } from './Inspector';
+import { Menu } from '../presentation/primitives/Menu';
+import { deriveSessionProductState } from '../bindings/session-product';
+import { SessionStatus } from './SessionStatus';
 
 const PREFERENCES = 'rustx-console-view-v1';
 function readPreferences(): { endpoint: string; tabs: string[] } {
@@ -59,6 +62,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
   const [createOpen, setCreateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [artifactPreview, setArtifactPreview] = useState<{ artifact: PreviewArtifact; resources: ArtifactResources }>();
   const [theme, setTheme] = useState(readTheme);
   useEffect(() => applyTheme(theme), [theme]);
@@ -87,6 +92,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
   const [preview, setPreview] = useState<RuntimeClientSessionDeletePreview>();
 
   const view = selected ? state.views[selected] : undefined;
+  const product = deriveSessionProductState(state, view);
   const artifacts = useMemo(() => selected && view?.target ? new ArtifactResources(client, selected) : undefined, [client, selected, view?.target, state.generation]);
   useEffect(() => () => artifacts?.dispose(), [artifacts]);
   const connected = state.connection === 'connected';
@@ -143,7 +149,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
     if (connected && selected) focusSession(selected, { preserveDraft: true });
   }, [state.connection, state.generation]);
   const open = (id: string, ready?: () => void) => {
-    if (!tabs.includes(id) && tabs.length >= 32) { setError('Close a view before opening more than 32 tabs. Explicit detach releases an attachment.'); return; }
+    if (!tabs.includes(id) && tabs.length >= 32) { setError('Close a view before opening more than 32 tabs.'); return; }
     setTabs(current => current.includes(id) ? current : [...current, id]);
     focusSession(id, { attach: true, ready });
   };
@@ -184,11 +190,12 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
       })} />}
     settings={wide => <SettingsTrigger wide={wide} onClick={() => setSettingsOpen(true)} />} />}
-    rightOpen={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} rightPanel={geometry => <RightPanel {...geometry} open={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} close={() => { setInspectorOpen(false); setArtifactPreview(undefined); }} title={artifactPreview && artifactPreview.resources === artifacts ? 'Artifact preview' : 'Developer inspector'}>{artifactPreview && artifactPreview.resources === artifacts ? <ArtifactPreview key={artifactPreview.artifact.id} artifact={artifactPreview.artifact} resources={artifacts!} /> : <Inspector client={client} state={state} view={view} />}</RightPanel>}
+    rightOpen={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} rightPanel={geometry => <RightPanel {...geometry} open={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} close={() => { setInspectorOpen(false); setArtifactPreview(undefined); }} title={artifactPreview && artifactPreview.resources === artifacts ? 'Artifact preview' : 'Developer inspector'}>{artifactPreview && artifactPreview.resources === artifacts ? <ArtifactPreview key={artifactPreview.artifact.id} artifact={artifactPreview.artifact} resources={artifacts!} /> : <Inspector log={client.log} state={state} view={view} />}</RightPanel>}
     overlay={<>
       <Modal open={connectionOpen} title="Connection" closeLabel="Close dialog" onClose={() => setConnectionOpen(false)}>
     <section className="connection-form" aria-label="Connection">
       <div className="connection-status"><StateDot state={connected ? 'done' : state.connection === 'error' || state.connection === 'incompatible' ? 'error' : state.connection === 'disconnected' ? 'idle' : 'warning'} /><strong>{state.connection}</strong><small>g{state.generation}</small></div>
+      {state.error && <p role="alert">{state.error}</p>}
       <details open={!connected}><summary>Connection settings</summary>
       <label>WebSocket endpoint<Input aria-label="WebSocket endpoint" value={endpoint} disabled={busy || connected} onChange={event => setEndpoint(event.target.value)} /></label>
       <label>Transport token<Input type="password" autoComplete="off" aria-label="Transport token" value={token} onChange={event => setToken(event.target.value)} /></label>
@@ -200,18 +207,21 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
     </section>
       </Modal>
       {settingsOpen && <Settings key={view?.id} onConnection={() => setConnectionOpen(true)} client={client} sessionId={view?.id} onClose={() => setSettingsOpen(false)} theme={theme} setTheme={setTheme} />}
+      <Modal open={advancedOpen} title="Advanced Session controls" closeLabel="Close advanced controls" onClose={() => setAdvancedOpen(false)}>
+        <p>Unload this Session only when you need to release its runtime, delete a loaded Session, or open a different history node. Active work may stop. Opening it again resolves current configuration.</p>
+        <Button disabled={!attached} onClick={() => { setAdvancedOpen(false); if (view) run(() => client.release(view.id, true)); }}>Unload runtime</Button>
+      </Modal>
     </>}>
-    <header className="console-header"><strong>{view ? state.sessions.find(item => item.id === view.id)?.name ?? 'Session' : 'rustX'}</strong><div className="row"><span className="status"><strong>{state.connection}</strong></span><Button aria-label="Toggle Inspector" onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></div></header>
+    {!view && <header className="console-header"><strong>rustX</strong><Button aria-label="Toggle Inspector" onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></header>}
     <nav className="tabs" role="tablist" aria-label="Open Session views" onKeyDown={navigateTabs}>{tabs.map(id => <div className="tab" key={id}>
-      <Pill role="tab" aria-label={state.sessions.find(item => item.id === id)?.name ?? id} title={id} id={`session-tab-${id}`} aria-controls="session-view" tabIndex={selected === id ? 0 : -1} active={selected === id} aria-selected={selected === id} onClick={() => focusSession(id)}>{state.sessions.find(item => item.id === id)?.name ?? id.slice(0, 16)}</Pill>
-      <button className="close-tab" aria-label={`Close view ${id}`} onClick={() => {
+      <Pill role="tab" aria-label={state.sessions.find(item => item.id === id)?.name ?? 'Session'} id={`session-tab-${id}`} aria-controls="session-view" tabIndex={selected === id ? 0 : -1} active={selected === id} aria-selected={selected === id} onClick={() => focusSession(id)}>{state.sessions.find(item => item.id === id)?.name ?? 'Session'}</Pill>
+      <button className="close-tab" aria-label={`Close ${state.sessions.find(item => item.id === id)?.name ?? 'Session'} view`} onClick={() => {
         const remaining = tabs.filter(item => item !== id); setTabs(remaining); if (selected === id) focusSession(remaining[0]);
         run(() => client.release(id, false));
       }}>×</button>
     </div>)}</nav>
-    {(error || state.error) && <div className="notice error" role="alert">{error || state.error}<Button size="sm" onClick={() => { setError(''); client.clearError(); }}>Dismiss notice</Button></div>}
-    {state.uncertain.map(item => <div key={item.id} className="notice" role="status"><strong>Outcome uncertain: {item.method}</strong><p>{item.sessionId ?? 'Session identity not known'} · request {item.id}. No automatic replay. Read authoritative state before deciding what to do.</p>
-      {!item.interactionKey && <Button size="sm" onClick={() => client.acknowledgeDiagnostic(item.id)}>Acknowledge diagnostic only</Button>}</div>)}
+    {error && <div className="notice error" role="alert">{error}<Button size="sm" onClick={() => setError('')}>Dismiss notice</Button></div>}
+    {state.uncertain.some(item => item.sessionId && item.sessionId !== view?.id) && <div className="notice" role="status">Other Sessions need verification. Check their conversation and affected work before trying again. Exact evidence is available in Developer Inspector.</div>}
     {preview && <section className="delete-preview" aria-label="Confirm Session deletion"><h2>Delete {preview.name ?? preview.session_id}?</h2><pre>{json(preview)}</pre>
       <p>This deletes the native ownership graph. An in-use Session may need explicit unload first.</p>
       <div className="row"><Button onClick={() => setPreview(undefined)}>Keep Session</Button><Button variant="primary" disabled={!connected} onClick={() => run(async () => {
@@ -227,22 +237,26 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
       })}>Confirm delete</Button></div>
     </section>}
     {view ? <section className={`session-panel ${agentCss.root}`} data-phase="active" id="session-view" role="tabpanel" aria-labelledby={`session-tab-${view.id}`}>
-      <section className={agentCss.header}><div className={`${agentCss.titleRow} agent-title-row`}><div className={agentCss.titleCluster}><strong aria-label="Session title">{state.sessions.find(session => session.id === view.id)?.name ?? view.id}</strong><small aria-label="Session location and attachment">{view.settings?.cwd ?? 'cwd unavailable'} · {view.attachment}</small></div>
-        <div className="row"><Button size="sm" disabled={!connected} onClick={() => focusSession(view.id, { attach: true, preserveDraft: true })}>{view.target && view.attachmentIntent === 'wanted' ? 'Resync' : 'Attach / cold resume'}</Button>
-          <Button size="sm" disabled={!attached || commandOpen || !lineageSwitchSafe(view)} onClick={() => invokeCommand({ id: 'tree' })}>Session tree</Button>
-          <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, false))}>Detach</Button>
-          <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, true))}>Unload runtime</Button></div>
+      <header className={agentCss.header}><div className={`${agentCss.titleRow} agent-title-row`}><div className={agentCss.titleCluster}><strong aria-label="Session title">{state.sessions.find(session => session.id === view.id)?.name ?? 'Session'}</strong><small aria-label="Session location" title={view.settings?.cwd}>{view.settings?.cwd ?? 'Location unavailable'}</small></div>
+        <div className="row"><Menu open={sessionMenuOpen} onClose={() => setSessionMenuOpen(false)} align="end" autoFocus portal
+          anchor={<Button aria-label="Session actions" aria-haspopup="menu" aria-expanded={sessionMenuOpen} onClick={() => setSessionMenuOpen(value => !value)}>•••</Button>}
+          items={[{ id: 'tree', label: 'Session tree', disabled: !attached || commandOpen || !lineageSwitchSafe(view) }, { id: 'advanced', label: 'Advanced Session controls' }]}
+          onSelect={id => { setSessionMenuOpen(false); if (id === 'tree') invokeCommand({ id: 'tree' }); else setAdvancedOpen(true); }} />
+          <Button aria-label="Toggle Inspector" aria-expanded={inspectorOpen} onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></div>
       </div>
       <div className={agentCss.tabs} role="tablist" aria-label="Conversation view" onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <Button className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? 'Chat' : 'Trajectory'}</Button>)}</div>
-      </section>
-      {view.modelMutation && <p className="notice" role="status">Model change {view.modelMutation.status}. Sending is paused until native state is reread.</p>}
-      {view.attachment !== 'attached' && <p className="notice">{view.attachment}: last observed values may be stale. Execution and pending interactions remain server-owned. {view.error}</p>}
+      </header>
+      <SessionStatus product={product} recover={action => {
+        if (action === 'connection-settings') setConnectionOpen(true);
+        else if (action === 'connect') { if (token) connect(true); else setConnectionOpen(true); }
+        else if (action === 'refresh') run(() => client.refresh(view.id));
+        else focusSession(view.id, { attach: true, preserveDraft: true });
+      }} />
 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role="tabpanel" aria-labelledby={`view-tab-${conversationMode}`} tabIndex={0}>
       <PreviewContext value={artifact => { if (artifacts) { setArtifactPreview({ artifact, resources: artifacts }); setInspectorOpen(false); } }}><ArtifactContext.Provider value={artifacts}>{conversationMode === 'trajectory' && view.trace ? <Trajectory key={view.id} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} loadEarlier={() => run(() => client.loadEarlierTrace(view.id))} latest={() => client.latestTrace(view.id)} /> : <ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
         {view.snapshot && <><AgentTranscript snapshot={view.snapshot} history={view.history} loadEarlier={() => run(() => client.loadEarlier(view.id))} latest={() => client.latestTranscript(view.id)}
           lineageSwitchSafe={lineageSwitchSafe(view)} historicalDisabled={composerDisabled || commandOpen} onHistorical={(id, messageId) => invokeCommand({ id, messageId })} /><RuntimeFacts snapshot={view.snapshot} />
-          <div className="attempt-status" role="status">{view.cancellation && <span>{view.cancellation.status === "uncertain" ? "Cancellation outcome uncertain" : "Stop requested; waiting for native settlement"} · </span>}Attempt: {view.snapshot.attempt ? `${view.snapshot.attempt.attempt_id} · ${view.snapshot.attempt.phase.type}` : 'none observed'}{view.snapshot.attempt?.phase.type === 'settled' && ` · ${view.snapshot.attempt.phase.outcome.type}`}</div>
 
         </>}
       </ChatViewport>}</ArtifactContext.Provider></PreviewContext>
@@ -276,6 +290,6 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
           setTabs(current => current.includes(result.session.id) ? current : [...current, result.session.id]);
         }} />}
 
-    </section> : <div className="empty"><h2>One runtime. Many Sessions.</h2><p>Choose New Session to select a Workspace, or open an existing Session from the sidebar.</p><p>Switching or closing views never cancels work.</p></div>}
+    </section> : <div className="empty"><h2>What would you like to work on?</h2><p>Choose New Session to select a Workspace, or open an existing Session from the sidebar.</p><p>Switching or closing views never cancels work.</p><SessionStatus product={product} recover={() => setConnectionOpen(true)} /></div>}
   </AppFrame>;
 }

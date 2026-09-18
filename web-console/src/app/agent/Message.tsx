@@ -26,6 +26,6 @@ export function Content({ blocks, markdown = false, streaming = false, tools = [
 export function Message({ message, tools = [], actions }: { message: MessageBlock; tools?: ForegroundToolExecution[]; actions?: ReactNode }) {
   if (message.role === 'tool') return null; // Results belong to the native call projection, never paired here.
   if (message.role === 'user' && message.kind && message.kind !== 'message') return <details><summary>Context · {Object.keys(message.kind)[0]}</summary><Content blocks={message.content} markdown/></details>;
-  return message.role === 'user' ? <UserMessage label={`user · ${message.id}`} actions={actions}><Content blocks={message.content}/></UserMessage>
-    : <AssistantMessage label={`assistant · ${message.id}`}><Content blocks={message.content} markdown tools={tools}/></AssistantMessage>;
+  return message.role === 'user' ? <UserMessage label="Your message" actions={actions}><Content blocks={message.content}/></UserMessage>
+    : <AssistantMessage label="Assistant response"><Content blocks={message.content} markdown tools={tools}/></AssistantMessage>;
 }

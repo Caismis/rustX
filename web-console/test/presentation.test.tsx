@@ -22,7 +22,7 @@ it('switching and unmounting open Session views remains presentation-only', asyn
   const ui = render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   const baseline = server.requests.length;
   fireEvent.click(screen.getByRole('tab', { name: 'Session B' }));
-  expect(screen.getByText('/workspace/B · attached')).toBeTruthy();
+  expect(screen.getByLabelText('Session location').textContent).toBe('/workspace/B');
   fireEvent.click(screen.getByRole('tab', { name: 'Session A' }));
   expect(screen.getAllByRole('tab', { name: /^Session / })).toHaveLength(2);
   ui.unmount();
@@ -37,9 +37,9 @@ it('renders streaming then one committed response, and an authoritative Approval
   const live = { ...snapshot(), attempt: { attempt_id: 'attempt-A', phase: { type: 'running' as const }, turn: 1,
     in_flight: { message_id: 'assistant-1', blocks: [{ type: 'text' as const, block_index: 0, text: 'Streaming response' }] } } };
   await act(() => server.update('A', live));
-  expect(screen.getByLabelText('Streaming · assistant-1')).toBeTruthy();
+  expect(screen.getByLabelText('Streaming response')).toBeTruthy();
   await act(() => server.update('A', { ...snapshot(), messages: [{ role: 'assistant', id: 'assistant-1', content: [{ type: 'text', text: 'Committed response' }] }], transcript: { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: 'assistant-1', content: [{ type: 'text', text: 'Committed response' }] } } }] }, pending_interactions: [interaction('approval')] }));
-  expect(screen.queryByLabelText('Streaming · assistant-1')).toBeNull();
+  expect(screen.queryByLabelText('Streaming response')).toBeNull();
   expect(screen.getAllByText('Committed response')).toHaveLength(1);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Allow once' })); await server.waitFor('interaction/respond', 1); await server.client.refresh('A'); });
   expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
@@ -86,7 +86,7 @@ it('closing A immediately emits exactly its detach, preserving B, runtime work a
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   const target = server.client.target('A'), beforeA = server.client.getSnapshot().views.A.snapshot, beforeB = server.client.getSnapshot().views.B;
   const baseline = server.requests.length;
-  act(() => { fireEvent.click(screen.getByRole('button', { name: 'Close view A' })); });
+  act(() => { fireEvent.click(screen.getByRole('button', { name: 'Close Session A view' })); });
   expect(screen.queryByRole('tab', { name: 'Session A' })).toBeNull();
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   const detach = await server.waitFor('session/detach', 1);
@@ -109,11 +109,11 @@ it('lost close-tab detach acknowledgement leaves the tab closed and intent relea
   await server.attached('A', 'B'); server.held.add('session/detach');
   localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A', 'B'] }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
-  act(() => { fireEvent.click(screen.getByRole('button', { name: 'Close view A' })); });
+  act(() => { fireEvent.click(screen.getByRole('button', { name: 'Close Session A view' })); });
   const detach = await server.waitFor('session/detach', 1); server.commit(detach);
   await act(async () => { server.socket.close(); await server.connect(); });
   expect(screen.queryByRole('tab', { name: 'Session A' })).toBeNull();
-  expect(screen.getByText('Outcome uncertain: session/detach')).toBeTruthy();
+  expect(screen.getByText(/Other Sessions need verification/)).toBeTruthy();
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   expect(server.claims().map(item => item.session_id)).toEqual(['B']);
   expect(server.requests.filter(({ request }) => request.method === 'session/detach')).toHaveLength(1);
@@ -125,6 +125,8 @@ it('releasing an open tab also removes its existing reload hint without closing 
   await server.attached('A', 'B'); server.held.add('session/unload');
   localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A', 'B'] }));
   const ui = render(<App client={server.client} workspaceHost={server.workspaceHost} />);
+  act(() => { fireEvent.click(screen.getByRole('button', { name: 'Session actions' })); });
+  act(() => { fireEvent.click(screen.getByRole('menuitem', { name: 'Advanced Session controls' })); });
   act(() => { fireEvent.click(screen.getByRole('button', { name: 'Unload runtime' })); });
   const unload = await server.waitFor('session/unload', 1); server.commit(unload);
   expect(screen.getByRole('tab', { name: 'Session A' })).toBeTruthy();

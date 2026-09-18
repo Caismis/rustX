@@ -1,6 +1,10 @@
 # rustX Web console
 
 Harness owns the presentation baseline; rustX owns all runtime/product semantics.
+The ordinary Session surface follows the [WEB-12 product audit](PRODUCT-SURFACE.md):
+one identity/view header, contextual product status, and a Session actions menu.
+Exact runtime facts live in the read-only Developer Inspector. Normal opening and
+restoration use the existing native client attachment path without lifecycle buttons.
 The normal Agent path uses the integrated Conversation, Composer, specialized
 Tool cards, interaction takeover and model/permission controls. See
 [Agent architecture](AGENT-ARCHITECTURE.md) and [#346 validation](RESET-346-VALIDATION.md).
@@ -131,17 +135,18 @@ Switching tabs and React unmounting alone remain presentation-only.
 Disconnect, closing a tab, switching focus, and React unmounting never cancel,
 answer, unload or delete. Detach releases only external controller/subscription
 ownership, so work, loaded runtimes and pending interactions survive. Explicit
-**Unload runtime** is the native shutdown operation and may settle active work.
+**Unload runtime**, available only in **Session actions → Advanced Session controls**,
+is the native shutdown operation and may settle active work.
 After lost detach/unload acknowledgement, released intent prevents reconnect from
 attaching or cold-loading the Session to discover the outcome. Only a later
-explicit **Open / Attach / cold resume** sets wanted intent again. A fresh attach
+explicit **Open Session** sets wanted intent again. A fresh attach
 cannot by itself prove the previous mutation's outcome, so uncertainty remains.
 
 The existing endpoint/tab navigation hints retain only wanted views for automatic
 page-reload restoration. A detached tab can remain visible on this page without
 remaining a resume hint; no new persisted intent, observation or request state is
 introduced. On a fresh page the Session remains available through the native list
-for explicit Open. **Attach / cold resume** resolves through rustX's canonical
+for explicit Open. Opening or resuming resolves through rustX's canonical
 configuration owners.
 
 Request IDs provide correlation only. There are at most eight transmitted and 64
@@ -151,8 +156,8 @@ side-effect with no acknowledgement is **outcome uncertain**, including create,
 delete, turn/cancellation, interaction and lifecycle operations. Unsent calls are
 discarded. Reconnect reads authority first; no mutation is automatically replayed.
 Non-interaction uncertainty remains a diagnostic even when a snapshot is suggestive:
-the protocol cannot prove request identity. Acknowledging its notice changes no
-server state. Up to 64 unresolved mutations can be retained; new mutations are
+the protocol cannot prove request identity. The product warning and Inspector
+retain that unresolved evidence. Up to 64 unresolved mutations can be retained; new mutations are
 refused before diagnostics would be silently dropped.
 
 Pending interactions come only from authoritative snapshots, including routed
@@ -172,8 +177,8 @@ connection generation, cwd, observed residency, safe model/settings generation,
 active attempt, pending interactions, Subagents, Workflows and background counts.
 Native Tool calls/results use extracted disclosure cards. Current Todo, Goal and
 pending inbound state render as the composer context docks ([COMPOSER.md](COMPOSER.md)).
-Workflow, Subagent and background/status values keep their cards or JSON
-disclosure. Live versus last-observed values are labelled. Unknown residency is not
+Workflow, Subagent and background activity keep named progress cards; execution
+identities and raw Agent status are in Inspector. Live versus last-observed values are labelled. Unknown residency is not
 inferred as unloaded.
 
 The raw log observes actual incoming/outgoing JSON-RPC text **before adaptation**.
@@ -194,7 +199,9 @@ telemetry is used by it.
 Supported native gestures: list/create/open, delete preview and revision-checked
 delete, Send/Queue/Steer and cancel, Goal pause/resume/edit, typed slash commands,
 native Fork/Branch/Retry and Session tree navigation, explicit model selection and configuration-owned approval policy,
-answer/decline/cancel interactions, resync, detach, unload/cold attach and reconnect.
+answer/decline/cancel interactions and contextual reconnect. Closing a view releases
+its controller without stopping work; advanced unload remains explicit. Resync,
+detach and cold attach remain native client capabilities, not permanent product buttons.
 Commands are client grammar, never server command strings. Unsupported slash input
 is refused without prompt fallback. Retry creates a native branch and executes its
 returned input once; original canonical history remains unchanged. Fork relies on

@@ -48,3 +48,30 @@ test('Harness shell reference states and presentation-only navigation', async ({
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
+
+test('Session product states stay concise and recovery evidence remains in Inspector', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  for (const mode of ['idle', 'queued', 'stopping', 'reconnect', 'uncertain'] as const) {
+    await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html');
+    await expect(page.getByLabel('Session status')).toHaveText('Working…');
+    await page.evaluate(mode => window.sessionFixture.state(mode), mode);
+    const expected = { idle: undefined, queued: 'Queued', stopping: 'Stopping…', reconnect: 'Connection interrupted', uncertain: 'Needs verification' }[mode];
+    if (expected) await expect(page.getByLabel('Session status')).toContainText(expected);
+    else await expect(page.getByLabel('Session status')).toHaveCount(0);
+    const ordinary = await page.locator('main').innerText();
+    expect(ordinary).not.toMatch(/attempt-A|runtime_incarnation|connection_generation|Attach \/ cold resume|Unload runtime|Detach|Resync/);
+    await expect(page).toHaveScreenshot(`session-${mode}-light.png`);
+    if (mode === 'uncertain') {
+      await page.getByRole('button', { name: 'Toggle Inspector' }).click();
+      await page.getByText('Uncertain operations and reconciliation evidence', { exact: true }).click();
+      await expect(page.getByRole('complementary', { name: 'Developer inspector' })).toContainText('turn/cancel');
+      await page.getByRole('button', { name: 'Close Inspector' }).click();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect(page).toHaveScreenshot('session-uncertain-mobile.png');
+    }
+  }
+  expect(errors).toEqual([]);
+});

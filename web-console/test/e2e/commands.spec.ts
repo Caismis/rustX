@@ -1,3 +1,5 @@
+import { expectSettled } from './shell-actions';
+import { sessionTree } from './shell-actions';
 import { showInspector } from './shell-actions';
 import { chooseWorkspace, connectionAction } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
@@ -16,14 +18,14 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
   const message = page.getByRole('textbox', { name: 'Message', exact: true });
   const facts = page.getByLabel('Native diagnostic JSON', { exact: true });
   const command = async (name: string) => { await message.fill(`/${name}`); await message.press('Enter'); return page.getByRole('dialog', { name: `/${name}`, exact: true }); };
-  const settled = () => expect(page.locator('.attempt-status')).toContainText('settled');
+  const settled = () => expectSettled(page);
   try {
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await expect(page).toHaveTitle(/rustX/);
     await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
     await page.getByLabel('Transport token').fill(fixture.token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.locator('.status strong')).toHaveText('connected'); await showInspector(page);
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0); await showInspector(page);
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(message).toBeEnabled();
@@ -42,7 +44,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(popup).toHaveCount(0); await expect(message).toBeFocused();
     await expect(message).toHaveValue('/model');
     await connectionAction(page, 'Reconnect');
-    await expect(page.locator('.status strong')).toHaveText('connected'); await showInspector(page);
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0); await showInspector(page);
     await expect(facts).toContainText('fixture/second-model');
     await message.fill('/not-a-command'); await message.press('Enter');
     await expect(page.getByRole('alert')).toContainText('Unsupported command');
@@ -66,7 +68,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
       await expect(facts).not.toContainText(`"ConversationId": "${originalConversation}"`);
       expect(JSON.parse(await facts.innerText()).SessionId).toBe(originalId);
       expect(JSON.parse(await facts.innerText()).ConversationId).not.toBe(originalConversation);
-      await expect(page.locator('.attempt-status')).toContainText('running');
+      await expect(page.getByLabel('Session status')).toContainText('Working…');
       await expect(page.getByText('Regenerated native answer', { exact: true })).toHaveCount(0);
     });
     phase = 'validated retry request reached; awaiting provider output and canonical settlement';
@@ -77,7 +79,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(transcript.getByText('Original native answer', { exact: true })).toHaveCount(0);
     await expect(transcript.getByText('Regenerate my uploaded note', { exact: true })).toHaveCount(1);
     await page.screenshot({ path: 'test-results/commands-retry-desktop.png' });
-    await page.getByRole('button', { name: 'Session tree', exact: true }).click();
+    await sessionTree(page);
     await page.getByRole('dialog', { name: 'Session tree', exact: true }).getByRole('option').filter({ hasText: originalConversation }).click();
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
     await expect(transcript.getByText('Regenerated native answer', { exact: true })).toHaveCount(0);
@@ -94,7 +96,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     expect(batches).toHaveLength(1);
     expect(readFileSync(join(root, batches[0], 'note.txt'), 'utf8')).toBe('Owned by native Session');
     await connectionAction(page, 'Reconnect');
-    await expect(page.locator('.status strong')).toHaveText('connected'); await showInspector(page);
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0); await showInspector(page);
     await expect(message).toBeEnabled();
     // Live settings are Conversation-owned. A new cold lineage uses the native
     // Session/launch configuration, never a browser copy of the old live values.

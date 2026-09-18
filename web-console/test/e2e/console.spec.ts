@@ -1,3 +1,4 @@
+import { unloadSession } from './shell-actions';
 import { showInspector } from './shell-actions';
 import { chooseWorkspace, connectionAction, closeSettings } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
@@ -5,16 +6,23 @@ import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host.ts';
 import { startDogfood } from './dogfood-server';
+import { wireProbe } from './wire-probe';
 
 test('two real rustX Sessions, browser loss, native interactions, raw wire, and cold configuration resolution', async ({ page }) => {
   const fixture = await startDogfood();
+  const wire = await wireProbe(page);
+  const closeView = async (id: string) => {
+    const count = wire.responses.filter(row => row.method === 'session/detach').length;
+    await page.locator(`[id="session-tab-${id}"]`).locator('..').getByRole('button').click();
+    await expect.poll(() => wire.responses.filter(row => row.method === 'session/detach').length).toBe(count + 1);
+  };
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const connect = async () => {
     await page.getByLabel('WebSocket endpoint').fill(`${fixture.endpoint}/`);
     await page.getByLabel('Transport token').fill(fixture.token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.locator('.status strong')).toHaveText('connected'); await showInspector(page);
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0); await showInspector(page);
   };
   const send = async (text: string) => { await page.getByRole('textbox', { name: 'Message', exact: true }).fill(text); await page.getByRole('button', { name: 'Send', exact: true }).click(); };
   const reload = async () => { await page.reload(); await connect(); };
@@ -27,13 +35,13 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await connect();
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
-    await expect(page.getByLabel('Session location and attachment', { exact: true })).toHaveText(`${fixture.workspaceA} · attached`);
-    const idA = await page.getByLabel('Session title', { exact: true }).innerText();
+    await expect(page.getByLabel('Session location', { exact: true })).toHaveText(`${fixture.workspaceA}`);
+    const idA = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId as string;
     await chooseWorkspace(page, 'Workspace B'); await page.getByRole('button', { name: 'Create Session', exact: true }).click();
-    await expect(page.getByLabel('Session location and attachment', { exact: true })).toHaveText(`${fixture.workspaceB} · attached`);
-    const idB = await page.getByLabel('Session title', { exact: true }).innerText();
-    await expect(page.getByRole('tab', { name: /^ses_/ })).toHaveCount(2);
-    await page.getByRole('tab', { name: idA, exact: true }).click();
+    await expect(page.getByLabel('Session location', { exact: true })).toHaveText(`${fixture.workspaceB}`);
+    const idB = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId as string;
+    await expect(page.getByRole('tablist', { name: 'Open Session views' }).getByRole('tab')).toHaveCount(2);
+    await page.locator(`[id="session-tab-${idA}"]`).click();
     await send('Long action in A'); await fixture.gate('finish-a');
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     // Configuration source commits cannot rewrite a running admitted attempt.
@@ -56,34 +64,33 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(settings.getByText(/Source saved. The loaded runtime/)).toBeVisible();
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 
-    await page.getByRole('tab', { name: idB, exact: true }).click(); await send('Use B while A runs');
+    await page.locator(`[id="session-tab-${idB}"]`).click(); await send('Use B while A runs');
     await expect(page.getByText('B stayed responsive.', { exact: true })).toBeVisible();
     // The actual TUI client joins the browser's server. Handoff is explicit;
     // neither client needs a private API or a second writable controller.
     remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     await expect(remote.attach(idB)).rejects.toMatchObject({ kind: 'controller_in_use' });
-    await page.getByRole('button', { name: 'Detach', exact: true }).click();
-    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('detached');
+    await closeView(idB);
     const terminalB = await remote.attach(idB);
     expect(JSON.stringify(terminalB.state.transcript)).toContain('B stayed responsive.');
     expect((await remote.readSession(idA)).id).toBe(idA);
     await terminalB.resync();
     await remote.detach(idB);
-    await page.getByRole('button', { name: 'Attach / cold resume' }).click();
-    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('attached');
+    await page.locator(`button[data-session-id="${idB}"]`).click();
+    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await remote.shutdown(); remote = undefined;
 
-    await page.getByRole('tab', { name: idA, exact: true }).click();
+    await page.locator(`[id="session-tab-${idA}"]`).click();
     await connectionAction(page, 'Disconnect');
-    await expect(page.locator('.status strong')).toHaveText('disconnected');
+    await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
     await connectionAction(page, 'Reconnect');
-    await expect(page.locator('.status strong')).toHaveText('connected'); await showInspector(page);
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0); await showInspector(page);
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     await reload(); await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     const incarnationA = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).runtime_incarnation;
-    await page.getByRole('button', { name: `Close view ${idA}` }).click();
-    await expect(page.getByRole('tab', { name: idA, exact: true })).toHaveCount(0);
-    await expect(page.locator(`button[data-session-id="${idA}"]`)).toHaveAttribute('title', /detached/i);
+    await closeView(idA);
+    await expect(page.locator(`[id="session-tab-${idA}"]`)).toHaveCount(0);
+    await expect(page.locator(`button[data-session-id="${idA}"]`)).toHaveAttribute('title', /Open Session/);
     // The only controller has been released before the provider finishes A.
     await fixture.release('finish-a');
     await fixture.control('observations/await?kind=response_completed&count=2&timeoutMs=30000');
@@ -94,13 +101,13 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     // Every close is acknowledged as detached, and every reopen keeps residency.
     for (let i = 0; i < 34; i++) {
       const id = i % 2 === 0 ? idA : idB;
-      await page.getByRole('button', { name: `Close view ${id}` }).click();
-      await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('title', /detached/i);
+      await closeView(id);
+      await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('title', /Open Session/);
       await page.locator(`button[data-session-id="${id}"]`).click();
-      await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('attached');
-      await expect(page.getByLabel('Session title', { exact: true })).toHaveText(id);
+      await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
+      await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId).toBe(id);
     }
-    await page.getByRole('tab', { name: idA, exact: true }).click();
+    await page.locator(`[id="session-tab-${idA}"]`).click();
     await send('Approval please'); await expect(page.getByRole('button', { name: 'Allow once' })).toBeEnabled();
     const pendingApproval = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).pending_interactions[0].interaction;
     await connectionAction(page, 'Disconnect'); await reload();
@@ -116,7 +123,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByText('Questionnaire completed.', { exact: true })).toBeVisible();
     await send('Publish while detached'); await fixture.gate('publish-question');
     await connectionAction(page, 'Disconnect');
-    await expect(page.locator('.status strong')).toHaveText('disconnected');
+    await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
     remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     // Observe connection cleanup at the native owner before publishing an
     // interaction with no UI attached. This observer never attaches a Session.
@@ -125,20 +132,20 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await fixture.control('observations/await?kind=response_completed&count=7&timeoutMs=30000');
     await remote.shutdown(); remote = undefined;
     await connectionAction(page, 'Reconnect');
-    await expect(page.locator('.status strong')).toHaveText('connected'); await showInspector(page);
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0); await showInspector(page);
     await expect(page.getByRole('region', { name: 'Questionnaire' })).toBeVisible();
     await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit answers' }).click();
     await expect(page.getByText('Detached question completed.', { exact: true })).toBeVisible();
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
     fixture.writeSettings('second-model');
-    await page.getByRole('button', { name: 'Resync', exact: true }).click();
+    await page.locator(`button[data-session-id="${idA}"]`).click();
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
-    await page.getByRole('button', { name: 'Unload runtime', exact: true }).click();
-    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('unloaded');
-    await page.getByRole('button', { name: 'Attach / cold resume' }).click();
+    await unloadSession(page);
+    await expect(page.getByLabel('Session status').getByRole('button', { name: 'Open Session', exact: true })).toBeVisible();
+    await page.getByLabel('Session status').getByRole('button', { name: 'Open Session', exact: true }).click();
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('second-model');
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
-    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText(fixture.workspaceA);
+    await expect(page.getByLabel('Session location', { exact: true })).toContainText(fixture.workspaceA);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('second-model');
     await page.getByLabel('Method filter').fill('session/attach');
     await expect(page.locator('.protocol-log')).toContainText('session/attach');
@@ -150,9 +157,9 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(fixture.token);
     expect(await page.locator('body').innerText()).not.toContain('fake-provider-only');
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.getByRole('tab', { name: idB, exact: true }).click();
-    await page.getByRole('button', { name: 'Unload runtime', exact: true }).click();
-    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('unloaded');
+    await page.locator(`[id="session-tab-${idB}"]`).click();
+    await unloadSession(page);
+    await expect(page.getByLabel('Session status').getByRole('button', { name: 'Open Session', exact: true })).toBeVisible();
     await page.locator(`button[data-session-id="${idB}"]`).hover();
     await page.locator(`button[data-session-actions="${idB}"]`).click();
     await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();
@@ -160,8 +167,8 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('"status": "deleted"');
     await expect(page.locator(`button[data-session-id="${idB}"]`)).toHaveCount(0);
-    await expect(page.getByRole('tab', { name: /^ses_/ })).toHaveCount(1);
-    await expect(page.getByLabel('Session title', { exact: true })).toHaveText(idA);
+    await expect(page.getByRole('tablist', { name: 'Open Session views' }).getByRole('tab')).toHaveCount(1);
+    await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId).toBe(idA);
     expect(readFileSync(`${fixture.workspaceA}/console-effect`, 'utf8')).toBe('x');
     expect((await fixture.control('requests')).requests).toHaveLength(8);
     expect(errors).toEqual([]); passed = true;

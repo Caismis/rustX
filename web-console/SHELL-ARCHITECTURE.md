@@ -24,6 +24,20 @@ The shell decision from #345 remains in force. #346 completes the Agent seats;
 
 ## Boundary
 
+WEB-12 uses one Session identity/header with Chat/Trajectory tabs, a bounded
+Session actions menu (tree navigation and advanced lifecycle), and the existing
+Inspector corner/side-panel seat. The former duplicate title/connection bar and
+permanent attach/resync/detach/unload toolbar are removed. Paths identify the
+execution location without attachment suffixes; Sidebar tooltips use product copy.
+See [the complete classification](PRODUCT-SURFACE.md).
+
+`bindings/session-product.ts` is a pure projection, shared by Session status and
+Sidebar observation. It carries no transitions, timers or guessed settlement.
+Transport reconnect, attachment open and snapshot refresh remain distinct actions.
+Inspector accepts observations and `ProtocolLog` only, so its controls cannot
+dispatch runtime operations. Unresolved evidence stays in the client; reading,
+filtering, clearing or pausing the log cannot acknowledge it.
+
 `presentation/` has no imports of app, bindings, workspaces, client or protocol.
 `app/` and `workspaces/` bind its props to the typed App Server client.
 Native Session cwd/history/execution remain App Server owned. Product Host owns

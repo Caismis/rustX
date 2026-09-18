@@ -312,7 +312,10 @@ describe('typed native operations and continuation fencing', () => {
       act(() => { work = server.client.send('A', 'Accepted task'); });
       const request = await server.waitFor('turn/start', 1);
       expect(server.client.getSnapshot().views.A.submissions ?? []).toEqual([]);
-      for (const name of ['Branch', 'Retry / Regenerate', 'Session tree']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+      for (const name of ['Branch', 'Retry / Regenerate']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+      fireEvent.click(screen.getByRole('button', { name: 'Session actions' }));
+      expect(screen.getByRole('menuitem', { name: 'Session tree' })).toHaveProperty('disabled', true);
+      fireEvent.keyDown(document, { key: 'Escape' });
       expect(screen.getByRole('button', { name: 'Fork' })).toHaveProperty('disabled', false);
       fireEvent.change(screen.getByLabelText('Message'), { target: { value: '/branch' } });
       expect(screen.queryByRole('option', { name: /Branch within/ })).toBeNull();
@@ -324,7 +327,10 @@ describe('typed native operations and continuation fencing', () => {
     expect(activeAttempt(view().snapshot)).toBe(false);
     expect(executionIdle(view())).toBe(false);
     if (source !== 'acknowledgement') expect(view().submissions ?? []).toEqual([]);
-    for (const name of ['Branch', 'Retry / Regenerate', 'Session tree']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+    for (const name of ['Branch', 'Retry / Regenerate']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+      fireEvent.click(screen.getByRole('button', { name: 'Session actions' }));
+      expect(screen.getByRole('menuitem', { name: 'Session tree' })).toHaveProperty('disabled', true);
+      fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.getByRole('button', { name: 'Fork' })).toHaveProperty('disabled', false);
     const input = screen.getByLabelText('Message');
     fireEvent.change(input, { target: { value: '/branch' } });
@@ -343,7 +349,10 @@ describe('typed native operations and continuation fencing', () => {
     expect(executionIdle(view())).toBe(false); // authority now owns the blocking fact
     await act(() => server.update('A', { ...history, messages: [{ role: 'user', ...pending.message }], inbound: {} }));
     expect(executionIdle(view())).toBe(true);
-    for (const name of ['Branch', 'Retry / Regenerate', 'Session tree']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', false);
+    for (const name of ['Branch', 'Retry / Regenerate']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', false);
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions' }));
+    expect(screen.getByRole('menuitem', { name: 'Session tree' })).toHaveProperty('disabled', false);
+    fireEvent.keyDown(document, { key: 'Escape' });
     fireEvent.change(input, { target: { value: '/' } });
     expect(screen.getByRole('option', { name: /Branch within/ })).toBeTruthy();
   });

@@ -23,3 +23,20 @@ server.workspaceHost.classifyLocations = async cwds => cwds.map(cwd => ({ author
 await server.attached('A', 'B');
 localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint, tabs: ['A', 'B'] }));
 createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost} />);
+
+// Isolated fixture controls, never reachable from the production application.
+window.sessionFixture = {
+  async state(mode) {
+    const next = structuredClone(server.snapshots.get('A')!);
+    if (mode === 'idle' || mode === 'queued') next.attempt = null;
+    if (mode === 'queued') next.inbound = { pending: [{ sequence: '1', revision: '0', message: { id: 'queued-A', source: 'human', content: [{ type: 'text', text: 'Review the implementation' }] } }] };
+    await server.update('A', next);
+    if (mode === 'stopping' || mode === 'uncertain') {
+      server.held.add('turn/cancel');
+      void server.client.cancelTurn('A').catch(() => {});
+      await server.waitFor('turn/cancel', 1);
+    }
+    if (mode === 'reconnect' || mode === 'uncertain') server.socket.close();
+  },
+};
+declare global { interface Window { sessionFixture: { state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void> } } }

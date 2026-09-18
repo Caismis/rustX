@@ -129,8 +129,8 @@ it('late cold open cannot restore focus after Workspace navigation', async () =>
 });
 it('stale or unloaded snapshots cannot claim running work', () => {
   const view = { id: 'A', attachmentIntent: 'wanted' as const, attachment: 'unloaded' as const, snapshot: snapshot('A') };
-  expect(sessionObservation(view, true)).toBe('Durable · unloaded');
-  expect(sessionObservation(view, false)).toBe('Observation stale / disconnected');
+  expect(sessionObservation(view, true)).toBe('Connection interrupted');
+  expect(sessionObservation(view, false)).toBe('Connection interrupted');
 });
 it('sidebar Fork uses the exact native boundary and late completion cannot undo Workspace focus', async () => {
   const boundary = { surface_revision: '37', message: { id: 'user-cut', kind: 'message' as const, source: 'human' as const, content: [{ type: 'text' as const, text: 'Fork this native boundary' }] } };
@@ -221,7 +221,7 @@ it('toolbar cold resume and sidebar Fork share admission and refuse an unauthori
   await act(async () => server.client.release('A', true));
   server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
   const baseline = methods().filter(method => method === 'session/attach').length;
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Attach / cold resume' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Fork session' })));
   expect(methods().filter(method => method === 'session/attach')).toHaveLength(baseline);

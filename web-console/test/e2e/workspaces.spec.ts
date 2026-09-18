@@ -1,3 +1,4 @@
+import { unloadSession } from './shell-actions';
 import { test, expect } from '@playwright/test';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -55,13 +56,14 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     expect(await read()).toEqual(original);
     const resident = (await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot;
     expect(resident.loaded).toBe(1);
-    await page.getByRole('button', { name: 'Detach', exact: true }).click();
+    await page.locator(`[id="session-tab-${id}"]`).locator('..').getByRole('button').click();
+    await expect.poll(async () => (await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.external_attachments).toBe(0);
     const attached = await remoteA.client.call('session/attach', { session_id: id }, 'attached');
     await remoteA.client.call('configuration/reload', { target: attached.target }, 'configuration_reloaded');
     const refreshed = await remoteA.client.call('session/snapshot', { target: attached.target }, 'snapshot');
     expect(refreshed.snapshot.resources?.revision).not.toBe(attached.snapshot.resources?.revision);
     await remoteA.client.call('session/detach', { target: attached.target }, 'detached');
-    await page.getByRole('button', { name: 'Attach / cold resume' }).click();
+    await page.locator(`button[data-session-id="${id}"]`).click();
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'View options' }).click();
     await page.getByRole('menuitem', { name: 'Flat view' }).click();
@@ -93,8 +95,8 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     expect(await read()).toEqual(original);
     expect((await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.loaded).toBe(1);
     await page.locator(`button[data-session-id="${id}"]`).click();
-    await page.getByRole('button', { name: 'Unload runtime', exact: true }).click();
-    await page.getByRole('button', { name: 'Attach / cold resume' }).click();
+    await unloadSession(page);
+    await page.getByLabel('Session status').getByRole('button', { name: 'Open Session', exact: true }).click();
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await expect(page.locator('[aria-label^="Select Workspace"][aria-current="page"]')).toHaveCount(0);
     expect((await a.workspaceHost.host.listWorkspaces()).workspaces.some(row => row.id === wa.id)).toBe(false);

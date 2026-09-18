@@ -146,3 +146,20 @@ is the supported local engine selection when Docker is absent. Current composer
 references cover idle empty/draft, running Stop/Queue, attachments and the context
 stack in both themes at 1440px and 390px. Shell/Settings baselines also include the
 changed composer behind their overlays; no shell or Settings redesign is implied.
+
+## WEB-12 product / Inspector boundary
+
+`session-product.test.tsx` covers deterministic status priority, idle silence,
+accepted versus unaccepted inbound, cancellation request versus settlement,
+attachment recovery, durability and uncertain outcomes. It proves exact native
+identity/phase/revision evidence remains in Inspector, Inspector navigation and
+local log controls send no native operations, and lost cancellation is not replayed.
+Existing client/runtime tests remain authoritative for attachment and residency.
+
+Browser tests no longer synchronize through `.attempt-status`, permanent lifecycle
+buttons or attachment suffixes. They use canonical resulting messages, product
+readiness, actual wire responses, native diagnostics, or explicit Inspector reads.
+Advanced unload is tested through its disclosed dialog; controller handoff uses
+close/open and exact native detach acknowledgements. Shell references now include
+idle, queued, stopping, reconnect and uncertainty, alongside desktop light/dark,
+Inspector and narrow layouts. Existing four-width keyboard acceptance remains.

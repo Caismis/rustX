@@ -19,7 +19,8 @@ label { display: grid; gap: 5px; font-size: 12px; }
 .conversation-scroll { flex: 1; min-height: 150px; overflow: auto; padding-bottom: 18px; }
 .empty { padding: 60px 30px; text-align: center; color: var(--dsw-alias-label-tertiary); }.empty h2 { color: var(--dsw-alias-label-primary); margin-bottom: 10px; font-size: 24px; }
 .runtime-facts { margin: 12px 26px; border-top: 1px solid var(--dsw-alias-border-l3); }.runtime-facts > details { display: block; }
-.attempt-status { margin: 10px 26px; font-size: 12px; color: var(--dsw-alias-state-business-primary); }
+.session-status { margin: 8px 26px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.session-status[data-severity=error] { border-color: var(--dsw-alias-state-error-secondary); }
 .interaction { padding: 6px 8px; }.inset { margin: 6px 18px; display: block; }
 .review { padding: 18px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 14px; margin: 12px 18px; }.review textarea { width: 100%; }
 .notice { padding: 10px 18px; margin: 6px 16px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-2); border-radius: 10px; font-size: 12px; overflow-wrap: anywhere; }.notice.error { background: var(--dsw-alias-bg-layer-2); border-color: var(--dsw-alias-state-error-secondary); }
@@ -45,8 +46,8 @@ label { display: grid; gap: 5px; font-size: 12px; }
 [data-assistant-message] { display: flex; flex-direction: column; gap: 12px; }
 @media (max-width: 600px) { .conversation-scroll { padding: 16px 12px; } .agent-control { max-width: 170px; } }
 
-.session-panel .agent-title-row { gap: 16px; flex-wrap: wrap; }
-.agent-title-row > div:first-child { flex: 1 1 240px; }
+.session-panel .agent-title-row { gap: 16px; flex-wrap: nowrap; }
+.agent-title-row > div:first-child { flex: 1 1 0; min-width: 0; }
 .agent-title-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-title-row strong { max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media (max-width: 600px) { .session-panel .agent-title-row { gap: 4px; } .agent-title-row > div:first-child { flex-basis: 100%; } }
+@media (max-width: 600px) { .session-panel .agent-title-row { gap: 4px; } .agent-title-row small { max-width: 100px; } }

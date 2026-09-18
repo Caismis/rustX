@@ -15,7 +15,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
     await page.getByLabel('Transport token').fill(fixture.token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
   };
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await connect();

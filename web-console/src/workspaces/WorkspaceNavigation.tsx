@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import type { AppServerClient, ClientView, SessionView } from '../client/app-server';
 import { activeAttempt } from '../bindings/projection';
+import { deriveSessionProductState } from '../bindings/session-product';
 import { NavigationEpoch } from '../app/commands/native';
 import { Button } from '../presentation/primitives/Button';
 import { Input } from '../presentation/primitives/Input';
@@ -13,16 +14,9 @@ import type { ProductHostWorkspaces, WorkspaceCatalog, SessionLocation } from '.
 
 
 /** Activity requires a current attachment; cached snapshots cannot claim execution. */
-export function sessionObservation(view: SessionView | undefined, connected: boolean, residency?: string) {
-  if (!connected) return 'Observation stale / disconnected';
-  if (view?.attachment === 'detached') return `Durable · detached · ${residency?.toLowerCase() ?? 'runtime not observed'} (list observation)`;
-  if (!view) return residency ? `Durable · ${residency.toLowerCase()} (list observation)` : 'Durable · runtime not observed';
-  if (view.attachment === 'unloaded') return 'Durable · unloaded';
-  if (view.attachmentIntent !== 'wanted') return 'Detached / observation stale';
-  if (view.attachment !== 'attached' || !view.target) return `Observation ${view.attachment}`;
-  if (view.snapshot?.inbound.pending?.length) return `Pending inbound · ${view.snapshot.inbound.pending.length}`;
-  if (activeAttempt(view.snapshot)) return 'Running';
-  return 'Loaded / attached';
+export function sessionObservation(view: SessionView | undefined, connected: boolean) {
+  if (connected && (!view || view.attachmentIntent === 'released')) return 'Open Session';
+  return deriveSessionProductState({ connection: connected ? 'connected' : 'disconnected', uncertain: [] }, view).label ?? '';
 }
 export function WorkspaceNavigation({ host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, createSession, forkSession, deleteSession, creating, metadataChanged, wide, expand, createOpen, closeCreate }: {
   host: ProductHostWorkspaces; client: AppServerClient; state: ClientView; endpoint: string; navigation: NavigationEpoch;
@@ -73,10 +67,10 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
     const view = state.views[session.id];
     const current = connected && view?.attachment === 'attached' && view.attachmentIntent === 'wanted';
     const pending = current ? view.snapshot?.pending_interactions?.[0] : undefined;
-    return { id: session.id, title: session.name ?? session.preview ?? session.id,
+    return { id: session.id, title: session.name ?? session.preview ?? 'Session',
       running: !!current && activeAttempt(view.snapshot), pendingInteraction: pending ? pending.request.kind.type === 'approval' ? 'approval' : pending.request.kind.type === 'review' ? 'plan-review' : 'question' : undefined,
       runningSubagentCount: 0,
-      updatedAt: Date.parse(session.updated_at) || 0, observation: sessionObservation(view, connected, state.sessionResidencies?.[session.id]) };
+      updatedAt: Date.parse(session.updated_at) || 0, observation: sessionObservation(view, connected) };
   };
   const groupNodes: GroupNode[] = (bound ? catalog?.workspaces ?? [] : []).map(row => ({ key: row.id, workspaceId: row.id,
     cwd: row.displayPath, createdAt: undefined, label: row.displayName, expanded: true,

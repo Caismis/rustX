@@ -111,7 +111,7 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     await mount(withGoal(goal()));
     expect(dock('Goal').textContent).toContain('Active Goal');
     expect(dock('Goal').textContent).toContain('Ship the docks');
-    expect(dock('Goal').textContent).toContain('1/4 rounds · r3');
+    expect(dock('Goal').textContent).toContain('1/4 rounds');
     expect(goalButton('Pause goal')).toBeTruthy();
     expect(within(dock('Goal')).queryByRole('button', { name: 'Resume goal' })).toBeNull();
     // Only controls GoalDomain assigns to users: no create, clear, complete or block.
@@ -132,7 +132,7 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     await mount(withGoal(goal()));
     fireEvent.click(goalButton('Pause goal'));
     await waitFor(() => expect(dock('Goal').textContent).toContain('Paused Goal'));
-    expect(dock('Goal').textContent).toContain('r4');
+    expect(server.client.getSnapshot().views.A.snapshot?.goal?.current?.reference.revision).toBe('4');
     // The projected text and the control lock are two different signals: this
     // text is published *by* the reread, and the dock unlocks only once the
     // mutation itself settles afterwards. Gate on the unlock, never on its
@@ -157,13 +157,13 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     expect((await within(dock('Goal')).findByRole('status')).textContent).toContain('applied');
     // GoalDomain is at r4; the browser still renders its last authoritative observation.
     expect(dock('Goal').textContent).toContain('Active Goal');
-    expect(dock('Goal').textContent).toContain('r3');
+    expect(server.client.getSnapshot().views.A.snapshot?.goal?.current?.reference.revision).toBe('3');
     for (const name of ['Pause goal', 'Edit goal objective', 'Edit round budget']) expect(goalButton(name)).toHaveProperty('disabled', true);
     fireEvent.click(goalButton('Pause goal'));
     expect(goalControls()).toHaveLength(1);
     await recoverAuthority();
     await waitFor(() => expect(dock('Goal').textContent).toContain('Paused Goal'));
-    expect(dock('Goal').textContent).toContain('r4');
+    expect(server.client.getSnapshot().views.A.snapshot?.goal?.current?.reference.revision).toBe('4');
     expect(goalButton('Resume goal')).toHaveProperty('disabled', false);
     expect(within(dock('Goal')).queryByRole('status')).toBeNull();
     expect(goalControls()).toHaveLength(1);
@@ -252,7 +252,7 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     expect((await within(dock('Goal')).findByRole('alert')).textContent).toBe('Stale GoalRef; observe current state before trying again');
     expect(dock('Goal').textContent).toContain('Changed elsewhere');
     expect(dock('Goal').textContent).toContain('Active Goal');
-    expect(dock('Goal').textContent).toContain('r4');
+    expect(server.client.getSnapshot().views.A.snapshot?.goal?.current?.reference.revision).toBe('4');
     expect(goalButton('Pause goal')).toHaveProperty('disabled', false);
     expect(snapshotReads()).toBe(reads + 1);
     expect(goalControls()).toEqual([{ action: 'mutate', expected: { id: 'goal-1', revision: '3' }, mutation: { action: 'pause' } }]);
@@ -267,13 +267,13 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     expect((await within(dock('Goal')).findByRole('alert')).textContent).toBe('Stale GoalRef; observe current state before trying again');
     expect(within(dock('Goal')).getByRole('status').textContent).toContain('locked');
     expect(dock('Goal').textContent).toContain('Ship the docks');
-    expect(dock('Goal').textContent).toContain('r3');
+    expect(server.client.getSnapshot().views.A.snapshot?.goal?.current?.reference.revision).toBe('3');
     expect(goalButton('Pause goal')).toHaveProperty('disabled', true);
     fireEvent.click(goalButton('Pause goal'));
     expect(goalControls()).toHaveLength(1);
     await recoverAuthority();
     await waitFor(() => expect(dock('Goal').textContent).toContain('Changed elsewhere'));
-    expect(dock('Goal').textContent).toContain('r4');
+    expect(server.client.getSnapshot().views.A.snapshot?.goal?.current?.reference.revision).toBe('4');
     expect(goalButton('Pause goal')).toHaveProperty('disabled', false);
     expect(goalControls()).toEqual([{ action: 'mutate', expected: { id: 'goal-1', revision: '3' }, mutation: { action: 'pause' } }]);
   });
@@ -331,7 +331,7 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     expect(ui.getByRole('textbox')).toHaveProperty('value', 'Draft');
     fireEvent.keyDown(ui.getByRole('textbox'), { key: 'Escape' });
     expect(ui.container.textContent).toContain('Active Goal');
-    expect(ui.container.textContent).toContain('r4');
+    expect(ui.container.textContent).not.toContain('r4');
     expect(ui.getByRole('button', { name: 'Pause goal' })).toBeTruthy();
     expect(ui.queryByRole('button', { name: 'Resume goal' })).toBeNull();
     expect(document.activeElement).toBe(ui.getByRole('button', { name: 'Edit goal objective' }));
@@ -385,7 +385,8 @@ describe('Queue dock binds the native inbound mailbox', () => {
     expect(Object.getOwnPropertyNames(AppServerClient.prototype).filter(name => /queue|inbox/i.test(name))).toEqual([]);
     await update(running(withQueue([inbound('8', 'Continue')])));
     expect(within(dock('Queue')).queryByRole('button', { expanded: false })).toBeNull();
-    expect(dock('Queue').textContent).toContain('#8');
+    expect(dock('Queue').textContent).toContain('Continue');
+    expect(server.client.getSnapshot().views.A.snapshot?.inbound.pending?.[0].sequence).toBe('8');
     await update(running());
     expect(region('Queue')).toBeNull();
     expect(JSON.stringify(localStorage)).not.toContain('First queued');
@@ -433,11 +434,11 @@ describe('Queue dock binds the native inbound mailbox', () => {
     // Acceptance names the server MessageId; only now may provisional presentation exist.
     const header = await within(dock('Queue')).findByRole('button', { expanded: false });
     expect(header.textContent).toContain('2 queued');
-    expect(within(header).getByRole('status').textContent).toBe('1 accepted · awaiting projection');
+    expect(within(header).getByRole('status').textContent).toBe('1 queued · updating…');
     fireEvent.click(header);
     const echo = dock('Queue').querySelector('[data-submission-echo]')!;
     expect(echo.getAttribute('data-accepted-message-id')).toBe('accepted-user');
-    expect(echo.textContent).toContain('Accepted · awaiting projection');
+    expect(echo.textContent).toContain('Queued · updating…');
     expect(server.client.getSnapshot().views.A.submissions?.map(item => item.messageId)).toEqual(['accepted-user']);
   });
   it('an accepted echo settles only by its exact MessageId', async () => {
@@ -461,7 +462,7 @@ describe('Queue dock binds the native inbound mailbox', () => {
     expect(screen.getByLabelText('Message')).toHaveProperty('value', 'Lost acknowledgement');
     expect(region('Queue')).toBeNull();
     expect(server.client.getSnapshot().uncertain.map(item => item.method)).toEqual(['turn/start']);
-    expect(screen.getByText('Outcome uncertain: turn/start')).toBeTruthy();
+    expect(screen.getByText('Needs verification')).toBeTruthy();
     server.held.delete('turn/start');
     // The runtime did commit it; only an authoritative read may say so.
     server.snapshots.set('A', running(withQueue([inbound('5', 'Lost acknowledgement', { id: 'accepted-user' })])));
@@ -536,7 +537,7 @@ describe('Composer context stack lifecycle', () => {
     server.snapshots.set('A', withGoal(goal({ phase: 'paused', reference: { id: 'goal-1', revision: '9' } }), withTodos([task('1', 'completed')])));
     await act(() => server.connect());
     await waitFor(() => expect(dock('Goal').textContent).toContain('Paused Goal'));
-    expect(dock('Goal').textContent).toContain('r9');
+    expect(server.client.getSnapshot().views.A.snapshot?.goal?.current?.reference.revision).toBe('9');
     expect(dock('To-dos').textContent).toContain('1 completed');
     expect(region('Queue')).toBeNull();
     expect(methods().filter(method => ['goal/control', 'turn/cancel', 'turn/steer'].includes(method))).toEqual([]);
