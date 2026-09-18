@@ -1,10 +1,13 @@
 import type { ToolExecutionResult } from '../../../../protocol/app-server/v6';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ArtifactResources } from '../../client/artifacts';
+import { PreviewContext } from './ArtifactPreview';
+import { Button } from '../../presentation/primitives/Button';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 export const ArtifactContext = createContext<ArtifactResources | undefined>(undefined);
 export function Artifact({ id, name = id, image = false, mimeType }: { id: string; name?: string; image?: boolean; mimeType?: string }) {
   const resources = useContext(ArtifactContext);
+  const preview = useContext(PreviewContext);
   const [attempt, setAttempt] = useState(0);
   const [url, setUrl] = useState<string>();
   const [error, setError] = useState<string>();
@@ -20,9 +23,9 @@ export function Artifact({ id, name = id, image = false, mimeType }: { id: strin
     }).catch(cause => { if (live) setError(String(cause)); }).finally(() => { if (live) setLoading(false); });
     return () => { live = false; if (owned) resources.release(owned); };
   }, [resources, id, mimeType, attempt]);
-  return <AttachmentCard name={name} image={image} url={url} error={error} loading={loading}
+  return <div><AttachmentCard name={name} image={image} url={url} error={error} loading={loading}
     onLoad={resources ? () => setAttempt(value => value + 1) : undefined}
-    onDecodeError={() => { if (url) resources?.release(url); setUrl(undefined); setError('Image could not be decoded'); }} />;
+    onDecodeError={() => { if (url) resources?.release(url); setUrl(undefined); setError('Image could not be decoded'); }} />{preview && resources && <Button size="sm" onClick={() => preview({ id, name, image, mimeType })}>Preview {name}</Button>}</div>;
 }
 
 /** Only typed artifact/image/file facts; arbitrary tool JSON is never interpreted. */

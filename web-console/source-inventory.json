@@ -1099,20 +1099,25 @@
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "destination": "web-console/src/app/settings/Settings.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell.",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
         "../../../../protocol/app-server/v6",
         "../../client/app-server",
         "../../presentation/primitives/Button",
+        "../../presentation/primitives/tabs",
+        "../../presentation/settings/SettingsContent",
+        "../../presentation/settings/SettingsContent.module.css",
         "../../presentation/settings/SettingsRoot",
+        "../components/NativeFacts",
         "./AgentEditor",
         "./CatalogEditor",
         "./Integrations",
+        "./ResourceInventory",
         "./RootEditor",
         "./RuntimeEditor",
-        "./Settings.module.css",
         "./controls",
+        "./drafts",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -1129,18 +1134,19 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "46a8067261e9fc34241429ca9fea986fe983751659519b6d649631e82a144a57"
+      "local_sha256": "228cc5776a5f4402eb2f233c23b3a779f7558b68ea32af2d8d0487de9105d82c"
     },
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
       "destination": "web-console/src/app/settings/CatalogEditor.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery.",
       "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
       "retained_dependencies": [
         "../../../../protocol/app-server/v6",
         "../../presentation/primitives/Button",
+        "../../presentation/settings/SettingsContent",
+        "../../presentation/settings/SettingsContent.module.css",
         "./RequestPolicy",
-        "./Settings.module.css",
         "./controls",
         "react"
       ],
@@ -1158,31 +1164,18 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "96aae1cd14e34d3839443591880caed892d4ac2cf18248ae337c2919b2b39d2a"
-    },
-    {
-      "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
-      "destination": "web-console/src/app/settings/Settings.module.css",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority",
-      "upstream_sha256": "db6217c722001b0871e035f325b7fc2999fd91c0b5f2e311b07fae1eab047b5e",
-      "retained_dependencies": [],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness Host/Remote settings and credentials",
-        "Cordis plugin runtime",
-        "Harness source merge and model catalog authority"
-      ],
-      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "8d344bf79e699a36a92d7ed895007462dca84dc7824f9a4687117633d5a84f35"
+      "local_sha256": "5653c3a5fb3b4ffbab19388ffe2796587e0f252a384850a3b3dc428f284b0929"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
       "destination": "web-console/src/app/settings/Integrations.tsx",
-      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command",
+      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS.",
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
         "../../../../protocol/app-server/v6",
         "../../presentation/primitives/Button",
+        "../../presentation/settings/SettingsContent",
+        "../../presentation/settings/SettingsContent.module.css",
         "./controls",
         "react"
       ],
@@ -1225,7 +1218,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "e0844ef2e4a976a3b0c86aa28087a4ae536457161a2a419b1615c4dfc0b84ef2"
+      "local_sha256": "7853b9f8de6b08fd9a34e26f61172ef074ad8321c994d50f3e07a2db5b33e8e4"
     },
     {
       "destination": "web-console/src/presentation/primitives/HoverCard.tsx",
@@ -2064,6 +2057,35 @@
         "browser Tool lifecycle and interaction settlement"
       ],
       "local_sha256": "d0921a6a4200b90bdaf4067892a3c396ac0a60602a72130826c81a63d6a35f15"
+    },
+    {
+      "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
+      "destination": "web-console/src/presentation/settings/SettingsContent.module.css",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership.",
+      "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
+      "local_sha256": "3a87965517828c67e01d76bf34054439d3ab813dbde0be4119bed76385e2574d",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Harness Host configuration",
+        "credential store",
+        "Cordis/npm plugin lifecycle"
+      ],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-settings-plugins/src/client/fields.module.css",
+          "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "upstream_sha256": "f7323c028461e616e8386edb269c7640a56a18284d711e0f4fc19243b6047e58",
+          "treatment": "Adapted field, badge, card and diagnostic styles only."
+        },
+        {
+          "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.module.css",
+          "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "upstream_sha256": "fcde749f0cc6dba596f52875501d0872d019d558f7ee76b52aafbc813aebad17",
+          "treatment": "Adapted field, badge, card and diagnostic styles only."
+        }
+      ]
     }
   ],
   "inspected_only": [

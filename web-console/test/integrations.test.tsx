@@ -27,6 +27,6 @@ it('creates a Workspace definition without borrowing the User transport or crede
   render(<Integrations source={source} scope="workspace" save={vi.fn<SaveSource>()} />);
   fireEvent.change(screen.getByLabelText('New MCP identity'), { target: { value: 'remote' } }); fireEvent.click(screen.getByRole('button', { name: 'Add MCP' }));
   expect((screen.getByLabelText('MCP command') as HTMLInputElement).value).toBe('');
-  expect((screen.getByLabelText('Retain existing header keys') as HTMLTextAreaElement).value).toBe('');
+  expect(screen.getByRole('group', { name: 'Retain existing header keys' }).querySelectorAll('input')).toHaveLength(0);
   expect(screen.queryByText(/trusted/i)).toBeNull();
 });

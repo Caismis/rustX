@@ -1,4 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted resource editor controls; see PROVENANCE.md. */
+import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';
+import css from '../../presentation/settings/SettingsContent.module.css';
 import { useState } from 'react';
 import type { McpWrite, SourceScope, SourceSettings } from '../../../../protocol/app-server/v6';
 import { Button } from '../../presentation/primitives/Button';
@@ -14,7 +16,7 @@ export function Integrations({ source, scope, save }: { source: SourceSettings; 
   const current = catalog.authored?.[selected];
   return <section aria-label="MCP definitions"><h3>MCP definitions</h3><p>Definitions are inert. Agent or Workflow selection creates admitted demand before connection. Workspace replaces a whole same-name definition.</p><p>{catalog.path}</p>
     {catalog.diagnostic && <p role="alert">{catalog.diagnostic}</p>}
-    <ul>{Object.keys(catalog.authored ?? {}).map(id => <li key={id}><Button onClick={() => select(id)}>Edit MCP {id}</Button></li>)}</ul>
+    <div className={css.rows}>{Object.entries(catalog.authored ?? {}).map(([id, entry]) => <SettingsCard key={id} title={id} meta={<Badge>{entry.definition.type ?? 'stdio'}</Badge>} actions={<Button onClick={() => select(id)}>Edit MCP {id}</Button>}><p className={css.hint}>{entry.definition.url ?? entry.definition.command}</p></SettingsCard>)}</div>
     <TextField label="New MCP identity" value={name} change={setName} /><Button disabled={!name || name in (catalog.authored ?? {})} onClick={() => { select(name); setName(''); }}>Add MCP</Button>
     {selected && <UnitForm<McpWrite> key={selected} title={`MCP ${selected}`} revision={catalog.revision} initial={current ?? { definition: { type: 'stdio', command: '', args: [] }, retained_env: [], retained_headers: [] }} mutation={authored => ({ kind: 'mcp', scope, id: selected, authored })} save={save}>{(value, change) => <>
       <label>Transport<select value={value.definition.type ?? 'stdio'} onChange={e => change({ ...value, definition: e.target.value === 'http' ? { type: 'http', url: '' } : { type: 'stdio', command: '', args: [] }, retained_env: [], retained_headers: [] })}><option value="stdio">stdio</option><option value="http">HTTP</option></select></label>

@@ -1,35 +1,43 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { SourceMutation } from '../../../../protocol/app-server/v6';
+import { Switch } from '../../presentation/primitives/Switch';
 import { Button } from '../../presentation/primitives/Button';
-import css from './Settings.module.css';
+import { DraftContext } from './drafts';
+import css from '../../presentation/settings/SettingsContent.module.css';
 
 export type SaveSource = (mutation: SourceMutation, revision: string) => Promise<string | undefined>;
 export function UnitForm<T>({ title, initial, revision, mutation, save, children, removable = true }: {
   title: string; initial: T; revision: string; mutation: (value: T | null) => SourceMutation;
   save: SaveSource; children: (value: T, change: (value: T) => void) => ReactNode; removable?: boolean;
 }) {
-  const [value, change] = useState(initial), [base, setBase] = useState(revision);
-  const [busy, setBusy] = useState(false), [saved, setSaved] = useState(false);
-  const committed = useRef<string | undefined>(undefined);
+  const drafts = useContext(DraftContext);
+  const identity = JSON.stringify(mutation(null));
+  const cached = drafts?.get(identity);
+  const [value, change] = useState<T>(() => cached ? cached.value as T : initial), [base, setBase] = useState(cached?.base ?? revision);
+  const [busy, setBusy] = useState(false), [saved, setSaved] = useState(false), [dirty, setDirty] = useState(cached?.dirty ?? false);
+  const committed = useRef<string | undefined>(cached?.committed);
+  useEffect(() => { if (dirty) drafts?.set(identity, { value, base, dirty, committed: committed.current }); else drafts?.delete(identity); }, [drafts, identity, value, base, dirty]);
   useEffect(() => {
-    if (committed.current === revision) {
+    if (committed.current === revision || !dirty) {
       committed.current = undefined;
       // Reconstruct from the native redacted projection after acknowledgement.
       // Literal credentials must not remain in a successful editor draft.
-      change(initial);
+      change(initial); setBase(revision); setDirty(false);
+      drafts?.delete(identity);
     }
-  }, [initial, revision]);
+  }, [initial, revision, dirty, drafts, identity]);
   const commit = async (remove = false) => {
     setBusy(true); setSaved(false);
-    try { const next = await save(mutation(remove ? null : value), base); if (next) { committed.current = next; setBase(next); setSaved(true); } }
+    try { const next = await save(mutation(remove ? null : value), base); if (next) { drafts?.delete(identity); committed.current = next; setBase(next); setSaved(true); } }
     finally { setBusy(false); }
   };
-  return <form className={css.unit} onSubmit={e => { e.preventDefault(); void commit(); }}>
-    <fieldset disabled={busy}><legend>{title}</legend>{children(value, next => { change(next); setSaved(false); })}
-      {base !== revision && <p role="status">Source revision changed. Your draft and original revision are preserved. Review the current source before replacing it.</p>}
+  return <form aria-label={title} className={css.unit} onSubmit={e => { e.preventDefault(); void commit(); }}>
+    <fieldset disabled={busy}><legend>{title}</legend>{children(value, next => { change(next); setDirty(true); setSaved(false); })}
+      <details><summary>Source revision & replacement</summary><p className={css.hint}>Draft base revision: {base}<br />Current revision: {revision}</p><p>Save replaces this native semantic unit. Remove omits it from this scope. Empty selections remain explicit.</p></details>
+      {base !== revision && <div className={css.review}><p role="status">Source revision changed. Your draft and original revision are preserved. Review the current source before replacing it.</p><details><summary>Review current authored unit (redacted)</summary><pre>{JSON.stringify(initial, null, 2)}</pre></details></div>}
       <div className={css.actions}><Button variant="primary" type="submit">Save {title}</Button>
         {removable && <Button type="button" onClick={() => void commit(true)}>Remove {title}</Button>}
-        <Button type="button" onClick={() => { change(initial); setBase(revision); setSaved(false); }}>Discard draft</Button>
+        <Button type="button" onClick={() => { change(initial); setBase(revision); setDirty(false); setSaved(false); }}>Discard draft</Button>
         {base !== revision && <Button type="button" onClick={() => setBase(revision)}>Use reviewed revision</Button>}
       </div>{saved && <p role="status">Source saved. Reload separately to publish configuration.</p>}
     </fieldset>
@@ -39,7 +47,7 @@ export function TextField({ label, value, change, required = false, secret = fal
   return <label>{label}<input type={secret ? 'password' : 'text'} value={value ?? ''} required={required} onChange={e => change(e.target.value)} autoComplete={secret ? 'new-password' : undefined} /></label>;
 }
 export function Names({ label, value, change }: { label: string; value: string[]; change: (value: string[]) => void }) {
-  return <label>{label}<textarea aria-label={label} value={value.join('\n')} onChange={e => change(e.target.value ? e.target.value.split('\n') : [])} /><span className={css.hint}>One exact identity per line. An empty list selects none.</span></label>;
+  return <fieldset><legend>{label}</legend>{value.map((name, index) => <div className={css.names} key={index}><input aria-label={`${label} ${index + 1}`} value={name} onChange={e => change(value.map((item, at) => at === index ? e.target.value : item))} /><Button aria-label={`Remove ${label} ${index + 1}`} onClick={() => change(value.filter((_, at) => at !== index))}>Remove</Button></div>)}<Button onClick={() => change([...value, ''])}>Add {label}</Button>{!value.length && <p className={css.hint}>Empty list · no entries</p>}</fieldset>;
 }
 export function Selection({ label, value, change }: { label: string; value: 'all' | string[]; change: (value: 'all' | string[]) => void }) {
   const mode = value === 'all' ? 'all' : value.length ? 'exact' : 'none';
@@ -50,3 +58,10 @@ export function CheckboxList({ label, values, selected, change }: { label: strin
 }
 export const policyTools = ['read', 'write', 'edit', 'glob', 'grep', 'bash'] as const;
 export const nativeTools = [...policyTools, 'ask_user', 'execution'];
+
+export function Toggle({ label, checked, change }: { label: string; checked: boolean; change: (value: boolean) => void }) {
+  return <div className={css.rowHead}><span>{label}</span><Switch label={label} checked={checked} onChange={change} /></div>;
+}
+export function OptionalBoolean({ label, value, change }: { label: string; value?: boolean; change: (value: boolean | undefined) => void }) {
+  return <label>{label}<select value={value === undefined ? '' : String(value)} onChange={e => change(e.target.value === '' ? undefined : e.target.value === 'true')}><option value="">Native default</option><option value="true">On</option><option value="false">Off</option></select></label>;
+}

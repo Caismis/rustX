@@ -21,6 +21,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and explicit publ
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await expect(settings.getByRole('tab', { name: 'Effective', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await settings.getByText('Source paths', { exact: true }).click();
     await expect(settings.getByText(fixture.settings, { exact: true })).toBeVisible();
     await expect(settings.getByText(join(fixture.directory, 'home/rustx/.agents'), { exact: true })).toBeVisible();
     await settings.screenshot({ path: test.info().outputPath('cfg3-effective.png') });
@@ -29,7 +30,10 @@ test('CFG3 structured source authoring, inert definitions, CAS and explicit publ
     await settings.getByLabel('New MCP identity').fill('local-fixture');
     await settings.getByRole('button', { name: 'Add MCP', exact: true }).click();
     await settings.getByLabel('MCP command').fill('python3');
-    await settings.getByLabel('Arguments', { exact: true }).fill(`${fileURLToPath(new URL('./web09-mcp.py', import.meta.url))}\n${join(fixture.directory, 'mcp-started')}`);
+    await settings.getByRole('button', { name: 'Add Arguments', exact: true }).click();
+    await settings.getByLabel('Arguments 1', { exact: true }).fill(fileURLToPath(new URL('./web09-mcp.py', import.meta.url)));
+    await settings.getByRole('button', { name: 'Add Arguments', exact: true }).click();
+    await settings.getByLabel('Arguments 2', { exact: true }).fill(join(fixture.directory, 'mcp-started'));
     await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
     await expect(settings.getByText(/Source saved. The loaded runtime/)).toBeVisible();
     await expect(settings.getByText(/Pending reload/)).toBeVisible();
@@ -62,7 +66,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and explicit publ
     await settings.getByLabel('read', { exact: true }).check();
     await settings.getByRole('button', { name: 'Save Agent reviewer', exact: true }).click();
     await expect(settings.getByText(/Source saved. The loaded runtime/)).toBeVisible();
-    await expect(settings.getByText(/reviewer · workspace/)).toContainText('Valid definition');
+    await expect(settings.getByRole('region', { name: 'agents inventory' }).getByRole('article').filter({ hasText: 'reviewer' })).toContainText('Valid definition');
     await settings.getByRole('heading', { name: 'Named Agents', exact: true }).scrollIntoViewIfNeeded();
     await settings.screenshot({ path: test.info().outputPath('cfg3-named-agent.png') });
     await settings.getByRole('button', { name: 'Reload', exact: true }).click();

@@ -246,3 +246,6 @@
   .header { height: 44px; padding-top: 8px; }
   .options { padding: 0 16px 16px; }
 }
+
+.group { padding: 10px 12px 2px; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
+@media (max-width: 640px) { .group { display: none; } }

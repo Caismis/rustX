@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
-import { useId, useRef, type ReactNode } from 'react';
+import { Fragment, useId, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalFocus } from '../primitives/useModalFocus';
 import clsx from 'clsx';
@@ -11,7 +11,7 @@ import css from './SettingsRoot.module.css';
  * open, so the listener lifetime is the panel's).
  */
 export function SettingsPanel({ rows, activeId, onSelect, onClose, children, actions }: {
-  rows: readonly { id: string; label: string }[]; activeId: string; onSelect: (id: string) => void;
+  rows: readonly { id: string; label: string; group?: string }[]; activeId: string; onSelect: (id: string) => void;
   onClose: () => void; children: ReactNode; actions?: ReactNode;
 }) {
   // Entries can unmount underneath the requested id, so the render-time
@@ -33,8 +33,8 @@ export function SettingsPanel({ rows, activeId, onSelect, onClose, children, act
         <nav className={css.nav} aria-label="Settings sections">
           <div className={css.navTitle} id={titleId}>Settings</div>
           <div className={css.navList}>
-            {rows.map(row => (
-              <button
+            {rows.map((row, index) => (
+              <Fragment key={row.id}>{row.group && row.group !== rows[index - 1]?.group && <span className={css.group}>{row.group}</span>}<button
                 key={row.id}
                 type="button"
                 className={clsx(css.navCell, row.id === active && css.active)}
@@ -43,7 +43,7 @@ export function SettingsPanel({ rows, activeId, onSelect, onClose, children, act
               >
                 <IconSettingsOutline16 className={css.navIcon} size={16} />
                 <span className={css.navLabel}>{row.label}</span>
-              </button>
+              </button></Fragment>
             ))}
           </div>
         </nav>

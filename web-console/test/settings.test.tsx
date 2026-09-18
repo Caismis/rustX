@@ -85,3 +85,80 @@ it('keeps shadowed User resources visible using native shadowing facts', async (
   expect(screen.getByText(/Shadowed by Workspace/).textContent).toContain('/home/user/rustx/.agents/skills/review/SKILL.md');
   expect(screen.queryByText(/Root visible/)).toBeNull();
 });
+
+it('retains a draft and its original CAS revision across scope and section navigation', async () => {
+  const subject = cfg3Client(); await open(subject, 'Tools');
+  fireEvent.click(screen.getByLabelText('read'));
+  fireEvent.click(screen.getByRole('tab', { name: 'User' }));
+  expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'General' }));
+  subject.source.workspace.revision = 'external';
+  fireEvent.click(screen.getByRole('button', { name: 'Read current sources' }));
+  await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead')).toHaveLength(2));
+  fireEvent.click(screen.getByRole('tab', { name: 'Workspace' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+  expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+  await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'workspace-1' } }));
+});
+
+it('replaces against the newer revision only after an explicit review gesture', async () => {
+  let first = true;
+  const subject = cfg3Client(async (op, source) => {
+    if (op.method === 'configuration/sourceWrite' && first) { first = false; source.workspace.revision = 'reviewed'; throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: 'workspace-1', actual: 'reviewed' } }); }
+  });
+  await open(subject, 'Tools'); fireEvent.click(screen.getByLabelText('read'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Use reviewed revision' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+  await screen.findByText(/Source saved. The loaded runtime/);
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'reviewed', mutation: { mutation: { authored: ['read'] } } } });
+});
+
+it.each(['empty', 'omit'] as const)('preserves native %s Tool selection as a distinct semantic-unit operation', async mode => {
+  const subject = cfg3Client(); await open(subject, 'Tools');
+  fireEvent.click(screen.getByRole('button', { name: `${mode === 'empty' ? 'Save' : 'Remove'} Native Tools` }));
+  await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'native_tools', authored: mode === 'empty' ? [] : null } } } }));
+});
+
+it('repairs an uncertain Reload by rereading the native generation without replay', async () => {
+  const subject = cfg3Client(async (op, source, effective) => { if (op.method === 'configuration/reload') { effective.generation = '8'; source.loaded = { generation: '8', pending_reload: false, changed_sources: [] }; throw new OutcomeUncertain(); } });
+  render(<Settings client={subject.client} sessionId={cfg3Session} />); await screen.findByText('server-frozen-model');
+  fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
+  await screen.findByText(/Runtime generation 8/);
+  expect(screen.getByRole('alert').textContent).toContain('will not be replayed');
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/reload')).toHaveLength(1);
+});
+
+it('presents User-only process policy as restart-required and Effective as read-only', async () => {
+  const subject = cfg3Client(); await open(subject, 'General', 'User');
+  expect(screen.getByText(/take effect after restart/)).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Save App Server policy' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('tab', { name: 'Workspace' }));
+  expect(screen.queryByRole('button', { name: 'Save App Server policy' })).toBeNull();
+  expect(screen.getByText(/User-only and restart-required/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('tab', { name: 'Effective' }));
+  expect(screen.queryByRole('button', { name: /^Save / })).toBeNull();
+  expect(screen.getByText(/not evidence of a live process change/)).toBeTruthy();
+});
+
+it('does not equate invalid resource existence with readiness or Root authority', async () => {
+  const subject = cfg3Client();
+  subject.effective.resources.definitions = [{ name: 'unselected', family: 'managed_python', valid: false, location: { scope: 'workspace', path: '/workspace/.agents/python/unselected' } }];
+  subject.effective.resources.sources = { 'python:unselected': { status: 'unavailable' } };
+  render(<Settings client={subject.client} sessionId={cfg3Session} />); await screen.findByText('server-frozen-model');
+  fireEvent.click(screen.getByRole('button', { name: 'Managed Python' }));
+  expect(screen.getByText('Invalid definition')).toBeTruthy(); expect(screen.getByText('Defined only')).toBeTruthy();
+  expect(screen.getAllByText('unavailable').length).toBeGreaterThan(0);
+  expect(screen.queryByText('Root selected')).toBeNull();
+});
+
+it('keeps contributor default intent unspecified when enabling the closed Agent Status Plugin', async () => {
+  const subject = cfg3Client(); await open(subject, 'Plugins');
+  expect((screen.getByLabelText('Time contributor') as HTMLSelectElement).value).toBe('');
+  fireEvent.click(screen.getByRole('switch', { name: 'Enable Agent Status Plugin' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Agent Status Plugin' }));
+  await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'agent_status', authored: { enabled: true } } } } }));
+  const write = subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')![0];
+  expect(JSON.stringify(write)).not.toMatch(/"time"|"background"|npm|cordis/);
+});

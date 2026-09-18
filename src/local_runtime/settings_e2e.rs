@@ -178,3 +178,62 @@ async fn cfg332_complete_candidate_stays_offside_cancellation_keeps_old_and_publ
     assert!(Arc::ptr_eq(&after, &runtime.runtime_resources()));
     runtime.shutdown().await.unwrap();
 }
+
+#[test]
+fn root_identity_and_description_are_independent_cas_units() {
+    let (_root, host, request) = fixture();
+    let (manager, input) = request.session_input(&host).unwrap();
+    let source = manager.read_source_settings(&input).unwrap();
+    let identity = SourceMutation::Config {
+        scope: SourceScope::Workspace,
+        mutation: ConfigMutation::AgentIdentity {
+            authored: Some(crate::runtime::identity::AgentId::new("reviewer")),
+        },
+    };
+    let saved = manager
+        .write_source_settings(&input, &source.workspace.revision, identity.clone())
+        .unwrap();
+    assert_ne!(saved.workspace.revision, source.workspace.revision);
+    assert!(matches!(
+        manager.write_source_settings(&input, &source.workspace.revision, identity),
+        Err(SettingsError::Conflict { .. })
+    ));
+    let saved = manager
+        .write_source_settings(
+            &input,
+            &saved.workspace.revision,
+            SourceMutation::Config {
+                scope: SourceScope::Workspace,
+                mutation: ConfigMutation::Description {
+                    authored: Some("Review changes".into()),
+                },
+            },
+        )
+        .unwrap();
+    let document = saved.workspace.authored.unwrap();
+    assert_eq!(document.agent_id.unwrap().as_str(), "reviewer");
+    assert_eq!(
+        document.agent.unwrap().description.as_deref(),
+        Some("Review changes")
+    );
+    let removed = manager
+        .write_source_settings(
+            &input,
+            &saved.workspace.revision,
+            SourceMutation::Config {
+                scope: SourceScope::Workspace,
+                mutation: ConfigMutation::Description { authored: None },
+            },
+        )
+        .unwrap();
+    assert!(
+        removed
+            .workspace
+            .authored
+            .unwrap()
+            .agent
+            .unwrap()
+            .description
+            .is_none()
+    );
+}

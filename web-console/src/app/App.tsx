@@ -1,4 +1,5 @@
 import { navigateTabs } from '../presentation/primitives/tabs';
+import { readTheme, applyTheme } from './appearance';
 import { Settings } from './settings/Settings';
 import { HttpWorkspaceHost, type ProductHostWorkspaces } from '../workspaces/host';
 import { WorkspaceNavigation } from '../workspaces/WorkspaceNavigation';
@@ -17,6 +18,7 @@ import { GoalDock } from './composer/GoalDock';
 import { QueueDock } from './composer/QueueDock';
 import { TodoDock } from './composer/TodoDock';
 import { ArtifactResources } from '../client/artifacts';
+import { ArtifactPreview, PreviewContext, type PreviewArtifact } from './components/ArtifactPreview';
 import { ArtifactContext } from './components/Artifact';
 import { ChatViewport } from '../presentation/layout/ChatViewport';
 import { AppFrame } from '../presentation/layout/AppFrame';
@@ -57,8 +59,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
   const [createOpen, setCreateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
-  useEffect(() => { document.body.toggleAttribute('data-ds-dark-theme', theme === 'dark'); document.documentElement.style.colorScheme = theme; }, [theme]);
+  const [artifactPreview, setArtifactPreview] = useState<{ artifact: PreviewArtifact; resources: ArtifactResources }>();
+  const [theme, setTheme] = useState(readTheme);
+  useEffect(() => applyTheme(theme), [theme]);
   useEffect(() => { if (state.connection === 'connected') setConnectionOpen(false); }, [state.connection]);
   const [conversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
   const [preferences] = useState(readPreferences);
@@ -181,7 +184,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
       })} />}
     settings={wide => <SettingsTrigger wide={wide} onClick={() => setSettingsOpen(true)} />} />}
-    rightOpen={inspectorOpen} rightPanel={geometry => <RightPanel {...geometry} open={inspectorOpen} close={() => setInspectorOpen(false)} title="Developer inspector"><Inspector client={client} state={state} view={view} /></RightPanel>}
+    rightOpen={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} rightPanel={geometry => <RightPanel {...geometry} open={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} close={() => { setInspectorOpen(false); setArtifactPreview(undefined); }} title={artifactPreview && artifactPreview.resources === artifacts ? 'Artifact preview' : 'Developer inspector'}>{artifactPreview && artifactPreview.resources === artifacts ? <ArtifactPreview key={artifactPreview.artifact.id} artifact={artifactPreview.artifact} resources={artifacts!} /> : <Inspector client={client} state={state} view={view} />}</RightPanel>}
     overlay={<>
       <Modal open={connectionOpen} title="Connection" closeLabel="Close dialog" onClose={() => setConnectionOpen(false)}>
     <section className="connection-form" aria-label="Connection">
@@ -198,7 +201,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
       </Modal>
       {settingsOpen && <Settings key={view?.id} onConnection={() => setConnectionOpen(true)} client={client} sessionId={view?.id} onClose={() => setSettingsOpen(false)} theme={theme} setTheme={setTheme} />}
     </>}>
-    <header className="console-header"><strong>{view ? state.sessions.find(item => item.id === view.id)?.name ?? 'Session' : 'rustX'}</strong><div className="row"><span className="status"><strong>{state.connection}</strong></span><Button aria-label="Toggle Inspector" onClick={() => setInspectorOpen(value => !value)}><IconInspectOutline12 /></Button></div></header>
+    <header className="console-header"><strong>{view ? state.sessions.find(item => item.id === view.id)?.name ?? 'Session' : 'rustX'}</strong><div className="row"><span className="status"><strong>{state.connection}</strong></span><Button aria-label="Toggle Inspector" onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></div></header>
     <nav className="tabs" role="tablist" aria-label="Open Session views" onKeyDown={navigateTabs}>{tabs.map(id => <div className="tab" key={id}>
       <Pill role="tab" aria-label={state.sessions.find(item => item.id === id)?.name ?? id} title={id} id={`session-tab-${id}`} aria-controls="session-view" tabIndex={selected === id ? 0 : -1} active={selected === id} aria-selected={selected === id} onClick={() => focusSession(id)}>{state.sessions.find(item => item.id === id)?.name ?? id.slice(0, 16)}</Pill>
       <button className="close-tab" aria-label={`Close view ${id}`} onClick={() => {
@@ -236,13 +239,13 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
       {view.attachment !== 'attached' && <p className="notice">{view.attachment}: last observed values may be stale. Execution and pending interactions remain server-owned. {view.error}</p>}
 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role="tabpanel" aria-labelledby={`view-tab-${conversationMode}`} tabIndex={0}>
-      <ArtifactContext.Provider value={artifacts}>{conversationMode === 'trajectory' && view.trace ? <Trajectory key={view.id} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} loadEarlier={() => run(() => client.loadEarlierTrace(view.id))} latest={() => client.latestTrace(view.id)} /> : <ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
+      <PreviewContext value={artifact => { if (artifacts) { setArtifactPreview({ artifact, resources: artifacts }); setInspectorOpen(false); } }}><ArtifactContext.Provider value={artifacts}>{conversationMode === 'trajectory' && view.trace ? <Trajectory key={view.id} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} loadEarlier={() => run(() => client.loadEarlierTrace(view.id))} latest={() => client.latestTrace(view.id)} /> : <ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
         {view.snapshot && <><AgentTranscript snapshot={view.snapshot} history={view.history} loadEarlier={() => run(() => client.loadEarlier(view.id))} latest={() => client.latestTranscript(view.id)}
           lineageSwitchSafe={lineageSwitchSafe(view)} historicalDisabled={composerDisabled || commandOpen} onHistorical={(id, messageId) => invokeCommand({ id, messageId })} /><RuntimeFacts snapshot={view.snapshot} />
           <div className="attempt-status" role="status">{view.cancellation && <span>{view.cancellation.status === "uncertain" ? "Cancellation outcome uncertain" : "Stop requested; waiting for native settlement"} · </span>}Attempt: {view.snapshot.attempt ? `${view.snapshot.attempt.attempt_id} · ${view.snapshot.attempt.phase.type}` : 'none observed'}{view.snapshot.attempt?.phase.type === 'settled' && ` · ${view.snapshot.attempt.phase.outcome.type}`}</div>
 
         </>}
-      </ChatViewport>}</ArtifactContext.Provider>
+      </ChatViewport>}</ArtifactContext.Provider></PreviewContext>
       {/* Keyed by Session: no dock or draft state crosses Session views. */}
       <div className={agentCss.composerSeat}><div hidden={!!view.snapshot?.pending_interactions?.length}><ComposerContextStack key={view.id}
         todo={<TodoDock state={todoDock(view.snapshot)} />}

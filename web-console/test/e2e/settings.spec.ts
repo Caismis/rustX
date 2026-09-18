@@ -48,8 +48,8 @@ test('CFG3 atomic Provider and Model editing, Root selections, Save and reload f
     await settings.getByRole('button', { name: 'Reload', exact: true }).click();
     await expect(settings.getByText(/Configuration published:/)).toBeVisible();
     await settings.getByRole('tab', { name: 'Effective', exact: true }).click();
-    await expect(settings.getByRole('row').filter({ hasText: 'wire-workspace' })).toContainText('workspace:');
-    await expect(settings.getByRole('row').filter({ hasText: 'http://127.0.0.1:2/v1' })).toContainText('workspace:');
+    await expect(settings.getByRole('article').filter({ hasText: 'wire-workspace' })).toContainText('workspace:');
+    await expect(settings.getByRole('article').filter({ hasText: 'http://127.0.0.1:2/v1' })).toContainText('workspace:');
     await expect(settings.getByRole('button', { name: /Save / })).toHaveCount(0);
     await settings.screenshot({ path: test.info().outputPath('cfg3-effective-provenance.png') });
     await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
@@ -66,7 +66,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, Save and reload f
       const source = settings.getByRole('group', { name: `Source ${name}`, exact: true });
       await source.getByRole('combobox', { name: 'Selection', exact: true }).selectOption('all');
       await source.getByRole('combobox', { name: 'Selection', exact: true }).selectOption('exact');
-      await source.getByLabel(`${name} identities`).fill('inspect');
+      await source.getByLabel(`${name} identities 1`).fill('inspect');
       await source.getByRole('combobox', { name: 'Selection', exact: true }).selectOption('none');
       await source.getByRole('button', { name: `Save Source ${name}`, exact: true }).click(); await saved();
     }
@@ -77,10 +77,10 @@ test('CFG3 atomic Provider and Model editing, Root selections, Save and reload f
     await settings.getByRole('button', { name: 'Save Skill visibility', exact: true }).click(); await saved();
     await settings.getByRole('button', { name: 'Plugins', exact: true }).click();
     await expect(settings.getByLabel('Enable todo', { exact: true })).not.toBeChecked();
-    await settings.getByLabel('Enable todo', { exact: true }).check();
+    await settings.getByRole('switch', { name: 'Enable todo', exact: true }).click();
     await settings.getByRole('button', { name: 'Save todo Plugin', exact: true }).click(); await saved();
     await settings.getByRole('button', { name: 'Agents & Workflows', exact: true }).click();
-    await expect(settings.getByLabel('agents', { exact: true })).toHaveValue('');
+    await expect(settings.getByRole('group', { name: 'agents', exact: true }).getByRole('textbox')).toHaveCount(0);
     await settings.getByRole('button', { name: 'Save Agent allowlist', exact: true }).click(); await saved();
     await settings.getByRole('button', { name: 'Reload', exact: true }).click();
     await expect(settings.getByText(/Configuration published:/)).toBeVisible();
