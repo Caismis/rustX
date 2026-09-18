@@ -248,8 +248,9 @@ use super::inbox::{
 /// Version 35 requires the fixed Journal presentation indexes for bounded Trace
 /// seeks. Older development stores are rejected, never lazily repaired.
 /// Version 37 adds native compare-and-set revisions to Pending Inbound.
-/// Version 39 persists exact canonical Tool occurrence/result associations.
-pub const SQLITE_SCHEMA_VERSION: i64 = 39;
+/// Version 39 introduced the Tool occurrence index.
+/// Version 40 makes Tool-result occurrence ownership canonical; prior shapes are refused.
+pub const SQLITE_SCHEMA_VERSION: i64 = 40;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -1616,10 +1617,6 @@ impl ConversationStore for SqliteConversationStore {
                 }
                 validate_surface_operation_references(&transaction, operation)?;
                 append_surface_op(&transaction, revision, generation, operation)?;
-                if let SurfaceOp::Append { message_id } = operation {
-                    let message = load_message_tx(&transaction, message_id)?;
-                    associate_canonical_tool_result(&transaction, &message, &active, None)?;
-                }
                 apply_surface_op(&mut active, operation)?;
             }
             if revision != SurfaceRevision::INITIAL {
@@ -1766,9 +1763,7 @@ impl ConversationStore for SqliteConversationStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("canonical event transaction: {error}")))?;
         ensure_surface_head(&transaction)?;
-        let owner = event_tool_owner(&transaction, message, &event)?;
-        let transcript_cursor =
-            append_message_and_surface_internal(&transaction, message, None, owner.as_ref())?;
+        let transcript_cursor = append_message_and_surface_internal(&transaction, message, None)?;
         #[cfg(test)]
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: canonical event journal commit"));
@@ -1803,14 +1798,12 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(format!("canonical event batch transaction: {error}")))?;
         ensure_surface_head(&transaction)?;
         let mut receipts = Vec::with_capacity(messages.len());
-        for (message, event) in messages.iter().zip(events) {
-            let owner = event_tool_owner(&transaction, message, event)?;
+        for message in messages {
             receipts.push(TranscriptCommitReceipt {
                 transcript_cursor: append_message_and_surface_internal(
                     &transaction,
                     message,
                     None,
-                    owner.as_ref(),
                 )?,
             });
         }
@@ -3718,7 +3711,7 @@ fn request_outcome_is_durable(
 /// This is the durable half of the hard Issue #108 invariant: no tool
 /// proposal from an Incomplete or Unaccepted publication may have a dependent
 /// `ToolExecutionStarted`, `ToolResult`, or side-effect authorization.
-#[allow(clippy::too_many_lines)] // One store-layer owner keeps every dependency path identical.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // One owner validates execution envelopes and exact canonical references.
 fn record_tool_proposal_dependency(
     transaction: &Transaction<'_>,
     call_id: &ToolCallId,
@@ -3727,17 +3720,19 @@ fn record_tool_proposal_dependency(
     expected_tool_id: Option<&ToolId>,
     dependency: &str,
     allow_unowned_canonical: bool,
+    canonical_owner: Option<&MessageId>,
 ) -> Result<(), ConversationStoreError> {
     // Detached authorization facts intentionally outlive an attempt and carry
     // no envelope generation. Resolve those facts through the current durable
-    // Surface: an active canonical Assistant is the only valid owner, and the
-    // active Surface rejects duplicate ToolCallIds. This keeps a historical
+    // Surface: an active canonical Assistant is the only valid owner, and
+    // ambiguous publication owners are rejected. This keeps a historical
     // audited/canonical reuse from becoming a bare-call-id alias.
-    let detached_active_messages = if attempt_id.is_none() && turn_id.is_none() {
-        Some(load_head(transaction)?.active_message_ids)
-    } else {
-        None
-    };
+    let detached_active_messages =
+        if canonical_owner.is_none() && attempt_id.is_none() && turn_id.is_none() {
+            Some(load_head(transaction)?.active_message_ids)
+        } else {
+            None
+        };
     let mut statement = transaction
         .prepare(
             "SELECT p.stream_id,s.attempt_id,s.turn_id,s.message_id,p.tool_id,p.settlement,p.state
@@ -3773,7 +3768,23 @@ fn record_tool_proposal_dependency(
         // direct canonical ToolMessage or detached lifecycle opening may
         // still be admitted without a model proposal: neither is a
         // ToolResult or execution fact for a publication proposal.
-        if let Some(owner_tool_id) = canonical_surface_tool_id(transaction, call_id)? {
+        let owner_tool_id = if let Some(owner) = canonical_owner {
+            let message = load_message_tx(transaction, owner)?;
+            match message {
+                MessageBlock::Assistant(assistant) => {
+                    assistant.content.iter().find_map(|block| match block {
+                        AssistantContentBlock::ToolCall(call) if call.id == *call_id => {
+                            Some(call.tool_id.clone())
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            }
+        } else {
+            canonical_surface_tool_id(transaction, call_id)?
+        };
+        if let Some(owner_tool_id) = owner_tool_id {
             if let Some(expected_tool_id) = expected_tool_id
                 && *expected_tool_id != owner_tool_id
             {
@@ -3794,7 +3805,8 @@ fn record_tool_proposal_dependency(
         .iter()
         .filter(
             |(_, candidate_attempt, candidate_turn, candidate_message, _, _, _)| {
-                attempt_id.is_none_or(|attempt| candidate_attempt == attempt.as_str())
+                canonical_owner.is_none_or(|owner| candidate_message == owner.as_str())
+                    && attempt_id.is_none_or(|attempt| candidate_attempt == attempt.as_str())
                     && turn_id.is_none_or(|turn| candidate_turn == turn.as_str())
                     && detached_active_messages.as_ref().is_none_or(|active| {
                         active
@@ -4296,6 +4308,7 @@ fn append_canonical_messages(
                 Some(&tool.tool_id),
                 "canonical ToolMessage",
                 true,
+                Some(&tool.occurrence.assistant_message_id),
             )?;
         }
         receipts.push(TranscriptCommitReceipt {
@@ -4915,8 +4928,6 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 PRIMARY KEY(assistant_message_id,block_index),
                 UNIQUE(assistant_message_id,call_id)
             );
-            CREATE INDEX IF NOT EXISTS canonical_tool_calls_by_call
-                ON canonical_tool_calls(call_id,tool_id,assistant_message_id);
             CREATE TABLE IF NOT EXISTS transcript_order (
                 position INTEGER PRIMARY KEY,
                 reference_kind TEXT NOT NULL,
@@ -5519,74 +5530,43 @@ fn update_checkpoint(
     Ok(())
 }
 
-/// The publication generation proves an exact Assistant owner when the commit
-/// carries a runtime envelope. Direct canonical commits and lineage bootstrap
-/// instead use their authoritative Surface at the commit's historical position.
-fn event_tool_owner(
-    transaction: &Transaction<'_>,
-    message: &MessageBlock,
-    event: &RuntimeEventEnvelope,
-) -> Result<Option<MessageId>, ConversationStoreError> {
-    if let (MessageBlock::Tool(tool), Some(attempt), Some(turn)) =
-        (message, event.attempt_id.as_ref(), event.turn_id.as_ref())
-    {
-        canonical_generation_owner(transaction, &tool.tool_call_id, attempt, turn)
-    } else {
-        Ok(None)
-    }
-}
-
-/// Persists only the relationship, not a second Tool body/lifecycle. Active
-/// Surface membership is a native ownership proof (its call IDs are unique),
-/// never a "latest call" or "nearest message" heuristic. Ambiguity is refused.
+/// Validates explicit canonical ownership; this index contains no independent
+/// relationship evidence. Both ordinary commits and lineage seeds derive it from
+/// the canonical Tool message itself, atomically with its Ledger append.
 fn associate_canonical_tool_result(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
-    active: &[MessageId],
-    owner: Option<&MessageId>,
 ) -> Result<(), ConversationStoreError> {
     let MessageBlock::Tool(tool) = message else {
         return Ok(());
     };
-    let owners = owner.map_or_else(|| active.to_vec(), |id| vec![id.clone()]);
-    let mut statement = transaction.prepare(
-        "SELECT assistant_message_id,block_index,result_message_id FROM canonical_tool_calls
-         WHERE call_id=?1 AND tool_id=?2 AND assistant_message_id IN (SELECT value FROM json_each(?3)) LIMIT 2",
-    ).map_err(|error| storage(format!("canonical Tool owner: {error}")))?;
-    let rows = statement
-        .query_map(
-            params![
-                tool.tool_call_id.as_str(),
-                tool.tool_id.as_str(),
-                encode(&owners, "Tool owner Surface")?
-            ],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, u32>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                ))
-            },
+    let owner = &tool.occurrence;
+    let association: Option<(String, String, Option<String>)> = transaction
+        .query_row(
+            "SELECT call_id,tool_id,result_message_id FROM canonical_tool_calls
+         WHERE assistant_message_id=?1 AND block_index=?2",
+            params![owner.assistant_message_id.as_str(), owner.block_index.get()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
-        .map_err(|error| storage(format!("canonical Tool owners: {error}")))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| storage(format!("canonical Tool owner row: {error}")))?;
-    let (assistant, block, previous) = match rows.as_slice() {
-        [] if owner.is_none() => return Ok(()), // Unowned canonical Tool messages have no call occurrence.
-        [row] => row,
-        _ => {
-            return Err(storage(
-                "canonical Tool result has missing or ambiguous occurrence ownership",
-            ));
-        }
+        .optional()
+        .map_err(|error| storage(format!("canonical Tool occurrence: {error}")))?;
+    let Some((call_id, tool_id, previous)) = association else {
+        return Err(ConversationStoreError::InvalidReference(
+            "Tool result occurrence does not name a canonical ToolCall block".into(),
+        ));
     };
-    if previous.as_deref().is_some_and(|id| id != tool.id.as_str()) {
-        return Err(storage(
-            "canonical Tool occurrence already has a different result",
+    if call_id != tool.tool_call_id.as_str() || tool_id != tool.tool_id.as_str() {
+        return Err(ConversationStoreError::InvalidReference(
+            "Tool result correlation differs from its canonical occurrence".into(),
         ));
     }
-    transaction.execute("UPDATE canonical_tool_calls SET result_message_id=?1 WHERE assistant_message_id=?2 AND block_index=?3", params![tool.id.as_str(), assistant, block])
-        .map_err(|error| storage(format!("canonical Tool result association: {error}")))?;
+    if previous.is_some() {
+        return Err(ConversationStoreError::InvalidReference(
+            "canonical Tool occurrence already has a result".into(),
+        ));
+    }
+    transaction.execute("UPDATE canonical_tool_calls SET result_message_id=?1 WHERE assistant_message_id=?2 AND block_index=?3", params![tool.id.as_str(), owner.assistant_message_id.as_str(), owner.block_index.get()])
+        .map_err(|error| storage(format!("canonical Tool result index: {error}")))?;
     Ok(())
 }
 
@@ -5594,7 +5574,7 @@ fn append_message_and_surface(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
-    append_message_and_surface_internal(transaction, message, None, None)
+    append_message_and_surface_internal(transaction, message, None)
 }
 
 /// Appends one seeded canonical message to the Ledger alone.
@@ -5619,14 +5599,13 @@ fn append_adopted_message_and_surface(
     message: &MessageBlock,
     pending_message_id: &MessageId,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
-    append_message_and_surface_internal(transaction, message, Some(pending_message_id), None)
+    append_message_and_surface_internal(transaction, message, Some(pending_message_id))
 }
 
 fn append_message_and_surface_internal(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
     allowed_pending_message_id: Option<&MessageId>,
-    tool_owner: Option<&MessageId>,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
     if matches!(
         message,
@@ -5644,7 +5623,6 @@ fn append_message_and_surface_internal(
     }
     let transcript_cursor =
         append_message_ledger(transaction, message, allowed_pending_message_id)?;
-    associate_canonical_tool_result(transaction, message, &head.active_message_ids, tool_owner)?;
     let mut active = head.active_message_ids;
     active.push(id.clone());
     let revision = head.revision.next();
@@ -5699,6 +5677,7 @@ fn append_message_ledger(
             }
         }
     }
+    associate_canonical_tool_result(transaction, message)?;
     if transcript_visible_message(message) {
         Ok(Some(append_transcript_reference(
             transaction,
@@ -6039,7 +6018,10 @@ fn load_transcript_tools(
             .transpose()?
             .map(|message| match message {
                 MessageBlock::Tool(tool)
-                    if tool.tool_call_id == call.id && tool.tool_id == call.tool_id =>
+                    if tool.occurrence.assistant_message_id == assistant.id
+                        && tool.occurrence.block_index.get() == block_index
+                        && tool.tool_call_id == call.id
+                        && tool.tool_id == call.tool_id =>
                 {
                     Ok(tool.result)
                 }
@@ -8022,6 +8004,7 @@ fn validate_event_reference(
                 Some(tool_id),
                 runtime_event_dependency_name(&envelope.event),
                 false,
+                None,
             )?;
         }
         RuntimeEvent::BackgroundExecutionCommitted {
@@ -8037,6 +8020,7 @@ fn validate_event_reference(
                 Some(tool_id),
                 runtime_event_dependency_name(&envelope.event),
                 true,
+                None,
             )?;
         }
         RuntimeEvent::SubagentOwnershipCommitted {
@@ -8070,6 +8054,7 @@ fn validate_event_reference(
                 None,
                 runtime_event_dependency_name(&envelope.event),
                 true,
+                None,
             )?;
             // The durable identity of an ownership fact is canonical: the
             // EventId must be the deterministic `subagent-committed-event:{id}`
@@ -8266,6 +8251,7 @@ fn validate_event_reference(
                 Some(&tool.tool_id),
                 runtime_event_dependency_name(&envelope.event),
                 false,
+                Some(&tool.occurrence.assistant_message_id),
             )?;
         }
         RuntimeEvent::CompactionCompleted {
@@ -9297,6 +9283,102 @@ mod tests {
     }
 
     #[test]
+    fn canonical_tool_results_validate_exact_ownership_and_roll_back() {
+        use crate::message::types::{ContentBlockIndex, ToolCallOccurrenceRef};
+        let store = store();
+        let call = ToolCall {
+            id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-bash"),
+            name: "bash".into(),
+            arguments: serde_json::json!({}),
+        };
+        let owner = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("a"),
+            content: vec![
+                AssistantContentBlock::Text(TextBlock {
+                    text: "thinking".into(),
+                }),
+                AssistantContentBlock::ToolCall(call.clone()),
+            ],
+        });
+        store.initialize(&[owner]).unwrap();
+        let valid = ToolMessageBlock {
+            id: MessageId::new("result"),
+            occurrence: ToolCallOccurrenceRef::new(MessageId::new("a"), ContentBlockIndex::new(1)),
+            tool_call_id: call.id,
+            tool_id: call.tool_id,
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Success,
+                content: vec![],
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: vec![],
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            },
+        };
+        let mut missing = valid.clone();
+        missing.occurrence.assistant_message_id = MessageId::new("missing");
+        let mut text = valid.clone();
+        text.occurrence.block_index = ContentBlockIndex::new(0);
+        let mut outside = valid.clone();
+        outside.occurrence.block_index = ContentBlockIndex::new(2);
+        let mut wrong_call = valid.clone();
+        wrong_call.tool_call_id = ToolCallId::new("wrong");
+        let mut wrong_tool = valid.clone();
+        wrong_tool.tool_id = ToolId::new("wrong");
+        for invalid in [missing, text, outside, wrong_call, wrong_tool] {
+            assert!(
+                store
+                    .append_canonical(&MessageBlock::Tool(invalid))
+                    .is_err()
+            );
+            assert_eq!(
+                store.load_canonical().unwrap().len(),
+                1,
+                "failed result leaves no ledger row"
+            );
+            assert!(
+                store.load_transcript_page(None, 1).unwrap().entries[0].tool_calls[0]
+                    .result
+                    .is_none()
+            );
+        }
+        store
+            .append_canonical(&MessageBlock::Tool(valid.clone()))
+            .unwrap();
+        let mut duplicate = valid.clone();
+        duplicate.id = MessageId::new("duplicate");
+        assert!(
+            store
+                .append_canonical(&MessageBlock::Tool(duplicate))
+                .is_err()
+        );
+        // Reusing one result MessageId for a second exact occurrence is also invalid.
+        let second = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("b"),
+            content: vec![AssistantContentBlock::ToolCall(ToolCall {
+                id: valid.tool_call_id.clone(),
+                tool_id: valid.tool_id.clone(),
+                name: "bash".into(),
+                arguments: serde_json::json!({}),
+            })],
+        });
+        store.append_canonical(&second).unwrap();
+        let mut reused = valid;
+        reused.occurrence =
+            ToolCallOccurrenceRef::new(MessageId::new("b"), ContentBlockIndex::new(0));
+        assert!(store.append_canonical(&MessageBlock::Tool(reused)).is_err());
+        assert_eq!(store.load_canonical().unwrap().len(), 3);
+        assert!(
+            store.load_transcript_page(None, 1).unwrap().entries[0].tool_calls[0]
+                .result
+                .is_none()
+        );
+    }
+
+    #[test]
     fn transcript_tool_reads_seek_occurrences_and_result_message_indexes() {
         let store = store();
         let connection = store.conn.lock().unwrap();
@@ -9323,32 +9405,34 @@ mod tests {
     }
 
     #[test]
-    fn transcript_tool_schema_38_is_refused_without_backfill() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("old.sqlite");
-        let id = ConversationId::new("conv_a2b8feb8-c105-7980-8a72-d8482750c3fc");
-        {
-            let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
-            store.conn.lock().unwrap().execute_batch("DROP TABLE canonical_tool_calls; UPDATE rustx_store SET schema_version=38 WHERE id=1").unwrap();
+    fn transcript_tool_obsolete_schemas_are_refused_without_backfill() {
+        for obsolete in [38, 39] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("old.sqlite");
+            let id = ConversationId::new("conv_a2b8feb8-c105-7980-8a72-d8482750c3fc");
+            {
+                let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+                store.conn.lock().unwrap().execute_batch(&format!("DROP TABLE canonical_tool_calls; UPDATE rustx_store SET schema_version={obsolete} WHERE id=1")).unwrap();
+            }
+            assert!(matches!(
+                SqliteConversationStore::open(id, &path),
+                Err(ConversationStoreError::SchemaVersionMismatch {
+                    stored,
+                    expected: SQLITE_SCHEMA_VERSION
+                }) if stored == obsolete
+            ));
+            let connection = Connection::open(path).unwrap();
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT count(*) FROM sqlite_master WHERE name='canonical_tool_calls'",
+                        [],
+                        |row| row.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                0
+            );
         }
-        assert!(matches!(
-            SqliteConversationStore::open(id, &path),
-            Err(ConversationStoreError::SchemaVersionMismatch {
-                stored: 38,
-                expected: SQLITE_SCHEMA_VERSION
-            })
-        ));
-        let connection = Connection::open(path).unwrap();
-        assert_eq!(
-            connection
-                .query_row(
-                    "SELECT count(*) FROM sqlite_master WHERE name='canonical_tool_calls'",
-                    [],
-                    |row| row.get::<_, i64>(0)
-                )
-                .unwrap(),
-            0
-        );
     }
 
     #[test]
@@ -9365,8 +9449,12 @@ mod tests {
                 content: vec![AssistantContentBlock::ToolCall(call.clone())],
             })
         };
-        let result = |id, text: &str| {
+        let result = |id, owner: &str, text: &str| {
             MessageBlock::Tool(ToolMessageBlock {
+                occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                    crate::runtime::identity::MessageId::new(owner),
+                    crate::message::types::ContentBlockIndex::new(0),
+                ),
                 id: MessageId::new(id),
                 tool_call_id: call.id.clone(),
                 tool_id: call.tool_id.clone(),
@@ -9386,7 +9474,7 @@ mod tests {
         };
         let canonical = vec![
             assistant("a"),
-            result("ra", "old-result"),
+            result("ra", "a", "old-result"),
             MessageBlock::User(summary_message("summary", "retired A")),
             assistant("b"),
         ];
@@ -9425,7 +9513,9 @@ mod tests {
                 .unwrap()
                 .contains("old-result")
         );
-        store.append_canonical(&result("rb", "new-result")).unwrap();
+        store
+            .append_canonical(&result("rb", "b", "new-result"))
+            .unwrap();
         let page = store.load_transcript_page(None, 10).unwrap();
         let tools: Vec<_> = page
             .entries
@@ -9486,6 +9576,12 @@ mod tests {
         for (index, call) in calls.iter().enumerate().rev() {
             store
                 .append_canonical(&MessageBlock::Tool(ToolMessageBlock {
+                    occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                        crate::runtime::identity::MessageId::new("assistant"),
+                        crate::message::types::ContentBlockIndex::new(
+                            u32::try_from(index).unwrap(),
+                        ),
+                    ),
                     id: MessageId::new(format!("result-{index}")),
                     tool_call_id: call.id.clone(),
                     tool_id: call.tool_id.clone(),
@@ -13365,7 +13461,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 39);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 40);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -13434,7 +13530,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 39);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 40);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -13956,12 +14052,17 @@ mod tests {
                 }),
             ],
         });
-        let cancelled = |message_id: &str,
+        let cancelled = |index: u32,
+                         message_id: &str,
                          call_id: &str,
                          tool_id: &str,
                          reason: CancellationReason,
                          phase: ToolCancellationPhase| {
             MessageBlock::Tool(ToolMessageBlock {
+                occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                    crate::runtime::identity::MessageId::new("assistant-issue-136"),
+                    crate::message::types::ContentBlockIndex::new(index),
+                ),
                 id: MessageId::new(message_id),
                 tool_call_id: ToolCallId::new(call_id),
                 tool_id: ToolId::new(tool_id),
@@ -13978,6 +14079,7 @@ mod tests {
             })
         };
         let before_start = cancelled(
+            0,
             "result-before-start",
             "call-before-start",
             "tool-before-start",
@@ -13985,6 +14087,7 @@ mod tests {
             ToolCancellationPhase::BeforeStart,
         );
         let during_execution = cancelled(
+            1,
             "result-during-execution",
             "call-during-execution",
             "tool-during-execution",

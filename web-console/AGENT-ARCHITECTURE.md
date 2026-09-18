@@ -27,12 +27,11 @@ an active attempt keeps its admitted policy. The Agent control must display this
 boundary explicitly, including pending Reload, rather than imply a Save changed
 execution. No Session approval override or compatibility settings API is added.
 
-Tool results are associated atomically in native SQLite schema 39 by canonical
-Assistant MessageId plus block index, with a nullable result MessageId reference.
-The existing Attempt/turn-scoped publication owner proves the result's Assistant;
-native Surface history supplies ownership for direct canonical/lineage writes.
-Transcript pages use indexed occurrence/result-message seeks across page
-boundaries. The foreground projection carries the same MessageId/block identity;
-only that exact occurrence can receive its live state. Provider call/Tool IDs
-alone are never historical identity. No unproven turn
-folding or inferred subcall nesting is supported.
+Canonical Tool results carry `ToolCallOccurrenceRef` (Assistant MessageId plus
+block index). SQLite schema 40 validates this owner and atomically maintains the
+derived `canonical_tool_calls` index for bounded cross-page reads. Canonical
+history carries the relationship through clone, fork and tree copies, which remap
+Assistant MessageIds and preserve provider correlation IDs. The foreground
+projection carries the same occurrence; only that occurrence can receive its live
+state. Provider call/Tool IDs alone are never historical identity. No unproven
+turn folding or inferred subcall nesting is supported.

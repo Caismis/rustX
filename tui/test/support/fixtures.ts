@@ -524,6 +524,7 @@ export function toolMessage(
 ): MessageBlock {
   return {
     role: "tool",
+    occurrence: { assistant_message_id: "m1", block_index: 0 },
     id,
     tool_call_id: callId,
     tool_id: toolId,

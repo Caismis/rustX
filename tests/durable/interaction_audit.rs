@@ -1806,6 +1806,10 @@ fn transcript_tool_occurrences_do_not_alias_across_attempts_and_reopen() {
             store
                 .append_canonical_with_event(
                     &MessageBlock::Tool(ToolMessageBlock {
+                        occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+                            generation.message_id(),
+                            rustx::message::types::ContentBlockIndex::new(0),
+                        ),
                         id: id.clone(),
                         tool_call_id: generation.call.id.clone(),
                         tool_id: generation.call.tool_id.clone(),

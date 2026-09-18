@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! Assistant owns ToolCall identity and arguments
-//! Tool            owns the execution result and references ToolCallId
+//! Tool            owns the execution result and references ToolCallOccurrenceRef
 //! ```
 //!
 //! A `ToolMessageBlock` whose call resolves to no active owning Assistant
@@ -19,10 +19,12 @@
 //! its active owning tool call, and vice versa. Raw message counts are never
 //! a structural boundary heuristic.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::message::types::{AssistantContentBlock, MessageBlock};
-use crate::runtime::identity::{MessageId, ToolCallId};
+use crate::message::types::{
+    AssistantContentBlock, ContentBlockIndex, MessageBlock, ToolCallOccurrenceRef,
+};
+use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
 
 /// A structural contract violation of the active conversation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,8 +36,13 @@ pub enum StructuralError {
         /// The unresolvable tool call identity.
         tool_call_id: ToolCallId,
     },
-    /// The same tool call identity is issued by more than one Assistant message.
+    /// A provider response repeats a correlation ID inside one Assistant.
     DuplicateToolCall(ToolCallId),
+    /// An exact occurrence exists but disagrees with the result's call/Tool identity.
+    InvalidToolOccurrence {
+        /// The offending result.
+        message_id: MessageId,
+    },
     /// The same tool call has more than one result.
     DuplicateToolResult {
         /// The duplicated tool call identity.
@@ -64,9 +71,13 @@ impl core::fmt::Display for StructuralError {
             Self::DuplicateToolCall(id) => {
                 write!(
                     f,
-                    "tool call {id} is issued by more than one Assistant message"
+                    "tool call {id} is issued twice inside one Assistant message"
                 )
             }
+            Self::InvalidToolOccurrence { message_id } => write!(
+                f,
+                "tool message {message_id} disagrees with its canonical occurrence"
+            ),
             Self::DuplicateToolResult {
                 tool_call_id,
                 message_id,
@@ -89,10 +100,10 @@ impl std::error::Error for StructuralError {}
 pub struct StructuralIndex {
     /// Every Assistant message position, in active order.
     assistant_positions: Vec<usize>,
-    /// `tool_call_id` → the active position of the requesting Assistant message.
-    call_owners: BTreeMap<ToolCallId, usize>,
-    /// `tool_call_id` → the active position of its result, when one exists.
-    results: BTreeMap<ToolCallId, usize>,
+    /// Exact occurrence → owner position and provider/native Tool correlation.
+    call_owners: BTreeMap<ToolCallOccurrenceRef, (usize, ToolCallId, ToolId)>,
+    /// Exact occurrence → result position, when settled.
+    results: BTreeMap<ToolCallOccurrenceRef, usize>,
     /// Assistant position → the last active position of its turn.
     turn_ends: BTreeMap<usize, usize>,
     /// active position → the message identity at that position.
@@ -106,35 +117,53 @@ impl StructuralIndex {
     ///
     /// Returns the [`StructuralError`] of the first violation: an orphan
     /// tool result, a tool call issued twice, or a duplicated tool result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an Assistant contains more blocks than `ContentBlockIndex` can represent.
     pub fn build(active: &[MessageBlock]) -> Result<Self, StructuralError> {
         let mut assistant_positions = Vec::new();
-        let mut call_owners: BTreeMap<ToolCallId, usize> = BTreeMap::new();
-        let mut results: BTreeMap<ToolCallId, usize> = BTreeMap::new();
+        let mut call_owners: BTreeMap<ToolCallOccurrenceRef, (usize, ToolCallId, ToolId)> =
+            BTreeMap::new();
+        let mut results: BTreeMap<ToolCallOccurrenceRef, usize> = BTreeMap::new();
         let mut ids = Vec::with_capacity(active.len());
         for (position, message) in active.iter().enumerate() {
             ids.push(super::ledger::message_id_of(message));
             match message {
                 MessageBlock::Assistant(assistant) => {
                     assistant_positions.push(position);
-                    for block in &assistant.content {
-                        if let AssistantContentBlock::ToolCall(call) = block
-                            && call_owners.insert(call.id.clone(), position).is_some()
-                        {
-                            return Err(StructuralError::DuplicateToolCall(call.id.clone()));
+                    let mut provider_ids = BTreeSet::new();
+                    for (index, block) in assistant.content.iter().enumerate() {
+                        if let AssistantContentBlock::ToolCall(call) = block {
+                            if !provider_ids.insert(&call.id) {
+                                return Err(StructuralError::DuplicateToolCall(call.id.clone()));
+                            }
+                            let occurrence = ToolCallOccurrenceRef::new(
+                                assistant.id.clone(),
+                                ContentBlockIndex::new(
+                                    u32::try_from(index).expect("canonical block index"),
+                                ),
+                            );
+                            call_owners.insert(
+                                occurrence,
+                                (position, call.id.clone(), call.tool_id.clone()),
+                            );
                         }
                     }
                 }
                 MessageBlock::Tool(tool) => {
-                    if !call_owners.contains_key(&tool.tool_call_id) {
+                    let Some((_, call_id, tool_id)) = call_owners.get(&tool.occurrence) else {
                         return Err(StructuralError::OrphanToolResult {
                             message_id: tool.id.clone(),
                             tool_call_id: tool.tool_call_id.clone(),
                         });
+                    };
+                    if call_id != &tool.tool_call_id || tool_id != &tool.tool_id {
+                        return Err(StructuralError::InvalidToolOccurrence {
+                            message_id: tool.id.clone(),
+                        });
                     }
-                    if results
-                        .insert(tool.tool_call_id.clone(), position)
-                        .is_some()
-                    {
+                    if results.insert(tool.occurrence.clone(), position).is_some() {
                         return Err(StructuralError::DuplicateToolResult {
                             tool_call_id: tool.tool_call_id.clone(),
                             message_id: tool.id.clone(),
@@ -150,9 +179,13 @@ impl StructuralIndex {
                 unreachable!("assistant_positions only holds Assistant messages");
             };
             let mut end = assistant_position;
-            for block in &assistant.content {
-                if let AssistantContentBlock::ToolCall(call) = block
-                    && let Some(&result_position) = results.get(&call.id)
+            for (index, block) in assistant.content.iter().enumerate() {
+                let occurrence = ToolCallOccurrenceRef::new(
+                    assistant.id.clone(),
+                    ContentBlockIndex::new(u32::try_from(index).expect("canonical block index")),
+                );
+                if matches!(block, AssistantContentBlock::ToolCall(_))
+                    && let Some(&result_position) = results.get(&occurrence)
                 {
                     end = end.max(result_position);
                 }
@@ -221,8 +254,9 @@ impl StructuralIndex {
     ///
     /// Returns [`StructuralError::SplitToolPair`].
     pub fn validate_span(&self, start: usize, end: usize) -> Result<(), StructuralError> {
-        for (call_id, &owner) in &self.call_owners {
-            let Some(&result) = self.results.get(call_id) else {
+        for (occurrence, (owner, call_id, _)) in &self.call_owners {
+            let owner = *owner;
+            let Some(&result) = self.results.get(occurrence) else {
                 // A pending call with no committed result imposes no edge:
                 // the Agent Loop contract allows it to remain representable.
                 continue;
@@ -279,8 +313,12 @@ mod tests {
         })
     }
 
-    fn tool(call: &str) -> MessageBlock {
+    fn tool(owner: &str, index: u32, call: &str) -> MessageBlock {
         MessageBlock::Tool(ToolMessageBlock {
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                crate::runtime::identity::MessageId::new(owner),
+                crate::message::types::ContentBlockIndex::new(index),
+            ),
             id: MessageId::new(format!("tool-{call}")),
             tool_call_id: ToolCallId::new(call),
             tool_id: ToolId::new("tool-a"),
@@ -297,10 +335,71 @@ mod tests {
         })
     }
 
+    #[test]
+    fn canonical_occurrences_distinguish_reused_provider_ids_and_compaction_edges() {
+        let mut second = tool("a2", 0, "call-1");
+        let MessageBlock::Tool(t) = &mut second else {
+            unreachable!()
+        };
+        t.id = MessageId::new("result-B");
+        let active = vec![
+            assistant("a1", &["call-1"]),
+            tool("a1", 0, "call-1"),
+            assistant("a2", &["call-1"]),
+            second,
+        ];
+        let index = StructuralIndex::build(&active).unwrap();
+        assert!(index.validate_span(0, 1).is_ok());
+        assert!(index.validate_span(2, 3).is_ok());
+        assert!(index.validate_span(0, 2).is_err());
+        assert!(index.validate_span(1, 3).is_err());
+        assert_eq!(index.turn_end_of(0), 1);
+        assert_eq!(index.turn_end_of(2), 3);
+        assert_eq!(
+            super::super::pending_tool_call(&active[..3]),
+            Some(ToolCallId::new("call-1"))
+        );
+        assert_eq!(super::super::pending_tool_call(&active), None);
+    }
+
+    #[test]
+    fn canonical_tool_references_reject_wrong_owner_block_correlation_and_duplicate_results() {
+        let owner = assistant("a1", &["call-1"]);
+        let valid = tool("a1", 0, "call-1");
+        for invalid in [
+            tool("missing", 0, "call-1"),
+            tool("a1", 1, "call-1"),
+            tool("a1", 0, "foreign"),
+        ] {
+            assert!(StructuralIndex::build(&[owner.clone(), invalid]).is_err());
+        }
+        let mut wrong_tool = valid.clone();
+        let MessageBlock::Tool(t) = &mut wrong_tool else {
+            unreachable!()
+        };
+        t.tool_id = ToolId::new("foreign");
+        assert!(StructuralIndex::build(&[owner.clone(), wrong_tool]).is_err());
+        let mut duplicate = valid.clone();
+        let MessageBlock::Tool(t) = &mut duplicate else {
+            unreachable!()
+        };
+        t.id = MessageId::new("different-result");
+        assert!(matches!(
+            StructuralIndex::build(&[owner, valid, duplicate]),
+            Err(StructuralError::DuplicateToolResult { .. })
+        ));
+        assert!(matches!(
+            StructuralIndex::build(&[assistant("a1", &["call-1", "call-1"])]),
+            Err(StructuralError::DuplicateToolCall(_))
+        ));
+        assert!(StructuralIndex::build(&[user("a1"), tool("a1", 0, "call-1")]).is_err());
+    }
+
     /// An orphan tool result is malformed, never guessed around.
     #[test]
     fn orphan_tool_result_is_rejected() {
-        let error = StructuralIndex::build(&[user("u1"), tool("ghost")]).expect_err("rejected");
+        let error = StructuralIndex::build(&[user("u1"), tool("missing", 0, "ghost")])
+            .expect_err("rejected");
         assert_eq!(
             error,
             StructuralError::OrphanToolResult {
@@ -314,7 +413,12 @@ mod tests {
     /// direction.
     #[test]
     fn spans_never_split_a_tool_pair() {
-        let active = vec![user("u1"), assistant("a1", &["c1"]), tool("c1"), user("u2")];
+        let active = vec![
+            user("u1"),
+            assistant("a1", &["c1"]),
+            tool("a1", 0, "c1"),
+            user("u2"),
+        ];
         let index = StructuralIndex::build(&active).expect("well-formed");
         assert!(index.validate_span(0, 0).is_ok());
         assert!(index.validate_span(0, 2).is_ok());
@@ -352,8 +456,8 @@ mod tests {
         let active = vec![
             user("u1"),
             assistant("a1", &["c1", "c2"]),
-            tool("c1"),
-            tool("c2"),
+            tool("a1", 0, "c1"),
+            tool("a1", 1, "c2"),
         ];
         let index = StructuralIndex::build(&active).expect("well-formed");
         assert_eq!(index.turn_end_of(1), 3);

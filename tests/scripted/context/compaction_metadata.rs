@@ -95,8 +95,12 @@ fn assistant(id: &str, calls: Vec<ToolCall>) -> MessageBlock {
     })
 }
 
-fn tool_result(id: &str, call: &ToolCall) -> MessageBlock {
+fn tool_result(id: &str, owner: &MessageId, index: usize, call: &ToolCall) -> MessageBlock {
     MessageBlock::Tool(ToolMessageBlock {
+        occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+            owner.clone(),
+            rustx::message::types::ContentBlockIndex::new(u32::try_from(index).unwrap()),
+        ),
         id: MessageId::new(id),
         tool_call_id: call.id.clone(),
         tool_id: call.tool_id.clone(),
@@ -175,20 +179,30 @@ pub(super) fn file_operation_history() -> Vec<MessageBlock> {
     );
     let mut messages = vec![user("u1"), reads.clone()];
     if let MessageBlock::Assistant(assistant) = &reads {
-        for block in &assistant.content {
+        for (index, block) in assistant.content.iter().enumerate() {
             let AssistantContentBlock::ToolCall(call) = block else {
                 unreachable!();
             };
-            messages.push(tool_result(&format!("t-{}", call.id.as_str()), call));
+            messages.push(tool_result(
+                &format!("t-{}", call.id.as_str()),
+                &assistant.id,
+                index,
+                call,
+            ));
         }
     }
     messages.push(writes.clone());
     if let MessageBlock::Assistant(assistant) = &writes {
-        for block in &assistant.content {
+        for (index, block) in assistant.content.iter().enumerate() {
             let AssistantContentBlock::ToolCall(call) = block else {
                 unreachable!();
             };
-            messages.push(tool_result(&format!("t-{}", call.id.as_str()), call));
+            messages.push(tool_result(
+                &format!("t-{}", call.id.as_str()),
+                &assistant.id,
+                index,
+                call,
+            ));
         }
     }
     messages.push(user("u2"));
@@ -237,12 +251,17 @@ fn second_compaction_merges_lineage_metadata() {
     let MessageBlock::Assistant(calls) = &reads else {
         unreachable!();
     };
-    for block in &calls.content {
+    for (index, block) in calls.content.iter().enumerate() {
         let AssistantContentBlock::ToolCall(call) = block else {
             unreachable!();
         };
         history
-            .commit(tool_result(&format!("t-{}", call.id.as_str()), call))
+            .commit(tool_result(
+                &format!("t-{}", call.id.as_str()),
+                &calls.id,
+                index,
+                call,
+            ))
             .expect("commit result");
     }
     history.commit(user("u3")).expect("commit u3");

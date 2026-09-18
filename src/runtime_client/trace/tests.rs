@@ -976,7 +976,9 @@ fn canonical_tool_artifacts_merge_by_identity_with_bounded_first_occurrence() {
                 }),
                 event(
                     &store,
-                    E::AssistantMessageCommitted { message_id: owner },
+                    E::AssistantMessageCommitted {
+                        message_id: owner.clone(),
+                    },
                     1,
                 ),
             )
@@ -1003,6 +1005,10 @@ fn canonical_tool_artifacts_merge_by_identity_with_bounded_first_occurrence() {
         store
             .append_canonical_with_event(
                 &MessageBlock::Tool(crate::message::types::ToolMessageBlock {
+                    occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                        owner.clone(),
+                        crate::message::types::ContentBlockIndex::new(0),
+                    ),
                     id: id.clone(),
                     tool_call_id: call.clone(),
                     tool_id: tool.clone(),

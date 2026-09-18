@@ -1773,6 +1773,10 @@ mod tests {
     #[test]
     fn issue136_responses_translation_consumes_typed_cancellation_status() {
         let message = ToolMessageBlock {
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                crate::runtime::identity::MessageId::new("assistant"),
+                crate::message::types::ContentBlockIndex::new(0),
+            ),
             id: MessageId::new("tool-result-1"),
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-1"),
@@ -1816,6 +1820,10 @@ mod tests {
             ),
         ] {
             let message = ToolMessageBlock {
+                occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                    crate::runtime::identity::MessageId::new("assistant"),
+                    crate::message::types::ContentBlockIndex::new(0),
+                ),
                 id: MessageId::new("tool-result-1"),
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-1"),
@@ -1847,6 +1855,10 @@ mod tests {
     #[test]
     fn responses_translation_consumes_the_canonical_failed_result_projection() {
         let message = ToolMessageBlock {
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                crate::runtime::identity::MessageId::new("assistant"),
+                crate::message::types::ContentBlockIndex::new(0),
+            ),
             id: MessageId::new("tool-result-failed"),
             tool_call_id: ToolCallId::new("call-failed"),
             tool_id: ToolId::new("tool-web-search-exa"),

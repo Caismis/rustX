@@ -781,16 +781,36 @@ Provider ToolCallIds are not unique across a Conversation lifetime (the recovery
 owner already scopes evidence by Attempt). Consumers must never join historical
 calls/results or overlay current state by provider call/Tool identity alone.
 
-SQLite schema **39** persists `canonical_tool_calls`, keyed by
-`(assistant_message_id, block_index)`, with call/Tool identity and a nullable unique
-`result_message_id` referencing the canonical ledger. The Assistant commit indexes
-its occurrences. The Tool-result transaction binds through the existing
-Attempt/turn-scoped publication generation; direct canonical/seed writes use the
-native Surface at that exact historical transition. Ambiguous ownership is
-refused. Lineage seeds replay their retained Surface history, including retired
-spans, to establish the same associations. Results are never copied into a second
-lifecycle store. Schema 38 development databases are refused, without backfill or
-fallback JSON scanning.
+`ToolCallId` is an opaque, provider-issued correlation string, not a rustX global
+identity. It remains unchanged on OpenAI Chat tool results, Responses
+`function_call_output.call_id`, and Anthropic `tool_result.tool_use_id`.
+`ToolCallOccurrenceRef { assistant_message_id: MessageId, block_index: ContentBlockIndex }`
+is the canonical rustX identity. Every `ToolMessageBlock` requires `occurrence`
+alongside its own `id`, provider `tool_call_id`, native `tool_id`, and `result`.
+`ToolExecutionId` is a separate runtime-owned UUID for detached execution; it is
+neither provider correlation nor canonical occurrence identity.
+
+The Agent supplies occurrence ownership from its committed Assistant blocks before
+the result commit. Recovery retains AttemptId + ToolCallId execution evidence and
+resolves missing results against exact canonical Assistant blocks; synthesized
+results carry that occurrence before commit. Canonical history alone therefore
+contains every call/result relationship, without source execution events.
+
+SQLite schema **40** retains `canonical_tool_calls` only as a derived index. Its
+primary key is `(assistant_message_id, block_index)`; Assistant/call and result
+MessageId uniqueness constraints prevent duplicate provider IDs within one
+Assistant and duplicate settlement. Tool commits validate the exact indexed
+occurrence, call ID and Tool ID, then insert the canonical result and link its
+MessageId atomically. The index is reproducible from canonical messages. No active
+Surface search discovers result ownership. Schemas 38/39 are refused without
+migration, dual decoding, backfill or fallback JSON scanning.
+
+Clone, fork and tree copies remap canonical MessageIds and each result's
+`occurrence.assistant_message_id`, preserving block positions and provider IDs.
+These IDs remain historical provider correlation values, not new invocations;
+rewriting them has no native ownership purpose. Reuse across Assistant messages is
+valid, including within the retained Surface. Fork cuts and compaction boundaries
+validate exact occurrence relationships and cannot retain only one side of a pair.
 
 Transcript reads perform one occurrence-index range seek per Assistant page row
 and ledger MessageId-index seeks for linked results, even outside that page:

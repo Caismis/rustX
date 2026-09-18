@@ -426,7 +426,12 @@ impl RuntimeClientProjection {
     ) {
         let MessageBlock::Assistant(assistant) = message else {
             if let MessageBlock::Tool(tool) = message {
-                let _ = self.settle_foreground(attempt_id, &tool.tool_call_id, tool.result.clone());
+                let _ = self.settle_foreground(
+                    attempt_id,
+                    &tool.tool_call_id,
+                    Some(&tool.occurrence),
+                    tool.result.clone(),
+                );
             }
             return;
         };
@@ -549,8 +554,12 @@ impl RuntimeClientProjection {
                 // publishes ToolExecutionSettled.
                 let mut events = Vec::with_capacity(2);
                 if let (Some(attempt_id), MessageBlock::Tool(tool)) = (attempt_id.as_ref(), &block)
-                    && self.settle_foreground(attempt_id, &tool.tool_call_id, tool.result.clone())
-                        == ForegroundSettlement::Applied
+                    && self.settle_foreground(
+                        attempt_id,
+                        &tool.tool_call_id,
+                        Some(&tool.occurrence),
+                        tool.result.clone(),
+                    ) == ForegroundSettlement::Applied
                 {
                     events.push(RuntimeClientEvent::ToolExecutionSettled {
                         attempt_id: attempt_id.clone(),
@@ -1224,7 +1233,7 @@ impl RuntimeClientProjection {
                 tool_id,
                 result,
             } => {
-                if self.settle_foreground(attempt_id, tool_call_id, result.clone())
+                if self.settle_foreground(attempt_id, tool_call_id, None, result.clone())
                     == ForegroundSettlement::AlreadySettled
                 {
                     return Vec::new();
@@ -1253,7 +1262,7 @@ impl RuntimeClientProjection {
                     workflow: None,
                     managed_output: None,
                 };
-                if self.settle_foreground(attempt_id, tool_call_id, result.clone())
+                if self.settle_foreground(attempt_id, tool_call_id, None, result.clone())
                     == ForegroundSettlement::AlreadySettled
                 {
                     return Vec::new();
@@ -1554,6 +1563,7 @@ impl RuntimeClientProjection {
         &mut self,
         attempt_id: &AttemptId,
         call_id: &ToolCallId,
+        occurrence: Option<&crate::message::types::ToolCallOccurrenceRef>,
         result: ToolExecutionResult,
     ) -> ForegroundSettlement {
         let Some(attempt) = self
@@ -1567,6 +1577,11 @@ impl RuntimeClientProjection {
         let Some(slot) = foreground_slot_mut(&mut attempt.foreground, call_id) else {
             return ForegroundSettlement::Missing;
         };
+        if occurrence.is_some_and(|owner| {
+            owner.assistant_message_id != slot.message_id || owner.block_index != slot.block_index
+        }) {
+            return ForegroundSettlement::Missing;
+        }
         if matches!(&slot.state, ForegroundToolState::Settled { .. }) {
             return ForegroundSettlement::AlreadySettled;
         }
@@ -4853,6 +4868,10 @@ mod tests {
             ToolCancellationPhase::BeforeStart,
         );
         let committed = MessageBlock::Tool(ToolMessageBlock {
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                crate::runtime::identity::MessageId::new("msg-1"),
+                crate::message::types::ContentBlockIndex::new(0),
+            ),
             id: MessageId::new("message-before-start"),
             tool_call_id: call.id.clone(),
             tool_id: call.tool_id.clone(),
@@ -4995,6 +5014,10 @@ mod tests {
         projection.apply(ConversationObservation::Committed {
             attempt_id: Some(attempt()),
             block: MessageBlock::Tool(ToolMessageBlock {
+                occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                    crate::runtime::identity::MessageId::new("msg-1"),
+                    crate::message::types::ContentBlockIndex::new(0),
+                ),
                 id: MessageId::new("message-during-execution"),
                 tool_call_id: call.id.clone(),
                 tool_id: call.tool_id.clone(),

@@ -209,7 +209,8 @@ id_type! {
 }
 
 id_type! {
-    /// Identifies one tool call issued by the current agent.
+    /// Provider/model-issued opaque correlation string, scoped to a request/publication.
+    /// Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
     ToolCallId
 }
 

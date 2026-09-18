@@ -199,3 +199,9 @@ grouping, current snapshot repair, redaction and deliberate inspector omissions.
 Upload uncertainty includes typed `committed_durability_uncertain` RPC failures,
 as well as response loss. Such drafts remain uncertain and require reconciliation
 through authoritative state/reconnect; no mutation is automatically replayed.
+
+Canonical Tool results require an exact `occurrence` reference (Assistant
+MessageId and block index). The native derived index supplies cross-page results;
+Chat never correlates historical results by provider `ToolCallId`. Lineage copies
+remap the occurrence owner and retain the provider correlation ID. See the
+[Agent protocol contract](../docs/app-server-protocol.md#agent-read-projections-346).

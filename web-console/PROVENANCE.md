@@ -256,7 +256,7 @@ Agent Loop, Cordis/module loader/plugin runtime, durable event/history stores,
 provisional Session identity, archive membership, workspace ownership, desktop
 caption/update systems, file/terminal/dock runtime, configuration mirrors and
 interaction settlement. Native additions are canonical transcript Tool read projections backed by an
-occurrence/result association index (SQLite schema 39), and resolved prospective
+occurrence/result association index (SQLite schema 40), and resolved prospective
 approval policy. Assistant MessageId plus block index preserves exact Tool
 ownership across reused provider call IDs. These are rustX-owned adaptations. No upstream runtime semantics are imported.
 

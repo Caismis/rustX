@@ -53,8 +53,8 @@ client/runtime/workspace authority; the provenance gate enforces this direction.
 - Existing generation, AttachmentTarget/incarnation, replay-gap, late-socket and
   navigation fences remain. Disconnect does not cancel work or settle interactions.
 
-Native changes are two read projections and a canonical Tool occurrence/result
-index in SQLite schema 39, with regenerated v6 TypeScript/schema and protocol
+Native changes are two read projections, required canonical Tool-result occurrence
+ownership, and its derived index in SQLite schema 40, with regenerated v6 TypeScript/schema and protocol
 documentation. Obsolete development stores are refused. No new mutation, Harness
 compatibility protocol, migration, execution controller or browser event journal
 was introduced. The PR #349 review correction is recorded below.
@@ -180,7 +180,7 @@ text/JSON/artifact output and requested diffs provide the supported truthful sub
 No legacy Agent implementation remains. All relevant Linux checks are run; macOS
 platform execution remains the existing CI lane's responsibility.
 
-## PR #349 Tool identity review correction (2026-09-18)
+## PR #349 Tool identity and canonical lineage corrections (2026-09-18)
 
 Preflight fetched the existing PR branch at
 `aa02e87b3990bd4517fe1311b06b77de03e2a33e`; no subsequent commits needed preserving.
@@ -199,24 +199,43 @@ keys execution evidence by owning Attempt plus call ID. That invariant is unchan
 The old transcript JSON lookup and browser foreground match used only call/Tool IDs,
 allowing an old result to settle a new Attempt's reused provider ID.
 
-SQLite schema 39 persists `canonical_tool_calls`, whose primary key is canonical
-`(assistant_message_id, block_index)`. The Assistant commit inserts its occurrences;
-the Tool-result commit atomically links its canonical result MessageId. The existing
-publication owner resolves the exact Assistant through Attempt/turn and call ID.
-Direct canonical commits use their native active Surface; lineage initialization
-uses its retained Surface history at each original transition, including retired
-spans. Ambiguous ownership is refused. Results and lifecycle bodies remain in the
-canonical ledger, not duplicated in the index.
+`ToolCallId` is an opaque, provider-issued correlation string, not a rustX global
+identity. It remains unchanged on OpenAI Chat tool results, Responses
+`function_call_output.call_id`, and Anthropic `tool_result.tool_use_id`.
+`ToolCallOccurrenceRef { assistant_message_id: MessageId, block_index: ContentBlockIndex }`
+is the canonical rustX identity. Every `ToolMessageBlock` requires `occurrence`
+alongside its own `id`, provider `tool_call_id`, native `tool_id`, and `result`.
+`ToolExecutionId` is a separate runtime-owned UUID for detached execution; it is
+neither provider correlation nor canonical occurrence identity.
 
-The primary-key index supplies an Assistant's ordered occurrence range;
-`message_ledger(message_id)` supplies each linked result body. The store also has
-unique Assistant/call and result-message constraints and the native
-`canonical_tool_calls_by_call(call_id, tool_id, assistant_message_id)` write-side
-index. A page uses O(page rows + required associations) indexed seeks rather than
-one full-history JSON scan per Tool. The query-plan regression proves occurrence
-and result-index SEARCH operations with no SCAN or temporary sort. Normal transcript
-reads never materialize the full ledger. Schema 38 is refused without migration,
-backfill or an alternate lookup path.
+The Agent supplies occurrence ownership from its committed Assistant blocks before
+the result commit. Recovery retains AttemptId + ToolCallId execution evidence and
+resolves missing results against exact canonical Assistant blocks; synthesized
+results carry that occurrence before commit. Canonical history alone therefore
+contains every call/result relationship, without source execution events.
+
+SQLite schema **40** retains `canonical_tool_calls` only as a derived index. Its
+primary key is `(assistant_message_id, block_index)`; Assistant/call and result
+MessageId uniqueness constraints prevent duplicate provider IDs within one
+Assistant and duplicate settlement. Tool commits validate the exact indexed
+occurrence, call ID and Tool ID, then insert the canonical result and link its
+MessageId atomically. The index is reproducible from canonical messages. No active
+Surface search discovers result ownership. Schemas 38/39 are refused without
+migration, dual decoding, backfill or fallback JSON scanning.
+
+Clone, fork and tree copies remap canonical MessageIds and each result's
+`occurrence.assistant_message_id`, preserving block positions and provider IDs.
+These IDs remain historical provider correlation values, not new invocations;
+rewriting them has no native ownership purpose. Reuse across Assistant messages is
+valid, including within the retained Surface. Fork cuts and compaction boundaries
+validate exact occurrence relationships and cannot retain only one side of a pair.
+
+The occurrence primary key supplies each Assistant's ordered range and
+`message_ledger(message_id)` supplies linked result bodies. Reads cost
+O(page rows + required associations) indexed lookups; the query-plan regression
+asserts SEARCH operations without SCAN or temporary sorting. The previous
+write-side `canonical_tool_calls_by_call` index has been removed: canonical
+ownership requires no provider-ID search.
 
 `RuntimeClientTranscriptEntry.tool_calls` and live `attempt.foreground` share
 `ForegroundToolExecution { message_id, block_index, call_id, tool_id, name, state }`.
@@ -237,12 +256,12 @@ same native identity and cannot create it from execution events alone.
 | Physical settlement order | The duplicate-ID test runs A→B and B→A settlement, with exact ownership in both orders | Pass |
 | Cross-page resolution | One-row Assistant pages resolve results outside their page; existing two-call reversed-order test also passes | Pass |
 | Reopen | Drop the store and reopen the SQLite file before rereading both occurrences | Pass |
-| Lineage/retired Surface | Seed replays A's retirement, retains A's result and leaves reused B assembled until its own commit | Pass |
+| Lineage | Actual Session clone, early fork, post-B fork and tree preparation preserve exact A/B ownership without compaction; destination reopen and one-row paging retain results | Pass |
 | Web running versus old result | `agent.test.tsx`: one row at B, running, no old result; A retains its old result; B's own canonical settlement wins over lagging live state; an unresolved A cannot borrow B's live state | Pass |
-| Query bounds and obsolete schema | SQLite EXPLAIN index checks and explicit schema-38 refusal without creating/backfilling the new table | Pass |
+| Query bounds and obsolete schema | SQLite EXPLAIN index checks and explicit schema-38/39 refusal without creating/backfilling the new table | Pass |
 | Live identity | Runtime Client reversed-completion test preserves native block positions; TUI requires native call occurrence and preserves it through execution | Pass |
 
-### Validation after correction
+### Validation of the initial correction (`dc5bd636`)
 
 Exact commands below ran in the same worktree; shell log redirection is omitted.
 The affected tests ran first, followed by all current Linux CI lanes. Intermediate
@@ -284,3 +303,85 @@ same Playwright 1.63.0 immutable Noble image recorded above, through
 model/permission behavior, interactions, cancellation and reconnect ownership are
 unchanged. There is no legacy Tool-association or Agent presentation mode. No local
 check is blocked; macOS execution remains CI's responsibility.
+
+## Canonical lineage follow-up from `dc5bd636`
+
+Fetched origin before editing and before publication. Reviewed PR head was exactly
+`dc5bd636f4fb5dc73c7d85aafb60fcd7736e9c38`; there were no subsequent remote commits.
+Main remained `204f7ccc8fbaf4bc1b6842e02e8d0d68f19d5837`. The existing issue worktree
+and PR #349 are retained; no second branch, PR, issue or compatibility path exists.
+
+The previous side table fixed transcript reads but left canonical results without
+an occurrence and Session `remap_seed` rejecting repeated provider IDs. Required
+canonical `ToolMessageBlock.occurrence` now carries that relationship across every
+lineage boundary. Schema 40 deliberately rejects the old schema-39 message shape.
+The final ownership/index model is described above and in the protocol contract.
+
+Additional deterministic evidence:
+
+- `lineage_product_paths_preserve_reused_provider_ids_without_compaction`: actual
+  Session catalog preparation, HistoricalConversationSnapshot, remap and durable
+  initialization, followed by clone/tree publication. Both occurrences remain in
+  source canonical history and Surface. Full clone, early fork, post-B fork and
+  tree retain exactly the selected results; one-row pages after destination DB
+  reopen match each exact canonical occurrence and its distinct old/new result.
+- `canonical_tool_results_validate_exact_ownership_and_roll_back`: missing owner,
+  text/out-of-range block, wrong call/Tool ID, duplicate settlement and reusing one
+  result MessageId for another occurrence all fail without partial ledger/index
+  commits. Per-Assistant duplicate call IDs remain forbidden.
+- Structural regressions distinguish repeated IDs, pending calls and compaction
+  pair boundaries by occurrence. A retired span cannot split either exact pair.
+- `recovery_repairs_exact_occurrences_when_provider_ids_repeat_on_the_surface`:
+  A's settled result cannot satisfy B's missing result; restart repair supplies B's
+  exact owner and preserves A. Recovery execution evidence remains Attempt-scoped.
+- Existing duplicate-ID publication tests retain both physical completion orders,
+  cross-page association and reopen. Web's unchanged 299-test lane retains the
+  running-B/no-old-result/exact-occurrence overlay regression.
+- OpenAI Chat, Responses and Anthropic full-history tests assert original provider
+  correlation and absence of native occurrence fields from wire requests. Generated
+  TypeScript contract tests reject Tool results without the required occurrence.
+
+Final follow-up commands (root cwd unless indicated; output redirection omitted):
+
+| Command | Result |
+| --- | --- |
+| `cargo check --lib` | Pass |
+| `cargo check --all-targets --all-features` | Pass |
+| `cargo test --lib --all-features canonical_tool` | 3 passed |
+| `cargo test --lib --all-features lineage_product_paths` | 1 passed, including final reopen assertions |
+| `cargo test --lib --all-features issue136_` | 20 passed |
+| `cargo test --test durable --all-features` | 130 passed |
+| `cargo build --bins` | Pass |
+| `cargo fmt --all` | Pass |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Pass |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2,844 passed, 1 ignored; bin/example harnesses 0 tests |
+| `cargo test --test contracts --test provider --all-features` | 27 + 166 passed, 5 ignored live-provider tests |
+| `cargo test --lib --all-features -- boundary_suites::` | 226 passed |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | 422 passed (29 + 5 + 23 + 130 + 52 + 53 + 130) |
+| `pnpm --dir protocol/app-server generate` | Pass, normal Rust/schema/TS generator |
+| `pnpm --dir protocol/app-server check` | Pass, zero drift against staged artifacts |
+| `pnpm --dir protocol/app-server typecheck` | Pass |
+| `pnpm --dir web-console typecheck` | Pass |
+| `pnpm --dir web-console test` | 299 passed / 23 files |
+| `pnpm --dir web-console check:provenance` | 100 source records and 100 package notices verified |
+| `pnpm --dir web-console build` | Pass; existing chunk-size advisory |
+| `CONTAINER_ENGINE=podman pnpm test:e2e` (web-console) | 18 passed; zero-diff comparisons |
+| `pnpm --dir tui typecheck` | Pass |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | 788 passed / 94 suites |
+| `pnpm --dir dev typecheck` | Pass |
+| `pnpm --dir dev test` | 30 passed |
+| `uv sync --frozen` (test-support/fake-provider) | Pass |
+| `uv run --frozen pytest` (test-support/fake-provider) | 51 passed |
+| `git diff --check` | Pass |
+
+Initial compilation/lint and stricter-contract fixture failures were corrected:
+orphan fixtures now include canonical Assistant calls, sibling repair fixtures
+supply the correct block position, and audited proposals fail at the new earlier
+occurrence validation boundary. Final runs above have no failures. All checks
+available on this Linux host ran; macOS remains a GitHub Actions lane.
+
+No screenshot was regenerated or changed. The 18-test comparison used the pinned
+Playwright 1.63.0 Noble digest
+`bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7`
+through `scripts/browser-tests.sh`. Presentation/provenance closure is unchanged.

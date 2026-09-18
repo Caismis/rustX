@@ -255,6 +255,10 @@ async fn a_batch_that_never_becomes_canonical_leaves_the_list_untouched() {
 /// One canonical `todo` result carrying `snapshot`.
 fn published_result(id: &str, snapshot: &TodoSnapshot) -> MessageBlock {
     MessageBlock::Tool(rustx::message::types::ToolMessageBlock {
+        occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+            rustx::runtime::identity::MessageId::new("assistant"),
+            rustx::message::types::ContentBlockIndex::new(0),
+        ),
         id: MessageId::new(id),
         tool_call_id: rustx::runtime::identity::ToolCallId::new(format!("call-{id}")),
         tool_id: rustx::runtime::identity::ToolId::new(TODO_TOOL_ID),
@@ -313,7 +317,24 @@ async fn a_fresh_attach_carries_the_list_even_when_the_result_is_off_the_page() 
         }],
         next_id: 2,
     };
-    let mut history = vec![published_result("message-todo", &list)];
+    let mut history = vec![
+        rustx::message::types::MessageBlock::Assistant(
+            rustx::message::types::AssistantMessageBlock {
+                id: rustx::runtime::identity::MessageId::new("assistant"),
+                content: vec![rustx::message::types::AssistantContentBlock::ToolCall(
+                    rustx::tools::types::ToolCall {
+                        id: rustx::runtime::identity::ToolCallId::new("call-message-todo"),
+                        tool_id: rustx::runtime::identity::ToolId::new(
+                            rustx::tools::todo::TODO_TOOL_ID,
+                        ),
+                        name: "todo".into(),
+                        arguments: serde_json::json!({}),
+                    },
+                )],
+            },
+        ),
+        published_result("message-todo", &list),
+    ];
     history
         .extend((0..70).map(|index| assistant(&format!("message-after-{index}"), "kept working")));
 

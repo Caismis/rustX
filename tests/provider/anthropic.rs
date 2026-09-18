@@ -1318,6 +1318,10 @@ async fn tool_results_merge_into_one_user_message() {
     let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
     let make_tool_message = |id: &str| {
         rustx::message::types::MessageBlock::Tool(rustx::message::types::ToolMessageBlock {
+            occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+                rustx::runtime::identity::MessageId::new("assistant"),
+                rustx::message::types::ContentBlockIndex::new(0),
+            ),
             id: rustx::runtime::identity::MessageId::new(format!("msg-{id}")),
             tool_call_id: ToolCallId::new(id),
             tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
@@ -1685,6 +1689,10 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
             },
         )),
         rustx::model::ModelInputMessage::Canonical(MessageBlock::Tool(ToolMessageBlock {
+            occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+                rustx::runtime::identity::MessageId::new("assistant"),
+                rustx::message::types::ContentBlockIndex::new(0),
+            ),
             id: MessageId::new("msg-t1"),
             tool_call_id: ToolCallId::new("call_1"),
             tool_id: rustx::runtime::identity::ToolId::new("tool-list"),

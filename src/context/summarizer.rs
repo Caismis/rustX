@@ -731,6 +731,10 @@ mod tests {
     fn rendered_transcript_bounds_tool_output() {
         let request = SummaryRequest {
             retired: vec![MessageBlock::Tool(ToolMessageBlock {
+                occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                    crate::runtime::identity::MessageId::new("assistant"),
+                    crate::message::types::ContentBlockIndex::new(0),
+                ),
                 id: MessageId::new("tool-1"),
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-bash"),
@@ -781,6 +785,10 @@ mod tests {
             ] {
                 let request = SummaryRequest {
                     retired: vec![MessageBlock::Tool(ToolMessageBlock {
+                        occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                            crate::runtime::identity::MessageId::new("assistant"),
+                            crate::message::types::ContentBlockIndex::new(0),
+                        ),
                         id: MessageId::new("tool-cancelled"),
                         tool_call_id: ToolCallId::new("call-cancelled"),
                         tool_id: ToolId::new("tool-cancelled"),
@@ -823,6 +831,10 @@ mod tests {
         ] {
             let request = SummaryRequest {
                 retired: vec![MessageBlock::Tool(ToolMessageBlock {
+                    occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                        crate::runtime::identity::MessageId::new("assistant"),
+                        crate::message::types::ContentBlockIndex::new(0),
+                    ),
                     id: MessageId::new("tool-unknown"),
                     tool_call_id: ToolCallId::new("call-unknown"),
                     tool_id: ToolId::new("tool-unknown"),

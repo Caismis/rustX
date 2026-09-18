@@ -128,7 +128,7 @@ another Session's root.
 App Server v6 is the one mandatory vocabulary; its WebSocket subprotocol is
 `rustx.app-server.v6`. `session/upload` replaces the old user carrier. `artifact/read`
 remains for Tool-managed artifact presentation only. Session catalog schema 9,
-SQLite schema 39 and native Runtime Client version 38 reject older development
+SQLite schema 40 and native Runtime Client version 38 reject older development
 contracts without migrations or compatibility modes.
 
 JSON/base64 is a bounded current carrier: 1–8 files, at most 256 KiB each and

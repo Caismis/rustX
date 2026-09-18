@@ -7087,7 +7087,7 @@
       ]
     },
     "ToolCallId": {
-      "description": "Identifies one tool call issued by the current agent.",
+      "description": "Provider/model-issued opaque correlation string, scoped to a request/publication.\nNot a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.",
       "type": "string"
     },
     "TraceArtifact": {
@@ -8716,6 +8716,25 @@
         "content"
       ]
     },
+    "ToolCallOccurrenceRef": {
+      "description": "Exact rustX canonical ownership of a Tool call, independent of provider IDs.\nMessage identity is remapped by lineage; the canonical content position stays fixed.",
+      "type": "object",
+      "properties": {
+        "assistant_message_id": {
+          "description": "The canonical Assistant that issued the call.",
+          "$ref": "#/$defs/MessageId"
+        },
+        "block_index": {
+          "description": "The `ToolCall` block within that Assistant's content.",
+          "$ref": "#/$defs/ContentBlockIndex"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "assistant_message_id",
+        "block_index"
+      ]
+    },
     "ToolMessageBlock": {
       "description": "The result of one tool call produced by the current agent.\n\nThis block is the canonical conversation record of an execution outcome\nand composes [`ToolExecutionResult`] as its single source of truth. For\n`send_message`-style platform tools, the result is only the delivery\nacceptance/rejection acknowledgment; a later reply from the recipient\narrives as a `UserMessageBlock` with agent provenance and is never nested\nhere.",
       "type": "object",
@@ -8724,8 +8743,12 @@
           "description": "Durable message identity.",
           "$ref": "#/$defs/MessageId"
         },
+        "occurrence": {
+          "description": "Exact native canonical owner of this result.",
+          "$ref": "#/$defs/ToolCallOccurrenceRef"
+        },
         "tool_call_id": {
-          "description": "Identity of the tool call this block answers.",
+          "description": "Opaque provider correlation, scoped to its request/publication, not global identity.",
           "$ref": "#/$defs/ToolCallId"
         },
         "tool_id": {
@@ -8739,6 +8762,7 @@
       },
       "required": [
         "id",
+        "occurrence",
         "tool_call_id",
         "tool_id",
         "result"

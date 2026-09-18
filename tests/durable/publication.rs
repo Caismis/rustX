@@ -246,12 +246,22 @@ fn assistant_with_tools(message_id: &MessageId, calls: Vec<ToolCall>) -> Message
     })
 }
 
-fn tool_message(message_id: &str, call_id: &ToolCallId) -> MessageBlock {
-    tool_message_with_tool(message_id, call_id, ToolId::new("tool-alpha"))
+fn tool_message(message_id: &str, owner: &MessageId, call_id: &ToolCallId) -> MessageBlock {
+    tool_message_with_tool(message_id, owner, 0, call_id, ToolId::new("tool-alpha"))
 }
 
-fn tool_message_with_tool(message_id: &str, call_id: &ToolCallId, tool_id: ToolId) -> MessageBlock {
+fn tool_message_with_tool(
+    message_id: &str,
+    owner: &MessageId,
+    index: u32,
+    call_id: &ToolCallId,
+    tool_id: ToolId,
+) -> MessageBlock {
     MessageBlock::Tool(ToolMessageBlock {
+        occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+            owner.clone(),
+            rustx::message::types::ContentBlockIndex::new(index),
+        ),
         id: MessageId::new(message_id),
         tool_call_id: call_id.clone(),
         tool_id,
@@ -1167,10 +1177,20 @@ fn canonical_multiple_proposals_execute_and_commit_results() {
             ))
             .expect("ToolExecutionStarted");
     }
-    let first_result =
-        tool_message_with_tool("multiple-result-a", &first, ToolId::new("tool-alpha"));
-    let second_result =
-        tool_message_with_tool("multiple-result-b", &second, ToolId::new("tool-beta"));
+    let first_result = tool_message_with_tool(
+        "multiple-result-a",
+        &start.message_id,
+        0,
+        &first,
+        ToolId::new("tool-alpha"),
+    );
+    let second_result = tool_message_with_tool(
+        "multiple-result-b",
+        &start.message_id,
+        1,
+        &second,
+        ToolId::new("tool-beta"),
+    );
     store
         .append_canonical_batch_with_events(
             &[first_result, second_result],
@@ -1974,7 +1994,7 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
             assert_unchanged(&before_head, before_events, "dependent event");
         }
 
-        let single = tool_message("tool-result-single", &call_id);
+        let single = tool_message("tool-result-single", &start.message_id, &call_id);
         let single_event = envelope(
             "audited-tool-message",
             "1",
@@ -1985,17 +2005,14 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
         );
         let rejected = store.append_canonical_with_event(&single, single_event);
         assert!(
-            matches!(
-                rejected,
-                Err(ConversationStoreError::PublicationViolation(_))
-            ),
+            matches!(rejected, Err(ConversationStoreError::InvalidReference(_))),
             "audited proposal accepted a single ToolResult: {rejected:?}"
         );
         assert_unchanged(&before_head, before_events, "single ToolResult");
 
         let batch = [
-            tool_message("tool-result-batch-a", &call_id),
-            tool_message("tool-result-batch-b", &call_id),
+            tool_message("tool-result-batch-a", &start.message_id, &call_id),
+            tool_message("tool-result-batch-b", &start.message_id, &call_id),
         ];
         let batch_events = [
             envelope(
@@ -2017,10 +2034,7 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
         ];
         let rejected = store.append_canonical_batch_with_events(&batch, &batch_events);
         assert!(
-            matches!(
-                rejected,
-                Err(ConversationStoreError::PublicationViolation(_))
-            ),
+            matches!(rejected, Err(ConversationStoreError::InvalidReference(_))),
             "audited proposal accepted a ToolResult batch: {rejected:?}"
         );
         assert_unchanged(&before_head, before_events, "ToolResult batch");
@@ -2153,7 +2167,7 @@ fn canonical_proposal_can_execute_and_commit_its_tool_result() {
             },
         ))
         .expect("tool outcome");
-    let result = tool_message("canonical-tool-result", &call_id);
+    let result = tool_message("canonical-tool-result", &start.message_id, &call_id);
     store
         .append_canonical_with_event(
             &result,

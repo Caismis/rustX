@@ -26,7 +26,7 @@ const withQueue = (rows: ReturnType<typeof inbound>[], base = snapshot()): Runti
 /** Historical execution facts only: a `todo` call and its committed result. */
 const withTodoHistory = (base = snapshot()): RuntimeClientSnapshot => {
   const call = { role: 'assistant' as const, id: 'history-call', content: [{ type: 'tool_call' as const, id: 'call-todo', tool_id: 'tool-todo', name: 'todo', arguments: { action: 'create', subject: 'Historical task' } }] };
-  const result = { role: 'tool' as const, id: 'history-result', tool_call_id: 'call-todo', tool_id: 'tool-todo', result: { status: { type: 'success' as const }, duration_ms: 1 } };
+  const result = { role: 'tool' as const, occurrence: { assistant_message_id: 'history-call', block_index: 0 }, id: 'history-result', tool_call_id: 'call-todo', tool_id: 'tool-todo', result: { status: { type: 'success' as const }, duration_ms: 1 } };
   return { ...base, transcript: { entries: [call, result].map((message, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message } })) } };
 };
 

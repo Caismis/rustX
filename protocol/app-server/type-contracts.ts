@@ -18,3 +18,17 @@ const revision: RuntimeClientSnapshot['capabilities']['revision'] = '90071992547
 const numericRevision: RuntimeClientSnapshot['capabilities']['revision'] = 0;
 void revision;
 void numericRevision;
+
+// Tool results carry native ownership independently of provider correlation.
+const tool = {
+  role: 'tool', id: 'result-B',
+  occurrence: {assistant_message_id: 'assistant-B', block_index: 2},
+  tool_call_id: 'call_1', tool_id: 'tool-bash',
+  result: {status: {type: 'success'}, content: [], duration_ms: 0},
+} satisfies MessageBlock;
+read(tool);
+const {occurrence: nativeOwner, ...missingOwner} = tool;
+// @ts-expect-error Provider call IDs alone cannot identify a canonical result owner.
+const invalidTool: MessageBlock = missingOwner;
+void nativeOwner;
+void invalidTool;

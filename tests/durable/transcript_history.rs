@@ -121,6 +121,10 @@ fn assistant_with_call(message_id: &str, call: ToolCall) -> MessageBlock {
 
 fn tool_result(message_id: &str, call_id: &str, body: &str) -> MessageBlock {
     MessageBlock::Tool(ToolMessageBlock {
+        occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+            rustx::runtime::identity::MessageId::new("assistant-read"),
+            rustx::message::types::ContentBlockIndex::new(0),
+        ),
         id: MessageId::new(message_id),
         tool_call_id: ToolCallId::new(call_id),
         tool_id: ToolId::new("tool-read"),

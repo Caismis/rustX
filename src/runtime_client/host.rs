@@ -3360,6 +3360,10 @@ mod tests {
         });
         let tool_result = durable_tool_result();
         let tool = MessageBlock::Tool(ToolMessageBlock {
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                crate::runtime::identity::MessageId::new("child-assistant"),
+                crate::message::types::ContentBlockIndex::new(1),
+            ),
             id: MessageId::new("child-tool-result"),
             tool_call_id: call.id.clone(),
             tool_id: call.tool_id.clone(),

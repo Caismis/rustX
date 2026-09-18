@@ -1107,7 +1107,8 @@ export type ModelErrorKind =
   | 'generation_degenerated'
   | 'generation_budget_exceeded';
 /**
- * Identifies one tool call issued by the current agent.
+ * Provider/model-issued opaque correlation string, scoped to a request/publication.
+ * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
  */
 export type ToolCallId = string;
 /**
@@ -1440,7 +1441,8 @@ export type PublicationAuditBlock =
        */
       block_index: number;
       /**
-       * Identifies one tool call issued by the current agent.
+       * Provider/model-issued opaque correlation string, scoped to a request/publication.
+       * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
        */
       call_id: string;
       /**
@@ -1673,7 +1675,8 @@ export type InFlightBlock =
        */
       block_index: number;
       /**
-       * Identifies one tool call issued by the current agent.
+       * Provider/model-issued opaque correlation string, scoped to a request/publication.
+       * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
        */
       call_id: string;
       /**
@@ -2740,7 +2743,8 @@ export type RuntimeClientEvent =
        */
       block_index: number;
       /**
-       * Identifies one tool call issued by the current agent.
+       * Provider/model-issued opaque correlation string, scoped to a request/publication.
+       * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
        */
       call_id: string;
       /**
@@ -2783,7 +2787,8 @@ export type RuntimeClientEvent =
        */
       attempt_id: string;
       /**
-       * Identifies one tool call issued by the current agent.
+       * Provider/model-issued opaque correlation string, scoped to a request/publication.
+       * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
        */
       tool_call_id: string;
       /**
@@ -2798,7 +2803,8 @@ export type RuntimeClientEvent =
        */
       attempt_id: string;
       /**
-       * Identifies one tool call issued by the current agent.
+       * Provider/model-issued opaque correlation string, scoped to a request/publication.
+       * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
        */
       tool_call_id: string;
       /**
@@ -2819,7 +2825,8 @@ export type RuntimeClientEvent =
        */
       attempt_id: string;
       /**
-       * Identifies one tool call issued by the current agent.
+       * Provider/model-issued opaque correlation string, scoped to a request/publication.
+       * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
        */
       tool_call_id: string;
       /**
@@ -4639,7 +4646,8 @@ export interface ForegroundToolExecution {
    */
   block_index: number;
   /**
-   * Identifies one tool call issued by the current agent.
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
    */
   call_id: string;
   /**
@@ -5045,7 +5053,8 @@ export interface AnthropicContinuation {
  */
 export interface ToolCall {
   /**
-   * Identifies one tool call issued by the current agent.
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
    */
   id: string;
   /**
@@ -5088,8 +5097,10 @@ export interface ToolMessageBlock {
    * Identifies a committed canonical message block.
    */
   id: string;
+  occurrence: ToolCallOccurrenceRef;
   /**
-   * Identifies one tool call issued by the current agent.
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
    */
   tool_call_id: string;
   /**
@@ -5097,6 +5108,19 @@ export interface ToolMessageBlock {
    */
   tool_id: string;
   result: ToolExecutionResult1;
+}
+/**
+ * Exact native canonical owner of this result.
+ */
+export interface ToolCallOccurrenceRef {
+  /**
+   * Identifies a committed canonical message block.
+   */
+  assistant_message_id: string;
+  /**
+   * The `ToolCall` block within that Assistant's content.
+   */
+  block_index: number;
 }
 /**
  * The normalized execution result.
@@ -5710,7 +5734,8 @@ export interface SubagentObservation {
       }
     | {
         /**
-         * Identifies one tool call issued by the current agent.
+         * Provider/model-issued opaque correlation string, scoped to a request/publication.
+         * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
          */
         tool_call_id: string;
         /**
@@ -8202,7 +8227,8 @@ export interface RuntimeClientContextView2 {
  */
 export interface ToolCallStart {
   /**
-   * Identifies one tool call issued by the current agent.
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
    */
   id: string;
   /**
@@ -8219,7 +8245,8 @@ export interface ToolCallStart {
  */
 export interface ToolCall1 {
   /**
-   * Identifies one tool call issued by the current agent.
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
    */
   id: string;
   /**
