@@ -700,10 +700,10 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let connection = AppServerConnection::new(f.host.clone());
         let before = connection.handle_json(r#"{"jsonrpc":"2.0","id":0,"method":"server/info","params":{}}"#).await.unwrap();
         assert!(matches!(before, Response::Failure(Failure { error: RpcError { data: Some(ErrorData::NotInitialized), .. }, .. })));
-        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":2,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
+        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":6,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 6, .. })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 7, requested: 6 })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),

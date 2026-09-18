@@ -500,7 +500,7 @@ mod tests {
     fn committed_rust_artifacts_are_current() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server");
         assert_eq!(
-            std::fs::read_to_string(root.join("v6.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v7.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

@@ -3,7 +3,7 @@ import type {
   PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v6';
+} from '../../../protocol/app-server/v7';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from './uploads';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, type TranscriptCache } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
@@ -69,7 +69,7 @@ export interface ClientView {
   capabilities?: ServerCapabilities;
   error?: string;
   sessions: readonly SessionSummary[];
-  sessionResidencies?: Record<string, import('../../../protocol/app-server/v6').ResidencyState>;
+  sessionResidencies?: Record<string, import('../../../protocol/app-server/v7').ResidencyState>;
   nextOffset?: number | null;
   views: Readonly<Record<string, SessionView>>;
   uncertain: readonly UncertainOperation[];
@@ -142,6 +142,7 @@ export class AppServerClient {
   private summaryObservedEpoch = new Map<string, number>();
   private summaryInFlight = new Map<string, { generation: number; work: Promise<void> }>();
   private summaryReadSequence = 0;
+  // Minimum acceptable metadata sequence: last observation or a committed rename read floor.
   private summaryReads = new Map<string, number>();
   private state: ClientView = {
     connection: 'disconnected', generation: 0, sessions: [], views: {}, uncertain: [], interactionOperations: {},
@@ -185,7 +186,7 @@ export class AppServerClient {
     const generation = this.state.generation;
     this.publish({ endpoint: url.href, connection: reconnect ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v6', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v7', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -203,12 +204,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 6, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 7, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 6 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v6 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (hello.protocol_version !== 7 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v7 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
@@ -427,6 +428,20 @@ export class AppServerClient {
     this.summaryInFlight.set(id, read);
     void work.finally(() => { if (this.summaryInFlight.get(id) === read) this.summaryInFlight.delete(id); }).catch(() => {});
     return work;
+  }
+  /** A committed rename requires a read started after its acknowledgement.
+   * Ordinary observers still coalesce; the old read cannot publish past this floor. */
+  async renameSession(id: string, name: string): Promise<void> {
+    const generation = this.state.generation;
+    await this.request({ method: 'session/name', params: { session_id: id, name } }, 'session');
+    if (!this.current(generation)) return;
+    await this.readFreshSessionSummary(id);
+  }
+  private readFreshSessionSummary(id: string): Promise<void> {
+    this.summaryReads.set(id, ++this.summaryReadSequence);
+    this.summaryObservedEpoch.delete(id);
+    this.summaryInFlight.delete(id);
+    return this.readSessionSummary(id);
   }
   async deleteSession(id: string, expectedRevision: string) {
     const generation = this.state.generation;
@@ -742,7 +757,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v6').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v7').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);

@@ -5,7 +5,7 @@ import { sessionDisplayTitle } from '../src/bindings/session-title';
 import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
-import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v6';
+import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v7';
 
 let server: Server;
 beforeEach(() => { server = new Server(); localStorage.clear(); });
@@ -250,6 +250,50 @@ it('manual naming immediately wins and survives later messages and catalog pagin
   await act(async () => server.client.listSessions(0, 'Session B'));
   expect(screen.getByLabelText('Session title').textContent).toBe('My explicit name');
   expect(methods().filter(method => method === 'session/name')).toHaveLength(1);
+});
+
+it.each([false, true])('rename establishes a post-commit exact read independently of list repair (old response last: %s)', async oldLast => {
+  server.summaries.set('A', { name: null, preview: 'Old preview' });
+  await mount(['A']);
+  server.held.add('session/summary'); server.held.add('session/list');
+  const oldRead = server.client.readSessionSummary('A');
+  const oldRequest = await server.waitFor('session/summary', 2);
+  server.commit(oldRequest);
+  const beforeRename = server.client.getSnapshot().views.A.summary;
+  server.handlers.set('session/name', request => {
+    if (request.method !== 'session/name') throw new Error('wrong method');
+    server.summaries.set('A', { name: request.params.name, preview: 'Old preview' });
+    return { type: 'session', session: { id: 'A', name: request.params.name, active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } };
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Session actions for Old preview' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New name' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save name' })));
+  const freshRequest = await server.waitFor('session/summary', 3);
+  expect(freshRequest.params).toEqual({ session_id: 'A' });
+  expect(server.summaries.get('A')?.name).toBe('New name');
+  // Fresh repair is transmitted while the pre-rename request remains held.
+  const shared = server.client.readSessionSummary('A');
+  expect(server.client.readSessionSummary('A')).toBe(shared);
+  const beforeLists = methods().filter(method => method === 'session/list').length;
+  if (!oldLast) {
+    await act(async () => { server.reply(oldRequest); await oldRead; });
+    expect(screen.getByLabelText('Session title').textContent).toBe('Old preview');
+    expect(server.client.getSnapshot().views.A.summary).toBe(beforeRename);
+  }
+  await act(async () => { server.reply(freshRequest); await shared; });
+  const followupList = await server.waitFor('session/list', beforeLists + 1);
+  // List remains held: exact summary alone updates all product labels.
+  expect(server.client.getSnapshot().views.A.summary?.name).toBe('New name');
+  expect(screen.getByLabelText('Session title').textContent).toBe('New name');
+  expect(row('A').getAttribute('aria-label')).toBe('Open New name');
+  expect(screen.getByRole('button', { name: 'Session actions for New name' })).toBeTruthy();
+  if (oldLast) await act(async () => { server.reply(oldRequest); await oldRead; });
+  expect(server.client.getSnapshot().views.A.summary?.name).toBe('New name');
+  expect(screen.getByLabelText('Session title').textContent).toBe('New name');
+  expect(methods().filter(method => method === 'session/summary')).toHaveLength(3);
+  expect(methods().filter(method => method === 'session/name')).toHaveLength(1);
+  await act(async () => server.reply(followupList));
 });
 
 it('a delayed older Sidebar page cannot overwrite a newer committed native preview', async () => {

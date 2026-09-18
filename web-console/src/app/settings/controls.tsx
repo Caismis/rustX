@@ -1,5 +1,5 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { SourceMutation } from '../../../../protocol/app-server/v6';
+import type { SourceMutation } from '../../../../protocol/app-server/v7';
 import { Switch } from '../../presentation/primitives/Switch';
 import { Button } from '../../presentation/primitives/Button';
 import { DraftContext } from './drafts';

@@ -1,8 +1,8 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol 6. It does not parse
+The TUI is a projection/control client of App Server protocol 7. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v6.ts`](../protocol/app-server/v6.ts).
+[`protocol/app-server/v7.ts`](../protocol/app-server/v7.ts).
 
 `/settings` renders native effective/source/provenance/generation facts. `/reload`
 calls the single `configuration/reload` operation and reports success, failure or

@@ -415,7 +415,7 @@ preserves the draft. Reconnect reads current state without replaying Save or Rel
 
 TUI `/settings` presents native effective/source/generation facts, `/reload` uses
 the same native operation, and `/model` changes Session intent. Neither client
-parses or merges configuration. App Server protocol 6 is generated from Rust; the
+parses or merges configuration. App Server protocol 7 is generated from Rust; the
 previous development protocol is rejected rather than dual-decoded.
 
 CFG3 intentionally replaces the previous development configuration and durable

@@ -165,7 +165,7 @@ pre-commit failures use a bounded protocol error without private storage paths.
 | `not_found` | No live Session or pending record, including completed deletion |
 
 The TUI consumes these deletion DTOs from the generated App Server
-`protocol/app-server/v6.ts` contract. There is no separate deletion SDK. Shared Rust/TypeScript
+`protocol/app-server/v7.ts` contract. There is no separate deletion SDK. Shared Rust/TypeScript
 fixtures validate the wire contract, not deletion persistence. Interactive deletion
 UX (#257) and retention/lifecycle policy remain outside this change.
 

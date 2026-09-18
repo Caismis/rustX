@@ -234,7 +234,7 @@ and reconnect diagnostics remain visible.
 
 ## Uploads
 
-User uploads are Session-owned workspace uploads on App Server **v6**. The stack
+User uploads are Session-owned workspace uploads on App Server **v7**. The stack
 wraps `app/agent/AgentComposer` and the pinned Harness card/footer seats: a draft transfers
 through `session/upload` first, and either delivery action carries the resulting
 typed `UploadReceipt`s as ordinary content.

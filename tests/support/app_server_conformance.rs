@@ -72,7 +72,7 @@ pub async fn representative_scenario(
         .request(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: mismatch_id.clone(),
-            call: initialize(APP_SERVER_PROTOCOL_VERSION + 1),
+            call: initialize(6),
         })
         .await
     else {
@@ -83,7 +83,7 @@ pub async fn representative_scenario(
         failure.error.data,
         Some(ErrorData::UnsupportedVersion {
             supported: APP_SERVER_PROTOCOL_VERSION,
-            requested: APP_SERVER_PROTOCOL_VERSION + 1,
+            requested: 6,
         })
     );
     assert!(matches!(

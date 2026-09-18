@@ -46,7 +46,10 @@ not a second catalog. It may retain its last value across transport loss for sta
 presentation, but each new open-view attachment epoch must establish authoritative
 summary freshness through an exact read. The first canonical-user preview check is
 separate: only a successful read begun after that history exists completes it,
-including preview=None. Read-order and connection fences reject stale observations.
+including preview=None. A successful rename establishes a metadata read floor and
+starts a new exact observation after its acknowledgement; pre-rename reads cannot
+publish or satisfy that repair. Ordinary reads still coalesce. Read-order and
+connection fences reject stale observations.
 See [the complete classification](PRODUCT-SURFACE.md).
 
 `bindings/session-product.ts` is a pure projection, shared by Session status and

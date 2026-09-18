@@ -46,7 +46,7 @@
       "treatment": "rewritten selectors with Harness Modal and typed rustX dispatch",
       "upstream_sha256": "c6a89ae2771f36ff6da26886fbc6719369f41f9eae004e52561644c788df153f",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v6",
+        "../../../../protocol/app-server/v7",
         "../../bindings/projection",
         "../../client/app-server",
         "../../presentation/primitives/Button",
@@ -64,7 +64,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "9c5e7c770d538a3c035154e3ad2b7b850b93a3defbd0aa4c24ec52a51ea18fda"
+      "local_sha256": "c3fb8e6f185920c2c3c7b25b96852bec414d4bd55a1768237dd5e35cc6d30823"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -818,7 +818,7 @@
       "upstream_sha256": "8761d0bbd471440ce331db1e4537e42cc630969244290f8b66cab090457ac70f",
       "destination": "web-console/src/app/Trajectory.tsx",
       "retained_dependencies": [
-        "../../../protocol/app-server/v6",
+        "../../../protocol/app-server/v7",
         "../client/trace",
         "../presentation/primitives/Button",
         "../presentation/primitives/Input",
@@ -855,7 +855,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "d26b9e31f3bb6932093bad8b17e66de556c983dbe34b861b663ead825949c452"
+      "local_sha256": "5120d91430498e36c6d17460626675d00d5007ca41f2ad66b3eef5b585493f7f"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -945,7 +945,7 @@
       "treatment": "adapted: collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds a composed-empty strip, blocked_by and active_form",
       "upstream_sha256": "1d1e9d87c12b505fc8bc2bdf9973fc349fb80b9385419e0247420ecdb1fc2f4a",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v6",
+        "../../../../protocol/app-server/v7",
         "../../bindings/composer-context",
         "../../presentation/primitives/icons",
         "./TodoDock.module.css",
@@ -959,7 +959,7 @@
         "Harness locale runtime"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "a24d2a2d8167dbda3fc8736c44627cb545e5ae2dd66b932c85e1a5b6117d74ff"
+      "local_sha256": "b5a43c4ac4e26c8127225fa13adea87b33873623cf6331bf181c4218818431c8"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -981,7 +981,7 @@
       "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds the rustX durable GoalPhase as the sole lifecycle authority (one Pause-or-Resume control, no activation flag), adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs",
       "upstream_sha256": "fcd9ec77f6e40cf4220a883f276d59be5641768a606ff128a5aa209222a637fa",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v6",
+        "../../../../protocol/app-server/v7",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -998,7 +998,7 @@
         "clear/tombstone control"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "bbee28dc09fc8e449589649a408cfea4e252af14ad20b7b0a93ff2a3124464d1"
+      "local_sha256": "b28d9b96cc8a48abf9d0b2a396a9eae0b49b6b53a89b1f9bcd0e89267fddecd6"
     },
     {
       "upstream": "packages/client/ui-goal/src/client/GoalBar.module.css",
@@ -1020,7 +1020,7 @@
       "treatment": "adapted: collapsible queue, inline text editing, remove, busy controls and preserved drafts; native exact pending CAS and authoritative readback; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Use latest version conflict copy; exact expected revision remains native. Native authority unchanged.",
       "upstream_sha256": "682d5bb4aa11478acbac0f2e21ed1e129baddd18cbff732c64ae5bdb95fb738e",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v6",
+        "../../../../protocol/app-server/v7",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -1035,7 +1035,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "8e58bb60bb469f497e1cf38f213295f468a94d87ce86ae5453a58af1c52ca8ba"
+      "local_sha256": "4799e33860e09ba046bea1b0b03a7d724478d547441df43f3a5316b8e8761473"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
@@ -1096,7 +1096,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "6fbb44a712ad3836b8bdc841e1ca23958524c0a43d48812acda11994dab57aa6"
+      "local_sha256": "72744ce28e0e3342beed195098b588f6970487410e4e5439e6249d9da3354f74"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -1104,7 +1104,7 @@
       "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v6",
+        "../../../../protocol/app-server/v7",
         "../../client/app-server",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/tabs",
@@ -1136,7 +1136,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "a81a59043c6f45843e31374bf038ce951dc1076ec7dbd60bd2dcdf9076644e05"
+      "local_sha256": "e584c8c19908de02480920e0023b4182cb9658178b547bd1a7a149f5acfd7c57"
     },
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
@@ -1144,7 +1144,7 @@
       "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery. Dedicated Provider/Model drill-down with explicit return to the native catalog; unsaved units retained by app draft owner.",
       "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v6",
+        "../../../../protocol/app-server/v7",
         "../../presentation/primitives/Button",
         "../../presentation/settings/SettingsContent",
         "../../presentation/settings/SettingsContent.module.css",
@@ -1166,7 +1166,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "1ce9ef854eb4f5c27d38fac28065b24ec68fbeda944ca513a5bccef6f868ea18"
+      "local_sha256": "81320f7452237f6c46da5bbca5bad3b579b939f89886120c98dc400ef1529b45"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -1174,7 +1174,7 @@
       "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS. infer native MCP transport for display without rewriting authored intent",
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v6",
+        "../../../../protocol/app-server/v7",
         "../../bindings/mcp",
         "../../presentation/primitives/Button",
         "../../presentation/settings/SettingsContent",
@@ -1221,7 +1221,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3344bfce95a65ed9983f0f6ce49dcb7f7aa742f1e89fd2d494475cf8f7891e72"
+      "local_sha256": "ac43bb052a66365f8cc3b8a4ac6e3b467e48b0e0022ffcf80d9f0313272ffacc"
     },
     {
       "destination": "web-console/src/presentation/primitives/HoverCard.tsx",
@@ -1678,7 +1678,7 @@
       "upstream_sha256": "dda4354ed278a20a2eda4e18fcde289d9c9ba21d2c039bc400f84237cd7ac2a1",
       "classification": "A",
       "treatment": "Harness card width, 22px radius, elevation, 36px floor and toolbar rhythm retained. Native textarea alone owns measured growth and capped overflow; subdued file accessory and bounded responsive control groups.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1695,7 +1695,7 @@
       "upstream_sha256": "03880a4702978e8403a882f9036205ab7ff791f80cc06e47fdafa4fef6971c67",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1712,7 +1712,7 @@
       "upstream_sha256": "998c35f8b412380fb64819d8036f136dd0661d6fbc31692656c7ce0514fb9308",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1729,7 +1729,7 @@
       "upstream_sha256": "f2696301b4ec912ecdf1df83229a87140566a1c6dabca8bac55259df2c29a695",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1746,7 +1746,7 @@
       "upstream_sha256": "de90c417934f43f7c10386ee9e60f551eedc85f7462ee72bf876a138cd379e19",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1763,7 +1763,7 @@
       "upstream_sha256": "84b5078051034c194b743b4fd3b607acaa847fff3b1adad717342ff40acac439",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1780,7 +1780,7 @@
       "upstream_sha256": "9ff57a944f9c7364c7ee2197d5727a612e931c37994d9baf3420337ff839d5d1",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1797,7 +1797,7 @@
       "upstream_sha256": "d2baf40fcc375fa4189322bf1b91b84e2d3335704a06fe0d294a9803817bdd64",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1814,7 +1814,7 @@
       "upstream_sha256": "2f1f5a9b40b7df4645f9cd2f858806333400cf1ac8c0a8d45029b0bb6799b50c",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1831,7 +1831,7 @@
       "upstream_sha256": "0c3385a4ffa34b2a534b70a326193f441d5f8ffb0de471bcdf145844dfbe94fa",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1848,7 +1848,7 @@
       "upstream_sha256": "dc6cea246e452bfef40b1085c5b624b742c509bf54c8ea5fd15c2c8ca52be328",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1865,7 +1865,7 @@
       "upstream_sha256": "181844e9c1809607458dfdfbbffa50cbc16357d0696ae78a8ee13f86b5fd6354",
       "classification": "B",
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "./Message.module.css",
         "react"
@@ -1885,7 +1885,7 @@
       "upstream_sha256": "3be7189ac85b1d1484dcce1d1952e2186aa521f1b0428c384cf659cb51839f76",
       "classification": "B",
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../markdown/MarkdownText",
         "../primitives/DisclosureRow",
@@ -1908,7 +1908,7 @@
       "upstream_sha256": "df1dbc9771459eb5160a42d28fd284a54ff66b306562a2a3528bd717e42454f4",
       "classification": "B",
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. retain native Tool diagnostic identity independently of Goal display labels",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../primitives/DisclosureRow",
         "../primitives/StateDot",
@@ -1932,7 +1932,7 @@
       "upstream_sha256": "e108d9a196672dc99613d5789569c6bd3f49ef689aa1e33817bc6cecfa03e6aa",
       "classification": "B",
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../primitives/Button",
         "./Approval.module.css",
@@ -1953,7 +1953,7 @@
       "upstream_sha256": "4726d9ddcffd63295b0635fac728512308d56ef412ed9f6b037b3eddc552d1c0",
       "classification": "B",
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../primitives/Menu",
         "../primitives/icons",
@@ -1975,7 +1975,7 @@
       "upstream_sha256": "d426510c88d64789c0f126d2e2649e7ddb7a2f46f7f8832cc69fd5e563045958",
       "classification": "B",
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. Optional effective-policy tooltip keeps ambient caption out of the composer toolbar; actionable pending Reload remains in the native binding.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../primitives/Menu",
         "../primitives/icons",
@@ -1997,9 +1997,9 @@
       "upstream_sha256": "6e627be2ae8990290e94fc9d35d36802695c457fd98a8655fd73e52c4ce1d2db",
       "classification": "B",
       "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. No local delivery preference, runtime or slot/store authority.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v6",
+        "../../../../protocol/app-server/v7",
         "../../client/app-server",
         "../../client/uploads",
         "../../presentation/agent/Composer.module.css",
@@ -2019,7 +2019,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "11ee69f375ebe110e4e418925ce4bc2dd4921c00773348ef338e2fd5f004fdf8"
+      "local_sha256": "4b3674900a4c01da29ffba534dbf5ca30a5f26d3f6aec1df6faff56618233a29"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2028,9 +2028,9 @@
       "upstream_sha256": "b4ff56bd18dfef03299dd7dc43f928b7ac2a7d5253ecf65a5fbe64ca9b65ec8e",
       "classification": "B",
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v6",
+        "../../../../protocol/app-server/v7",
         "../../bindings/questionnaire",
         "../../presentation/agent/Question.module.css",
         "../../presentation/primitives/Button",
@@ -2044,7 +2044,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "557f3d35e7cb99f85d8ebf77c25b5713ab3100abf43acb57d66ee41a5864eaf5"
+      "local_sha256": "5a2695408e2b9e733873a8b71f4e1b49b2d260cddf164dae2299179620fee9bf"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2053,7 +2053,7 @@
       "upstream_sha256": "a0765d599b80c91798c00b2fd1a917fb37d99ddcdabd67b5a8f1d90cd9e9fdc1",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",

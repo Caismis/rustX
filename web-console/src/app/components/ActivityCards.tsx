@@ -1,4 +1,4 @@
-import type { RuntimeClientSubagent, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v6';
+import type { RuntimeClientSubagent, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v7';
 
 import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';
 

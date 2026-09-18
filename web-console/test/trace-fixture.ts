@@ -1,4 +1,4 @@
-import type { TraceEntry } from '../../protocol/app-server/v6';
+import type { TraceEntry } from '../../protocol/app-server/v7';
 export const traceEntry = (n: number, overrides: Partial<TraceEntry> = {}): TraceEntry => ({
   id: `trace:${n}`, position: `trace:${n}`, location: { attempt_id: 'attempt-a', step_id: '1' }, kind: 'request', state: 'completed',
   timing: { started_at: '2026-09-15T00:00:00Z', ended_at: '2026-09-15T00:00:01Z', duration_ms: '1000' },
