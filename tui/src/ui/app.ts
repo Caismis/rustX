@@ -312,18 +312,20 @@ export class RustxTuiApp {
     this.#switching = true;
     const oldHost = this.#host;
     const focused = this.#session;
+    const deletion = this.#deletion.state;
+    const deletionTarget = "sessionId" in deletion ? deletion.sessionId : undefined;
     let replacement: AppServerHost | undefined;
     this.#showTransient("info", "reconnecting; unanswered mutations have unknown outcomes and will not be resent…");
     try {
       await oldHost.shutdown();
       replacement = await this.#reconnect();
-      const deletion = this.#deletion.state;
       let focus = focused;
       let observedDeletion: SessionDeleteResult | undefined;
-      if (focused && 'sessionId' in deletion && deletion.sessionId === focused.sessionId) {
-        const observed = await replacement.previewSessionDeletion(focused.sessionId);
+      // A historical deletion target is independent of the currently focused Session.
+      if (deletionTarget !== undefined) {
+        const observed = await replacement.previewSessionDeletion(deletionTarget);
         observedDeletion = observed;
-        if (observed.status === 'deleted' || observed.status === 'not_found' || observed.status === 'committed_cleanup_pending' || observed.status === 'committed_durability_uncertain') {
+        if (focused?.sessionId === deletionTarget && (observed.status === 'deleted' || observed.status === 'not_found' || observed.status === 'committed_cleanup_pending' || observed.status === 'committed_durability_uncertain')) {
           focus = undefined;
           this.#showTransient('info', `Deletion observation: ${observed.status.replaceAll('_', ' ')}. No deletion was replayed.`);
         }

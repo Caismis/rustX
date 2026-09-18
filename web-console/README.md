@@ -100,6 +100,20 @@ requests provider/MCP configuration.
   before TypeScript compilation so canonical message fields are not lost; it does
   not alter the Rust schema or public wire contract.
 
+Deletion recovery obligations are keyed by the deletion target SessionId, independently
+of focus/navigation. Server-confirmed `committed_cleanup_pending` and
+`committed_durability_uncertain` retain a **Retry deletion recovery** notice even
+when that Session is absent from the list. Its explicit action calls
+`session/recoverDeletion` through the client. Conversation controls stay fenced;
+Deleted/NotFound remove the obligation and refresh the list, continued committed
+outcomes retain the action, and a live observation clears committed authority.
+Users can settle cleanup or durability without restarting the App Server.
+
+Unknown transport outcomes grant no recovery authority. After a lost delete or
+recovery response, reconnect observes `session/deletePreview` for the target before
+reattachment; only a fresh committed observation restores recovery. Neither mutation
+is replayed. A recovery notice remains available when another Session is focused.
+
 Each Session has its own target tuple (SessionId, ConversationId, runtime
 incarnation, attachment ID), cursor and snapshot. A/B notifications cannot share a
 projection. Successful attach installs the native authoritative snapshot and atomic

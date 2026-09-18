@@ -91,7 +91,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
   const [sending, setSending] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<RuntimeClientSessionDeletePreview>();
 
-  const view = selected ? state.views[selected] : undefined;
+  const selectedView = selected ? state.views[selected] : undefined;
+  const view = selectedView?.deleting && !selectedView.target ? undefined : selectedView;
   const product = deriveSessionProductState(state, view);
   const artifacts = useMemo(() => selected && view?.target ? new ArtifactResources(client, selected) : undefined, [client, selected, view?.target, state.generation]);
   useEffect(() => () => artifacts?.dispose(), [artifacts]);
@@ -225,6 +226,13 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
       {settingsOpen && <Settings key={view?.id} onConnection={() => setConnectionOpen(true)} client={client} sessionId={view?.id} onClose={() => setSettingsOpen(false)} theme={theme} setTheme={setTheme} />}
     </>}>
     {!view && <header className="console-header"><strong>rustX</strong><Button aria-label="Toggle Inspector" onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></header>}
+    {Object.values(state.views).filter(item => item.deletionRecovery).map(item => <section key={item.id} className="notice" aria-label={`Deletion recovery for ${sessionDisplayTitle(item.summary)}`}>
+      <p>{sessionDisplayTitle(item.summary)}: {item.deletionRecovery === 'committed_cleanup_pending' ? 'Session removed. Cleanup is still pending.' : 'Deletion durability needs verification.'}</p>
+      <Button disabled={!connected || item.recoveringDeletion} onClick={() => run(async () => {
+        const result = await client.recoverSessionDeletion(item.id);
+        if (result) setError(sessionDeletionNotice(result));
+      })}>{item.recoveringDeletion ? 'Recovering deletion…' : 'Retry deletion recovery'}</Button>
+    </section>)}
     {error && <div className="notice error" role="alert">{error}<Button size="sm" onClick={() => setError('')}>Dismiss notice</Button></div>}
     {state.uncertain.some(item => !item.sessionId) && <div className="notice" role="status">A global operation needs verification. Inspect Global / other Session diagnostics and check the affected work before trying again.</div>}
     {preview && <section className="delete-preview" aria-label="Confirm Session deletion"><h2>Delete {sessionDisplayTitle(state.sessions.find(session => session.id === preview.session_id) ?? state.views[preview.session_id]?.summary)}?</h2>

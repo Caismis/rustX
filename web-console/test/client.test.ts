@@ -311,6 +311,40 @@ it.each(['not_found', 'committed_cleanup_pending', 'committed_durability_uncerta
   expect(s.requests.filter(row => row.request.method === 'session/delete')).toHaveLength(1);
   expect(s.requests.slice(before).filter(row => row.request.method === 'session/deletePreview')).toHaveLength(1);
   expect(s.requests.slice(before).filter(row => row.request.method === 'session/attach')).toHaveLength(status === 'preview' ? 1 : 0);
-  if (status === 'not_found' || status === 'committed_cleanup_pending') expect(s.client.getSnapshot().views.A).toBeUndefined();
+  if (status === 'not_found') expect(s.client.getSnapshot().views.A).toBeUndefined();
+  if (status === 'committed_cleanup_pending' || status === 'committed_durability_uncertain') expect(s.client.getSnapshot().views.A.deletionRecovery).toBe(status);
   if (status === 'committed_durability_uncertain') expect(s.client.getSnapshot().views.A.deleting).toBe(true);
+});
+
+
+it('lost recovery reply removes recovery authority until fresh committed observation and never replays', async () => {
+  const s = server(); await s.attached('A');
+  s.handlers.set('session/delete', () => ({ type: 'deletion', result: { status: 'committed_durability_uncertain', session_id: 'A' } }));
+  await s.client.deleteSession('A', 'confirmed');
+  s.held.add('session/recoverDeletion');
+  const pending = s.client.recoverSessionDeletion('A');
+  const lost = expect(pending).rejects.toBeInstanceOf(OutcomeUncertain);
+  await s.waitFor('session/recoverDeletion', 1);
+  s.socket.close(); await lost;
+  expect(s.client.getSnapshot().views.A.deletionRecovery).toBeUndefined();
+  await expect(s.client.recoverSessionDeletion('A')).rejects.toThrow('Observe committed');
+  s.handlers.set('session/deletePreview', () => ({ type: 'deletion', result: { status: 'committed_cleanup_pending', session_id: 'A' } }));
+  await s.connect();
+  expect(s.client.getSnapshot().views.A.deletionRecovery).toBe('committed_cleanup_pending');
+  expect(s.requests.filter(r => r.request.method === 'session/recoverDeletion')).toHaveLength(1);
+  expect(s.requests.filter(r => r.request.method === 'session/delete')).toHaveLength(1);
+});
+
+it.each(['preview', 'blocked', 'stale', 'not_found'] as const)('recovery settles authoritative %s without retaining committed authority', async status => {
+  const s = server(); await s.attached('A');
+  s.handlers.set('session/delete', () => ({ type: 'deletion', result: { status: 'committed_cleanup_pending', session_id: 'A' } }));
+  await s.client.deleteSession('A', 'confirmed');
+  s.handlers.set('session/recoverDeletion', () => ({ type: 'deletion', result: status === 'preview'
+    ? { status, preview: { session_id: 'A', target_revision: 'fresh', owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } }
+    : status === 'blocked' ? { status, session_id: 'A', reason: { kind: 'workspace', resource_count: 1 } }
+    : { status, session_id: 'A' } }));
+  expect((await s.client.recoverSessionDeletion('A'))?.status).toBe(status);
+  expect(s.client.getSnapshot().views.A?.deletionRecovery).toBeUndefined();
+  if (status === 'not_found') expect(s.client.getSnapshot().views.A).toBeUndefined();
+  else expect(s.client.getSnapshot().views.A.deleting).toBe(false);
 });

@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
+import { OutcomeUncertain } from '../src/client/app-server';
 import { App } from '../src/app/App';
 import { sessionDisplayTitle } from '../src/bindings/session-title';
 import { sessionDeletionNotice } from '../src/bindings/session-deletion';
@@ -505,4 +506,59 @@ it.each([true, false])('focused deletion fences controls and selects an existing
   else expect(screen.queryByLabelText('Session title')).toBeNull();
   expect(methods().filter(method => method === 'session/create')).toHaveLength(0);
   expect(methods().filter(method => method === 'session/delete')).toHaveLength(1);
+});
+
+it.each(['committed_cleanup_pending', 'committed_durability_uncertain'] as const)('committed %s exposes explicit recovery to terminal deletion independently of focus', async status => {
+  await mount();
+  server.handlers.set('session/delete', () => ({ type: 'deletion', result: { status, session_id: 'A' } }));
+  await act(async () => { await server.client.deleteSession('A', 'confirmed'); });
+  await select('B');
+  expect(screen.getByLabelText('Session title').textContent).toBe('Session B');
+  await expect(server.client.attach('A')).rejects.toThrow();
+  await expect(server.client.send('A', 'forbidden', [], 'send')).rejects.toThrow();
+  await expect(server.client.deleteSession('A', 'old')).rejects.toThrow();
+  server.held.add('session/recoverDeletion');
+  server.handlers.set('session/recoverDeletion', () => { server.snapshots.delete('A'); return { type: 'deletion', result: { status: 'deleted', session_id: 'A' } }; });
+  const before = methods().filter(m => m === 'session/list').length;
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry deletion recovery' })));
+  expect(screen.getByRole('button', { name: 'Recovering deletion…' }).hasAttribute('disabled')).toBe(true);
+  expect(server.requests.filter(r => r.request.method === 'session/recoverDeletion').map(r => r.request.params)).toEqual([{ session_id: 'A' }]);
+  const call = [...server.requests].reverse().find(r => r.request.method === 'session/recoverDeletion')!;
+  await act(async () => server.reply(call.request, call.socket));
+  expect(screen.queryByRole('button', { name: 'Retry deletion recovery' })).toBeNull();
+  expect(server.client.getSnapshot().views.A).toBeUndefined();
+  expect(methods().filter(m => m === 'session/list').length).toBeGreaterThan(before);
+  expect(methods().filter(m => m === 'session/delete')).toHaveLength(1);
+});
+
+it('continued durability uncertainty requires another explicit recovery gesture', async () => {
+  await mount();
+  const response = () => ({ type: 'deletion' as const, result: { status: 'committed_durability_uncertain' as const, session_id: 'A' } });
+  server.handlers.set('session/delete', response); server.handlers.set('session/recoverDeletion', response);
+  await act(async () => { await server.client.deleteSession('A', 'confirmed'); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry deletion recovery' })));
+  expect(methods().filter(m => m === 'session/recoverDeletion')).toHaveLength(1);
+  expect(screen.getByRole('button', { name: 'Retry deletion recovery' }).hasAttribute('disabled')).toBe(false);
+  expect(server.client.getSnapshot().views.A.deletionRecovery).toBe('committed_durability_uncertain');
+  await expect(server.client.attach('A')).rejects.toThrow();
+});
+
+it('unknown delete enables recovery only after committed reconnect observation', async () => {
+  await mount(); server.held.add('session/delete');
+  let deletion!: Promise<unknown>;
+  await act(async () => {
+    deletion = server.client.deleteSession('A', 'confirmed').catch(error => error);
+    await server.waitFor('session/delete', 1); server.socket.close();
+    expect(await deletion).toBeInstanceOf(OutcomeUncertain);
+  });
+  expect(screen.queryByRole('button', { name: 'Retry deletion recovery' })).toBeNull();
+  await expect(server.client.recoverSessionDeletion('A')).rejects.toThrow('Observe committed');
+  server.handlers.set('session/deletePreview', () => ({ type: 'deletion', result: { status: 'committed_durability_uncertain', session_id: 'A' } }));
+  await act(async () => { await server.connect(); });
+  server.handlers.set('session/recoverDeletion', () => ({ type: 'deletion', result: { status: 'not_found', session_id: 'A' } }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry deletion recovery' })));
+  expect(methods().filter(m => m === 'session/recoverDeletion')).toHaveLength(1);
+  expect(methods().filter(m => m === 'session/delete')).toHaveLength(1);
+  expect(server.client.getSnapshot().views.A).toBeUndefined();
+  expect(screen.queryByRole('button', { name: 'Retry deletion recovery' })).toBeNull();
 });

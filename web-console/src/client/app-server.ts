@@ -1,6 +1,6 @@
 import { TRACE_LIMIT, TRACE_PAGE_SIZE, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
 import type {
-  PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
+  RuntimeClientSessionDeletionResult, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
 } from '../../../protocol/app-server/v8';
@@ -17,6 +17,8 @@ export type InboundControlOutcome =
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'resynchronizing' | 'stale' | 'incompatible' | 'error';
 export interface SessionView {
   deleting?: boolean;
+  deletionRecovery?: "committed_cleanup_pending" | "committed_durability_uncertain";
+  recoveringDeletion?: boolean;
   id: string;
   /** Last native catalog row, retained when the Sidebar reads a different page. */
   summary?: SessionSummary;
@@ -221,12 +223,8 @@ export class AppServerClient {
         if (this.state.views[id]?.deleting) {
           const observed = await this.request({ method: 'session/deletePreview', params: { session_id: id } }, 'deletion');
           if (!this.current(generation)) return;
-          if (observed.result.status === 'not_found' || observed.result.status === 'committed_cleanup_pending') {
-            const views = { ...this.state.views }; delete views[id]; this.publish({ views });
-            continue;
-          }
-          if (observed.result.status === 'committed_durability_uncertain') continue;
-          this.setSession(id, { deleting: false });
+          this.settleDeletion(id, observed.result);
+          if (!this.state.views[id] || this.state.views[id].deletionRecovery) continue;
         }
         if (this.state.views[id]?.attachmentIntent === 'wanted') await this.acquireAttachment(id).catch(() => {});
       }
@@ -268,7 +266,7 @@ export class AppServerClient {
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
     this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view, history: undefined, target: undefined, submissions: undefined, inboundRequests: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
+        ...view, ...(view.recoveringDeletion ? { recoveringDeletion: false, deletionRecovery: undefined } : {}), history: undefined, target: undefined, submissions: undefined, inboundRequests: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
       }])),
     });
     oldSocket?.close();
@@ -462,17 +460,46 @@ export class AppServerClient {
       if (this.current(generation)) this.setSession(id, { error: String(error) });
       throw error;
     });
-    if (this.current(generation) && result.result.status === 'committed_durability_uncertain') this.setSession(id, { error: 'Deletion durability is uncertain. Reconnect to verify the authoritative outcome.' });
     if (!this.current(generation)) return;
-    if (result.result.status === 'deleted' || result.result.status === 'not_found' || result.result.status === 'committed_cleanup_pending') {
-      this.retireAttachmentWork(id);
-      this.attachmentEpochs.set(id, (this.attachmentEpochs.get(id) ?? 0) + 1);
-      const views = { ...this.state.views }; delete views[id];
-      this.publish({ views });
-    }
-    if (this.state.views[id] && (result.result.status === 'stale' || result.result.status === 'blocked')) this.setSession(id, { deleting: false });
+    this.settleDeletion(id, result.result);
     await this.listSessions();
     if (this.current(generation)) return result.result;
+  }
+  /** Explicit recovery requires a committed server observation, never just a lost reply. */
+  async recoverSessionDeletion(id: string) {
+    const view = this.state.views[id];
+    if (!view?.deletionRecovery || view.recoveringDeletion) throw new Error('Observe committed deletion state before recovery.');
+    const generation = this.state.generation;
+    this.setSession(id, { recoveringDeletion: true, error: undefined });
+    try {
+      const response = await this.request({ method: 'session/recoverDeletion', params: { session_id: id } }, 'deletion');
+      if (!this.current(generation)) return;
+      this.settleDeletion(id, response.result);
+      await this.listSessions();
+      if (this.current(generation)) return response.result;
+    } catch (error) {
+      if (this.current(generation)) this.setSession(id, {
+        recoveringDeletion: false, error: String(error),
+        ...(isOutcomeUncertain(error) ? { deletionRecovery: undefined } : {}),
+      });
+      throw error;
+    }
+  }
+  private settleDeletion(id: string, result: RuntimeClientSessionDeletionResult): void {
+    const committed = result.status === 'committed_cleanup_pending' || result.status === 'committed_durability_uncertain';
+    if (committed || result.status === 'deleted' || result.status === 'not_found') {
+      this.retireAttachmentWork(id);
+      this.attachmentEpochs.set(id, (this.attachmentEpochs.get(id) ?? 0) + 1);
+      if (committed) {
+        // Retain only a recovery obligation; this is not a resumable conversation.
+        this.setSession(id, { deleting: true, deletionRecovery: result.status,
+          recoveringDeletion: false, attachmentIntent: 'released', attachment: 'detached', target: undefined, snapshot: undefined, error: undefined });
+      } else {
+        const views = { ...this.state.views }; delete views[id]; this.publish({ views });
+      }
+    } else {
+      this.setSession(id, { deleting: false, deletionRecovery: undefined, recoveringDeletion: false, error: undefined });
+    }
   }
   /** Explicit Open / Attach gesture. Visibility itself does not acquire a claim. */
   attach(id: string, nodeId?: string, navigationCurrent: () => boolean = () => true): Promise<void> {

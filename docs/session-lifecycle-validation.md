@@ -397,3 +397,90 @@ The first full browser run passed 38 tests and failed the unchanged
 raw image difference to the composer border at (518,897)–(522,899). No Web source,
 reference image or tolerance was changed; the identical full suite was rerun and
 all 39 tests passed.
+
+## Client recovery target ownership correction
+
+Deletion recovery obligations are keyed by the deletion target SessionId and
+survive connection replacement independently of focus/navigation. The TUI captures
+only that target before reconnect, observes it on the replacement host, binds a
+fresh workflow, and transfers only committed observations with `observeCommitted`.
+Focused A therefore reattaches normally when historical B is the deletion target.
+Only a matching focused target is withheld after committed/absent observation.
+Unknown transport outcome grants no cleanup authority and never replays delete.
+
+The four new real RustxTuiApp tests are:
+
+- `external reconnect preserves historical B deletion committed_cleanup_pending while A stays focused across workflow replacement`
+- `external reconnect preserves historical B deletion committed_durability_uncertain while A stays focused across workflow replacement`
+- `external reconnect preserves historical B deletion preview while A stays focused across workflow replacement`
+- `external reconnect preserves historical B deletion not_found while A stays focused across workflow replacement`
+
+Each parks the replacement preview after exactly one unanswered delete(B), verifies
+preview(B) exactly once, and then releases its authoritative observation. A attaches
+in every case; B never attaches. Both committed cases close/reopen `/resume`, press
+R twice while recovery is pending, and prove one recover(B), never recover(A).
+After Deleted, C remains navigable. Preview retains visible B without recovery;
+NotFound offers no recovery. No case replays delete.
+
+Web now has a typed `AppServerClient.recoverSessionDeletion` operation through its
+existing request/correlation owner. Server-confirmed committed DTOs retain a
+non-resumable recovery entry keyed by SessionId, rendered as **Retry deletion
+recovery** independently of focus. Deleted/NotFound remove it and refresh the list;
+continued committed outcomes retain it; Preview/Blocked/Stale clear committed
+authority. Lost recovery replies clear the pending action's authority during
+connection teardown, and reconnect must observe deletePreview again. Neither delete
+nor recovery is automatically retried. Ordinary controls remain fenced meanwhile.
+
+Deterministic Web coverage exercises actual UI recovery clicks through the typed
+client request path, including both committed outcomes while B is focused,
+Deleted/NotFound terminal settlement, continued uncertainty requiring another
+explicit gesture, unknown-only rejection, committed reconnect promotion, lost
+recovery replies without replay, and live recovery reconciliation.
+
+No backend or protocol changes were made: App Server v8 and Runtime Client v40,
+writer certainty, manager admission/fence ownership, and durable recovery remain
+unchanged. The existing real App Server browser deletion acceptance remains the
+end-to-end check. Deliberate catalog durability faults are native `cfg(test)` hooks;
+exposing them in the production server solely for browser fault injection would
+expand this client correction. Precise committed-outcome tests use the protocol
+fixture and real React/client boundary rather than injecting state into React.
+
+### Client correction validation
+
+Origin was fetched before validation; main remained
+`5d0d9ae998577cfa00a07fab1610bd1be3dce127`. Validation results are recorded below.
+
+| Command | Result |
+| --- | --- |
+| `git fetch origin` | Passed; base unchanged, checked again after validation. |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 node --test --test-name-pattern='external reconnect' tui/test/app.test.ts` | 8 passed, including all four historical-target cases. |
+| `pnpm --dir tui typecheck` | Passed. |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | 797 passed, none skipped. |
+| `pnpm --dir web-console exec vitest run test/client.test.ts test/session-surface.test.tsx` | 80 passed. |
+| `pnpm --dir web-console typecheck` | Passed. |
+| `pnpm --dir web-console test` | 441 passed in 29 files. |
+| `pnpm --dir web-console build` | Passed; existing chunk-size advisory. |
+| `pnpm --dir web-console check:provenance` | 104 source records and 100 package notices verified. |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | All 39 passed, including real App Server deletion acceptance. |
+| `cargo fmt --all -- --check` | Passed. |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed. |
+| `cargo test --all-targets --all-features` | 3,708 passed, zero failures, six existing ignored credential/fixture tests. |
+| `pnpm --dir protocol/app-server check` | Passed; no drift. |
+| `pnpm --dir protocol/app-server typecheck` | Passed. |
+| `pnpm --dir dev typecheck` | Passed. |
+| `pnpm --dir dev test` | 30 passed. |
+| `uv run --frozen --directory test-support/fake-provider pytest` | 51 passed. |
+| `git diff --check` | Passed. |
+
+Intermediate development checks found and corrected: two test-fixture API/type
+mistakes; one lost-recovery authority assertion (fixed in connection teardown);
+and two strengthened TUI reopen tests using an ambiguous bare Escape sequence
+(fixed to use the existing encoded Escape input and close both notice and selector).
+The final focused/full results above include those corrections. No assertion,
+timeout, screenshot baseline, tolerance or synchronization was weakened.
+
+Self-review confirms: unknown is not recovery authority; focus is not deletion
+target identity; neither mutation is replayed; committed recovery remains reachable
+on both clients; live/absent observations grant no recovery; backend ownership and
+protocol versions are untouched. Original checkout remains clean. macOS checks are
+remote CI coverage, not a local claim.

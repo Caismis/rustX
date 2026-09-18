@@ -885,7 +885,10 @@ After an external-server reconnect, the TUI rereads deletion state before decidi
 whether to reattach. A server-confirmed committed cleanup/durability result is
 transferred into the new connection's deletion workflow, so **R** still recovers
 the original deleted Session even when it is absent from the fresh Session list.
-A live preview reopens the Session; confirmed absence offers no cleanup action.
+The deletion target is observed independently of focus: deleting historical B while
+A is focused preserves recovery for B and reattaches A normally. A live preview
+grants no cleanup authority; confirmed absence ends the obligation. Only when the
+deleted target was focused does its observation prevent reattachment of that focus.
 Neither reconnect nor the recovery action replays the original deletion.
 
 A failed Session-list refresh means visibility is unavailable, not that the list
