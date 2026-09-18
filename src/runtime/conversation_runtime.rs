@@ -678,15 +678,16 @@ struct CurrentAttempt {
 /// so an explicit interrupt can tell an autonomous Goal continuation apart
 /// from an ordinary Human attempt, including a Human attempt during which the
 /// model called `create_goal`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum AttemptProvenance {
     /// Ordinary adopted inbound that contains no Goal continuation: Human
     /// input, native results, and every other runtime-generated inbound.
     Inbound,
     /// The adopted batch carries the durable Goal continuation admitted at
     /// the Goal-round frontier. Exactly this attempt is an autonomous Goal
-    /// continuation.
-    GoalContinuation,
+    /// continuation. The reference is the post-accounting authority, captured
+    /// from the accepted inbound rather than a later current-Goal read.
+    GoalContinuation(crate::goal::GoalRef),
     /// Recovery continuation over already-canonical history: no fresh inbound
     /// was adopted, so no Goal round was consumed for it.
     RecoveredContinuation,
@@ -2916,14 +2917,23 @@ impl RuntimeInner {
         // queue at the Goal-round frontier, so a batch carrying one is
         // pursuing that committed round even if ordinary inbound joined it
         // before adoption.
-        let provenance = if adopted
+        let provenance = adopted
             .iter()
-            .any(|item| matches!(item.message().kind, InboundKind::GoalContinuation(_)))
-        {
-            AttemptProvenance::GoalContinuation
-        } else {
-            AttemptProvenance::Inbound
-        };
+            .find_map(|item| {
+                if let InboundKind::GoalContinuation(reference) = &item.message().kind {
+                    // Atomic acceptance advanced this exact authority once. Never
+                    // sample today's Goal here: it may already have been replaced.
+                    let mut admitted = reference.clone();
+                    admitted.revision = admitted
+                        .revision
+                        .checked_add(1)
+                        .expect("accepted Goal round advanced its revision");
+                    Some(AttemptProvenance::GoalContinuation(admitted))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(AttemptProvenance::Inbound);
         // Durable adoption completes this finite admission cycle. The next
         // cycle starts with a fresh select/adopt retry allowance.
         Self::complete_admission_cycle(&mut state);
@@ -4941,13 +4951,15 @@ impl ConversationRuntime {
     /// 1. prove the named attempt is the current attempt and read its
     ///    runtime-owned [`AttemptProvenance`];
     /// 2. if — and only if — it is an autonomous Goal continuation, durably
-    ///    commit `Active -> Paused`;
+    ///    commit `Active -> Paused` only while its admitted `GoalRef` is current;
     /// 3. request cancellation of that same attempt;
     /// 4. report success only once both semantic actions have won.
     ///
     /// Because the durable pause commits **before** cancellation is
-    /// requested, there is no window in which the Goal is `Active` with a
-    /// cancelled attempt: the state "Active but inert" does not exist.
+    /// requested, the matching authority cannot immediately restart. A newer
+    /// Goal revision is left unchanged: the old attempt has no pause authority
+    /// over later user intent. Settlement clears the named attempt under this
+    /// same lock; a later interrupt returns `NoCurrentAttempt`.
     /// Because provenance decides step 2, cancelling an ordinary Human
     /// attempt never pauses an Active Goal merely because one exists — not
     /// even a Human attempt during which the model called `create_goal`.
@@ -4976,15 +4988,16 @@ impl ConversationRuntime {
         };
         let attempt_id = current.attempt_id.clone();
         let cancellation = current.cancellation.clone();
-        let goal_attempt = current.provenance == AttemptProvenance::GoalContinuation;
-        let pause = goal_attempt
-            .then(|| self.inner.composed_goal(&state))
-            .flatten()
-            .map(|domain| {
-                self.inner
-                    .mailbox
-                    .with_running_commit(|| domain.pause_current())
-            });
+        let pause = match &current.provenance {
+            AttemptProvenance::GoalContinuation(expected) => {
+                self.inner.composed_goal(&state).map(|domain| {
+                    self.inner
+                        .mailbox
+                        .with_running_commit(|| domain.pause_if_current(expected))
+                })
+            }
+            _ => None,
+        };
         let failure = match pause {
             None | Some(Ok(Ok(_))) => None,
             // A genuine durable failure: fail closed through the existing

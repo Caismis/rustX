@@ -3800,3 +3800,264 @@ async fn goal351_model_mutation_and_drain_have_one_owned_commit_order() {
         }
     }
 }
+
+/// The current attempt remains parked while a newer durable authority wins.
+/// Interrupt cancels that attempt, but cannot undo edits, explicit resume, or
+/// replacement. The next frontier is gated so assertions cannot race a new round.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn goal350_old_attempt_cannot_pause_newer_goal_authority() {
+    use rustx::goal::{GoalControl, GoalMutation};
+    for change in ["edit", "resume", "replace"] {
+        let label = "conv_45000000-0000-7000-8000-000000000001";
+        let (_dir, tools, _) = goal_runtime(label, 3, None);
+        let capability =
+            extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
+                .published()
+                .await;
+        let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
+        let mut parked = model.parked();
+        let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
+        composed.runtime.activate();
+        tokio::time::timeout(Duration::from_secs(10), parked.wait_for(|v| *v))
+            .await
+            .unwrap()
+            .unwrap();
+        let admitted = tools.goal().unwrap().view().unwrap().current.unwrap();
+        let mutate = |expected, mutation| {
+            composed
+                .runtime
+                .control_goal(GoalControl::Mutate { expected, mutation })
+                .unwrap()
+                .current
+                .unwrap()
+        };
+        let newer = match change {
+            "edit" => mutate(
+                admitted.reference.clone(),
+                GoalMutation::Edit {
+                    objective: "New objective authority".into(),
+                },
+            ),
+            "resume" => {
+                let paused = mutate(admitted.reference.clone(), GoalMutation::Pause);
+                mutate(paused.reference, GoalMutation::Resume)
+            }
+            _ => {
+                mutate(admitted.reference.clone(), GoalMutation::Complete);
+                composed
+                    .runtime
+                    .control_goal(GoalControl::Create {
+                        objective: "Replacement Goal".into(),
+                        budget: 3,
+                    })
+                    .unwrap()
+                    .current
+                    .unwrap()
+            }
+        };
+        let boundary = Arc::new(rustx::runtime::conversation_runtime::Gate::default());
+        let release = boundary.arm_scoped();
+        composed.runtime.install_admission_gate(boundary.clone());
+        let settled = Arc::new(rustx::runtime::conversation_runtime::Gate::default());
+        let settled_release = settled.arm_scoped();
+        composed
+            .runtime
+            .install_residency_probe(None, Some(settled.clone()));
+        let attempt =
+            AttemptId::for_conversation(&rustx::runtime::identity::ConversationId::new(label), 0);
+        assert_eq!(
+            composed.runtime.cancel_current_attempt(&attempt).unwrap(),
+            attempt
+        );
+        assert_eq!(
+            tools.durable_store().load_goal().unwrap(),
+            Some(newer.clone())
+        );
+        let entered = settled.clone();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::task::spawn_blocking(move || entered.wait_entered()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(!composed.runtime.has_current_attempt());
+        assert_eq!(model.requests().len(), 1);
+        assert_eq!(tools.durable_store().load_goal().unwrap(), Some(newer));
+        let mut shutdown = Box::pin(composed.runtime.shutdown());
+        assert!(futures_util::poll!(&mut shutdown).is_pending());
+        drop(settled_release);
+        drop(release);
+        shutdown.await.unwrap();
+    }
+}
+
+/// Settlement releases the named attempt under the same coordinator lock
+/// cancellation takes. Once that boundary wins, a stale interrupt is refused
+/// without pausing the Goal. The provider watch and admission gate fix the order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn goal350_settlement_before_interrupt_leaves_active_unchanged() {
+    let label = "conv_45000000-0000-7000-8000-000000000002";
+    let (_dir, tools, _) = goal_runtime(label, 2, None);
+    let capability =
+        extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
+            .published()
+            .await;
+    let (finish, wait) = support::fake::model_release();
+    let mut script = vec![FakeStep::ParkUntilReleased(wait)];
+    script.extend(stop_turn());
+    let model = fake_model(vec![script]);
+    let mut parked = model.parked();
+    let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
+    composed.runtime.activate();
+    tokio::time::timeout(Duration::from_secs(10), parked.wait_for(|v| *v))
+        .await
+        .unwrap()
+        .unwrap();
+    let admitted = tools.durable_store().load_goal().unwrap();
+    let boundary = Arc::new(rustx::runtime::conversation_runtime::Gate::default());
+    let release = boundary.arm_scoped();
+    composed.runtime.install_admission_gate(boundary.clone());
+    finish.send(true).unwrap();
+    let entered = boundary.clone();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || entered.wait_entered()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!composed.runtime.has_current_attempt());
+    let attempt =
+        AttemptId::for_conversation(&rustx::runtime::identity::ConversationId::new(label), 0);
+    assert!(matches!(
+        composed.runtime.cancel_current_attempt(&attempt),
+        Err(rustx::runtime::CancelAttemptError::NoCurrentAttempt)
+    ));
+    assert_eq!(tools.durable_store().load_goal().unwrap(), admitted);
+    let mut shutdown = Box::pin(composed.runtime.shutdown());
+    assert!(futures_util::poll!(&mut shutdown).is_pending());
+    drop(release);
+    shutdown.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal350_background_terminal_publication_wakes_next_continuation() {
+    let extensions = NativeAgentExtensions::none().and_goal();
+    let (_dir, tools) = todo_tool_runtime("conv_45000000-0000-7000-8000-000000000003", &extensions);
+    let capability =
+        extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
+            .published()
+            .await;
+    let model = fake_model(vec![stop_turn(), vec![FakeStep::ParkUntilCancelled]]);
+    let mut parked = model.parked();
+    let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
+    composed.runtime.activate();
+    let execution = seed_detached_execution(&tools).await;
+    composed
+        .runtime
+        .control_goal(rustx::goal::GoalControl::Create {
+            objective: "Use the owned result".into(),
+            budget: 2,
+        })
+        .unwrap();
+    composed.runtime.admit_now_for_test();
+    assert!(model.requests().is_empty());
+    assert_eq!(
+        tools
+            .durable_store()
+            .load_goal()
+            .unwrap()
+            .unwrap()
+            .autonomous_rounds_consumed,
+        0
+    );
+    // Native terminal publication is the only new wake source. No Human input
+    // or manual admission call follows it.
+    tools.background().cancel(&execution).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), parked.wait_for(|v| *v))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(model.requests().len(), 2);
+    assert_eq!(
+        tools
+            .durable_store()
+            .load_goal()
+            .unwrap()
+            .unwrap()
+            .autonomous_rounds_consumed,
+        1
+    );
+    assert!(model.requests()[1].messages.iter().any(|m| matches!(m.as_canonical(), Some(MessageBlock::User(u)) if matches!(u.kind, InboundKind::GoalContinuation(_)))));
+    composed.runtime.shutdown().await.unwrap();
+}
+
+/// Process-death tests prove both `SQLite` commit cuts. This test closes the
+/// remaining liveness seam: a fresh runtime adopts the accepted message itself,
+/// with budget still available, rather than charging a second Goal round.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal350_reopen_adopts_already_accepted_round_without_recharging() {
+    let label = "conv_45000000-0000-7000-8000-000000000004";
+    let (dir, initial, _) = goal_runtime(label, 3, None);
+    let accepted = initial
+        .goal()
+        .unwrap()
+        .reserve_and_accept(|reference| rustx::durable::InboundDraft {
+            message_id: None,
+            source: UserSource::Runtime,
+            kind: InboundKind::GoalContinuation(reference),
+            content: inbound("unused", "Continue accepted Goal round").content,
+            timestamp: chrono::Utc::now(),
+            correlation: None,
+        })
+        .unwrap()
+        .unwrap();
+    let committed = initial.durable_store().load_goal().unwrap().unwrap();
+    drop(initial);
+    let tools = rustx::tools::runtime::ConversationToolRuntime::from_config(
+        rustx::runtime::identity::ConversationId::new(label),
+        rustx::tools::runtime::ConversationRuntimeConfig::new(
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
+        )
+        .with_extensions(NativeAgentExtensions::none().and_goal()),
+    )
+    .unwrap();
+    let capability =
+        extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
+            .published()
+            .await;
+    let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
+    let mut parked = model.parked();
+    let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
+    assert!(model.requests().is_empty());
+    composed.runtime.activate();
+    tokio::time::timeout(Duration::from_secs(10), parked.wait_for(|v| *v))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(tools.durable_store().load_goal().unwrap(), Some(committed));
+    assert!(tools.durable_store().load_pending().unwrap().is_empty());
+    assert_eq!(model.requests().len(), 1);
+    let messages: Vec<_> = model.requests()[0]
+        .messages
+        .iter()
+        .filter_map(|m| match m.as_canonical() {
+            Some(MessageBlock::User(u)) if matches!(u.kind, InboundKind::GoalContinuation(_)) => {
+                Some(u.id.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(messages, vec![accepted.message_id]);
+    // Recovered Pending Inbound also retains exact interrupt provenance.
+    let attempt =
+        AttemptId::for_conversation(&rustx::runtime::identity::ConversationId::new(label), 0);
+    composed.runtime.cancel_current_attempt(&attempt).unwrap();
+    assert_eq!(
+        tools.durable_store().load_goal().unwrap().unwrap().phase,
+        rustx::goal::GoalPhase::Paused
+    );
+    composed.runtime.shutdown().await.unwrap();
+}

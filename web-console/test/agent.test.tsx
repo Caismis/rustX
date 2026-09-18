@@ -192,15 +192,25 @@ it('live foreground overlays only its exact canonical occurrence when historical
  expect(oldRow.getByLabelText('Tool status').textContent).toBe('assembled');
  expect(newRow.getByLabelText('Tool status').textContent).toBe('running');
 });
-it('Goal Tool labels reflect native outcomes and retain exact diagnostic identity', () => {
+it('native Goal activity specializes outcomes without generic cards and retains exact execution details', () => {
  const tool: ForegroundToolExecution = { message_id: 'a', block_index: 0, call_id: 'goal-call', tool_id: 'native.create_goal', name: 'create_goal', state: { type: 'running', arguments: '{}' } };
  const ui = render(<Tool tool={tool}/>);
- expect(ui.container.querySelector('[data-tool-name="create_goal"]')).toBeTruthy();
- expect(toolCard(tool).title).toBe('Start Goal');
- tool.state = { type: 'settled', arguments: '{}', result: { status: { type: 'failed', error: 'native rejection' }, duration_ms: 0 } };
- expect(toolCard(tool).title).toBe('Start Goal');
- tool.state.result.status = { type: 'success' };
- expect(toolCard(tool).title).toBe('Goal started');
- expect(toolCard({ ...tool, name: 'update_goal' }).title).toBe('Goal updated');
- expect(toolCard({ ...tool, name: 'get_goal' }).title).toBe('Read Goal');
+ expect(screen.getByText('Starting Goal')).toBeTruthy();
+ expect(screen.getByLabelText('Goal activity status').textContent).toBe('running');
+ expect(ui.container.querySelector('[data-tool-renderer]')).toBeNull();
+ for (const [name, args, label] of [['create_goal', '{}', 'Goal started'], ['update_goal', '{"action":"complete"}', 'Goal completed'], ['update_goal', '{"action":"blocked"}', 'Goal blocked'], ['get_goal', '{}', 'Goal checked']] as const) {
+   const execution: ForegroundToolExecution = { ...tool, tool_id: `native.${name}`, name, state: { type: 'settled', arguments: args, result: { status: { type: 'success' }, duration_ms: 0 } } };
+   ui.rerender(<Tool tool={execution}/>);
+   expect(screen.getByText(label)).toBeTruthy();
+   expect(ui.container.querySelector('[data-tool-renderer]')).toBeNull();
+   expect(JSON.parse(ui.container.querySelector('pre')!.textContent!)).toEqual(execution);
+ }
+ for (const status of [{ type: 'failed', error: 'native rejection' }, { type: 'cancelled', reason: 'user_requested', phase: 'during_execution' }, { type: 'outcome_unknown', detail: 'unknown' }] as const) {
+   ui.rerender(<Tool tool={{ ...tool, state: { type: 'settled', arguments: '{}', result: { status, duration_ms: 0 } } }}/>);
+   expect(screen.queryByText('Goal started')).toBeNull();
+   expect(screen.getByLabelText('Goal activity status').textContent).toBe(status.type.replaceAll('_', ' '));
+ }
+ ui.rerender(<Tool tool={{ ...tool, tool_id: 'mcp.create_goal' }}/>);
+ expect(ui.container.querySelector('[data-goal-activity]')).toBeNull();
+ expect(ui.container.querySelector('[data-tool-renderer="generic"]')).toBeTruthy();
 });

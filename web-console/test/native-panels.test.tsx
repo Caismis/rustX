@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ArtifactPreview } from '../src/presentation/right-panel/ArtifactPreview';
 import { readTheme, applyTheme } from '../src/app/appearance';
-import { toolCard } from '../src/bindings/tools';
+import { goalActivityLabel } from '../src/app/agent/GoalActivity';
 import type { ForegroundToolExecution } from '../../protocol/app-server/v8';
 afterEach(() => { cleanup(); localStorage.clear(); document.body.removeAttribute('data-ds-dark-theme'); });
 it('keeps preview content inert, wrapping local, and error retries explicit', () => {
@@ -21,6 +21,6 @@ it('persists only the safe Web appearance preference', () => {
 });
 it('Goal Tool labels describe native outcomes while preserving exact tool identity', () => {
  const tool: ForegroundToolExecution = { call_id: 'goal-call', tool_id: 'native.create_goal', name: 'create_goal', state: { type: 'assembled', arguments: '{}' } } as ForegroundToolExecution;
- expect(toolCard(tool)).toMatchObject({ title: 'Start Goal', nativeName: 'create_goal', state: 'assembled' });
- expect(toolCard({ ...tool, state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, content: [], duration_ms: 1 } } })).toMatchObject({ title: 'Goal started', nativeName: 'create_goal', state: 'success' });
+ expect(goalActivityLabel(tool)).toBe('Starting Goal');
+ expect(goalActivityLabel({ ...tool, state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, content: [], duration_ms: 1 } } })).toBe('Goal started');
 });

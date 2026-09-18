@@ -965,3 +965,26 @@ it("audits title, output and metadata contrast on the neutral surface in truecol
     }
   }
 });
+
+
+describe("native Goal activity", () => {
+  it("renders semantic results and keeps exact evidence in expanded execution details", () => {
+    for (const [name, action, label] of [["create_goal", "", "Goal started"], ["update_goal", "complete", "Goal completed"], ["update_goal", "blocked", "Goal blocked"], ["get_goal", "", "Goal checked"]] as const) {
+      const execution = tool({ toolId: `native.${name}`, name, argumentsText: JSON.stringify({ action }), lifecycle: settled() });
+      const normal = plainText(renderToolCard(execution, context));
+      assert.match(normal, new RegExp(label));
+      assert.doesNotMatch(normal, /native\.|create_goal|update_goal|get_goal|call-1|action/);
+      const detail = plainText(renderToolCard(execution, expanded));
+      for (const exact of [execution.toolId, execution.name, execution.callId, execution.argumentsText, JSON.stringify(execution.lifecycle.type === "settled" ? execution.lifecycle.result : null)]) assert.ok(detail.includes(exact));
+      const split = plainText(renderToolCard(execution, context, "call"));
+      assert.doesNotMatch(split, /Goal started|Goal completed|Goal blocked|Goal checked/);
+      assert.match(plainText(renderToolCard(execution, context, "continuation")), new RegExp(label));
+    }
+  });
+  it("never claims success before settlement or for a failed or uncertain call", () => {
+    for (const lifecycle of [{ type: "assembled" }, { type: "running" }, settled({ status: { type: "failed", error: "refused" } }), settled({ status: { type: "outcome_unknown", detail: "unknown" } }), settled({ status: { type: "cancelled", reason: "user_requested", phase: "during_execution" } })] as const) {
+      assert.doesNotMatch(card({ toolId: "native.create_goal", name: "create_goal", lifecycle }), /Goal started/);
+    }
+    assert.match(card({ toolId: "mcp.create_goal", name: "create_goal" }), /create_goal/);
+  });
+});

@@ -63,6 +63,15 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(goal).toContainText('Active Goal');
     await expect(goal).toContainText('Verify the composer docks');
     await expect(goal).toContainText('1/1 rounds');
+    const activity = page.locator('[data-goal-activity]').filter({ hasText: 'Goal started' });
+    await expect(activity).toHaveCount(1);
+    await expect(activity.locator('[data-tool-renderer]')).toHaveCount(0);
+    await page.screenshot({ path: test.info().outputPath('goal-activity.png') });
+    await expect(activity.locator('details')).not.toHaveAttribute('open', '');
+    await activity.getByText('Execution details', { exact: true }).click();
+    await expect(activity.locator('pre')).toContainText('native.create_goal');
+    await expect(activity.locator('pre')).toContainText('"name": "create_goal"');
+    await activity.getByText('Execution details', { exact: true }).click();
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible();
     await message.fill('Queued during the Goal round'); await page.getByRole('button', { name: 'Queue', exact: true }).click();
     await expect(queue.locator('[data-inbound-sequence]')).toContainText('Queued during the Goal round');

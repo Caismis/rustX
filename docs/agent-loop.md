@@ -31,7 +31,9 @@ durable authorization to continue when runtime admission becomes eligible; there
 is no activation precondition and no separate arm step. Runtime stopped is not
 Goal paused — drain leaves `Active` intact — while explicit interruption of an
 autonomous active Goal attempt durably pauses the Goal and requests cancellation
-of that attempt. [Goal extension](goal-extension.md) specifies the atomic
+of that attempt only while its admitted GoalRef is still current. A later Goal
+revision wins unchanged; coordinator settlement winning first refuses the stale
+AttemptId. [Goal extension](goal-extension.md) specifies the atomic
 acceptance/accounting transaction and the recovery/interrupt/drain contracts.
 
 This document describes the runtime boundary implemented by the M3

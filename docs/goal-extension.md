@@ -305,7 +305,7 @@ admitted the attempt *for*:
 ```text
 AttemptProvenance::Inbound               ordinary adopted inbound (Human and
                                          every other runtime-generated inbound)
-AttemptProvenance::GoalContinuation      the adopted batch carries the durable
+AttemptProvenance::GoalContinuation(ref) the adopted batch carries the durable
                                          Goal continuation admitted at the
                                          Goal-round frontier
 AttemptProvenance::RecoveredContinuation recovery over already-canonical history
@@ -326,13 +326,13 @@ Goal control commit boundary, `cancel_current_attempt` runs:
 
 ```text
 1. prove the named attempt is the current attempt and read its provenance
-2. if and only if it is a Goal continuation: durably commit Active -> Paused
+2. for a Goal continuation whose admitted GoalRef is still current: commit Active -> Paused
 3. request cancellation of that same attempt
 4. report acceptance only after both boundaries are won
 ```
 
-The durable pause commits *before* cancellation is requested, so there is no
-window in which the Goal is `Active` with a cancelled attempt. Because step 2 is
+The matching durable pause commits *before* cancellation is requested, so that
+authority cannot immediately restart. A newer Goal authority remains unchanged. Because step 2 is
 gated on provenance, cancelling an ordinary Human attempt never pauses an Active
 Goal merely because one exists. Explicit `/goal pause` remains an independent
 durable user control.
@@ -423,7 +423,7 @@ atomic acceptance transactions. There is exactly one Goal lifecycle source of
 truth, `GoalSnapshot.phase`, and no process-local field whose value changes
 whether `Active` actually means active. GoalRoundDriver has no task, model adapter, execution loop,
 history, capability-generation mutation or private queue. Its sole caller is the
-ordinary coordinator at idle. The Goal reservation and activation lock, existing
+ordinary coordinator at idle. The runtime coordinator lock, existing
 owned-work locks, lifecycle guard and SQLite transaction establish exact winners.
 Ordinary acceptance rejects typed Goal continuation outside the accounting seam.
 Current context samples domain state at each request boundary and stays User data.
@@ -509,3 +509,74 @@ outlive it. No generic plugin, state, scheduling or transaction framework was ad
 - TUI `goal351 folds every durable Goal phase change at its stream cursor`:
   event and snapshot read models agree, and the folded view has no activation
   member to disagree about.
+
+## Issue #350 residual conformance
+
+Audited against `6487224c5e62a0ed0d4ecd6d2ffb824d5b2d9d0a`, after PR #352
+(`58ec906aaaca314a2ed6db2f2d2adfbed6aa37ac`). The #351 regression map above
+continues to own creation, resume, phase-only lifecycle, Human priority, drain,
+composition, CAS, projection, budget and no-polling guarantees. Those paths were
+not reimplemented. Two implementation gaps remained: stale-attempt pause authority
+and generic Goal Tool presentation. Recovery activation and terminal-publication
+liveness needed additional end-to-end evidence.
+
+### Exact interrupt authority and winner
+
+The coordinator captures the accepted inbound's `GoalRef`, advanced by the one
+revision increment committed atomically with round acceptance. It never substitutes
+the current Goal at adoption or cancellation. Under coordinator -> lifecycle ->
+Goal publication -> SQLite ordering, interrupt pauses only that exact reference
+while Active, then requests cancellation of the named attempt. A later edit,
+budget change, pause/resume, completion or replacement wins unchanged. A stale
+reference is an intentional no-op, not a persistence failure or retry opportunity.
+No additional permission or lifecycle state is introduced.
+
+`finish_attempt` clears the current attempt under the same coordinator mutex.
+If interrupt wins that mutex while the named attempt is current, its durable pause
+comparison and cancellation request precede coordinator settlement. The Agent Loop
+still owns its terminal outcome; an already completed outcome is not rewritten.
+If settlement clears the slot first, interrupt returns `NoCurrentAttempt` and
+changes no Goal. It cannot retarget a subsequently admitted attempt. The existing
+storage-failure containment/fencing behavior remains unchanged.
+
+### Native activity, authoritative state and diagnostics
+
+Web chat and normal TUI transcript specialize only exact native Goal Tool IDs:
+
+| Successful execution | Historical activity |
+| --- | --- |
+| `native.create_goal` | Goal started |
+| `native.update_goal`, `action=complete` | Goal completed |
+| `native.update_goal`, `action=blocked` | Goal blocked |
+| `native.get_goal` | Goal checked (compact activity) |
+
+Assembled/running/failed/cancelled/unknown executions never claim success. Pause,
+resume, objective and budget changes remain typed user controls; they are not
+model update actions. The Goal dock and `/goal` read authoritative `GoalSnapshot`,
+never these historical activities. Exhausted budget leaves the phase Active but
+permits zero additional autonomous rounds; consumed/budget values remain visible,
+and an explicit user budget edit may restore eligibility. It does not introduce
+an activation state or pin idle residency.
+
+Web activity's collapsed Execution details and TUI expanded activity retain the
+published Tool ID, model-facing name, ToolCallId, arguments, result and lifecycle.
+Web Trajectory continues to expose native Trace identity, lifecycle and payloads;
+TUI has no separate Trajectory screen, so expanded execution details are its
+inspection surface. Canonical execution and protocol types are unchanged.
+
+### Additional deterministic evidence
+
+| Test | Exact invariant |
+| --- | --- |
+| `goal350_old_attempt_cannot_pause_newer_goal_authority` | Park the admitted attempt, commit edit / pause-resume / complete-and-replace, interrupt it, and gate settlement/next admission: the newer snapshot remains exactly unchanged. |
+| `goal350_settlement_before_interrupt_leaves_active_unchanged` | Release provider completion into a gated post-settlement frontier; the old AttemptId is refused and durable Active/accounting are unchanged. The existing `goal351_interrupting_a_goal_continuation_pauses_it_and_cancels_that_attempt` proves interrupt-first. |
+| `goal350_reopen_adopts_already_accepted_round_without_recharging` | Reopen fresh owners with an accepted pending round and spare budget; exactly the accepted MessageId reaches the model, accounting is unchanged, and interrupt retains its exact Goal provenance. Paired with the SIGKILL regression, this covers both durable commit cuts and subsequent runtime activation. |
+| `goal350_background_terminal_publication_wakes_next_continuation` | Owned work prevents requests; native cancellation/terminal publication alone starts result processing, whose settlement admits one Goal round without manual admission or Human input. |
+| `goal350_subagent_terminal_publication_wakes_next_continuation` | A gated child over real control IPC suppresses parent polling; release/terminal publication alone causes parent result processing then one Goal round. |
+| Web `native Goal activity specializes outcomes without generic cards and retains exact execution details` | Native identity selects semantic activity, successful action selects the label, non-success never claims transition, and a same-name MCP tool remains generic. Exact execution data remains inspectable. |
+| Web `Goal semantic chat does not alter native Trace identity, arguments, result or lifecycle` | The Trajectory inspector exposes exact Tool ID, ToolCallId, action/CAS arguments, output and lifecycle. |
+| TUI `native Goal activity` tests | Compact semantics, split canonical ordering, all non-success states and expanded exact diagnostics remain truthful. |
+| Browser `native Todo, Goal and Queue docks follow the real App Server through control, loss and reload` | Model create renders native activity outside generic Tool cards, execution details retain identity, and the independent Goal dock continues typed pause/resume with authoritative revisions. |
+
+No new protocol version, model API, scheduler, queue, Goal execution owner or
+compatibility mode is required by these residual fixes.

@@ -1,0 +1,14 @@
+.activity {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  align-items: baseline;
+  gap: .5rem;
+  padding: .4rem 0;
+  font-size: .875rem;
+}
+.activity small { opacity: .7; }
+.activity details { font-size: .75rem; min-width: 0; max-width: 100%; }
+.activity details[open] { flex-basis: 100%; }
+.activity summary { cursor: pointer; opacity: .7; }
+.activity pre { max-height: 20rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
