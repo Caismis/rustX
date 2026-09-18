@@ -1,7 +1,7 @@
 import { isAbsolute, resolve } from 'node:path';
 
 export type Mode = 'app-server' | 'tui' | 'web';
-export interface Arguments { mode: Mode; binary: string; forwarded: string[]; workspaces: string[] }
+export interface Arguments { mode: Mode; binary: string; forwarded: string[]; workspaces: string[]; noOpen: boolean }
 
 /** Only composition options are consumed. Native/TUI parsers validate their own grammar. */
 export function parseArguments(argv: readonly string[], root: string): Arguments {
@@ -9,10 +9,12 @@ export function parseArguments(argv: readonly string[], root: string): Arguments
   if (mode !== 'app-server' && mode !== 'tui' && mode !== 'web') throw new Error('Expected app-server, tui, or web');
   if (input[0] === '--') input.shift(); // pnpm run's separator
   let binary: string | undefined;
+  let noOpen = false;
   const forwarded: string[] = [], workspaces: string[] = [];
   for (let i = 0; i < input.length; i++) {
     const flag = input[i];
-    if (flag === '--binary' || (mode === 'web' && flag === '--workspace')) {
+    if (mode === 'web' && flag === '--no-open') { noOpen = true; }
+    else if (flag === '--binary' || (mode === 'web' && flag === '--workspace')) {
       const value = input[++i];
       if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
       if (flag === '--binary') {
@@ -31,5 +33,5 @@ export function parseArguments(argv: readonly string[], root: string): Arguments
     }
   }
   if (mode === 'web' && workspaces.length === 0) throw new Error('web requires at least one explicit --workspace');
-  return { mode, binary: binary ?? resolve(root, 'target/debug/rustx'), forwarded, workspaces };
+  return { mode, binary: binary ?? resolve(root, 'target/debug/rustx'), forwarded, workspaces, noOpen };
 }

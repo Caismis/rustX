@@ -16,6 +16,9 @@ small typed `src/workspaces/host.ts` contract using same-origin JSON POSTs.
 Normal local development uses [the dev launcher](../DEVELOPMENT.md), which owns
 the ephemeral config and metadata. The following describes the distinct case of
 an independently managed Product Host with persistent operator-owned metadata.
+The launcher carrier authenticates browser requests before the Workspace middleware.
+Its bootstrap DTO contains only native transport admission material, never roots.
+Browser authentication cannot add roots; Remote Settings cannot grant filesystem access.
 Create its JSON file outside the repository/runtime root, e.g.:
 
 ```json

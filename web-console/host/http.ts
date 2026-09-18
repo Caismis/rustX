@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ProductHostWorkspaces } from '../src/workspaces/host.ts';
-/** Same-origin trusted-local carrier; deployments own authentication outside rustX. */
+/** Workspace authority only. The launcher carrier authenticates before this handler;
+ * independently managed deployments supply their own browser authentication. */
 export function workspaceHandler(host?: ProductHostWorkspaces) {
   return async (request: IncomingMessage, response: ServerResponse, next: () => void = () => { response.writeHead(404).end(); }) => {
     if (!request.url?.startsWith('/product-host/')) return next();

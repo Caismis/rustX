@@ -24,17 +24,15 @@ import { ChatViewport } from '../presentation/layout/ChatViewport';
 import { AppFrame } from '../presentation/layout/AppFrame';
 import { SidebarRoot } from '../presentation/sidebar/SidebarRoot';
 import { SettingsTrigger } from '../presentation/settings/SettingsRoot';
-import { Modal } from '../presentation/primitives/Modal';
-import { IconApiOutline14, IconInspectOutline12 } from '../presentation/primitives/icons';
+import { IconInspectOutline12 } from '../presentation/primitives/icons';
+import { ConnectionController } from '../connection/controller';
 import { RightPanel } from '../presentation/right-panel/RightPanel';
 import { AgentComposer } from './agent/AgentComposer';
 import { AgentControls } from './agent/AgentControls';
 import agentCss from '../presentation/agent/Conversation.module.css';
 import { Button } from '../presentation/primitives/Button';
-import { Input } from '../presentation/primitives/Input';
 import { sessionDisplayTitle } from '../bindings/session-title';
 import { sessionDeletionNotice } from '../bindings/session-deletion';
-import { StateDot } from '../presentation/primitives/StateDot';
 import { AgentTranscript } from './agent/AgentTranscript';
 import { Interactions } from './agent/Interactions';
 import { RuntimeFacts } from './agent/Activity';
@@ -44,22 +42,18 @@ import { deriveSessionProductState } from '../bindings/session-product';
 import { SessionStatus } from './SessionStatus';
 
 const PREFERENCES = 'rustx-console-view-v2';
-function readPreferences(): { endpoint: string; openViews: string[] } {
+function readPreferences(): { openViews: string[] } {
   try {
     const value = JSON.parse(localStorage.getItem(PREFERENCES) ?? 'null');
-    if (value && typeof value.endpoint === 'string' && Array.isArray(value.openViews)) {
-      const endpoint = new URL(value.endpoint);
-      if (['ws:', 'wss:'].includes(endpoint.protocol) && !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash && endpoint.pathname === '/') {
-        return { endpoint: endpoint.href, openViews: [...new Set<string>(value.openViews.filter((id: unknown) => typeof id === 'string'))].slice(0, 32) };
-      }
-    }
+    if (value && Array.isArray(value.openViews)) return { openViews: [...new Set<string>(value.openViews.filter((id: unknown) => typeof id === 'string'))].slice(0, 32) };
   } catch { /* Preferences are optional presentation, never recovery input. */ }
-  return { endpoint: 'ws://127.0.0.1:8080/', openViews: [] };
+  return { openViews: [] };
 }
 const defaultWorkspaceHost = new HttpWorkspaceHost();
-export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: AppServerClient; workspaceHost?: ProductHostWorkspaces }) {
+export function App({ client, workspaceHost = defaultWorkspaceHost, connection: providedConnection }: { client: AppServerClient; workspaceHost?: ProductHostWorkspaces; connection?: ConnectionController }) {
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot);
-  const [connectionOpen, setConnectionOpen] = useState(client.getSnapshot().connection !== 'connected');
+  const connection = useMemo(() => providedConnection ?? new ConnectionController(client), [providedConnection, client]);
+  const selection = useSyncExternalStore(connection.subscribe, connection.getSnapshot);
   const [createOpen, setCreateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -67,11 +61,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
   const [artifactPreview, setArtifactPreview] = useState<{ artifact: PreviewArtifact; resources: ArtifactResources }>();
   const [theme, setTheme] = useState(readTheme);
   useEffect(() => applyTheme(theme), [theme]);
-  useEffect(() => { if (state.connection === 'connected') setConnectionOpen(false); }, [state.connection]);
   const [conversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
   const [preferences] = useState(readPreferences);
-  const [endpoint, setEndpoint] = useState(preferences.endpoint);
-  const [token, setToken] = useState('');
+  const endpoint = state.endpoint ?? '';
   const [openViews, setOpenViews] = useState<string[]>(preferences.openViews);
   const [focus, setFocus] = useState<{ sessionId?: string; workspaceId?: string; generation?: number }>({ sessionId: preferences.openViews[0] });
   const selected = focus.sessionId;
@@ -87,7 +79,6 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
   const resumeViews = JSON.stringify(openViews.filter(id => state.views[id]?.attachmentIntent !== 'released'));
   const [error, setError] = useState('');
   const [creating, setCreating] = useState<number>();
-  const busy = creating === state.generation || ['connecting', 'reconnecting', 'resynchronizing'].includes(state.connection);
   const [sending, setSending] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<RuntimeClientSessionDeletePreview>();
 
@@ -122,10 +113,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
   useEffect(() => {
     try {
       // Persist only safe navigation. Never the token, drafts, snapshots or requests.
-      const url = new URL(endpoint);
-      if (['ws:', 'wss:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash && url.pathname === '/') localStorage.setItem(PREFERENCES, json({ endpoint, openViews: JSON.parse(resumeViews) }));
+      localStorage.setItem(PREFERENCES, json({ openViews: JSON.parse(resumeViews) }));
     } catch { /* Storage may be disabled in a trusted browser. */ }
-  }, [endpoint, resumeViews]);
+  }, [preferences, resumeViews]);
   // Every Session focus path publishes the same pair. Until native cwd has been
   // classified, its Workspace is explicitly empty rather than inherited.
   const focusSession = (id?: string, options: { attach?: boolean; ready?: () => void; preserveDraft?: boolean } = {}) => {
@@ -180,12 +170,6 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
       finally { if (generation === client.getSnapshot().generation) setCreating(undefined); }
     });
   };
-  const connect = (reconnect: boolean) => {
-    navigation.invalidate(); setError('');
-    const work = client.connect(endpoint, token, reconnect);
-    const generation = client.getSnapshot().generation;
-    void work.catch(cause => { if (generation === client.getSnapshot().generation) setError(String(cause)); });
-  };
   const deletePreview = (id: string) => run(async () => {
     const generation = client.getSnapshot().generation;
     const result = await client.request({ method: 'session/deletePreview', params: { session_id: id } }, 'deletion');
@@ -194,7 +178,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
     else setError(sessionDeletionNotice(result.result));
   });
   return <AppFrame sidebar={geometry => <SidebarRoot {...geometry} startSession={() => { setCreateOpen(true); }}
-    panels={[{ id: 'connection', label: 'Connection', icon: <IconApiOutline14 />, active: connectionOpen, select: () => setConnectionOpen(true) }]}
+    panels={[]}
     browser={(wide, expand) => <WorkspaceNavigation wide={wide} expand={expand} createOpen={createOpen} closeCreate={() => setCreateOpen(false)} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       creating={creating === state.generation} metadataChanged={removed => { if (selected) focusSession(selected, { preserveDraft: true }); else if (removed) setFocus(value => value.workspaceId === removed ? {} : value); }}
       workspace={workspace} selected={selected} selectWorkspace={id => { navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({ workspaceId: id, generation: state.generation }); }}
@@ -205,27 +189,13 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
     settings={wide => <SettingsTrigger wide={wide} onClick={() => setSettingsOpen(true)} />} />}
     rightOpen={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} rightPanel={geometry => <RightPanel {...geometry} open={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} close={() => { setInspectorOpen(false); setArtifactPreview(undefined); }} title={artifactPreview && artifactPreview.resources === artifacts ? 'Artifact preview' : 'Developer inspector'}>{artifactPreview && artifactPreview.resources === artifacts ? <ArtifactPreview key={artifactPreview.artifact.id} artifact={artifactPreview.artifact} resources={artifacts!} /> : <Inspector log={client.log} state={state} view={view} />}</RightPanel>}
     overlay={<>
-      <Modal open={connectionOpen} title="Connection" closeLabel="Close dialog" onClose={() => setConnectionOpen(false)}>
-    <section className="connection-form" aria-label="Connection">
-      <div className="connection-status"><StateDot state={connected ? 'done' : state.connection === 'error' || state.connection === 'incompatible' ? 'error' : state.connection === 'disconnected' ? 'idle' : 'warning'} /><strong>{{ connected: 'Connected', connecting: 'Connecting…', reconnecting: 'Connecting…', resynchronizing: 'Connecting…', disconnected: 'Disconnected', stale: 'Disconnected', incompatible: 'Version mismatch', error: 'Connection failed' }[state.connection]}</strong></div>
-      {state.error && <p role="alert">{state.error}</p>}
-      <details open={!connected}><summary>Connection settings</summary>
-      <label>WebSocket endpoint<Input aria-label="WebSocket endpoint" value={endpoint} disabled={busy || connected} onChange={event => setEndpoint(event.target.value)} /></label>
-      <label>Transport token<Input type="password" autoComplete="off" aria-label="Transport token" value={token} onChange={event => setToken(event.target.value)} /></label>
-      <small className="muted">Dedicated socket token; kept in page memory only.</small>
-      <Button variant="primary" disabled={busy || connected || !token} onClick={() => connect(false)}>Connect</Button>
-      </details>
-      <Button variant="outline" disabled={state.connection === 'disconnected'} onClick={() => { navigation.invalidate(); client.disconnect(); }}>Disconnect</Button>
-      <Button variant="outline" disabled={busy || !token} onClick={() => connect(true)}>Reconnect</Button>
-      {!!state.uncertain.filter(item => !item.interactionKey).length && <details><summary>Review uncertain operations</summary>
-        <p>First inspect the exact evidence in Developer Inspector and verify the affected conversation and work. Acknowledging a reviewed notice does not establish success or failure and never retries the operation.</p>
-        {state.uncertain.filter(item => !item.interactionKey).map(item => <div key={item.id} className="notice"><p>{item.sessionId ? sessionDisplayTitle(state.sessions.find(session => session.id === item.sessionId) ?? state.views[item.sessionId]?.summary) : 'Global operation'} · {item.method} · request {item.id}</p><Button onClick={() => client.acknowledgeDiagnostic(item.id)}>I have verified the affected work</Button></div>)}
-      </details>}
-    </section>
-      </Modal>
-      {settingsOpen && <Settings key={view?.id} onConnection={() => setConnectionOpen(true)} client={client} sessionId={view?.id} onClose={() => setSettingsOpen(false)} theme={theme} setTheme={setTheme} />}
+      {settingsOpen && <Settings key={view?.id} connection={connection} client={client} sessionId={view?.id} onClose={() => setSettingsOpen(false)} theme={theme} setTheme={setTheme} />}
     </>}>
     {!view && <header className="console-header"><strong>rustX</strong><Button aria-label="Toggle Inspector" onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></header>}
+    {!connected && !view && <section className="notice" aria-label="Connection recovery"><p>{selection.busy ? 'Connecting…' : 'Unable to connect to rustX'}</p>
+      {selection.mode === 'local' && !selection.busy && <p>No local managed connection is available. Reopen the launcher URL or configure a Remote App Server in Settings.</p>}
+      <Button disabled={selection.busy} onClick={() => void connection.reconnect()}>Reconnect</Button><Button onClick={() => setSettingsOpen(true)}>Show details</Button>
+    </section>}
     {Object.values(state.views).filter(item => item.deletionRecovery).map(item => <section key={item.id} className="notice" aria-label={`Deletion recovery for ${sessionDisplayTitle(item.summary)}`}>
       <p>{sessionDisplayTitle(item.summary)}: {item.deletionRecovery === 'committed_cleanup_pending' ? 'Session removed. Cleanup is still pending.' : 'Deletion durability needs verification.'}</p>
       <Button disabled={!connected || item.recoveringDeletion} onClick={() => run(async () => {
@@ -265,8 +235,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
       <div className={agentCss.tabs} role="tablist" aria-label="Conversation view" onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <Button className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? 'Chat' : 'Trajectory'}</Button>)}</div>
       </header>
       <SessionStatus product={product} recover={action => {
-        if (action === 'connection-settings') setConnectionOpen(true);
-        else if (action === 'connect') { if (token) connect(true); else setConnectionOpen(true); }
+        if (action === 'connection-settings') setSettingsOpen(true);
+        else if (action === 'connect') void connection.reconnect();
         else if (action === 'refresh') run(() => client.refresh(view.id));
         else focusSession(view.id, { attach: true, preserveDraft: true });
       }} />
@@ -308,6 +278,6 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
           setOpenViews(current => current.includes(result.session.id) ? current : [...current, result.session.id]);
         }} />}
 
-    </section> : <div className="empty"><h2>What would you like to work on?</h2><p>Choose New Session to select a Workspace, or open an existing Session from the sidebar.</p><p>Switching or closing views never cancels work.</p><SessionStatus product={product} recover={() => setConnectionOpen(true)} /></div>}
+    </section> : <div className="empty"><h2>What would you like to work on?</h2><p>Choose New Session to select a Workspace, or open an existing Session from the sidebar.</p><p>Switching or closing views never cancels work.</p></div>}
   </AppFrame>;
 }

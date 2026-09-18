@@ -10,6 +10,7 @@ import { Launcher } from '../src/launcher.ts';
 import type { Spawn, ChildSpec } from '../src/process.ts';
 import { LocalWorkspaceHost } from '../../web-console/host/workspaces.ts';
 import { parseArguments as parseTui } from '../../tui/src/cli.ts';
+import { handoff } from '../src/browser.ts';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: Error) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
@@ -91,7 +92,14 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   assert.deepEqual(config, { endpoint: 'ws://127.0.0.1:4242/', picker: true, metadataFile: join(scratch, 'workspaces.json'), roots: [
     { id: 'root-1', cwd: f.a, displayName: 'workspace with spaces' }, { id: 'root-2', cwd: f.b, displayName: 'second' },
   ] });
-  assert.deepEqual(readdirSync(scratch).sort(), ['host-config.json', 'transport-token']);
+  assert.deepEqual(readdirSync(scratch).sort(), ['host-config.json', 'transport-token', 'web-bootstrap.json']);
+  const bootstrapFile = web.spec.env!.RUSTX_WEB_BOOTSTRAP_CONFIG!;
+  const bootstrap = JSON.parse(readFileSync(bootstrapFile, 'utf8'));
+  assert.equal(statSync(bootstrapFile).mode & 0o777, 0o600);
+  assert.equal(bootstrap.transportTokenFile, tokenFile);
+  assert.equal(bootstrap.appServerEndpoint, config.endpoint);
+  assert.match(bootstrap.browserLaunchToken, /^[A-Za-z0-9_-]{43}$/);
+  assert.notEqual(bootstrap.browserLaunchToken, readFileSync(tokenFile, 'utf8'));
   assert.equal(statSync(configFile).mode & 0o777, 0o600);
   const host = new LocalWorkspaceHost(config);
   const nested = join(f.a, 'nested'); mkdirSync(nested);
@@ -100,7 +108,7 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   assert.equal(web.spec.component, 'web');
   assert.deepEqual(web.spec.args, [join(root, 'web-console/scripts/dev-carrier.ts')]);
   web.ready.resolve('http://127.0.0.1:4243/');
-  assert.deepEqual(await starting, { url: 'http://127.0.0.1:4243/', endpoint: config.endpoint, tokenFile, hostConfigFile: configFile, workspaces: [f.a, f.b] });
+  assert.deepEqual(await starting, { url: `http://127.0.0.1:4243/?token=${bootstrap.browserLaunchToken}`, endpoint: config.endpoint, tokenFile, hostConfigFile: configFile, workspaces: [f.a, f.b] });
   assert.equal(h.calls.length, 2); // no provider, fixture, or extra Host writer
   const terminal = launcher.settle(130);
   assert.equal(launcher.settle(143), terminal);
@@ -196,6 +204,28 @@ test('spawn exception after scratch allocation converges on cleanup without star
 test('native readiness parser accepts only the bounded bound-loopback announcement', () => {
   assert.equal(appServerEndpoint('rustx app-server listening ws://127.0.0.1:1234'), 'ws://127.0.0.1:1234');
   for (const line of ['listening ws://127.0.0.1:1234', 'rustx app-server listening ws://0.0.0.0:1234', 'rustx app-server listening ws://127.0.0.1:12 unexpected', 'x'.repeat(513)]) assert.equal(appServerEndpoint(line), undefined);
+});
+
+test('each composition mints distinct credentials; browser handoff waits for carrier readiness', async t => {
+  const f = fixture(); t.after(f.remove);
+  const seen = new Set<string>();
+  for (const noOpen of [false, true]) {
+    const h = harness(), launcher = new Launcher(root, h.spawn), opened: string[] = [], printed: string[] = [];
+    const started = launcher.start({ ...f.args, noOpen }).then(async ready => {
+      assert.ok(ready); await handoff(ready.url, noOpen, async url => { opened.push(url); }, line => printed.push(line)); return ready;
+    });
+    const token = readFileSync(h.calls[0].spec.args.at(-1)!, 'utf8');
+    assert.ok(!seen.has(token)); seen.add(token);
+    h.calls[0].ready.resolve('ws://127.0.0.1:1234/'); await h.count(2);
+    const config = JSON.parse(readFileSync(h.calls[1].spec.env!.RUSTX_WEB_BOOTSTRAP_CONFIG!, 'utf8'));
+    assert.ok(!seen.has(config.browserLaunchToken)); seen.add(config.browserLaunchToken);
+    assert.deepEqual(opened, []); assert.deepEqual(printed, []);
+    h.calls[1].ready.resolve('http://127.0.0.1:1235/'); const ready = await started;
+    assert.deepEqual(opened, noOpen ? [] : [ready.url]); assert.equal(printed.length, 1);
+    assert.ok(!printed.join('').includes(token));
+    const settled = launcher.settle(0); h.calls.forEach(call => call.reap.resolve()); await settled;
+    assert.equal(existsSync(config.transportTokenFile), false);
+  }
 });
 
 for (const [forwarded, expected] of [

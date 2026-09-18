@@ -5,6 +5,10 @@ For normal local development with your own native settings, use the
 acceptance environment; its fake provider, scenario assertions, isolated CFG3 sources and
 test Workspaces are intentionally fixture-only.
 
+Normal local startup is `pnpm --dir dev web -- --workspace /absolute/path/to/project`:
+the browser opens, authenticates, reaches a clean URL and connects automatically.
+Reload reconnects automatically. `--no-open` prints the startup URL without browser handoff.
+
 
 This guide uses real rustX App Server, native Tools, the local Product Host and
 strict local provider scripts. No paid model or external MCP service is needed.
@@ -32,8 +36,10 @@ Host path (the launcher itself relinquishes its Host before printing):
 RUSTX_WORKSPACE_HOST_CONFIG=/printed/host-config.json pnpm --dir web-console preview --port 4173 --strictPort
 ```
 
-Open `http://127.0.0.1:4173`. Read the printed token file locally, enter the endpoint
-and transport token, and Connect. Workspace A and B must appear. If they do not,
+This independently managed acceptance fixture uses explicit Remote mode. Open
+`http://127.0.0.1:4173`, then **Settings → Connection → Remote App Server**. Read the
+fixture's printed token file locally, enter its endpoint and transport token, and
+Connect. Close Settings. Workspace A and B must appear. If they do not,
 check the Host environment variable; do not bypass authorization by entering cwd.
 The fixture uses isolated User/Workspace configuration and runtime roots, removed
 on shutdown, with fake credential references only. Both scopes participate in CFG3
@@ -69,7 +75,8 @@ exploration intentionally leaves the provider script unconsumed.
    effective changes; current loaded and frozen admitted request stay
    `fixture/console-model`. Reset Workspace then Save Workspace to remove that
    authored selection. Return to Chat.
-4. Disconnect/reconnect, then reload and re-enter the token. A is still running;
+4. Disconnect/reconnect in Settings → Connection, then reload and explicitly select
+   Remote again and re-enter the fixture token. A is still running;
    the browser neither replays the prompt nor cancels it. Close A's view, then:
    `curl -fsS -X POST "$control/gates/finish-a/release"`.
    Open A again; its settled answer occurs once. B's history stays independent.

@@ -56,8 +56,10 @@ pnpm --dir dev web -- \
 ```
 
 It owns the real App Server, ephemeral transport credential, exact-root Product
-Host configuration, and Vite carrier. Open the printed browser URL and enter the
-printed endpoint plus the contents of the private token file in **Connect**.
+Host configuration, browser launch credential, and Vite carrier. The browser opens,
+authenticates, redirects to a clean URL and connects automatically. No endpoint or
+token input is needed. Reload reconnects through fresh authenticated bootstrap.
+Use `--no-open` for manual browser handoff; the authenticated startup URL is printed once.
 The native settings resolver remains authoritative; no fake provider starts.
 Choose an authorized Workspace or open a listed native Session. The browser never
 supplies arbitrary cwd authority or supplies configuration authority.
@@ -66,15 +68,24 @@ Direct `pnpm dev`/`preview` remain component-only commands for focused UI work o
 an independently managed runtime/Host. The [Host contract](WORKSPACES.md) describes
 that operator-owned integration. Use the launcher for complete local composition.
 
-Authentication is #36's **local/trusted, single writable controller** boundary.
+Native authentication remains #36's **local/trusted, single writable controller** boundary.
 The browser sends subprotocols `rustx.app-server.v8` and `rustx-token.<token>` in its
-WebSocket handshake. No arbitrary authorization header, URL credential, login,
+WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
 resolved by rustX and never entered, stored or requested here. The dedicated socket
-token stays in page memory; reload requires entering it again. Only the safe
-endpoint and up to 32 navigation IDs are stored in localStorage. They are hints to
+token stays in page memory. The carrier's separate launch token is exchanged only
+at `GET /?token=…`, before loading application resources. Its browser session is
+HttpOnly, SameSite=Strict, host-only and bound to the exact port for this process lifetime.
+Only safe presentation metadata and up to 32 navigation IDs are stored in localStorage. They are hints to
 read server state, not persisted conversation or interaction state.
+
+For an external App Server, explicitly choose **Settings → Connection → Remote App
+Server**, then supply its `ws://` or `wss://` root endpoint and transport token.
+The token remains memory-only; reload starts in Local mode and never restores a
+remote connection implicitly. Standalone `pnpm dev` without bootstrap shows recovery
+and directs you to Settings. Neither mode falls back into the other. Remote attachment
+does not grant Product Host Workspace authority. See [CONNECTION.md](CONNECTION.md).
 
 See [App Server transport/protocol](../docs/app-server-protocol.md) for supported
 bind/authentication semantics and deployment boundaries. No browser UI can redact

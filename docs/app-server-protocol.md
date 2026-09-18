@@ -126,6 +126,14 @@ and process supervision. Use secure termination for non-loopback deployments. Al
 admitted clients act within the same user environment; rustX adds no accounts,
 tenancy, workspace ACLs, or authentication inside `initialize`.
 
+The [local Web launcher](../web-console/CONNECTION.md) implements delivery through
+a separate browser launch-token exchange and process-ephemeral, authority-bound
+HttpOnly session. Its authenticated same-origin bootstrap returns the exact native
+endpoint/token; the browser then connects directly using the v8 subprotocols above.
+The browser launch credential is never a valid substitute for the native credential.
+Remote Web attachment is explicit Settings configuration. Neither browser login
+nor remote attachment grants Product Host Workspace filesystem authority.
+
 ### Finite delivery policy
 
 | Bound | Value | Terminal behavior |

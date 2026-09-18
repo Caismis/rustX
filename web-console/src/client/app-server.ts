@@ -184,8 +184,11 @@ export class AppServerClient {
       throw new Error('Use a ws:// or wss:// endpoint at / with no credentials, query, or fragment.');
     }
     if (!/^[A-Za-z0-9_-]{43,128}$/.test(token)) throw new Error('Enter the dedicated 43–128 character App Server transport token.');
-    this.disconnect();
+    const attempt = ++this.connectionAttempt;
+    if (this.socket) this.endConnection('disconnected');
     const generation = this.state.generation;
+    if (this.closing) await this.closing;
+    if (generation !== this.state.generation || attempt !== this.connectionAttempt) return;
     this.publish({ endpoint: url.href, connection: reconnect ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     try {
       const socket = this.socketFactory(url.href, ['rustx.app-server.v8', `rustx-token.${token}`]);
@@ -202,7 +205,7 @@ export class AppServerClient {
         const timer = setTimeout(() => fail('WebSocket connection timed out.'), this.timeoutMs);
         socket.onopen = () => { clearTimeout(timer); if (this.current(generation)) resolve(); else reject(new Error('Obsolete connection.')); };
         socket.onmessage = event => { if (this.current(generation)) this.receive(event.data, generation); };
-        socket.onclose = () => { clearTimeout(timer); fail('WebSocket closed. Check endpoint and transport token.'); };
+        socket.onclose = () => { this.closedSockets.add(socket); clearTimeout(timer); fail('WebSocket closed. Check endpoint and transport token.'); };
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
@@ -239,7 +242,10 @@ export class AppServerClient {
   }
   private current(generation: number) { return generation === this.state.generation && !!this.socket; }
   /** Explicit transport loss only; never dispatches semantic cancellation or unload. */
-  disconnect() { this.endConnection('disconnected'); }
+  private closing?: Promise<void>;
+  private connectionAttempt = 0;
+  private closedSockets = new WeakSet<Socket>();
+  disconnect() { ++this.connectionAttempt; this.endConnection('disconnected'); return this.closing; }
   private lose(generation: number) {
     if (this.current(generation)) this.endConnection('stale');
   }
@@ -269,7 +275,15 @@ export class AppServerClient {
         ...view, ...(view.recoveringDeletion ? { recoveringDeletion: false, deletionRecovery: undefined } : {}), history: undefined, target: undefined, submissions: undefined, inboundRequests: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
       }])),
     });
-    oldSocket?.close();
+    if (oldSocket && !this.closedSockets.has(oldSocket)) {
+      const previousClose = oldSocket.onclose;
+      this.closing = new Promise<void>((resolve, reject) => {
+        const deadline = setTimeout(() => reject(new Error('Previous WebSocket did not close. Reload before reconnecting.')), this.timeoutMs);
+        oldSocket.onclose = event => { clearTimeout(deadline); this.closedSockets.add(oldSocket); previousClose?.(event); resolve(); };
+        oldSocket.close();
+      });
+      void this.closing.catch(() => {});
+    }
   }
   /** Correlation only. No call is ever retried. Every payload is a generated union. */
   async request<T extends MethodResult['type']>(operation: Request1, expected: T): Promise<Extract<MethodResult, { type: T }>> {

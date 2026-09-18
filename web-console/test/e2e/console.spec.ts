@@ -1,3 +1,4 @@
+import { connectRemote } from './shell-actions';
 import { closeSessionView } from './shell-actions';
 import { showInspector } from './shell-actions';
 import { chooseWorkspace, connectionAction, closeSettings } from './shell-actions';
@@ -19,10 +20,8 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const connect = async () => {
-    await page.getByLabel('WebSocket endpoint').fill(`${fixture.endpoint}/`);
-    await page.getByLabel('Transport token').fill(fixture.token);
-    await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0); await showInspector(page);
+    await connectRemote(page, `${fixture.endpoint}/`, fixture.token);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
   };
   const send = async (text: string) => { await page.getByRole('textbox', { name: 'Message', exact: true }).fill(text); await page.getByRole('button', { name: 'Send', exact: true }).click(); };
   const reload = async () => { await page.reload(); await connect(); };
@@ -48,6 +47,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     // Configuration source commits cannot rewrite a running admitted attempt.
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    await settings.getByRole('button', { name: 'Overview', exact: true }).click();
     await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
     await settings.getByRole('button', { name: 'Model', exact: true }).click();
     await settings.getByRole('combobox', { name: 'Model', exact: true }).selectOption('fixture/second-model');
@@ -85,7 +85,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await connectionAction(page, 'Disconnect');
     await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0); await showInspector(page);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     await reload(); await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     const incarnationA = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).runtime_incarnation;
@@ -133,7 +133,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await fixture.control('observations/await?kind=response_completed&count=7&timeoutMs=30000');
     await remote.shutdown(); remote = undefined;
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0); await showInspector(page);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
     await expect(page.getByRole('region', { name: 'Questionnaire' })).toBeVisible();
     await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit answers' }).click();
     await expect(page.getByText('Detached question completed.', { exact: true })).toBeVisible();
@@ -142,6 +142,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.locator(`button[data-session-id="${idA}"]`).click();
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Overview', exact: true }).click();
     await page.getByRole('button', { name: 'Reload', exact: true }).click();
     await expect(page.getByRole('status').filter({ hasText: 'Configuration published' })).toBeVisible();
     await closeSettings(page);

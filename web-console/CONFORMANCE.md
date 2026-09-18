@@ -6,6 +6,25 @@ real App Server WebSockets, local provider HTTP/SSE and the actual Node Product
 Host. Owner races stay in deterministic Rust tests; component tests cover bounded
 presentation mechanics. Passing only the browser suite is insufficient.
 
+## Local bootstrap and explicit Remote Settings (WEB-13)
+
+Normal startup uses the real dev launcher and requires zero endpoint/token input;
+`--no-open` prints the authenticated startup URL without browser handoff. External
+fixtures explicitly select Settings → Connection → Remote App Server. Browser auth
+never grants Workspace filesystem authority; see [CONNECTION.md](CONNECTION.md).
+
+| Boundary | Executable evidence |
+| --- | --- |
+| Separate fresh credentials, 0600 bootstrap scratch, readiness/settlement | `dev/test/launcher.test.ts`, `process.test.ts` |
+| Boolean forwarding and sanitized browser handoff | `dev/test/browser.test.ts` |
+| Root exchange, malformed/wrong/missing credentials, exact bootstrap, no-store, port binding, secret rotation, unauthorized root | `test/browser-auth.test.ts` |
+| Mode-local recovery, no fallback, delayed bootstrap fence, exactly-once close before replacement | `test/connection-controller.test.ts` |
+| Native refusal of browser token, clean URL, automatic local connect/reload, storage isolation, exact roots | `test/e2e/dev-launcher.spec.ts` |
+| Explicit Remote Settings and keyboard reachability | Existing real-server browser fixtures and `accessibility.spec.ts` |
+
+App Server protocol remains v8. Carrier bootstrap is not JSON-RPC and ordinary
+App Server traffic continues directly over its native authenticated WebSocket.
+
 ## Historical prerequisite baseline (before CFG3)
 
 Fetched base: `9980fc719a573ece0cab0114311345dc4c78b621`. The following issues are

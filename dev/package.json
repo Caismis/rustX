@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.13.1",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "app-server": "node src/main.ts app-server",
     "tui": "node src/main.ts tui",
@@ -11,5 +13,11 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.ts"
   },
-  "devDependencies": { "@types/node": "24.10.1", "typescript": "5.9.3" }
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "open": "11.0.4"
+  }
 }

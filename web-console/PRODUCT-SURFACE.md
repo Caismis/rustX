@@ -1,5 +1,10 @@
 # WEB-12 product / diagnostic boundary
 
+WEB-13 follow-up: the default Connection Sidebar/modal and manual transport form
+are removed. Local launch authenticates and connects automatically. Recovery shows
+Reconnect / Show details. Explicit Remote App Server configuration and mode choice
+live in Settings → Connection; transport details remain advanced. See [CONNECTION.md](CONNECTION.md).
+
 Base: `66475c83ed7ff1cbb2be880b040913023a463f55`.
 This audit precedes implementation. Native authority and WEB-11 composer behavior
 remain inputs, not redesign targets.

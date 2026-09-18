@@ -1,3 +1,4 @@
+import { connectRemote } from './shell-actions';
 import { chooseWorkspace } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { appendFileSync, existsSync } from 'node:fs';
@@ -11,15 +12,14 @@ test('CFG3 structured source authoring, inert definitions, CAS and explicit publ
   page.on('pageerror', error => errors.push(error.message));
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/');
-    await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
-    await page.getByLabel('Transport token').fill(fixture.token);
-    await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Connection', exact: true })).toHaveCount(0);
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    await settings.getByRole('button', { name: 'Overview', exact: true }).click();
     await expect(settings.getByRole('tab', { name: 'Effective', exact: true })).toHaveAttribute('aria-selected', 'true');
     await settings.getByText('Source paths', { exact: true }).click();
     await expect(settings.getByText(fixture.settings, { exact: true })).toBeVisible();
