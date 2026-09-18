@@ -36,7 +36,6 @@ label { display: grid; gap: 5px; font-size: 12px; }
 .session-panel, .conversation-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .console-header { height: 60px; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 20px; }
 .conversation-scroll { padding: 20px 24px; }
-.agent-composer-hint { color: var(--dsw-alias-label-tertiary); font-size: 11px; padding: 0 14px 6px; line-height: 16px; }
 .agent-control { display: flex; flex-direction: column; min-width: 0; max-width: 280px; }
 .agent-control small { font-size: 10px; padding: 0 6px; }
 .agent-diff { padding: 10px 14px; overflow: auto; }

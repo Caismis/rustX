@@ -58,10 +58,10 @@ export function AgentControls({ client, view, kind }: { client: AppServerClient;
  </div>;
  const desired = source?.prospective_approval_mode ?? undefined;
  const effective = activeAttempt(view.snapshot) ? view.snapshot?.attempt?.execution_settings?.approval_mode : view.snapshot?.effective_approval_mode;
- return <div className="agent-control"><PermissionSelect key={`${generation}:${target?.attachment_id}`} choices={[{ id: 'policy', label: 'Tool policy' }, { id: 'full_access', label: 'Full access' }]} desired={desired} disabled={disabled} loading={blocked} load={load}
+ const effectiveLabel = `Effective${activeAttempt(view.snapshot) ? ' for running attempt' : ''}: ${effective ?? 'unavailable'}`;
+ return <div className="agent-control"><PermissionSelect title={effectiveLabel} key={`${generation}:${target?.attachment_id}`} choices={[{ id: 'policy', label: 'Tool policy' }, { id: 'full_access', label: 'Full access' }]} desired={desired} disabled={disabled} loading={blocked} load={load}
  choose={mode => { if (mode !== 'policy' && mode !== 'full_access') return; void mutate(() => client.request({ method: 'configuration/sourceWrite', params: { session_id: view.id, expected_revision: source!.workspace.revision, mutation: { kind: 'config', scope: 'workspace', mutation: { unit: 'approval', authored: mode } } } }, 'source_settings')); }}/>
- <small>Effective{activeAttempt(view.snapshot) ? ' for running attempt' : ''}: {effective ?? 'unavailable'}</small>
- {source?.loaded?.pending_reload && <><small>Desired: {desired ?? 'unavailable'} · pending Reload</small><Button size="sm" disabled={disabled || blocked || activeAttempt(view.snapshot)} onClick={() => void mutate(() => client.request({ method: 'configuration/reload', params: { target: target! } }, 'configuration_reloaded'))}>Apply saved policy</Button></>}
+ {source?.loaded?.pending_reload && <><small>{effectiveLabel}</small><small>Desired: {desired ?? 'unavailable'} · pending Reload</small><Button size="sm" disabled={disabled || blocked || activeAttempt(view.snapshot)} onClick={() => void mutate(() => client.request({ method: 'configuration/reload', params: { target: target! } }, 'configuration_reloaded'))}>Apply saved policy</Button></>}
  {error && <p role="alert">{error}</p>}{blocked && !busy && error && <Button size="sm" disabled={!attached} onClick={load}>Reread policy</Button>}
  </div>;
 }

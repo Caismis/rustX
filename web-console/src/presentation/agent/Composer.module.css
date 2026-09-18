@@ -126,30 +126,10 @@
   height: 0;
 }
 
-/* The draft's scrollport, and the ONLY scrolling box in the composer. The
-   contenteditable grows with its content inside; the 14-line cap lives here
-   because this is the box the cap describes. */
-.scroll {
-  max-height: var(--dsh-composer-text-max-height);
-  overflow-y: auto;
-  /* Keeps the bar off the card's right border; .input's right pad gives the
-     4px back so the text column is unchanged. */
-  margin-right: 4px;
-}
+/* The native textarea owns capped draft overflow; this inset never scrolls. */
+.editor { margin-right: 4px; }
 
-/* The card's 22px corner arc still overlaps the scrollport's top (8px top
-   pad reaches only y=8): start the thumb's travel below the arc so it never
-   pokes outside the capsule. WebKit-path only; Firefox's thin bar has no
-   track margin, an accepted remainder. */
-.scroll::-webkit-scrollbar-track {
-  margin-top: 8px;
-}
-
-/* Auto-grow anchor: the contenteditable is in normal flow and sets the
-   draft's height; the placeholder rides it absolutely. */
-.grow {
-  position: relative;
-}
+.input::-webkit-scrollbar-track { margin-top: 8px; }
 
 /* Machine pending dot (adjudicating / submitting). */
 .pending {
@@ -166,8 +146,7 @@
   to { opacity: 1; }
 }
 
-/* The contenteditable draft surface (grows with its content; .scroll caps
-   and scrolls it). figma .InputText 34:10434 drew pl 16 / pr 12 / pt 4; the
+/* The measured native draft surface grows until its own CSS cap. figma .InputText 34:10434 drew pl 16 / pr 12 / pt 4; the
    left pad tightened to 14, and the right pad is 8 here plus .scroll's 4px
    bar inset. */
 .input {
@@ -175,6 +154,13 @@
   /* Docked floor: one 24px line + 4px top pad = 28 content height; 36 leaves
      an 8px breath below the line (the hero keeps its own 52px floor below). */
   min-height: 36px;
+  max-height: var(--dsh-composer-text-max-height);
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  resize: none;
+  overflow-y: auto;
   padding: 4px 8px 0 14px;
   font-family: var(--dsw-font-family);
   font-size: inherit;
@@ -187,6 +173,10 @@
   /* Business blue, not brand-primary: that token resolves to ink in this sheet. */
   caret-color: var(--dsw-alias-state-business-primary);
 }
+
+/* Keyboard focus follows the rounded card, not a rectangular native editor. */
+.input:focus-visible { outline: none; }
+.card:has(.input:focus-visible) { --dsw-elevation-stroke-color: var(--dsw-alias-state-business-primary); }
 
 /* Lexical paragraphs are <p> blocks: strip the UA margins so the surface
    keeps the textarea's line rhythm. */
@@ -400,17 +390,29 @@
   cursor: pointer;
 }
 
-/* Native textarea occupies the Harness editor seat. */
-.input { width: 100%; border: 0; background: transparent; resize: none; min-height: 72px; }
-.row { container-type: normal; flex-wrap: wrap; }
-.trailing { flex-wrap: wrap; }
-
-/* Native mailbox delivery is a bounded third control beside model and Stop. */
-.trailing select { max-width: 82px; background: transparent; color: inherit; border: 0; font: inherit; }
-.primary { flex-shrink: 0; }
-@media (max-width: 600px) {
- .row { gap: 8px; }
- .tools { width: 100%; }
- .trailing { width: 100%; gap: 6px; justify-content: flex-end; }
- .trailing > div { min-width: 0; flex-shrink: 1; }
+/* File intake is a quiet accessory; + remains the command launcher. */
+.attachment {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
 }
+.attachment:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.attachment:disabled { opacity: .5; cursor: default; }
+/* Native control popovers use fixed positioning; do not add a size container. */
+.row { container-type: normal; }
+.dock { color: var(--dsw-alias-label-tertiary); font-size: 12px; }
+@media (max-width: 600px) {
+  .row, .tools, .modes, .trailing { gap: 8px; }
+  .trailing { max-width: 100%; }
+  .trailing > div { min-width: 0; flex-shrink: 1; }
+}
+
+.attachments { display: flex; gap: 10px; overflow-x: auto; padding: 6px 14px; }
+.attachments:empty { display: none; }

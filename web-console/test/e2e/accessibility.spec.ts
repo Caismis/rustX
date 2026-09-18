@@ -29,7 +29,13 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await tabTo(message); await page.keyboard.type('/mdl'); await page.keyboard.press('Enter');
     const dialog = page.getByRole('dialog', { name: '/model', exact: true }); await expect(dialog).toBeVisible();
     await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(message).toBeFocused();
-    expect(await message.evaluate(el => getComputedStyle(el).outlineStyle)).not.toBe('none');
+    // The composer paints keyboard focus on its rounded card, not a second
+    // rectangular outline around the native text scrollport.
+    expect(await message.evaluate(el => {
+      const card = getComputedStyle(el.closest('[data-composer-card]')!);
+      return el.matches(':focus-visible') && card.boxShadow !== 'none'
+        && card.getPropertyValue('--dsw-elevation-stroke-color').trim() === card.getPropertyValue('--dsw-alias-state-business-primary').trim();
+    })).toBe(true);
     await page.keyboard.press('ControlOrMeta+A'); await page.keyboard.press('Backspace');
     const chat = page.getByRole('tab', { name: 'Chat', exact: true }); await tabTo(chat);
     await page.keyboard.press('ArrowRight');

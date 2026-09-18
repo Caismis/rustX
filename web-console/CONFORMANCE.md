@@ -126,3 +126,23 @@ Agent references; the real-server suite runs the same production entry path.
 | Native model/catalog/profile, no inferred options, uncertain mutation Send fence | `agent.test.tsx`, `commands.test.tsx` |
 | Desired source CAS versus active frozen policy and explicit Reload | `agent.test.tsx`, native `agent_permission_projection_uses_native_resolution_and_source_cas`, CFG3 tests |
 | Light/dark/narrow and shared shell | pinned `agent.spec.ts`, `shell.spec.ts`, `foundation.spec.ts`; keyboard real-server acceptance |
+
+
+## WEB-11 composer interaction contract
+
+| Contract | Deterministic evidence |
+| --- | --- |
+| One primary seat, Queue default, accelerated Steer, commands, upload/ack/cancel gates | `submission-policy.test.ts` (21-case pure matrix), `composer.test.tsx`, `composer-context.test.tsx` exact App Server request assertions |
+| 36px floor, measured growth/shrink, configured cap, one text scrollport, restored draft mount/Session switch | `agent.spec.ts` DOM/computed-style geometry assertions at 1440/390px |
+| Todo → Goal → Queue → Composer; draft/node identity survives independent docks | `composer-context.test.tsx`; `agent.spec.ts` light/dark desktop/mobile context references |
+| Upload picker/remove, plain Enter/button/accelerated native method, compact desktop toolbar | `agent.spec.ts`; existing `artifacts.test.tsx` and real `uploads.spec.ts` retain failure, receipts and no-replay coverage |
+| Keyboard focus on the rounded composer card | `accessibility.spec.ts` keyboard traversal at 390/820/1280/1600px checks the rendered focus stroke and unchanged focus restoration |
+| Native queue CAS, cancellation settlement and reconnect uncertainty | Existing `agent.test.tsx`, `composer-context.test.tsx`, real `composer.spec.ts`, `console.spec.ts`, `commands.spec.ts`, `recovery.spec.ts` |
+
+Visual authority remains the digest-pinned Playwright 1.63.0 container. Use
+`pnpm --dir web-console test:e2e:update` only for reviewed baseline changes, then
+`pnpm --dir web-console test:e2e` with zero pixel tolerance. `CONTAINER_ENGINE=podman`
+is the supported local engine selection when Docker is absent. Current composer
+references cover idle empty/draft, running Stop/Queue, attachments and the context
+stack in both themes at 1440px and 390px. Shell/Settings baselines also include the
+changed composer behind their overlays; no shell or Settings redesign is implied.

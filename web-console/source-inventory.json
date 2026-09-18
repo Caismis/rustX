@@ -1675,7 +1675,7 @@
       "destination": "web-console/src/presentation/agent/Composer.module.css",
       "upstream_sha256": "dda4354ed278a20a2eda4e18fcde289d9c9ba21d2c039bc400f84237cd7ac2a1",
       "classification": "A",
-      "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
+      "treatment": "Harness card width, 22px radius, elevation, 36px floor and toolbar rhythm retained. Native textarea alone owns measured growth and capped overflow; subdued file accessory and bounded responsive control groups.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -1684,7 +1684,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "2772cf0b91909e8a8790b1ab9d3b332ac135e03a31dee3b381986e63805c4f58"
+      "local_sha256": "f0a91242712b6afee3e7bb2cc96a53c0fb96a44961d83c3c7c4b45b80d7f1d24"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1972,7 +1972,7 @@
       "destination": "web-console/src/presentation/agent/PermissionSelect.tsx",
       "upstream_sha256": "d426510c88d64789c0f126d2e2649e7ddb7a2f46f7f8832cc69fd5e563045958",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
+      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. Optional effective-policy tooltip keeps ambient caption out of the composer toolbar; actionable pending Reload remains in the native binding.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../primitives/Menu",
@@ -1986,7 +1986,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "3ab24845f0a044e783411987c37493383aec38ce3f75d1786d60f5dc8c9776cc"
+      "local_sha256": "af447b2c365e9f558a0c20a306cba12f2f9451bc31cec7ff3a63108fb5300903"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1994,7 +1994,7 @@
       "destination": "web-console/src/app/agent/AgentComposer.tsx",
       "upstream_sha256": "6e627be2ae8990290e94fc9d35d36802695c457fd98a8655fd73e52c4ce1d2db",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
+      "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. No local delivery preference, runtime or slot/store authority.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v6",
@@ -2007,6 +2007,8 @@
         "../commands/matching",
         "../commands/registry",
         "../composer/editor-content",
+        "../composer/submission-policy",
+        "../composer/useTextareaAutosize",
         "react"
       ],
       "excluded_dependencies": [
@@ -2015,7 +2017,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "75923b518aa8abe20672b8a4deba1b914f17bb7424e9c52cac3180b382885962"
+      "local_sha256": "11ee69f375ebe110e4e418925ce4bc2dd4921c00773348ef338e2fd5f004fdf8"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2134,6 +2136,30 @@
         "Host filesystem ownership",
         "Cordis/plugin lifecycle",
         "Harness configuration and runtime stores"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "62b24a76365530ced9d3590d076aa7960ab1ac355451ceb9a1aa7fcd28578768",
+      "treatment": "Busy Enter/button Queue default and accelerated Steer mapping adapted as a pure rustX function; native readiness and command labels added. Host settings, stores, queue steering and transport authority excluded.",
+      "destination": "web-console/src/app/composer/submission-policy.ts",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Harness snapshot store and Host settings",
+        "Cordis/plugin runtime",
+        "Harness delivery-window and queue authority"
+      ],
+      "local_sha256": "4f721ec65c954be66d25b7a7024ad2ede6b87cb8a3b83be9b2757e0f43981102",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
+          "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "upstream_sha256": "6e627be2ae8990290e94fc9d35d36802695c457fd98a8655fd73e52c4ce1d2db",
+          "treatment": "State-derived root primary seat and truthful ordinary-message labels adapted to native readiness and typed command grammar."
+        }
       ]
     }
   ],
@@ -2287,6 +2313,78 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "ccf268181e2f49c086b09a93f8d56e45657898e13aedf08a395bf1cb6f33c911",
       "treatment": "Agent presentation composition/dispatch inspected; Harness events, controllers, slots and host operations excluded"
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "upstream_sha256": "98fd669d20af309e31bf2cf0cc591b247905acf9ae02c98a3248c02429742477",
+      "treatment": "WEB-11 comparison: editor geometry, toolbar, primary action, gesture policy and dock seats reviewed. Only explicitly inventoried material adapted; no settings, Lexical or slot runtime imported."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "upstream_sha256": "f7483b4349fe46089ae368d5b785d3576d16c284077c64ec039d19bd50dae2ae",
+      "treatment": "WEB-11 comparison: editor geometry, toolbar, primary action, gesture policy and dock seats reviewed. Only explicitly inventoried material adapted; no settings, Lexical or slot runtime imported."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "upstream_sha256": "e4594b586dbfb9ff24e8dab528423128cfde19e5ee2f0a100c01c1b70c849582",
+      "treatment": "WEB-11 comparison: editor geometry, toolbar, primary action, gesture policy and dock seats reviewed. Only explicitly inventoried material adapted; no settings, Lexical or slot runtime imported."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/contract/slots.ts",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "upstream_sha256": "c67d01471d8d867b44cd3e4411c331655c1399cc255e24e9a649d4af5fcbf245",
+      "treatment": "WEB-11 comparison: editor geometry, toolbar, primary action, gesture policy and dock seats reviewed. Only explicitly inventoried material adapted; no settings, Lexical or slot runtime imported."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "upstream_sha256": "62b24a76365530ced9d3590d076aa7960ab1ac355451ceb9a1aa7fcd28578768",
+      "treatment": "WEB-11 comparison: editor geometry, toolbar, primary action, gesture policy and dock seats reviewed. Only explicitly inventoried material adapted; no settings, Lexical or slot runtime imported."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/submission-settings.ts",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "upstream_sha256": "3f01ef83124ae33dd54b8f1e057818ea6ba8b971a558209ab7c34344273ae5a3",
+      "treatment": "WEB-11 comparison: editor geometry, toolbar, primary action, gesture policy and dock seats reviewed. Only explicitly inventoried material adapted; no settings, Lexical or slot runtime imported."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "6e627be2ae8990290e94fc9d35d36802695c457fd98a8655fd73e52c4ce1d2db",
+      "treatment": "WEB-11 comparison: editor geometry, toolbar, primary action, gesture policy and dock seats reviewed. Only explicitly inventoried material adapted; no settings, Lexical or slot runtime imported."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "dda4354ed278a20a2eda4e18fcde289d9c9ba21d2c039bc400f84237cd7ac2a1",
+      "treatment": "WEB-11 comparison: editor geometry, toolbar, primary action, gesture policy and dock seats reviewed. Only explicitly inventoried material adapted; no settings, Lexical or slot runtime imported."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "03880a4702978e8403a882f9036205ab7ff791f80cc06e47fdafa4fef6971c67",
+      "treatment": "WEB-11 comparison: editor geometry, toolbar, primary action, gesture policy and dock seats reviewed. Only explicitly inventoried material adapted; no settings, Lexical or slot runtime imported."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/contract/slots.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "6a190507892b38fc99e242618bdd513de3df7153563d446d2d06aad7122d4fa8",
+      "treatment": "WEB-11 comparison: editor geometry, toolbar, primary action, gesture policy and dock seats reviewed. Only explicitly inventoried material adapted; no settings, Lexical or slot runtime imported."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "62b24a76365530ced9d3590d076aa7960ab1ac355451ceb9a1aa7fcd28578768",
+      "treatment": "WEB-11 comparison: editor geometry, toolbar, primary action, gesture policy and dock seats reviewed. Only explicitly inventoried material adapted; no settings, Lexical or slot runtime imported."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/submission-settings.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "3f01ef83124ae33dd54b8f1e057818ea6ba8b971a558209ab7c34344273ae5a3",
+      "treatment": "WEB-11 comparison: editor geometry, toolbar, primary action, gesture policy and dock seats reviewed. Only explicitly inventoried material adapted; no settings, Lexical or slot runtime imported."
     }
   ],
   "historical_inspection": {
