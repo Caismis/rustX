@@ -10,11 +10,12 @@ import { t } from '../locale/translate';
 import css from './WorkspaceBrowser.module.css';
 
 /** Native adapters supply facts/gestures. This component owns only visual state. */
-export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, query, search, open, rename, fork, remove, closeView,
+export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, query, search, open, rename, fork, remove, closeView, closeAllViews,
   selectWorkspace, create, renameWorkspace, removeWorkspace, addWorkspace, refresh, previous, next, notices }: {
   wide: boolean; expand: () => void; groups: readonly GroupNode[]; sessions: readonly SessionNode[]; selected?: string;
   query: string; search: (text: string) => void; open: (id: string) => void; rename: (id: string, title: string) => void;
   closeView?: (id: string) => void;
+  closeAllViews?: () => void;
   fork: (id: string) => void; remove: (id: string) => void; selectWorkspace: (id: string) => void; create: (id: string) => void;
   renameWorkspace: (id: string, title: string) => void; removeWorkspace: (id: string, title: string) => void;
   addWorkspace?: () => void; refresh: () => void; previous?: () => void; next?: () => void; notices?: ReactNode;
@@ -33,8 +34,8 @@ export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, que
       </div></div>}
       <div className={clsx(css.headerActions, wide && searchExpanded && css.headerActionsHidden)}>
         {wide && <Menu open={menu} onClose={() => setMenu(false)} portal autoFocus anchor={<button type="button" className={css.iconButton} aria-label="View options" onClick={() => setMenu(!menu)}><IconEllipsisOutline16 /></button>}
-          items={[{ id: 'group', label: flat ? 'Grouped view' : 'Flat view' }, { id: 'refresh', label: 'Refresh list' }]}
-          onSelect={id => { setMenu(false); if (id === 'group') setFlat(!flat); else refresh(); }} />}
+          items={[{ id: 'group', label: flat ? 'Grouped view' : 'Flat view' }, { id: 'refresh', label: 'Refresh list' }, ...(closeAllViews ? [{ id: 'close-views', label: 'Close all views' }] : [])]}
+          onSelect={id => { setMenu(false); if (id === 'group') setFlat(!flat); else if (id === 'close-views') closeAllViews?.(); else refresh(); }} />}
         {addWorkspace && <Tooltip label="Add Workspace"><button type="button" className={css.iconButton} aria-label="Add Workspace" onClick={addWorkspace}><IconProjectAddOutline16 size={wide ? 16 : 18} /></button></Tooltip>}
       </div>
     </div>

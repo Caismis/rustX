@@ -22,12 +22,12 @@ export function sessionObservation(state: ClientView, id: string) {
   if (state.connection === 'connected' && (!view || view.attachmentIntent === 'released')) return '';
   return product.label ?? '';
 }
-export function WorkspaceNavigation({ host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, openViews, closeView, createSession, forkSession, deleteSession, creating, metadataChanged, wide, expand, createOpen, closeCreate }: {
+export function WorkspaceNavigation({ host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, creating, metadataChanged, wide, expand, createOpen, closeCreate }: {
   host: ProductHostWorkspaces; client: AppServerClient; state: ClientView; endpoint: string; navigation: NavigationEpoch;
   wide: boolean; expand: () => void; createOpen: boolean; closeCreate: () => void;
   creating: boolean; metadataChanged: (removed?: string) => void;
   workspace?: string; selected?: string; selectWorkspace: (id?: string) => void;
-  openViews: readonly string[]; closeView: (id: string) => void;
+  openViews: readonly string[]; closeView: (id: string) => void; closeAllViews: () => void;
   openSession: (id: string) => void; createSession: (id: string) => void; forkSession: (id: string) => void; deleteSession: (id: string) => void;
 }) {
   const [catalog, setCatalog] = useState<WorkspaceCatalog>();
@@ -85,7 +85,7 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
     containsCurrent: rows.some(item => item.group === null && item.session.id === selected), sessionCount: rows.filter(item => item.group === null).length,
     sessions: rows.filter(item => item.group === null).map(item => toNode(item.session)) });
   return <>
-    <WorkspaceBrowser wide={wide} expand={expand} groups={groupNodes} sessions={state.sessions.map(toNode)} selected={selected} closeView={closeView}
+    <WorkspaceBrowser wide={wide} expand={expand} groups={groupNodes} sessions={state.sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
       query={query} search={text => connected && search(text)} open={id => connected && openSession(id)} rename={(id, title) => edit('session', id, title)} fork={forkSession} remove={deleteSession}
       selectWorkspace={selectWorkspace} create={id => connected && !creating && createSession(id)} renameWorkspace={(id, title) => edit('workspace', id, title)} removeWorkspace={(id, title) => edit('remove', id, title)}
       addWorkspace={catalog?.picker.kind === 'configured' && bound ? () => setDialog({ kind: 'add', id: '', name: '' }) : undefined}

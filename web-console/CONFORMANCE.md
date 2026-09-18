@@ -156,7 +156,7 @@ precedence, A/B and unscoped uncertainty, scoped interaction evidence, local-onl
 diagnostic acknowledgement and exact revision-confirmed deletion without raw DTOs.
 The former Session-tab selectors are removed; Chat/Trajectory keep tab semantics.
 
-Repair validation: 419 deterministic tests in 29 files; all 39 browser acceptance
+Repair validation: 421 deterministic tests in 29 files; all 39 browser acceptance
 tests; 23 intentional snapshot/geometry update cases followed by normal zero-tolerance
 E2E. Keyboard acceptance now explicitly reaches Sidebar row actions/Close view and
 Inspector at all four widths. Reviewed rendered light/dark/narrow, native preview,
@@ -164,6 +164,9 @@ manual name, empty Session, background work, scoped uncertainty, Inspector and d
 captures. Typecheck, production build, 104-source provenance/100-package notices,
 upstream reference audit and the 30-test development-launcher lane pass. No Rust or
 protocol source changes, skipped tests, screenshot tolerance changes or semantic sleeps.
+The unlisted-restoration regression also fills all 32 view slots without matching
+catalog rows, then recovers through explicit Sidebar Close all views. Its companion
+proves bulk close only releases observed controllers and leaves running work intact.
 
 `session-product.test.tsx` covers deterministic status priority, idle silence,
 accepted versus unaccepted inbound, cancellation request versus settlement,

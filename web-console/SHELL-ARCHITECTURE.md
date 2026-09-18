@@ -33,6 +33,8 @@ Sidebar is the sole Session selector. The top Session strip is deleted, not hidd
 `openViews` tracks real browser controller ownership/restoration (maximum 32), not
 visual tabs. Sidebar row menus expose Close view; switching focus retains background
 observation and never releases, cancels or unloads work. Chat/Trajectory retain tabs.
+Sidebar View options also offers explicit Close all views for unlisted/restored
+entries; missing catalog rows cannot make the finite capacity unmanageable.
 `sessionDisplayTitle` uses explicit name > native SessionSummary.preview > New session.
 No UUID fallback or automatic LLM naming exists. A bounded native catalog reread after
 canonical user-message observation refreshes unnamed labels; no draft or admission

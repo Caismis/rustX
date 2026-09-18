@@ -256,6 +256,36 @@ it('deletion shows the catalog title and impact, never raw identity/CAS, while s
   expect(server.requests.find(({ request }) => request.method === 'session/delete')?.request.params).toEqual({ session_id: 'A', expected_target_revision: '9007199254740999' });
 });
 
+it('unlisted restored views cannot strand the finite view capacity', async () => {
+  await server.connect();
+  const missing = Array.from({ length: 32 }, (_, i) => `missing-${i}`);
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: missing }));
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
+  await select('A');
+  expect(screen.getByRole('alert').textContent).toContain('32 Session views');
+  const before = methods().length;
+  fireEvent.click(screen.getByRole('button', { name: 'View options' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Close all views' })));
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!).openViews).toEqual([]);
+  expect(missing.every(id => server.client.getSnapshot().views[id].attachmentIntent === 'released')).toBe(true);
+  expect(methods().slice(before)).toEqual([]); // No controller exists to release.
+  await select('A');
+  expect(screen.getByLabelText('Session title').textContent).toBe('Session A');
+  expect(methods()).not.toContain('session/unload'); expect(methods()).not.toContain('turn/cancel');
+});
+
+it('Close all views releases observed controllers without stopping their work', async () => {
+  server.snapshots.get('A')!.attempt = { attempt_id: 'running-A', phase: { type: 'running' }, turn: 1 };
+  await mount();
+  const before = methods().length;
+  fireEvent.click(screen.getByRole('button', { name: 'View options' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Close all views' })));
+  expect(methods().slice(before)).toEqual(['session/detach', 'session/detach']);
+  expect(server.claims()).toEqual([]);
+  expect(server.loaded.has('A')).toBe(true);
+  expect(server.snapshots.get('A')!.attempt?.phase.type).toBe('running');
+});
+
 it('reviewing a notice restores capacity at the 64-diagnostic limit without replay', async () => {
   await server.attached('A');
   server.held.add('session/name');

@@ -1054,7 +1054,7 @@
     {
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
       "destination": "web-console/src/workspaces/WorkspaceNavigation.tsx",
-      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Sidebar-only selection/close callbacks, native display-title projection and Session-scoped uncertainty. Native authority unchanged.",
+      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Sidebar-only selection/close callbacks, native display-title projection and Session-scoped uncertainty. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work.",
       "upstream_sha256": "541bcf73a753b049ca25ade38a6565ddeabc750d8b4098eee4901c6d4a461d09",
       "retained_dependencies": [
         "../app/commands/native",
@@ -1096,7 +1096,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "97e6d829689540fa9a00172015f381cb0e80d8da662b2293c9d6a6867597ceb3"
+      "local_sha256": "a302366efa58604279b11ae61ab34743374d2fc2154c90eec2a4bdba10205def"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -1627,7 +1627,7 @@
       "destination": "web-console/src/presentation/workspace/WorkspaceBrowser.tsx",
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection; WEB-12 review repair: passes presentation-only Close view callback to open Sidebar rows. Native authority unchanged.",
+      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection; WEB-12 review repair: passes presentation-only Close view callback to open Sidebar rows. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work.",
       "upstream_sha256": "861c3a98489e6ddb7c9383c514a0af7ce59eedd03317b09d51063b0c69c6c775",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1647,7 +1647,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "cf65628de3f2f0ddd63afb99607ea68a0823574df1dfe73f578dec27d3564be2",
+      "local_sha256": "cd6b1bfe478f56bd1f723c3b7ca12f74d87f80a353bf8fda8ae0182a2da3714e",
       "classification": "B"
     },
     {

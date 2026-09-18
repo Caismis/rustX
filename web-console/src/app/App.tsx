@@ -150,7 +150,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
     if (connected && selected) focusSession(selected, { preserveDraft: true });
   }, [state.connection, state.generation]);
   const open = (id: string, ready?: () => void) => {
-    if (!openViews.includes(id) && openViews.length >= 32) { setError('32 Session views are open. Close a view from its Sidebar Session actions before opening another.'); return; }
+    if (!openViews.includes(id) && openViews.length >= 32) { setError('32 Session views are open. Close a view from its Sidebar Session actions, or use Sidebar View options → Close all views.'); return; }
     setOpenViews(current => current.includes(id) ? current : [...current, id]);
     focusSession(id, { attach: true, ready });
   };
@@ -160,8 +160,13 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
     if (selected === id) focusSession(remaining[0]);
     run(() => client.release(id, false));
   };
+  const closeAllViews = () => {
+    const closing = [...openViews];
+    setOpenViews([]); focusSession();
+    run(() => Promise.all(closing.map(id => client.release(id, false))));
+  };
   const createInWorkspace = (id: string) => {
-    if (openViews.length >= 32) { setError('32 Session views are open. Close a view from its Sidebar Session actions before creating another.'); return; }
+    if (openViews.length >= 32) { setError('32 Session views are open. Close a view from its Sidebar Session actions, or use Sidebar View options → Close all views.'); return; }
     if (creating === state.generation) return;
     navigation.invalidate(); const current = navigation.capture(); const generation = state.generation;
     setCommand(undefined); setCreating(generation);
@@ -193,7 +198,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
     browser={(wide, expand) => <WorkspaceNavigation wide={wide} expand={expand} createOpen={createOpen} closeCreate={() => setCreateOpen(false)} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       creating={creating === state.generation} metadataChanged={removed => { if (selected) focusSession(selected, { preserveDraft: true }); else if (removed) setFocus(value => value.workspaceId === removed ? {} : value); }}
       workspace={workspace} selected={selected} selectWorkspace={id => { navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({ workspaceId: id, generation: state.generation }); }}
-      openSession={open} openViews={openViews} closeView={closeView} createSession={createInWorkspace} deleteSession={deletePreview}
+      openSession={open} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={createInWorkspace} deleteSession={deletePreview}
       forkSession={id => open(id, () => {
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
       })} />}

@@ -10,7 +10,7 @@ remain inputs, not redesign targets.
 | Current Session header | Product | Identity/status/actions and Chat/Trajectory, not a Session picker | Identify current work |
 | Session display title | Product | Explicit name > native first-message preview > New session | Reuse native catalog, no browser summarization |
 | Session ID | Developer Inspector | Identity / scoped runtime facts | Never a product fallback or accessible label |
-| Close browser view | Product | Corresponding Sidebar Session row menu | Release one controller, free the 32-view capacity, retain server work |
+| Close browser view | Product | Corresponding Sidebar row menu; View options → Close all views for unlisted/restored views | Explicitly release controllers, free the 32-view capacity, retain server work; no eviction |
 | Automatic LLM title | Remove | Not implemented | Deterministic offline naming only; manual rename retained |
 | Workspace identity/location, cwd/path | Product | Quiet location under title | Identify execution location without lifecycle suffix |
 | Chat / Trajectory | Product | Header view tabs | Conversation and execution history navigation |

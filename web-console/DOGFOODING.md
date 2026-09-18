@@ -235,6 +235,8 @@ Use [PRODUCT-SURFACE.md](PRODUCT-SURFACE.md) to classify every visible control.
 Select Sessions only in Sidebar; verify no horizontal Session selector exists.
 Open A and B, leave A working, select B, and close A's browser view from its row
 menu: only the explicit close releases its controller; neither action stops A.
+Use Sidebar View options → Close all views to release even restored views whose
+catalog rows are absent, then reopen a Session without an invisible capacity block.
 Verify empty labels say New session, unnamed committed work uses native preview,
 and manual names win permanently. No LLM naming is implemented. Check deletion
 title and impact counts without raw identity/revision. With A healthy and B uncertain,

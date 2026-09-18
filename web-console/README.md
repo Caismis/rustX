@@ -113,6 +113,9 @@ current Session and offers bounded actions, Inspector, and Chat/Trajectory views
 there is no top Session tab strip or alternate picker. Close view is in each open
 Session's Sidebar row menu; the 32-view bound is actionable there. Internal
 `openViews` represents actual browser controller ownership, never a hidden tab UI.
+Sidebar View options → Close all views also releases unlisted/restored views, so
+missing catalog entries cannot strand capacity. This is explicit, never eviction;
+server-owned work continues exactly as for closing one view.
 
 Every ordinary Session label uses `sessionDisplayTitle`: explicit native name >
 native `SessionSummary.preview` > **New session**. Session IDs stay in Inspector.
