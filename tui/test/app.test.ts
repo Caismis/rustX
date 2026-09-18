@@ -1988,3 +1988,76 @@ it("deleting the focused last Session disables submissions and opens the empty s
     assert.equal(h.executes.length, 1);
   } finally { await h.finish(); }
 });
+
+for (const status of ["committed_cleanup_pending", "committed_durability_uncertain", "preview", "not_found"] as const) {
+  it(`external reconnect transfers deletion observation ${status} across workflow replacement`, async () => {
+    let close!: (error: TransportClosedError) => void;
+    const execution = deferred<SessionDeleteResult>();
+    const observation = deferred<SessionDeleteResult>();
+    const recovery = deferred<SessionDeleteResult>();
+    const old = fakeSession(undefined, "A");
+    const attaches: string[] = [], executes: string[] = [], recovers: string[] = [], previews: string[] = [];
+    const row = (id: string): SessionSummaryView => ({ id, name: `Session ${id}`, active_node: id, updated_at: "today", cwd: "/server/work" });
+    const preview: SessionDeleteResult = { status: "preview", preview: {
+      session_id: "A", name: "Session A", target_revision: "revision", owned_node_count: 1,
+      owned_conversation_count: 1, owned_child_count: 0,
+    } };
+    const first = fakeHost({ ownership: "external", onClose: listener => { close = listener; }, catalog: {
+      listSessions: async () => ({ sessions: [row("A")] }),
+      previewSessionDeletion: async () => preview,
+      deleteSession: (id: string) => { executes.push(id); return execution.promise; },
+    } });
+    const second = fakeHost({ ownership: "external", attach: async id => { attaches.push(id); return fakeSession(undefined, id); }, catalog: {
+      listSessions: async () => ({ sessions: [row("B")] }),
+      previewSessionDeletion: (id: string) => { previews.push(id); return observation.promise; },
+      deleteSession: async () => { assert.fail("reconnect must never replay delete"); },
+      recoverSessionDeletion: (id: string) => { recovers.push(id); return recovery.promise; },
+    } });
+    const original = TUI.prototype.showOverlay;
+    const surfaces: Array<{ content: Parameters<TUI["showOverlay"]>[0]; visible: boolean }> = [];
+    TUI.prototype.showOverlay = function(content, options) {
+      const surface = { content, visible: true }; surfaces.push(surface);
+      const handle = original.call(this, content, options); const hide = handle.hide;
+      handle.hide = () => { surface.visible = false; hide(); }; return handle;
+    };
+    const text = () => surfaces.findLast(s => s.visible)?.content.render(120).map(plainText).join("\n") ?? "";
+    const app = new RustxTuiApp({ host: first, session: old, sessionSettings: SESSION_SETTINGS, reconnect: async () => second });
+    const running = app.run();
+    const input = async (data: string) => { process.stdin.emit("data", data); await waitForApplicationContinuation(); };
+    try {
+      await input("/resume\r"); await input("\x04"); await input("\t\r");
+      assert.deepEqual(executes, ["A"]);
+      const error = new TransportClosedError("input_eof", "delete reply lost");
+      Object.defineProperty(first.client, "closed", { value: error }); close(error);
+      execution.reject(new UncertainOutcomeError("session/delete", error));
+      await waitForApplicationContinuation();
+      assert.deepEqual(previews, ["A"]);
+      assert.deepEqual(recovers, [], "lost response is not cleanup authority");
+      observation.resolve(status === "preview" ? preview : { status, session_id: "A" });
+      await waitForApplicationContinuation();
+      await waitForApplicationContinuation();
+      assert.deepEqual(executes, ["A"]);
+      const committed = status === "committed_cleanup_pending" || status === "committed_durability_uncertain";
+      assert.deepEqual(attaches, status === "preview" ? ["A"] : []);
+      if (committed) {
+        assert.match(text(), /R retry native cleanup/);
+        assert.match(text(), status === "committed_cleanup_pending" ? /removed and cannot be resumed/ : /durability is uncertain/);
+        await input("rr");
+        assert.deepEqual(recovers, ["A"], "fresh workflow recovers A, never listed B");
+        recovery.resolve({ status: "deleted", session_id: "A" });
+        await waitForApplicationContinuation();
+      } else {
+        assert.doesNotMatch(text(), /R retry native cleanup/);
+        assert.deepEqual(recovers, []);
+      }
+      if (status !== "preview") {
+        assert.match(text(), /Session B/);
+        await input("\r");
+        assert.deepEqual(attaches, ["B"], "ordinary fresh Session navigation stays usable");
+      }
+      assert.deepEqual(executes, ["A"]);
+    } finally {
+      await app.quit(); await running; TUI.prototype.showOverlay = original;
+    }
+  });
+}

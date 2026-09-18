@@ -74,6 +74,7 @@ import type { AppServerSession } from "../app-server/session.ts";
 import type {
   CatalogModelView,
   SessionSettings,
+  SessionDeleteResult,
   SessionSummaryView,
   SessionUserMessageBoundaryView,
   SessionView,
@@ -318,8 +319,10 @@ export class RustxTuiApp {
       replacement = await this.#reconnect();
       const deletion = this.#deletion.state;
       let focus = focused;
+      let observedDeletion: SessionDeleteResult | undefined;
       if (focused && 'sessionId' in deletion && deletion.sessionId === focused.sessionId) {
         const observed = await replacement.previewSessionDeletion(focused.sessionId);
+        observedDeletion = observed;
         if (observed.status === 'deleted' || observed.status === 'not_found' || observed.status === 'committed_cleanup_pending' || observed.status === 'committed_durability_uncertain') {
           focus = undefined;
           this.#showTransient('info', `Deletion observation: ${observed.status.replaceAll('_', ' ')}. No deletion was replayed.`);
@@ -336,6 +339,13 @@ export class RustxTuiApp {
       this.#watchConnection();
       if (session !== undefined) this.#renderState(session.state);
       else if (this.#started) await this.#openResumeSelector();
+      // Rebinding creates a new connection-local workflow. Transfer only the
+      // authoritative committed value, retaining its original Session identity.
+      // Use the fresh selector context; a failed list read supplies no rows.
+      if (observedDeletion?.status === "committed_cleanup_pending" || observedDeletion?.status === "committed_durability_uncertain") {
+        this.#deletion.observeCommitted(observedDeletion,
+          this.#resumePresentation?.reconciliationContext() ?? { query: "", ids: [], index: 0, loaded: 0 });
+      }
       this.#showTransient("info", "reconnected from server state; no unanswered mutations were resent");
     } catch (error) {
       await replacement?.shutdown();

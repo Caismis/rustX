@@ -328,3 +328,72 @@ context; it now preserves observation without granting recovery. A Clippy doc-ma
 failure was corrected. Both suites were rerun successfully. No timeout, screenshot,
 race synchronization or coverage was relaxed. Linux validation used the repository's
 pinned browser container; macOS remains a CI check, not a local claim.
+
+
+## External reconnect committed-observation handoff
+
+The reconnect path retains the finite server deletion observation in a local
+`observedDeletion` value. After installing the replacement host and calling
+`#bindSession`, it transfers only committed cleanup/durability outcomes through
+the new workflow's existing `observeCommitted` seam. The old workflow remains
+terminated. Context comes from the new selector's authoritative page; absent or
+failed list reads supply no rows, never a fabricated empty-list result. The result
+itself carries the original SessionId independently of focus or selector position.
+
+The following real RustxTuiApp tests park the replacement preview response after
+one submitted deletion loses its reply. Before that response, no recovery is sent.
+Each test retains exactly one delete submission throughout reconnect:
+
+- `external reconnect transfers deletion observation committed_cleanup_pending across workflow replacement`: A is not reattached; R twice while recovery is pending sends exactly one recovery for A, although only B is listed. After Deleted, B remains selectable and opens normally.
+- `external reconnect transfers deletion observation committed_durability_uncertain across workflow replacement`: same identity/count proof with the durability notice and explicit recovery action.
+- `external reconnect transfers deletion observation preview across workflow replacement`: A reattaches; no cleanup action or recovery request exists.
+- `external reconnect transfers deletion observation not_found across workflow replacement`: A stays detached, no cleanup action exists, and B opens from the fresh selector.
+
+No backend, protocol or Web implementation changes are included in this correction.
+Web already reads deletePreview on reconnect before reattachment and has no explicit
+cleanup-recovery caller; its behavior remains unchanged. App Server v8 and Runtime
+Client v40 remain strict and unchanged. Unknown transport outcome alone still grants
+no cleanup authority, and reconnect never replays session/delete.
+
+### Reconnect handoff validation
+
+Origin was fetched before validation and checked again; main remained
+`5d0d9ae998577cfa00a07fab1610bd1be3dce127`, so no rebase was needed.
+
+| Command | Result |
+| --- | --- |
+| `git fetch origin` | Passed; base unchanged. |
+| `pnpm --dir tui typecheck` | Passed. |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 node --test --test-name-pattern='external reconnect transfers deletion observation' tui/test/app.test.ts` | Four real app reconnect cases passed. |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | 793 passed, none skipped. |
+| `cargo test --lib --all-features local_runtime::session_runtime_manager::tests` | 94 passed. |
+| `cargo test --test process --all-features app_server` | 13 passed. |
+| `cargo fmt --all -- --check` | Passed. |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed. |
+| `cargo test --all-targets --all-features` | 3,708 passed, zero failures, six existing ignored credential/fixture tests. |
+| `cargo build --bins` | Passed. |
+| `pnpm --dir protocol/app-server generate` | Passed; no artifact changes. |
+| `pnpm --dir protocol/app-server check` | Passed; no drift. |
+| `pnpm --dir protocol/app-server typecheck` | Passed. |
+| `pnpm --dir web-console typecheck` | Passed. |
+| `pnpm --dir web-console test` | 432 passed in 29 files. |
+| `pnpm --dir web-console build` | Passed; existing chunk-size advisory. |
+| `pnpm --dir web-console check:provenance` | Passed; 104 source records and 100 package notices. |
+| `pnpm --dir dev typecheck` | Passed. |
+| `pnpm --dir dev test` | 30 passed. |
+| `uv run --frozen --directory test-support/fake-provider pytest` | 51 passed. |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | Initial run: 38 passed, one unchanged-reference pixel failure. Identical full rerun: all 39 passed. |
+| `git diff --check` | Passed. |
+
+Self-review: lost reply alone grants no recovery; both committed observations
+survive workflow replacement and are exercised by R; recovery retains A rather
+than deriving identity from focus/list B; reconnect never resends delete; live
+Preview and terminal NotFound create no recovery action. Existing assertions,
+timeouts, synchronization and screenshot references were unchanged. macOS remains
+remote CI validation, not a local claim.
+
+The first full browser run passed 38 tests and failed the unchanged
+`agent-error-light` reference by one reported pixel. Inspection localized the
+raw image difference to the composer border at (518,897)–(522,899). No Web source,
+reference image or tolerance was changed; the identical full suite was rerun and
+all 39 tests passed.

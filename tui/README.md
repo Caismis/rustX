@@ -881,6 +881,13 @@ or replays deletion merely because the outcome is unknown. Closing a recovery no
 hides it without discarding its native recovery action; reopening `/resume`
 restores it. Resolve that action before starting another deletion.
 
+After an external-server reconnect, the TUI rereads deletion state before deciding
+whether to reattach. A server-confirmed committed cleanup/durability result is
+transferred into the new connection's deletion workflow, so **R** still recovers
+the original deleted Session even when it is absent from the fresh Session list.
+A live preview reopens the Session; confirmed absence offers no cleanup action.
+Neither reconnect nor the recovery action replays the original deletion.
+
 A failed Session-list refresh means visibility is unavailable, not that the list
 is empty. The native deletion result and any recovery action remain intact.
 Reopening `/resume` queries the preserved search and uses the fresh native rows;
