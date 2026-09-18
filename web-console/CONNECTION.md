@@ -8,17 +8,38 @@ with the existing AppServerClient and App Server protocol **v8**.
 
 `GET /?token=<browser-launch-token>` accepts exactly one bounded 43-character
 base64url credential on the root route. Timing-safe comparison follows format checks.
-Success returns 303 to `/`, a host-only HttpOnly SameSite=Strict Path=/ session
-cookie, no persistent expiry, `Cache-Control: no-store`, and `Referrer-Policy: no-referrer`.
-No application resources load before redirect. The native token is never in this URL.
+Success mints a fresh independent 32-byte random browser-session proof and returns
+a tiny HTML exchange page, not the app. It has `Cache-Control: no-store`,
+`Referrer-Policy: no-referrer`, no external resources, and CSP `default-src 'none'`
+with only the exact inline script hash permitted, no base/forms/frames. The script
+stores only the proof under `rustx-browser-session` in sessionStorage, then calls
+`location.replace('/')`. No application resources load from the credential URL.
+The launch token is never stored; the native token never appears in the exchange.
 The printed launch URL can authorize another browser during the same composition.
 
 Every carrier HTTP request must have the exact `127.0.0.1:<bound-port>` Host;
-an Origin, if present, must match it. Sessions use a random process-ephemeral HMAC
-secret and exact authority as signed input and cookie-name input. Cookies cannot
-authenticate another port even if copied/renamed. Restart invalidates old sessions.
-Malformed/wrong tokens fail even when a valid session accompanies them. No query
-or Authorization bearer is accepted on APIs. Auth runs before Product Host middleware.
+an Origin, if present, must match the exact `http://127.0.0.1:<port>` origin.
+Cookies have no authentication authority: browsers deliver host-scoped Cookies to
+other ports regardless of Cookie name, HMAC or SameSite. Instead sessionStorage's
+scheme/host/port boundary isolates delivery. A shared browser HTTP helper attaches
+`X-Rustx-Browser-Session` only to this exact origin's `/__rustx/bootstrap` and
+`/product-host/*`, never redirects or external destinations. Cross-origin navigation
+does not send it. The carrier validates bounded proof format and its exact origin
+registration before Product Host middleware. Origin/Host checks are defenses, not
+substitutes for the proof. No query or Authorization bearer is accepted on APIs.
+
+Proofs are independently random and distinct from launch/native tokens. The carrier
+keeps at most 128 proof/origin registrations in process memory, refuses further
+exchanges with 429 rather than evicting live tabs, and loses all registrations on
+restart. A stale tab reaches LocalManaged recovery; reopen the newly printed launch
+URL to authenticate again. Reload in the same tab preserves a valid proof. Opening
+the startup URL again mints a new proof. Static app resources are public on loopback
+and confer no API authority. Cross-Origin-Opener-Policy is `same-origin`.
+
+This protects against another loopback origin observing browser-delivered credentials,
+not against same-origin script compromise, malicious browser extensions or local
+processes able to read launcher scratch/process memory. The proof is JavaScript-
+readable on its own origin; it is not an HttpOnly credential.
 
 Authenticated `GET /__rustx/bootstrap` returns only:
 
@@ -36,17 +57,18 @@ Host policy, independent of browser authentication and native socket admission.
 
 | Material | Owner/storage | Lifetime |
 | --- | --- | --- |
-| Native transport token | Launcher 0600 scratch file; carrier/page memory | Composition/page |
-| Browser launch token | Launcher 0600 bootstrap config, initial URL, carrier memory | Composition |
-| Browser session secret | Carrier memory only | Carrier process |
-| Browser session credential | Authority-bound HttpOnly session cookie | Valid only in carrier process |
+| Native transport token | Launcher 0600 scratch file; carrier/page memory, never browser storage | Composition/page |
+| Browser launch token | Launcher 0600 bootstrap config, initial URL, carrier memory; never browser storage | Composition |
+| Browser session proof | Exact-origin sessionStorage only; carrier memory registration | Tab storage; accepted only by minting carrier activation |
 | Remote transport token | Settings/controller memory only | Page; discarded when returning Local |
 | Endpoint-scoped navigation/presentation hints | Browser localStorage | Preference lifetime; never connection material |
 | Provider/MCP credentials | Existing native owners | Unchanged |
 
 The bootstrap config references the existing private transport-token file instead
-of duplicating it. Child settlement precedes scratch deletion. No credential or
-bootstrap JSON enters localStorage, sessionStorage or IndexedDB. Only the initial
+of duplicating it. Child settlement precedes scratch deletion. Only the derived
+browser proof may enter sessionStorage. Launch/native/provider/MCP credentials and
+bootstrap JSON never enter any browser storage; no proof enters localStorage or
+IndexedDB. Only the initial
 browser launch URL is printed, once; transport details belong in advanced Settings/Inspector.
 
 ConnectionController owns source selection: **LocalManaged** fetches authenticated

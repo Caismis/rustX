@@ -75,8 +75,13 @@ OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
 resolved by rustX and never entered, stored or requested here. The dedicated socket
 token stays in page memory. The carrier's separate launch token is exchanged only
-at `GET /?token=…`, before loading application resources. Its browser session is
-HttpOnly, SameSite=Strict, host-only and bound to the exact port for this process lifetime.
+at `GET /?token=…`, before loading application resources. A tiny no-store page with
+restrictive CSP stores only a separately generated browser-session proof in
+origin-scoped sessionStorage and replaces the URL with clean `/`. The proof is sent
+only as `X-Rustx-Browser-Session` on same-origin bootstrap/Product Host requests;
+redirects are refused. Cookies are not authentication: they cannot isolate ports.
+Reload reuses this tab's proof; carrier restart rejects it until a new launch exchange.
+Neither the launch token nor App Server token enters browser storage or IndexedDB.
 Only safe presentation metadata and up to 32 navigation IDs are stored in localStorage. They are hints to
 read server state, not persisted conversation or interaction state.
 

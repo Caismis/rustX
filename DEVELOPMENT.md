@@ -73,8 +73,11 @@ and starts the normal Vite carrier with one ephemeral Product Host configuration
 Vite selects its own free loopback port and reports readiness through IPC only
 after `listen()` completes. There are no readiness sleeps or port reservations.
 The launcher prints one authenticated startup URL and opens the default browser.
-The browser exchanges its launch credential for an HttpOnly session, redirects to
-clean `/`, and automatically connects to the exact native App Server. Reload
+The browser exchanges its launch credential for a random, origin-scoped session
+proof stored only in sessionStorage. A resource-free, no-store exchange page uses
+`location.replace('/')` before application resources load. The proof explicitly
+authenticates same-origin bootstrap and Product Host APIs; no auth Cookie is used.
+The clean-root app automatically connects to the exact native App Server. Reload
 repeats authenticated bootstrap without credential entry. Use `--no-open` to print
 the URL without opening a browser; SSH launches also suppress automatic opening.
 Browser opener failure leaves the composition running and points to the printed URL.

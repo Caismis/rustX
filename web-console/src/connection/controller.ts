@@ -1,4 +1,5 @@
 import type { AppServerClient } from '../client/app-server';
+import { carrierFetch } from '../carrier/http';
 
 export type ConnectionMode = 'local' | 'remote';
 export interface ConnectionSelection { mode: ConnectionMode; busy: boolean; error?: string }
@@ -8,7 +9,7 @@ export class ConnectionController {
   private listeners = new Set<() => void>();
   private epoch = 0;
   private remote?: { endpoint: string; token: string };
-  constructor(private client: AppServerClient, private fetchBootstrap: typeof fetch = (...args) => fetch(...args)) {}
+  constructor(private client: AppServerClient, private fetchBootstrap: (path: string, init?: RequestInit) => Promise<Response> = carrierFetch) {}
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
   private publish(patch: Partial<ConnectionSelection>) { this.state = { ...this.state, ...patch }; this.listeners.forEach(listener => listener()); }

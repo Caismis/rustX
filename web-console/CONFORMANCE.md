@@ -17,7 +17,9 @@ never grants Workspace filesystem authority; see [CONNECTION.md](CONNECTION.md).
 | --- | --- |
 | Separate fresh credentials, 0600 bootstrap scratch, readiness/settlement | `dev/test/launcher.test.ts`, `process.test.ts` |
 | Boolean forwarding and sanitized browser handoff | `dev/test/browser.test.ts` |
-| Root exchange, malformed/wrong/missing credentials, exact bootstrap, no-store, port binding, secret rotation, unauthorized root | `test/browser-auth.test.ts` |
+| Resource-free root exchange/CSP, separated fresh proofs, exact bootstrap, missing/wrong proof rejection, bounded sessions, restart, exact roots | `test/browser-auth.test.ts` |
+| Origin-only proof headers on bootstrap and Product Host; redirects/external destinations refused | `test/carrier-http.test.ts` |
+| Real-browser cross-port capture and replay rejected; origin-scoped storage, no Cookie bearer, stale-proof rejection | `test/e2e/browser-origin-auth.spec.ts` |
 | Mode-local recovery, no fallback, delayed bootstrap fence, exactly-once close before replacement | `test/connection-controller.test.ts` |
 | Two-server Session ID collision, same-authority restoration, view/focus/dialog retirement, detached uncertainty, deletion refusal, bounded evidence and close timeout | `test/authority.test.tsx` |
 | Overview by default; recovery targets Connection | `test/authority.test.tsx`, `test/e2e/dev-launcher.spec.ts`, `accessibility.spec.ts` |

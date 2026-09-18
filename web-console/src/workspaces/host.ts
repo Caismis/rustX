@@ -1,3 +1,4 @@
+import { carrierFetch } from '../carrier/http.ts';
 /** Product Host contract. No rustX trust, configuration, or Session ownership. */
 export interface ProductHostWorkspace { id: string; displayName: string; location: string; displayPath: string }
 export interface WorkspaceCatalog {
@@ -19,7 +20,7 @@ export interface ProductHostWorkspaces {
 export class HttpWorkspaceHost implements ProductHostWorkspaces {
   constructor(private readonly base = '/product-host') {}
   private async call<T>(method: string, body: unknown = {}): Promise<T> {
-    const response = await fetch(`${this.base}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const response = await carrierFetch(`${this.base}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!response.ok) throw new Error(`Workspace Host: ${await response.text()}`);
     return response.json();
   }

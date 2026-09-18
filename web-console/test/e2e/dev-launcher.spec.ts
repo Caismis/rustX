@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Launcher } from '../../../dev/src/launcher.ts';
 import { parseArguments } from '../../../dev/src/arguments.ts';
 import { spawnOwned } from '../../../dev/src/process.ts';
+import { BROWSER_SESSION_HEADER, BROWSER_SESSION_STORAGE } from '../../browser-session';
 
 /** Normal local composition: no dogfood helper, provider process, or Host proxy. */
 test('development launcher serves the real Web carrier, native App Server and exact-root Host', async ({ page }) => {
@@ -58,15 +59,23 @@ compat = { chat_reasoning_replay = "omit" }
     await expect(page.getByRole('region', { name: 'Connection recovery' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Select Workspace workspace with spaces' })).toBeVisible();
     await page.screenshot({ path: test.info().outputPath('local-managed.png') });
-    const bootstrap = await page.request.get(`${clean}__rustx/bootstrap`);
+    const proof = await page.evaluate(key => sessionStorage.getItem(key), BROWSER_SESSION_STORAGE);
+    expect(proof).toMatch(/^[A-Za-z0-9_-]{43}$/); expect([token, launchToken]).not.toContain(proof);
+    await new Promise<void>((resolve, reject) => {
+      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v8', `rustx-token.${proof}`]);
+      socket.onopen = () => { socket.close(); reject(new Error('Browser session proof admitted by native App Server')); };
+      socket.onerror = () => resolve();
+    });
+    const headers = { [BROWSER_SESSION_HEADER]: proof! };
+    const bootstrap = await page.request.get(`${clean}__rustx/bootstrap`, { headers });
     expect(bootstrap.headers()['cache-control']).toBe('no-store');
     expect(await bootstrap.json()).toEqual({ connectionMode: 'local', appServerEndpoint: ready.endpoint, appServerTransportToken: token });
-    const catalog = await (await page.request.post(`${clean}product-host/list`, { data: {} })).json();
+    const catalog = await (await page.request.post(`${clean}product-host/list`, { headers, data: {} })).json();
     expect(catalog.endpoint).toBe(ready.endpoint);
     expect(catalog.workspaces.map((row: { displayPath: string }) => row.displayPath)).toEqual([workspace]);
-    const classified = await (await page.request.post(`${clean}product-host/classify`, { data: { endpoint: ready.endpoint, cwds: [workspace, nested, directory] } })).json();
+    const classified = await (await page.request.post(`${clean}product-host/classify`, { headers, data: { endpoint: ready.endpoint, cwds: [workspace, nested, directory] } })).json();
     expect(classified.map((row: { authorized: boolean }) => row.authorized)).toEqual([true, false, false]);
-    expect((await page.request.post(`${clean}product-host/adopt`, { data: { location: nested } })).status()).toBe(400);
+    expect((await page.request.post(`${clean}product-host/adopt`, { headers, data: { location: nested } })).status()).toBe(400);
     expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain(token);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
@@ -106,12 +115,16 @@ compat = { chat_reasoning_replay = "omit" }
     await closeSettings(page);
     expect(await page.evaluate(() => indexedDB.databases())).toEqual([]);
     expect(await page.evaluate(() => document.cookie)).not.toContain('rustx-browser');
+    expect(await page.context().cookies(clean)).toEqual([]);
+    expect(await page.evaluate(() => Object.keys(sessionStorage))).toEqual([BROWSER_SESSION_STORAGE]);
     await chooseWorkspace(page, 'workspace with spaces');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
+    expect(await page.evaluate(key => sessionStorage.getItem(key), BROWSER_SESSION_STORAGE)).toBe(proof);
     await page.reload();
     await expect(page).toHaveURL(clean);
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
+    expect(await page.evaluate(key => sessionStorage.getItem(key), BROWSER_SESSION_STORAGE)).toBe(proof);
     expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain(launchToken);
     expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain(token);
     expect(errors).toEqual([]);
