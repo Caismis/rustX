@@ -856,6 +856,23 @@ async fn deletion_retirement_failure_retains_writer_slot_and_session_fence() {
         assert!(runtime.inspect_runtime().is_some());
         assert!(f.load(0).await.unwrap().is_err());
         assert!(replace_task(&f, 0).await.unwrap().is_err());
+        assert!(matches!(
+            f.manager
+                .recover_session_deletion(&f.sessions[0].id)
+                .await
+                .unwrap(),
+            crate::local_runtime::session::deletion::SessionDeleteResult::Preview { .. }
+        ));
+        assert!(
+            f.manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .retiring_sessions
+                .contains(&f.sessions[0].id)
+        );
+        assert!(f.load(0).await.unwrap().is_err());
         assert_eq!(f.manager.diagnostics().unloading, 1);
     })
     .await;
@@ -1674,6 +1691,183 @@ async fn deletion_joins_replacement_failure_after_proven_writer_transfer() {
                 .await
                 .is_err()
         );
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn recovery_observes_live_session_without_releasing_active_delete_fence() {
+    bounded(async {
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
+        let f = Fixture::new().await;
+        let id = f.id(0).await;
+        let session = &f.sessions[0].id;
+        let revision = deletion_revision(&f, 0).await;
+        let probe = f.manager.probe(&id);
+        probe.after_delete_fence.arm();
+        let delete = delete_task(&f, 0, revision.clone());
+        probe.after_delete_fence.entered().await;
+        let SessionDeleteResult::Preview { preview } =
+            f.manager.recover_session_deletion(session).await.unwrap()
+        else {
+            panic!("still-live Session must return Preview")
+        };
+        assert_eq!(preview.target_revision, revision);
+        assert!(
+            f.manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .retiring_sessions
+                .contains(session)
+        );
+        assert!(
+            f.manager
+                .sessions
+                .catalog
+                .lock()
+                .await
+                .pending_deletion_ids()
+                .is_empty()
+        );
+        assert!(!delete.is_finished());
+        assert!(f.load(0).await.unwrap().is_err());
+        assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 0);
+        probe.after_delete_fence.release();
+        assert!(matches!(
+            delete.await.unwrap().unwrap(),
+            SessionDeleteResult::Deleted { .. }
+        ));
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn recovery_settles_durability_uncertainty_without_runtime_reconstruction() {
+    bounded(async {
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
+        let f = Fixture::new().await;
+        let old = f.load(0).await.unwrap().unwrap();
+        let session = &f.sessions[0].id;
+        let probe = f.manager.probe(old.conversation_id());
+        let revision = deletion_revision(&f, 0).await;
+        f.manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .arm_write_fault_after_rename();
+        assert!(matches!(
+            f.manager.delete_session(session, &revision).await.unwrap(),
+            SessionDeleteResult::CommittedDurabilityUncertain { .. }
+        ));
+        assert!(old.inspect_runtime().is_none());
+        assert!(
+            f.manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .retiring_sessions
+                .contains(session)
+        );
+        assert!(f.load(0).await.unwrap().is_err());
+        assert!(
+            f.load(1)
+                .await
+                .unwrap()
+                .unwrap()
+                .client()
+                .validate()
+                .is_ok()
+        );
+        assert!(matches!(
+            f.manager.recover_session_deletion(session).await.unwrap(),
+            SessionDeleteResult::Deleted { .. }
+        ));
+        assert!(
+            !f.manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .retiring_sessions
+                .contains(session)
+        );
+        assert!(
+            f.manager
+                .sessions
+                .catalog
+                .lock()
+                .await
+                .pending_deletion_ids()
+                .is_empty()
+        );
+        assert!(f.load(0).await.unwrap().is_err());
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 1);
+        // Repeated reconciliation confirms absence; it never recreates authority.
+        assert!(matches!(
+            f.manager.recover_session_deletion(session).await.unwrap(),
+            SessionDeleteResult::NotFound { .. }
+        ));
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn recovery_with_unproven_catalog_durability_retains_delete_fence() {
+    bounded(async {
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
+        let f = Fixture::new().await;
+        let session = &f.sessions[0].id;
+        let id = f.id(0).await;
+        let probe = f.manager.probe(&id);
+        let revision = deletion_revision(&f, 0).await;
+        f.manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .arm_write_fault_after_rename();
+        assert!(matches!(
+            f.manager.delete_session(session, &revision).await.unwrap(),
+            SessionDeleteResult::CommittedDurabilityUncertain { .. }
+        ));
+        f.manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .arm_write_fault_before_rename();
+        assert!(matches!(
+            f.manager.recover_session_deletion(session).await.unwrap(),
+            SessionDeleteResult::CommittedDurabilityUncertain { .. }
+        ));
+        assert!(
+            f.manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .retiring_sessions
+                .contains(session)
+        );
+        assert_eq!(
+            f.manager
+                .sessions
+                .catalog
+                .lock()
+                .await
+                .pending_deletion_ids(),
+            vec![session.clone()]
+        );
+        assert!(f.load(0).await.unwrap().is_err());
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 0);
+        assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 0);
         f.close().await;
     })
     .await;

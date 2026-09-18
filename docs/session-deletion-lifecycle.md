@@ -124,7 +124,7 @@ explicit disposal and continue to block deletion.
 
 `LocalSessionClient::compose` recovers pending records after controller admission
 and before ordinary live-store recovery or runtime composition.
-`session/deleteRecover` is the explicit asynchronous retry boundary. Neither
+`session/recoverDeletion` is the explicit asynchronous retry boundary. Neither
 recovery path activates a deleted Conversation, processes Pending Inbound, restores
 agents, calls a model, or initializes semantic services. Cancellation can leave a
 worker running or an unfinalized record; both converge at the next recovery
@@ -133,7 +133,7 @@ boundary. No queue, timer, distributed worker, or retention policy is introduced
 ## Bounded deletion control contract
 
 App Server v8 owns the public `session/deletePreview`, `session/delete`
-(`session_id` + `expected_target_revision` only), and `session/deleteRecover` methods.
+(`session_id` + `expected_target_revision` only), and `session/recoverDeletion` methods.
 The obsolete native Runtime Client delete/recover mutation requests were removed
 in native protocol 40; only its finite read-only preview remains.
 `runtime_client::session_deletion` owns independent DTOs:
@@ -202,7 +202,7 @@ conformance remain part of validation.
 `/resume` exposes Ctrl+D for preview-first confirmed historical deletion. Cancel
 is the default focused action. The TUI submits only the captured SessionId and
 native target revision, then reconciles paginated visibility from the native
-boundary. Cleanup retry uses `session/deleteRecover`; no client storage or
+boundary. Cleanup retry uses `session/recoverDeletion`; no client storage or
 model-visible operation participates. See [TUI deletion help](../tui/README.md#delete-historical-sessions-inside-resume).
 
 ## Product and client behavior (App Server v8)
@@ -222,3 +222,25 @@ retirement closes old attachment routes; stale incarnations cannot enter operati
 A lost delete response is never replayed. Reconnect inspects deletion state to
 distinguish a live Session, committed cleanup pending, durability uncertainty, and
 absence. Existing recovery retains the frozen durable workset.
+
+## Public deletion recovery ownership
+
+`session/delete` delegates admission, native writer retirement and durable handoff
+to SessionRuntimeManager. `session/recoverDeletion` also uses that manager in a
+server-owned request task, independent of the initiating connection.
+
+Recovery first obtains the finite durable deletion observation. A live Session
+returns Preview or Blocked without cleanup or changing an active deletion fence.
+Only an observed committed record permits SessionController::recover_deletion,
+which retries that frozen authority. Observed absence receives a catalog durability
+barrier before NotFound; it grants no cleanup authority.
+
+Deleted, confirmed NotFound, and CommittedCleanupPending release a retained
+manager fence: durable absence or the durably published frozen record excludes
+normal Session/allocation admission. CommittedDurabilityUncertain retains the
+fence. Recovery never substitutes for unproven native writer retirement. Duplicate
+recovery uses existing idempotent cleanup/finalization and idempotent fence release.
+
+A client-side unknown outcome requires authoritative observation, not cleanup
+recovery or mutation replay. Only server-confirmed committed outcomes grant the
+explicit recovery action. App Server v8 and native Runtime Client v40 are unchanged.

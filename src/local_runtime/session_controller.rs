@@ -664,7 +664,26 @@ impl SessionController {
         };
         Ok(self.clean_deletion(work).await)
     }
-    /// Retry only the existing frozen cleanup record, outside the metadata mutex.
+    /// Confirm an already observed absent identity after a possibly uncertain final rename.
+    /// Session identities are never reused; this grants no cleanup authority.
+    pub(crate) async fn confirm_deletion_absence(
+        &self,
+        id: &SessionId,
+    ) -> super::session::deletion::SessionDeleteResult {
+        use super::session::deletion::SessionDeleteResult;
+        match self.catalog.lock().await.confirm_catalog_durability() {
+            Ok(()) => SessionDeleteResult::NotFound {
+                session_id: id.clone(),
+            },
+            Err(error) => SessionDeleteResult::CommittedDurabilityUncertain {
+                session_id: id.clone(),
+                detail: error.to_string(),
+            },
+        }
+    }
+    /// Retry only an observed frozen cleanup record, outside the metadata mutex.
+    /// Public callers must first reconcile through `SessionRuntimeManager`. A racing
+    /// cleanup may already have finalized that record; recovery confirms absence.
     pub(crate) async fn recover_deletion(
         &self,
         id: &SessionId,

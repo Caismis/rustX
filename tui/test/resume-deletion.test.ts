@@ -253,7 +253,7 @@ test("a remounted stale workflow preserves the query and neighbor anchor through
 });
 
 for (const outcome of ["committed_cleanup_pending", "committed_durability_uncertain", "unknown"] as const) {
-  test(`${outcome}: failed reconciliation is not empty authority and fresh remount retains recovery`, async () => {
+  test(`${outcome}: failed reconciliation is not empty authority and fresh remount retains observation`, async () => {
     const h = harness();
     assert.deepEqual(h.workflow.reconciliation, { kind: "none" });
     await h.open(); confirm(h.view);
@@ -267,7 +267,7 @@ for (const outcome of ["committed_cleanup_pending", "committed_durability_uncert
     refresh.reject(new Error("native list unavailable")); await turn();
     assert.deepEqual(h.workflow.reconciliation, { kind: "failed" });
     assert.deepEqual(h.workflow.state, { kind: "result", outcome: outcome === "unknown" ? { status: "unknown" } : { status: outcome, session_id: "b" }, sessionId: "b" });
-    assert.equal(h.workflow.canRecover(), true);
+    assert.equal(h.workflow.canRecover(), outcome !== "unknown");
     assert.equal(h.executes.length, 1);
     assert.doesNotMatch(h.text() + h.feedback.join(), /delete failed/);
     assert.match(h.feedback.join(), /visibility could not be refreshed/);
@@ -283,7 +283,7 @@ for (const outcome of ["committed_cleanup_pending", "committed_durability_uncert
     assert.deepEqual(replacement.selector.visibleSessions().map((r) => r.id), ["a", "c"]);
     assert.equal(replacement.selector.selectedSession()?.id, "c");
     replacement.handleInput("r"); replacement.handleInput("r");
-    assert.deepEqual(h.recovers, ["b"], "recovery uses the native result, not selected C");
+    assert.deepEqual(h.recovers, outcome === "unknown" ? [] : ["b"], "only confirmed committed authority permits recovery");
     assert.equal(h.executes.length, 1);
     replacement.dispose();
   });
@@ -485,7 +485,13 @@ test("a deletion whose response was lost is unknown, never failed, and is never 
   // claim this client cannot support, and resending could delete twice.
   assert.deepEqual(h.workflow.state, { kind: "result", sessionId: "b", outcome: { status: "unknown" } });
   assert.equal(h.executes.length, 1, "the uncertain mutation was not replayed");
-  assert.equal(h.workflow.canRecover(), true, "native recovery stays offered");
+  assert.equal(h.workflow.canRecover(), false);
+  assert.doesNotMatch(h.view.popupFooter().join(), /R retry native cleanup/);
+  assert.match(h.text(), /Reconnect or refresh Session state/);
+  h.view.handleInput("r");
+  h.workflow.recover(h.view.reconciliationContext());
+  assert.deepEqual(h.recovers, []);
+  assert.equal(h.executes.length, 1);
   h.dispose();
 });
 
@@ -507,4 +513,23 @@ test("New Session is presentation intent only for a ready unfiltered empty catal
   view.handleInput("\r");
   assert.equal(creates, 0, "unavailable visibility is not an empty catalog");
   view.dispose(); h.dispose();
+});
+
+
+test("unknown permits cleanup only after a fresh committed server observation", async () => {
+  const h = harness(); await h.open(); confirm(h.view);
+  h.execution.reject(new UncertainOutcomeError("session/delete", new TransportClosedError("input_eof", "lost")));
+  await turn();
+  assert.equal(h.workflow.canRecover(), false);
+  h.view.handleInput("r"); assert.deepEqual(h.recovers, []);
+  h.view.handleInput(esc);
+  h.setPreview(); h.view.selector.selectIdentity("b"); h.view.handleInput(del);
+  h.previewResponse.resolve({ status: "committed_cleanup_pending", session_id: "b" });
+  await turn();
+  assert.equal(h.workflow.canRecover(), true);
+  assert.match(h.view.popupFooter().join(), /R retry native cleanup/);
+  h.view.handleInput("r");
+  assert.deepEqual(h.recovers, ["b"]);
+  assert.equal(h.executes.length, 1);
+  h.dispose();
 });

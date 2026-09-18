@@ -191,7 +191,7 @@ export class ResumeSelector implements PopupContent {
       if (state.outcome.status === "precommit_failure") {
         this.#state = { kind: "notice", text: "Session deletion failed before logical commit. Review a new preview to try again." };
       } else if (state.outcome.status === "unknown") {
-        this.#state = { kind: "notice", recoveryId: state.sessionId, text: "Deletion outcome unknown. Rechecking native Session visibility; this is not proof of failure. Press R for native recovery." };
+        this.#state = { kind: "notice", text: "Deletion outcome unknown. Reconnect or refresh Session state to verify what happened. The delete will not be replayed." };
       } else void this.#result(state.outcome, state.sessionId);
     }
     this.onChange?.();
@@ -203,6 +203,7 @@ export class ResumeSelector implements PopupContent {
     try {
       const result = await this.#client.previewSessionDeletion(id);
       if (!this.#alive() || serial !== this.#workflowSerial) return;
+      this.#workflow.observeCommitted(result, this.reconciliationContext());
       await this.#result(result, id);
       if (result.status === "not_found") await this.#rebuild(this.#anchor);
     } catch {

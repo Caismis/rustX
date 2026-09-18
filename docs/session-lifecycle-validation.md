@@ -253,3 +253,78 @@ corrected; the checks and full Rust suite above were rerun successfully. No test
 were skipped, timeouts increased or synchronization weakened to obtain a pass.
 The existing six ignored tests remain the credential probes/fixture regeneration
 listed above. macOS validation runs in CI, not this Linux worktree.
+
+## Recovery ownership review correction
+
+Public `session/recoverDeletion` now runs through SessionRuntimeManager in a
+server-owned task retaining host request admission. It uses the existing finite
+durable preview before granting recovery authority. Live Preview/Blocked results
+leave any active delete or uncertain-writer fence untouched. Only committed-record
+observations invoke SessionController::recover_deletion. Observed absence confirms
+catalog persistence separately; it does not acquire cleanup authority.
+
+Deleted, confirmed NotFound, and CommittedCleanupPending release the provisional
+manager fence idempotently. Durable absence/retired identities or the durably
+published frozen record now reject runtime/allocation resurrection. Continued
+CommittedDurabilityUncertain retains the fence. A remaining managed writer slot
+cannot be overridden by durable recovery. Runtime Client v40, App Server v8 and
+all wire shapes remain unchanged.
+
+| Regression | Exact boundary and outcome |
+| --- | --- |
+| `recovery_observes_live_session_without_releasing_active_delete_fence` | Delete parks immediately after Session fence installation, before durable handoff. No committed record exists. Recovery returns Preview with the same revision; original fence remains, load is rejected with zero acquisitions. Releasing delete commits normally. |
+| `recovery_settles_durability_uncertainty_without_runtime_reconstruction` | Inject post-rename catalog failure after resident writer retirement. Delete returns CommittedDurabilityUncertain with fence retained. Recovery returns Deleted, clears the fence and leaves composition count at one. Load remains rejected by durable absence; B stays usable. Repeated recovery returns confirmed NotFound. |
+| `recovery_with_unproven_catalog_durability_retains_delete_fence` | Inject post-rename delete failure, then pre-rename recovery publication failure. Recovery returns CommittedDurabilityUncertain; frozen record and fence remain, load is rejected, acquisitions/compositions stay zero. |
+| Existing admitted-operation/delete race | Operation parks on its admitted lease while deletion drains it. Public App Server recovery returns Preview, retaining the active delete fence and old writer until native settlement. |
+| Existing unproven-writer regression | Recovery returns live Preview after failed native settlement; it does not clear the fence or admit a replacement writer. |
+| TUI lost-response regressions | One execute loses its reply. Unknown has no recovery capability/footer and R emits no cleanup request. A subsequent fresh server-confirmed committed preview can enable explicit recovery without replaying delete. |
+
+`deletion_duplicate_recovery_cannot_regress_terminal_or_mint_a_second_snapshot`
+already proves that duplicate/original cleanup work shares frozen authority and a
+delayed worker failure cannot turn finalized absence back into pending cleanup.
+No extra recovery operation registry or timing-based ordering was introduced.
+
+Web audit: reconnect still requests `session/deletePreview` before reattachment;
+there is no Web `session/recoverDeletion` caller. TUI preserves unresolved observation
+when its notice closes, but unknown alone grants neither cleanup action nor replay.
+
+Self-review answers are all **No**: public cleanup recovery without committed
+observation; NotFound for a live Session; live observation releasing an active
+delete fence; successful recovery permanently retaining the uncertainty fence;
+still-uncertain recovery reopening admission; lost response granting cleanup authority.
+
+### Recovery revision validation
+
+Fetched origin before final validation; main remained at
+`5d0d9ae998577cfa00a07fab1610bd1be3dce127`. No rebase was needed.
+
+| Command | Result |
+| --- | --- |
+| `git fetch origin` | Passed; base unchanged. |
+| `cargo fmt --all` | Passed. |
+| `cargo fmt --all -- --check` | Passed. |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed. |
+| `cargo test --all-targets --all-features` | 3,708 passed, zero failures, six existing ignored credential/fixture tests. |
+| `cargo build --bins` | Passed. |
+| `cargo test --lib --all-features local_runtime::session_runtime_manager::tests` | 94 passed. |
+| `cargo test --lib --all-features local_runtime::session::tests::deletion_tests` | 52 passed. |
+| `cargo test --test process --all-features app_server` | 13 passed. |
+| `pnpm --dir protocol/app-server check` | Passed; invokes generation internally, no artifact drift or wire changes. |
+| `pnpm --dir protocol/app-server typecheck` | Passed. |
+| `pnpm --dir tui typecheck` | Passed. |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | 789 passed, none skipped, including rebuilt-server integration. |
+| `pnpm --dir web-console typecheck` | Passed. |
+| `pnpm --dir web-console test` | 432 passed in 29 files. |
+| `pnpm --dir web-console build` | Passed; existing chunk-size advisory. |
+| `pnpm --dir web-console check:provenance` | Passed; 104 source records and 100 package notices. |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | 39 passed; unchanged pinned browser references. |
+| `pnpm --dir dev typecheck` | Passed. |
+| `pnpm --dir dev test` | 30 passed. |
+| `uv run --frozen --directory test-support/fake-provider pytest` | 51 passed. |
+| `git diff --check` | Passed. |
+
+An initial TUI run exposed that dismissing unknown had discarded its observation
+context; it now preserves observation without granting recovery. A Clippy doc-markdown
+failure was corrected. Both suites were rerun successfully. No timeout, screenshot,
+race synchronization or coverage was relaxed. Linux validation used the repository's
+pinned browser container; macOS remains a CI check, not a local claim.

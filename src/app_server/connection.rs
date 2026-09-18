@@ -525,7 +525,20 @@ impl AppServerConnection {
                 Ok(deletion(self.sessions.delete_preview(&session_id).await))
             }
             Method::SessionRecoverDeletion { session_id } => {
-                Ok(deletion(self.sessions.recover_deletion(&session_id).await))
+                let manager = self.host.manager().clone();
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                tokio::spawn(async move {
+                    let _request = request_owner;
+                    let result = manager
+                        .recover_session_deletion(&session_id)
+                        .await
+                        .map(deletion)
+                        .map_err(manager_error);
+                    let _ = sender.send(result);
+                });
+                receiver
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))?
             }
             Method::SourcesRead { session_id } => {
                 let (projection, session_revision, session_selection) = self

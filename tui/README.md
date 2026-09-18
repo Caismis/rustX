@@ -866,17 +866,18 @@ choice behavior applies to retained-workspace disposal.
 
 Deletion is permanent from rustX's perspective, including owned internal lineages
 and child conversations. Independent `/fork` and `/clone` Sessions and project
-files are preserved. The current Session is blocked: switch or use `/new` first.
-In-use Sessions or owned children must be released before deletion. Retained
+files are preserved. The current Session can be deleted directly; the server
+settles its runtime before durable deletion. Retained
 worktrees must be disposed explicitly through the existing subagent workspace
 action; Session deletion never disposes them automatically.
 
 A changed preview requires a fresh preview and another explicit confirmation.
 `CleanupPending` means the Session has been removed and cannot be resumed, but
 some local data still needs cleanup. Press **R** on the focused notice for one
-native recovery attempt. Durability uncertainty and unknown request outcomes are
-shown distinctly, with native list reconciliation and explicit recovery available;
-they are not reported as definite deletion failures. Closing a recovery notice
+native recovery attempt. Server-confirmed durability uncertainty also offers
+explicit recovery. An unknown outcome means the response was lost: reconnect or
+refresh authoritative Session state. It never offers **R retry native cleanup**
+or replays deletion merely because the outcome is unknown. Closing a recovery notice
 hides it without discarding its native recovery action; reopening `/resume`
 restores it. Resolve that action before starting another deletion.
 

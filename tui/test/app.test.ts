@@ -1672,7 +1672,7 @@ for (const takeover of ["HITL", "snapshot"] as const) {
 }
 
 for (const status of ["committed_cleanup_pending", "committed_durability_uncertain", "unknown"] as const) {
-  it(`execute ${status} remains recoverable across same-attachment snapshot invalidation`, async () => {
+  it(`execute ${status} remains observable across same-attachment snapshot invalidation`, async () => {
     const h = await deletionAppHarness();
     try {
       await h.resolvePreview(); await h.input("\t\r");
@@ -1684,7 +1684,7 @@ for (const status of ["committed_cleanup_pending", "committed_durability_uncerta
       assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
       assert.match(h.text(), status === "unknown" ? /outcome unknown/ : status === "committed_cleanup_pending" ? /removed and cannot be resumed/ : /durability is uncertain/);
       assert.doesNotMatch(h.text(), /delete failed|historical-target/);
-      await h.input("rr"); assert.deepEqual(h.recovers, ["old"]);
+      await h.input("rr"); assert.deepEqual(h.recovers, status === "unknown" ? [] : ["old"]);
       assert.equal(h.executes.length, 1); assert.equal(h.cancelled(), 0);
     } finally { await h.finish(); }
   });
@@ -1780,7 +1780,7 @@ it("a delayed initial resume response cannot resurrect a row after deletion reco
 
 
 for (const outcome of ["committed_cleanup_pending", "committed_durability_uncertain", "unknown"] as const) {
-  for (const empty of [false, true]) it(`${outcome}: reopening after failed reconciliation honors fresh ${empty ? "empty" : "matching"} authority and retains recovery`, async () => {
+  for (const empty of [false, true]) it(`${outcome}: reopening after failed reconciliation honors fresh ${empty ? "empty" : "matching"} authority and retains observation`, async () => {
     const h = await deletionAppHarness();
     try {
       await h.input("\x1b[27u"); // cancel the initial disposable preview
@@ -1800,7 +1800,8 @@ for (const outcome of ["committed_cleanup_pending", "committed_durability_uncert
       h.setList(async () => ({ sessions: empty ? [] : ["A", "C"].map((id) => ({ id, name: `histor-${id}`, updated_at: "today", cwd: "/server/work", active_node: id, active: false })) }));
       await h.input("/resume\r");
       assert.deepEqual(h.lists.at(-1), ["histor", 0]);
-      assert.match(h.text(), /R retry native cleanup/);
+      if (outcome === "unknown") assert.doesNotMatch(h.text(), /R retry native cleanup/);
+      else assert.match(h.text(), /R retry native cleanup/);
       await h.input("\x1b[27u");
       assert.doesNotMatch(h.text(), /visibility unavailable|historical-target/);
       if (empty) {
@@ -1810,7 +1811,7 @@ for (const outcome of ["committed_cleanup_pending", "committed_durability_uncert
       else { assert.match(h.text(), /histor-A/); assert.match(h.text(), /histor-C/); }
       // The retained action remains available on reopening even with no rows.
       await h.input("\x1b[27u"); await h.input("/resume\r"); await h.input("rr");
-      assert.deepEqual(h.recovers, ["old"]); assert.equal(h.executes.length, 1);
+      assert.deepEqual(h.recovers, outcome === "unknown" ? [] : ["old"]); assert.equal(h.executes.length, 1);
       assert.equal(h.cancelled(), 0);
     } finally { await h.finish(); }
   });

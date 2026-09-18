@@ -180,7 +180,7 @@ impl CleanupWork {
 }
 
 impl SessionCatalog {
-    fn confirm_catalog_durability(&self) -> std::io::Result<()> {
+    pub(crate) fn confirm_catalog_durability(&self) -> std::io::Result<()> {
         File::open(&self.path)?.sync_all()?;
         super::sync_directory_ancestry(&self.root)
     }

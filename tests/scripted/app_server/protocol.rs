@@ -225,6 +225,11 @@ async fn admitted_async_operation_drains_before_delete_releases_resources() {
             !delete.is_finished(),
             "unload is waiting on the admitted operation, not the client"
         );
+        assert!(matches!(
+            call(&connection, 202, Method::SessionRecoverDeletion { session_id: target.session_id.clone() }).await,
+            MethodResult::Deletion { result: crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult::Preview { .. } }
+        ));
+        assert!(f.manager.registry.0.lock().unwrap().retiring_sessions.contains(&target.session_id));
         assert!(weak_runtime.upgrade().is_some());
         assert_eq!(
             rejected(

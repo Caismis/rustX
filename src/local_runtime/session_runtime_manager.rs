@@ -1061,6 +1061,59 @@ impl SessionRuntimeManager {
         result
     }
 
+    /// Reconcile durable deletion state before retrying committed cleanup.
+    /// Live observations never release another delete's admission ownership.
+    pub(crate) async fn recover_session_deletion(
+        &self,
+        session: &SessionId,
+    ) -> Result<super::session::deletion::SessionDeleteResult, RuntimeManagerError> {
+        use super::session::deletion::SessionDeleteResult;
+        let observed = self.sessions.delete_preview(session).await;
+        if !matches!(
+            observed,
+            SessionDeleteResult::CommittedCleanupPending { .. }
+                | SessionDeleteResult::CommittedDurabilityUncertain { .. }
+                | SessionDeleteResult::NotFound { .. }
+        ) {
+            return Ok(observed);
+        }
+        // Durable recovery cannot substitute for retirement of a managed writer.
+        if self
+            .registry
+            .0
+            .lock()
+            .expect("registry mutex")
+            .by_session
+            .contains_key(session)
+        {
+            return Err(error(
+                "writer retirement must be proven before deletion recovery",
+            ));
+        }
+        let result = if matches!(observed, SessionDeleteResult::NotFound { .. }) {
+            self.sessions.confirm_deletion_absence(session).await
+        } else {
+            // These preview outcomes identify an existing frozen deletion record.
+            self.sessions.recover_deletion(session).await
+        };
+        if matches!(
+            result,
+            SessionDeleteResult::Deleted { .. }
+                | SessionDeleteResult::NotFound { .. }
+                | SessionDeleteResult::CommittedCleanupPending { .. }
+        ) {
+            // Durable absence or a durable frozen record now excludes admission.
+            // Idempotent, including recovery racing the original cleanup worker.
+            self.registry
+                .0
+                .lock()
+                .expect("registry mutex")
+                .retiring_sessions
+                .remove(session);
+        }
+        Ok(result)
+    }
+
     /// Warm loads reuse the current incarnation. Loads racing unload wait for
     /// its terminal result, then cold load; failed unload remains a closed slot.
     /// # Errors

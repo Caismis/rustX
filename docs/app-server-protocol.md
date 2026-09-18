@@ -887,3 +887,25 @@ Preview works while attached or executing, without destructive guards. Confirmed
 delete owns manager fencing/retirement, destructive exclusion, revision validation,
 durable commit, and cleanup. Existing stale-confirmation and durability outcomes
 remain authoritative. Close view continues to use `session/detach` only.
+
+## Public deletion recovery ownership
+
+`session/delete` delegates admission, native writer retirement and durable handoff
+to SessionRuntimeManager. `session/recoverDeletion` also uses that manager in a
+server-owned request task, independent of the initiating connection.
+
+Recovery first obtains the finite durable deletion observation. A live Session
+returns Preview or Blocked without cleanup or changing an active deletion fence.
+Only an observed committed record permits SessionController::recover_deletion,
+which retries that frozen authority. Observed absence receives a catalog durability
+barrier before NotFound; it grants no cleanup authority.
+
+Deleted, confirmed NotFound, and CommittedCleanupPending release a retained
+manager fence: durable absence or the durably published frozen record excludes
+normal Session/allocation admission. CommittedDurabilityUncertain retains the
+fence. Recovery never substitutes for unproven native writer retirement. Duplicate
+recovery uses existing idempotent cleanup/finalization and idempotent fence release.
+
+A client-side unknown outcome requires authoritative observation, not cleanup
+recovery or mutation replay. Only server-confirmed committed outcomes grant the
+explicit recovery action. App Server v8 and native Runtime Client v40 are unchanged.
