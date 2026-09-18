@@ -53,7 +53,7 @@ export class ConnectionController {
     } catch { if (epoch === this.epoch) this.publish({ busy: false, error: 'No local managed connection is available. Reopen the launcher URL or configure a Remote App Server in Settings.' }); }
   }
   private async connect(endpoint: string, token: string, epoch: number) {
-    try { await this.client.connect(endpoint, token, true); }
+    try { await this.client.connect(endpoint, token, this.client.isSameAuthority(endpoint) ? 'reconnect' : 'replace-authority'); }
     catch (error) { if (epoch === this.epoch) this.publish({ error: error instanceof Error ? error.message : 'Connection failed.' }); }
     finally { if (epoch === this.epoch) this.publish({ busy: false }); }
   }

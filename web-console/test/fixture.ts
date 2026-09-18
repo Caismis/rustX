@@ -71,18 +71,19 @@ export class Server {
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
   version = 8;
   capabilities = capabilities;
-  client = new AppServerClient((_url, protocols) => {
+  socketFactory = (_url: string, protocols: string[]) => {
     if (protocols[0] !== 'rustx.app-server.v8' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
-  });
+  };
+  client = new AppServerClient(this.socketFactory);
   constructor() { this.client.setAttachmentAdmission(async () => true); } // Protocol-only fixture; App installs real Host admission.
   get socket() { return this.sockets[this.sockets.length - 1]; }
   target(id: string, socket = this.socket): AttachmentTarget {
     return this.targets.get(socket)!.get(id)!;
   }
   claims(socket = this.socket) { return [...(this.targets.get(socket)?.values() ?? [])]; }
-  async connect() { await this.client.connect(endpoint, TOKEN, this.sockets.length > 0); }
+  async connect() { await this.client.connect(endpoint, TOKEN); }
   async attached(...ids: string[]) { await this.connect(); for (const id of ids) await this.client.attach(id); }
   waitFor(method: Request['method'], count = this.requests.filter(item => item.request.method === method).length + 1): Promise<Request> {
     const existing = this.requests.filter(item => item.request.method === method)[count - 1];

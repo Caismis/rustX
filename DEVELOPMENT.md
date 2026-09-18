@@ -79,6 +79,8 @@ repeats authenticated bootstrap without credential entry. Use `--no-open` to pri
 the URL without opening a browser; SSH launches also suppress automatic opening.
 Browser opener failure leaves the composition running and points to the printed URL.
 The opener receives only a bounded desktop environment, never provider/MCP credentials.
+It observes OS handoff, not browser lifetime. Only Windows waits for the short-lived
+PowerShell launcher; Linux/macOS/WSL return after `open()` accepts the URL.
 App Server credentials never appear in the URL or browser persistent storage.
 
 For the minimal local launch, use:

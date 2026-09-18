@@ -18,7 +18,7 @@ test('CFG3 committed write and reload response loss reconstructs native state wi
     await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-    await settings.getByRole('button', { name: 'Overview', exact: true }).click();
+    await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     const writes = () => wire.requests.filter(request => request.method === 'configuration/sourceWrite');
     const reconnect = async () => {
       await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
@@ -74,7 +74,7 @@ test('CFG3 committed write and reload response loss reconstructs native state wi
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.getByLabel('Session location', { exact: true })).toContainText(fixture.workspaceB);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await settings.getByRole('button', { name: 'Overview', exact: true }).click();
+    await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     await settings.getByRole('tab', { name: 'User', exact: true }).click();
     await settings.getByRole('button', { name: 'MCP', exact: true }).click();
     await settings.getByRole('button', { name: 'Edit MCP loss-fixture', exact: true }).click();

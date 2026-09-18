@@ -51,8 +51,8 @@ it('late bootstrap cannot replace an explicitly selected remote connection', asy
 it('competing replacements behind one close barrier create only the newest socket', async () => {
   const server = new Server(); await server.connect();
   const old = server.socket, close = vi.spyOn(old, 'close').mockImplementation(() => {});
-  const first = server.client.connect('wss://first.example/', TOKEN);
-  const second = server.client.connect('wss://second.example/', TOKEN);
+  const first = server.client.connect('wss://first.example/', TOKEN, 'replace-authority');
+  const second = server.client.connect('wss://second.example/', TOKEN, 'replace-authority');
   expect(server.sockets).toHaveLength(1); expect(close).toHaveBeenCalledTimes(1);
   old.onclose?.(new CloseEvent('close')); await Promise.all([first, second]);
   expect(server.sockets).toHaveLength(2); expect(server.client.getSnapshot().endpoint).toBe('wss://second.example/');

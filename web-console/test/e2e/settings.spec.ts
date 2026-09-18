@@ -17,7 +17,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, Save and reload f
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-    await settings.getByRole('button', { name: 'Overview', exact: true }).click();
+    await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     const saved = async () => { await expect(settings.getByText(/Source saved. Use Reload/)).toBeVisible(); };
     await settings.getByRole('tab', { name: 'User', exact: true }).click();
     await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();

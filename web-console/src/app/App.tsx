@@ -5,7 +5,7 @@ import { HttpWorkspaceHost, type ProductHostWorkspaces } from '../workspaces/hos
 import { WorkspaceNavigation } from '../workspaces/WorkspaceNavigation';
 import { createWorkspaceSession, WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { Trajectory } from './Trajectory';
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
 import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../../protocol/app-server/v8';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
@@ -42,10 +42,10 @@ import { deriveSessionProductState } from '../bindings/session-product';
 import { SessionStatus } from './SessionStatus';
 
 const PREFERENCES = 'rustx-console-view-v2';
-function readPreferences(): { openViews: string[] } {
+function readPreferences(): { endpoint?: string; openViews: string[] } {
   try {
     const value = JSON.parse(localStorage.getItem(PREFERENCES) ?? 'null');
-    if (value && Array.isArray(value.openViews)) return { openViews: [...new Set<string>(value.openViews.filter((id: unknown) => typeof id === 'string'))].slice(0, 32) };
+    if (value && typeof value.endpoint === 'string' && Array.isArray(value.openViews)) return { endpoint: value.endpoint, openViews: [...new Set<string>(value.openViews.filter((id: unknown) => typeof id === 'string'))].slice(0, 32) };
   } catch { /* Preferences are optional presentation, never recovery input. */ }
   return { openViews: [] };
 }
@@ -55,7 +55,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const connection = useMemo(() => providedConnection ?? new ConnectionController(client), [providedConnection, client]);
   const selection = useSyncExternalStore(connection.subscribe, connection.getSnapshot);
   const [createOpen, setCreateOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState<'overview' | 'connection'>();
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [artifactPreview, setArtifactPreview] = useState<{ artifact: PreviewArtifact; resources: ArtifactResources }>();
@@ -64,8 +64,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const [conversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
   const [preferences] = useState(readPreferences);
   const endpoint = state.endpoint ?? '';
-  const [openViews, setOpenViews] = useState<string[]>(preferences.openViews);
-  const [focus, setFocus] = useState<{ sessionId?: string; workspaceId?: string; generation?: number }>({ sessionId: preferences.openViews[0] });
+  const initialViews = preferences.endpoint === state.endpoint ? preferences.openViews : [];
+  const [openViews, setOpenViews] = useState<string[]>(initialViews);
+  const [focus, setFocus] = useState<{ sessionId?: string; workspaceId?: string; generation?: number }>({ sessionId: initialViews[0] });
   const selected = focus.sessionId;
   const workspace = focus.generation === state.generation && state.connection === 'connected' ? focus.workspaceId : undefined;
   const [navigation] = useState(() => new NavigationEpoch());
@@ -81,6 +82,15 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const [creating, setCreating] = useState<number>();
   const [sending, setSending] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<RuntimeClientSessionDeletePreview>();
+  const [presentationAuthority, setPresentationAuthority] = useState(state.authorityRevision);
+  // The client owns authority retirement. This render adjustment retires only
+  // browser presentation before any children can reinterpret an old Session ID.
+  if (presentationAuthority !== state.authorityRevision) {
+    setPresentationAuthority(state.authorityRevision);
+    navigation.invalidate(); setOpenViews([]); setFocus({}); setCommand(undefined); setRestored(undefined);
+    setPreview(undefined); setError(''); setConsumed(undefined); setSending({}); setCreating(undefined);
+    setCreateOpen(false); setSessionMenuOpen(false); setArtifactPreview(undefined);
+  }
 
   const selectedView = selected ? state.views[selected] : undefined;
   const view = selectedView?.deleting && !selectedView.target ? undefined : selectedView;
@@ -109,13 +119,23 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     void action().catch(cause => { if (generation === client.getSnapshot().generation) setError(String(cause)); });
   };
   // Subscription cleanup is presentation-only. No component owns socket/runtime life.
-  useEffect(() => { client.restoreViews(preferences.openViews); }, [client, preferences]);
+  const preferencesApplied = useRef(false);
+  useEffect(() => {
+    if (!endpoint || preferencesApplied.current) return;
+    preferencesApplied.current = true;
+    if (preferences.endpoint !== endpoint) return;
+    client.restoreViews(preferences.openViews);
+    setOpenViews(preferences.openViews); setFocus({ sessionId: preferences.openViews[0] });
+    if (client.getSnapshot().connection === 'connected') for (const id of preferences.openViews) {
+      if (!client.getSnapshot().views[id]?.target) void client.attach(id).catch(() => {});
+    }
+  }, [client, endpoint, preferences]);
   useEffect(() => {
     try {
       // Persist only safe navigation. Never the token, drafts, snapshots or requests.
-      localStorage.setItem(PREFERENCES, json({ openViews: JSON.parse(resumeViews) }));
+      if (endpoint) localStorage.setItem(PREFERENCES, json({ endpoint, openViews: JSON.parse(resumeViews) }));
     } catch { /* Storage may be disabled in a trusted browser. */ }
-  }, [preferences, resumeViews]);
+  }, [endpoint, resumeViews]);
   // Every Session focus path publishes the same pair. Until native cwd has been
   // classified, its Workspace is explicitly empty rather than inherited.
   const focusSession = (id?: string, options: { attach?: boolean; ready?: () => void; preserveDraft?: boolean } = {}) => {
@@ -179,22 +199,22 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   });
   return <AppFrame sidebar={geometry => <SidebarRoot {...geometry} startSession={() => { setCreateOpen(true); }}
     panels={[]}
-    browser={(wide, expand) => <WorkspaceNavigation wide={wide} expand={expand} createOpen={createOpen} closeCreate={() => setCreateOpen(false)} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
+    browser={(wide, expand) => <WorkspaceNavigation key={state.authorityRevision ?? 0} wide={wide} expand={expand} createOpen={createOpen} closeCreate={() => setCreateOpen(false)} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       creating={creating === state.generation} metadataChanged={removed => { if (selected) focusSession(selected, { preserveDraft: true }); else if (removed) setFocus(value => value.workspaceId === removed ? {} : value); }}
       workspace={workspace} selected={selected} selectWorkspace={id => { navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({ workspaceId: id, generation: state.generation }); }}
       openSession={open} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={createInWorkspace} deleteSession={deletePreview}
       forkSession={id => open(id, () => {
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
       })} />}
-    settings={wide => <SettingsTrigger wide={wide} onClick={() => setSettingsOpen(true)} />} />}
+    settings={wide => <SettingsTrigger wide={wide} onClick={() => setSettingsOpen('overview')} />} />}
     rightOpen={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} rightPanel={geometry => <RightPanel {...geometry} open={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} close={() => { setInspectorOpen(false); setArtifactPreview(undefined); }} title={artifactPreview && artifactPreview.resources === artifacts ? 'Artifact preview' : 'Developer inspector'}>{artifactPreview && artifactPreview.resources === artifacts ? <ArtifactPreview key={artifactPreview.artifact.id} artifact={artifactPreview.artifact} resources={artifacts!} /> : <Inspector log={client.log} state={state} view={view} />}</RightPanel>}
     overlay={<>
-      {settingsOpen && <Settings key={view?.id} connection={connection} client={client} sessionId={view?.id} onClose={() => setSettingsOpen(false)} theme={theme} setTheme={setTheme} />}
+      {settingsOpen && <Settings initialSection={settingsOpen} connection={connection} client={client} sessionId={view?.id} onClose={() => setSettingsOpen(undefined)} theme={theme} setTheme={setTheme} />}
     </>}>
     {!view && <header className="console-header"><strong>rustX</strong><Button aria-label="Toggle Inspector" onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></header>}
     {!connected && !view && <section className="notice" aria-label="Connection recovery"><p>{selection.busy ? 'Connecting…' : 'Unable to connect to rustX'}</p>
       {selection.mode === 'local' && !selection.busy && <p>No local managed connection is available. Reopen the launcher URL or configure a Remote App Server in Settings.</p>}
-      <Button disabled={selection.busy} onClick={() => void connection.reconnect()}>Reconnect</Button><Button onClick={() => setSettingsOpen(true)}>Show details</Button>
+      <Button disabled={selection.busy} onClick={() => void connection.reconnect()}>Reconnect</Button><Button onClick={() => setSettingsOpen('connection')}>Show details</Button>
     </section>}
     {Object.values(state.views).filter(item => item.deletionRecovery).map(item => <section key={item.id} className="notice" aria-label={`Deletion recovery for ${sessionDisplayTitle(item.summary)}`}>
       <p>{sessionDisplayTitle(item.summary)}: {item.deletionRecovery === 'committed_cleanup_pending' ? 'Session removed. Cleanup is still pending.' : 'Deletion durability needs verification.'}</p>
@@ -235,7 +255,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       <div className={agentCss.tabs} role="tablist" aria-label="Conversation view" onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <Button className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? 'Chat' : 'Trajectory'}</Button>)}</div>
       </header>
       <SessionStatus product={product} recover={action => {
-        if (action === 'connection-settings') setSettingsOpen(true);
+        if (action === 'connection-settings') setSettingsOpen('connection');
         else if (action === 'connect') void connection.reconnect();
         else if (action === 'refresh') run(() => client.refresh(view.id));
         else focusSession(view.id, { attach: true, preserveDraft: true });

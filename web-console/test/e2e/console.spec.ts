@@ -47,7 +47,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     // Configuration source commits cannot rewrite a running admitted attempt.
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-    await settings.getByRole('button', { name: 'Overview', exact: true }).click();
+    await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
     await settings.getByRole('button', { name: 'Model', exact: true }).click();
     await settings.getByRole('combobox', { name: 'Model', exact: true }).selectOption('fixture/second-model');
@@ -142,7 +142,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.locator(`button[data-session-id="${idA}"]`).click();
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await page.getByRole('button', { name: 'Overview', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     await page.getByRole('button', { name: 'Reload', exact: true }).click();
     await expect(page.getByRole('status').filter({ hasText: 'Configuration published' })).toBeVisible();
     await closeSettings(page);

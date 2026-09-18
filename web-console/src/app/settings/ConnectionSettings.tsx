@@ -25,6 +25,13 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
     <Button onClick={() => void connection.disconnect()}>Disconnect</Button>
     {(selection.error || transport.error) && <p role="alert">{selection.error || transport.error}</p>}
     <details><summary>Connection details</summary><p>{transport.endpoint} · generation {transport.generation} · App Server v8</p></details>
+    {!!transport.detached?.length && <details><summary>Detached authority diagnostics</summary>
+      <p>Historical evidence only. These operations are never replayed and cannot control the current server. Verify the old server separately before acknowledging.</p>
+      {transport.detached.map((evidence, index) => <section key={index}><h3>{evidence.authority}</h3>
+        <pre>{JSON.stringify(evidence, null, 2)}</pre>
+        <Button onClick={() => client.acknowledgeDetached(index)}>I have reviewed this historical evidence</Button>
+      </section>)}
+    </details>}
     {!!transport.uncertain.filter(item => !item.interactionKey).length && <details><summary>Review uncertain operations</summary>
       <p>Verify the affected work in Developer Inspector before acknowledging. Nothing is replayed.</p>
       {transport.uncertain.filter(item => !item.interactionKey).map(item => <div key={item.id}><p>{item.method} · request {item.id}</p><Button onClick={() => client.acknowledgeDiagnostic(item.id)}>I have verified the affected work</Button></div>)}

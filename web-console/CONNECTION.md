@@ -41,7 +41,7 @@ Host policy, independent of browser authentication and native socket admission.
 | Browser session secret | Carrier memory only | Carrier process |
 | Browser session credential | Authority-bound HttpOnly session cookie | Valid only in carrier process |
 | Remote transport token | Settings/controller memory only | Page; discarded when returning Local |
-| Navigation/presentation hints | Browser localStorage | Preference lifetime |
+| Endpoint-scoped navigation/presentation hints | Browser localStorage | Preference lifetime; never connection material |
 | Provider/MCP credentials | Existing native owners | Unchanged |
 
 The bootstrap config references the existing private transport-token file instead
@@ -60,6 +60,44 @@ Local disconnects Remote and waits for socket closure before fetching bootstrap.
 AppServerClient retains endpoint/token validation and socket replacement, waiting
 for the old close event before creating a replacement. Generations fence obsolete
 continuations. No mutations are replayed and Session authority remains native.
+
+Browser Session/control state belongs to one concrete App Server authority: the
+exact normalized WebSocket endpoint (scheme, host, port and root path). This is a
+transport authority, not a durable server identity. A server replaced behind the
+same endpoint is indistinguishable without new protocol identity; v8 runtime and
+attachment fencing still apply. Local compositions use ephemeral endpoints. No
+server registry or identity protocol is added.
+
+ConnectionController explicitly chooses same-authority reconnect or authority
+replacement. Same-authority reconnect retains wanted views/node intent and repairs
+them from native facts. Replacement fences the old generation synchronously,
+settles its socket once, then retires its catalog, views, focus, projections,
+attachment/node intent, interaction admission and Settings drafts before admitting
+the new connection. A colliding Session ID never carries intent across endpoints.
+Saved navigation hints are restored only for the first matching authenticated or
+explicitly selected endpoint, never used to select an endpoint, and are cleared on
+authority replacement. No multi-authority view history is maintained.
+
+Transmitted operations that lose responses remain uncertain exactly once. On
+replacement, uncertainty and Session diagnostic evidence move into read-only
+**Settings → Connection → Detached authority diagnostics**, tagged with their old
+endpoint. They have no control, replay, reattachment or new-server admission effect,
+even when Session/interaction IDs collide. Evidence is page-memory only: at most
+eight detached batches, each with the client's bounded operations and up to 64
+Session diagnostics. Capacity refuses replacement rather than evicting evidence;
+explicit acknowledgement removes a batch. Wire observations are replaceable logs
+and clear on authority replacement. Unresolved deletion verification or committed
+deletion recovery refuses replacement with a visible error: reconnect the original
+authority and resolve it first. It is neither dropped nor sent to another server.
+
+Ordinary Settings opens **Overview**. Recovery **Show details** and connection
+recovery actions explicitly open **Connection**; transport is never the default.
+
+Browser handoff observes OS acceptance, never browser lifetime. On Linux/macOS/WSL,
+`open()` success lets the helper exit without referencing or waiting on the returned
+process. On Windows only, the helper waits for the short-lived PowerShell launcher's
+exit and rejects nonzero status. The parent's deadline/cancellation can kill only
+the rustX helper, never the user's browser; the environment allowlist is unchanged.
 
 Harness `ddefc45fbc7f8e46dd73185e68295696d1297887` was inspected as a product/security
 reference. Authentication and launcher code are independently implemented. Unlike

@@ -19,7 +19,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and explicit publ
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-    await settings.getByRole('button', { name: 'Overview', exact: true }).click();
+    await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     await expect(settings.getByRole('tab', { name: 'Effective', exact: true })).toHaveAttribute('aria-selected', 'true');
     await settings.getByText('Source paths', { exact: true }).click();
     await expect(settings.getByText(fixture.settings, { exact: true })).toBeVisible();

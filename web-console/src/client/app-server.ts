@@ -66,6 +66,8 @@ export interface UncertainOperation {
   generation: number;
 }
 export interface ClientView {
+  authorityRevision?: number;
+  detached?: readonly DetachedEvidence[];
   endpoint?: string;
   connection: ConnectionState;
   generation: number;
@@ -76,6 +78,12 @@ export interface ClientView {
   views: Readonly<Record<string, SessionView>>;
   uncertain: readonly UncertainOperation[];
   interactionOperations: Readonly<Record<string, { sessionId: string; status: 'in-flight' | 'uncertain' | 'acknowledged' }>>;
+}
+/** Read-only historical evidence. Never consulted by attachment/control admission. */
+export interface DetachedEvidence {
+  authority: string;
+  operations: readonly UncertainOperation[];
+  sessions: readonly Pick<SessionView, 'id' | 'error' | 'modelMutation' | 'cancellation'>[];
 }
 export interface Socket {
   onopen: ((event: Event) => unknown) | null;
@@ -178,18 +186,40 @@ export class AppServerClient {
   restoreViews(ids: readonly string[]) {
     for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.setSession(id, { attachmentIntent: 'wanted' });
   }
-  async connect(endpoint: string, token: string, reconnect = false) {
+  // Browser transport authority, not a durable server identity. Reconnect alone
+  // can restore wanted Session intent; replacement must retire it after fencing.
+  isSameAuthority(endpoint: string) { return !this.state.endpoint || new URL(endpoint).href === this.state.endpoint; }
+  async connect(endpoint: string, token: string, transition: 'reconnect' | 'replace-authority' = 'reconnect') {
     const url = new URL(endpoint);
     if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== '/') {
       throw new Error('Use a ws:// or wss:// endpoint at / with no credentials, query, or fragment.');
     }
     if (!/^[A-Za-z0-9_-]{43,128}$/.test(token)) throw new Error('Enter the dedicated 43–128 character App Server transport token.');
+    const replacing = !this.isSameAuthority(url.href);
+    if (replacing && transition !== 'replace-authority') throw new Error('Different App Server authority requires explicit replacement.');
+    if (replacing && Object.values(this.state.views).some(view => view.deleting)) throw new Error('Resolve pending Session deletion verification/recovery on the current App Server before replacing its authority.');
+    // Capacity refusal precedes fencing; unresolved evidence is never evicted.
+    if (replacing && (this.state.detached?.length ?? 0) >= 8) throw new Error('Review and acknowledge detached authority diagnostics before replacing another App Server.');
+    if (replacing && Object.values(this.state.views).filter(view => view.error || view.modelMutation || view.cancellation).length > 64) throw new Error('Too many unresolved Session diagnostics. Review the current authority before replacing it.');
     const attempt = ++this.connectionAttempt;
     if (this.socket) this.endConnection('disconnected');
     const generation = this.state.generation;
     if (this.closing) await this.closing;
     if (generation !== this.state.generation || attempt !== this.connectionAttempt) return;
-    this.publish({ endpoint: url.href, connection: reconnect ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
+    if (replacing) {
+      const sessions = Object.values(this.state.views).filter(view => view.error || view.modelMutation || view.cancellation)
+        .map(({ id, error, modelMutation, cancellation }) => ({ id, error, modelMutation, cancellation }));
+      // Rejected pending continuations can add evidence while close is settling.
+      if (sessions.length > 64) throw new Error('Too many unresolved Session diagnostics. Reconnect and review the current authority before replacing it.');
+      const detached = [...(this.state.detached ?? [])];
+      if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, operations: this.state.uncertain, sessions });
+      this.attachmentEpochs.clear(); this.previewChecked.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear();
+      this.listEpoch++; this.listOffset = 0; this.listQuery = '';
+      this.log.clear();
+      this.publish({ views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
+        authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
+    }
+    this.publish({ endpoint: url.href, connection: transition === 'reconnect' ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     try {
       const socket = this.socketFactory(url.href, ['rustx.app-server.v8', `rustx-token.${token}`]);
       this.socket = socket;
@@ -246,6 +276,7 @@ export class AppServerClient {
   private connectionAttempt = 0;
   private closedSockets = new WeakSet<Socket>();
   disconnect() { ++this.connectionAttempt; this.endConnection('disconnected'); return this.closing; }
+  acknowledgeDetached(index: number) { this.publish({ detached: this.state.detached?.filter((_, at) => at !== index) }); }
   private lose(generation: number) {
     if (this.current(generation)) this.endConnection('stale');
   }

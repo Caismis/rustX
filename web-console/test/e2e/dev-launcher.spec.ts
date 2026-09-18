@@ -68,6 +68,8 @@ compat = { chat_reasoning_replay = "omit" }
     expect(classified.map((row: { authorized: boolean }) => row.authorized)).toEqual([true, false, false]);
     expect((await page.request.post(`${clean}product-host/adopt`, { data: { location: nested } })).status()).toBe(400);
     expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain(token);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     await openConnectionSettings(page);
     await expect(page.getByLabel('Connection mode')).toHaveValue('local');
     await page.getByLabel('Connection mode').selectOption('remote');
@@ -90,6 +92,9 @@ compat = { chat_reasoning_replay = "omit" }
     await expect(page.getByRole('region', { name: 'Connection Settings' }).getByRole('alert')).toContainText('No local managed connection');
     await expect(page.getByLabel('Connection mode')).toHaveValue('local');
     await expect(page.locator('.connection-status')).toHaveText('Disconnected');
+    await closeSettings(page);
+    await page.getByRole('button', { name: 'Show details', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Connection', exact: true })).toHaveAttribute('aria-current', 'page');
     await page.unroute('**/__rustx/bootstrap');
     await page.route('**/__rustx/bootstrap', route => route.fulfill({ json: { connectionMode: 'local', appServerEndpoint: ready.endpoint, appServerTransportToken: launchToken } }));
     await page.getByRole('region', { name: 'Connection Settings' }).getByRole('button', { name: 'Reconnect', exact: true }).click();

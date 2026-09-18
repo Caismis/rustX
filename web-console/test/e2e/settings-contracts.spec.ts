@@ -39,7 +39,7 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-    await settings.getByRole('button', { name: 'Overview', exact: true }).click();
+    await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
     for (const owner of ['Root', 'Agent'] as const) {
       await settings.getByRole('button', { name: owner === 'Root' ? 'Model' : 'Agents', exact: true }).click();

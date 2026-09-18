@@ -19,6 +19,9 @@ never grants Workspace filesystem authority; see [CONNECTION.md](CONNECTION.md).
 | Boolean forwarding and sanitized browser handoff | `dev/test/browser.test.ts` |
 | Root exchange, malformed/wrong/missing credentials, exact bootstrap, no-store, port binding, secret rotation, unauthorized root | `test/browser-auth.test.ts` |
 | Mode-local recovery, no fallback, delayed bootstrap fence, exactly-once close before replacement | `test/connection-controller.test.ts` |
+| Two-server Session ID collision, same-authority restoration, view/focus/dialog retirement, detached uncertainty, deletion refusal, bounded evidence and close timeout | `test/authority.test.tsx` |
+| Overview by default; recovery targets Connection | `test/authority.test.tsx`, `test/e2e/dev-launcher.spec.ts`, `accessibility.spec.ts` |
+| Non-Windows acceptance without process-lifetime wait; Windows launcher exit; helper-only cancellation | `dev/test/browser.test.ts` |
 | Native refusal of browser token, clean URL, automatic local connect/reload, storage isolation, exact roots | `test/e2e/dev-launcher.spec.ts` |
 | Explicit Remote Settings and keyboard reachability | Existing real-server browser fixtures and `accessibility.spec.ts` |
 

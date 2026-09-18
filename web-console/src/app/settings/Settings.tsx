@@ -39,10 +39,11 @@ function nativeDiagnostic(cause: unknown): string {
   return cause.error.message;
 }
 
-function SettingsContent({ client, sessionId, onClose = () => {}, theme = 'light', setTheme, connection }: { client: AppServerClient; sessionId?: string; onClose?: () => void; theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void; connection?: ConnectionController }) {
+interface SettingsProps { client: AppServerClient; sessionId?: string; onClose?: () => void; theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void; connection?: ConnectionController; initialSection?: 'overview' | 'connection' }
+function SettingsContent({ client, sessionId, onClose = () => {}, theme = 'light', setTheme, connection, section, setSection }: SettingsProps & { section: Section; setSection: (section: Section) => void }) {
   const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const target = sessionId ? transport.views[sessionId]?.target : undefined;
-  const [scope, setScope] = useState<'effective' | SourceScope>('effective'), [section, setSection] = useState<Section>(connection ? 'connection' : 'overview');
+  const [scope, setScope] = useState<'effective' | SourceScope>('effective');
   const [source, setSource] = useState<SourceSettings>(), [effective, setEffective] = useState<EffectiveConfiguration>();
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const writing = useRef(false), epoch = useRef(0), readSequence = useRef(0);
@@ -165,6 +166,8 @@ function RootFacts({ value, section }: { value: EffectiveConfiguration; section:
   return <dl>{facts.map(([name, fact, field]) => <div key={field}><dt>{name}</dt><dd>{<NativeFacts value={fact} />} · <Origin value={value} field={field} /></dd></div>)}</dl>;
 }
 function Origin({ value, field }: { value: EffectiveConfiguration; field: string }) { const origin = value.provenance[field]; return <span>{origin ? origin.kind === 'builtin' ? 'Product default' : origin.kind === 'process' ? 'Process binding' : `${origin.kind}: ${origin.document}` : 'Native domain default'}</span>; }
-export function Settings(props: Parameters<typeof SettingsContent>[0]) {
-  return <SettingsDrafts key={props.sessionId}><SettingsContent {...props} /></SettingsDrafts>;
+export function Settings(props: SettingsProps) {
+  const transport = useSyncExternalStore(props.client.subscribe, props.client.getSnapshot);
+  const [section, setSection] = useState<Section>(props.initialSection ?? 'overview');
+  return <SettingsDrafts key={`${transport.authorityRevision ?? 0}:${props.sessionId}`}><SettingsContent {...props} section={section} setSection={setSection} /></SettingsDrafts>;
 }

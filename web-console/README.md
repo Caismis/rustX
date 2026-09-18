@@ -190,7 +190,12 @@ explicit **Open Session** sets wanted intent again. A fresh attach
 cannot by itself prove the previous mutation's outcome, so uncertainty remains.
 
 The endpoint/openViews navigation hints retain only wanted views for automatic
-page-reload restoration. A released Session remains in the Sidebar catalog, without
+page-reload restoration only at the same normalized endpoint; they never choose
+connection material. Replacing App Server authority closes active browser views
+and focus instead of reinterpreting their IDs against the new server. Old uncertain
+operations remain detached, read-only diagnostics; unresolved deletion recovery
+refuses replacement. See [connection ownership](CONNECTION.md).
+A released Session remains in the Sidebar catalog, without
 remaining a resume hint; no persisted observation or request state is introduced.
 On a fresh page the Session remains available through the native list
 for explicit Open. Opening or resuming resolves through rustX's canonical
@@ -309,9 +314,10 @@ which observations were automated versus manually inspected.
 from `presentation/` form one Harness-derived foundation. AppFrame accepts Sidebar,
 main, right-panel and overlay seats. Its measured columns retain the upstream
 280px Sidebar, 56px rail, 1024px responsive collapse and right-panel constraints.
-The Sidebar Settings entry opens the shared modal/navigation frame; existing CFG3
+The Sidebar Settings entry opens **Overview** in the shared modal/navigation frame; existing CFG3
 editors supply its content. Inspector uses the right panel and is closed initially.
-Connection settings are reachable from the Sidebar and Settings frame.
+Connection is an explicit Settings section. Connection recovery **Show details**
+opens that section directly without changing the ordinary Settings default.
 
 Menus, HoverCards, Tooltips and Modals own only presentation/focus state. The
 workspace adapter projects native list/cwd, Host classification and current

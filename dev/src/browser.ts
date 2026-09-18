@@ -9,10 +9,10 @@ export function browserEnvironment(parent: NodeJS.ProcessEnv): NodeJS.ProcessEnv
   }
   return result;
 }
-export function openBrowser(url: string, signal?: AbortSignal): Promise<void> {
+export function openBrowser(url: string, signal?: AbortSignal, spawnHelper = spawn): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(new Error('Browser handoff cancelled')); return; }
-    const child = spawn(process.execPath, [fileURLToPath(new URL('./browser-worker.ts', import.meta.url)), url], { env: browserEnvironment(process.env), stdio: 'ignore' });
+    const child = spawnHelper(process.execPath, [fileURLToPath(new URL('./browser-worker.ts', import.meta.url)), url], { env: browserEnvironment(process.env), stdio: 'ignore' });
     let failed = false;
     const stop = () => { failed = true; child.kill('SIGKILL'); };
     const timer = setTimeout(stop, 10_000);

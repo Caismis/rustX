@@ -1138,7 +1138,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "d1ce06c8236578010af2df95dd8431aec14e7d1ceb9281343c8574bbd84c16ef"
+      "local_sha256": "dbab0ec374e4817cb42e6f2949e560145f000737805824d6f3c85630ac4d715d"
     },
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
