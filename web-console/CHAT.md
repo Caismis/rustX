@@ -1,4 +1,4 @@
-# Chat ownership and resource bounds (WEB-02)
+# Agent Conversation ownership and resource bounds
 
 rustX owns canonical messages and history. The browser renders two authoritative
 read products and retains only replaceable read caches:
@@ -13,17 +13,34 @@ read products and retains only replaceable read caches:
 
 ## Composition
 
-`Conversation` renders durable entries by native cursor order and identity.
-`ChatMessage` binds canonical user/Assistant/Tool facts to the WEB-01 Markdown
-renderer and cards. Streaming uses the server's message ID; a canonical message
+`app/agent/AgentTranscript` composes the pinned Harness Chat column and Message,
+Reasoning and Tool presentation. `app/agent/Message` binds canonical blocks to
+those pure components and the audited Markdown/code renderer. Durable entries
+remain in native cursor order. Streaming uses the server's message ID; a canonical message
 of that identity wins immediately, and settled/replaced attempts lose stale
 partials. Surface messages outside the loaded page are not appended as history.
-Typed current context is disclosed separately. Subagent, Workflow, foreground and
-background activity are current adjuncts, not fabricated historical placements.
+Typed current context is disclosed separately. Subagent, Workflow and background
+activity are current adjuncts, not fabricated historical placements. Foreground
+Tools occupy their canonical Assistant block position.
 Historical interaction/publication audits are read-only; live Approval,
 Questionnaire and Review retain existing typed settlement and uncertain-outcome
 controls. Todo/Goal/Queue projection remains in the composer docks. WEB-05 adds
 native historical actions as described below; it never derives canonical history.
+
+## Native Tool projection
+
+`RuntimeClientTranscriptEntry.tool_calls` contains native `ForegroundToolExecution`
+records in the Assistant's block order. The durable owner resolves each result
+from the canonical ledger, even when the result lies beyond the requested page.
+The runtime projection supplies live state for the exact `(call_id, tool_id)`;
+a settled durable record wins. React never joins call and result messages.
+
+`bindings/tools.ts` selects Bash, Read, Write/Edit and Glob/Grep views by native
+ToolId. Unknown identities use the same generic Harness card. Inputs, text/JSON
+output, native status and managed image/file attachments remain truthful subsets.
+Edit/Write diffs show **requested changes**, not an inferred filesystem diff.
+Background execution uses its native ExecutionId, not a fabricated call identity.
+No process folding or subcall nesting is inferred from adjacency or Tool names.
 
 ## Paging and reconnect
 
@@ -32,7 +49,9 @@ budget; each older request asks for at most 64 entries. It is a contiguous durab
 window, never canonical persistence. Current refresh preserves it only with a
 matching durable cursor and fact identity. Current entries win overlaps. Missing
 continuity or a capacity overflow replaces the window with the current page;
-capacity replacement has a visible diagnostic. At the entry bound, Return to
+capacity replacement has a visible diagnostic. Unsettled native Tool projections
+outside a fresh page also force a visible window rebase; historical assembled state
+is never retained indefinitely as a substitute for rereading terminal authority. At the entry bound, Return to
 latest explicitly replaces the window before more paging.
 
 Older responses require the same connection generation, complete attachment

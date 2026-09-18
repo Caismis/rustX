@@ -77,6 +77,8 @@ pub struct McpWrite {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SourceSettings {
+    /// Native current-file approval resolution. None when prospective configuration is invalid.
+    pub prospective_approval_mode: Option<crate::runtime::ApprovalMode>,
     /// Current-file analysis, separate from the published runtime. Never prepares sources.
     pub prospective_resources: Option<crate::runtime::capability_inspection::CapabilityInspection>,
     pub prospective_diagnostic: Option<String>,
@@ -635,17 +637,24 @@ impl UserConfigManager {
                 (root, revision)
             })
             .collect();
-        let (prospective_resources, prospective_diagnostic) = match self.resolve_session(input) {
-            Ok(prospective) => (Some(prospective.inspection), None),
-            Err(failure) => (
-                None,
-                Some(format!(
-                    "{}: {}",
-                    failure.diagnostic.path, failure.diagnostic.reason
-                )),
-            ),
-        };
+        let (prospective_resources, prospective_approval_mode, prospective_diagnostic) =
+            match self.resolve_session(input) {
+                Ok(prospective) => (
+                    Some(prospective.inspection),
+                    Some(prospective.config.approval_mode),
+                    None,
+                ),
+                Err(failure) => (
+                    None,
+                    None,
+                    Some(format!(
+                        "{}: {}",
+                        failure.diagnostic.path, failure.diagnostic.reason
+                    )),
+                ),
+            };
         let result = SourceSettings {
+            prospective_approval_mode,
             prospective_resources,
             prospective_diagnostic,
             absent_resource_revision: revision(None),

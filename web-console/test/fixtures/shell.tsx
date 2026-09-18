@@ -4,6 +4,7 @@ import { App } from '../../src/app/App';
 import { RpcFailure } from '../../src/client/app-server';
 import { Server, interaction, snapshot, endpoint } from '../fixture';
 import '../../src/presentation/theme/base.css';
+import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/scrollbar.css';
 import '../../src/presentation/theme/corner-shape.css';

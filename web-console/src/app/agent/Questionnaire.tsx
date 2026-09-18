@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
-// Extracted from DeepSeek Harness QuestionComposer: recommendation labels,
+// Extracted from DeepSeek Harness Questionnaire: recommendation labels,
 // mirror-growing answer field, option rows, page navigation, local drafts.
 // All Remote, plan-intent, slot-store, answer-lifetime and label-identity semantics
 // replaced by rustX's generated question shapes and index-based submissions.
@@ -10,7 +10,7 @@ import type { QuestionSpecification, QuestionnaireSubmission } from '../../../..
 import { emptyDraft, submission, type QuestionDraft } from '../../bindings/questionnaire';
 import { Button } from '../../presentation/primitives/Button';
 import { IconCheckOutline14, IconChevronLeftOutline14, IconChevronRightOutline14 } from '../../presentation/primitives/icons';
-import css from './QuestionComposer.module.css';
+import css from '../../presentation/agent/Question.module.css';
 
 export function parseRecommendedLabel(label: string) {
   const suffix = /\s*(?:\((?:recommended|推荐)\)|（(?:recommended|推荐)）)\s*$/i;
@@ -24,7 +24,7 @@ function AnswerField({ value, disabled, onChange, label }: {
     <textarea className={css.fieldInput} value={value} disabled={disabled} rows={1} aria-label={label} placeholder={label} onChange={onChange} />
   </div>;
 }
-export function QuestionComposer({ questions, disabled, status, onSubmit, onDecline }: {
+export function Questionnaire({ questions, disabled, status, onSubmit, onDecline }: {
   questions: QuestionSpecification[]; disabled: boolean; status: string;
   onSubmit: (value: QuestionnaireSubmission) => void; onDecline: () => void;
 }) {

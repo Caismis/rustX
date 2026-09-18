@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { AppServerClient } from './client/app-server';
 import { App } from './app/App';
 import './presentation/theme/base.css';
+import './presentation/theme/gradient-shadow-text.css';
 import './presentation/theme/design-platform.css';
 import './presentation/theme/shiki.css';
 import './presentation/theme/corner-shape.css';

@@ -37,7 +37,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await page.goto('/'); await connect();
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
-    await expect(page.locator('.session-toolbar small')).toHaveText(`${fixture.workspaceA} · attached`);
+    await expect(page.getByLabel('Session location and attachment', { exact: true })).toHaveText(`${fixture.workspaceA} · attached`);
     // Composed Todo with no current list is its own bounded fact; no Goal and no queue take space.
     await expect(todo).toHaveAttribute('data-todo-state', 'empty');
     await expect(goal).toHaveCount(0); await expect(queue).toHaveCount(0);
@@ -58,7 +58,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(goal).toContainText('Ongoing Goal');
     await expect(goal).toContainText('Verify the composer docks');
     await expect(goal).toContainText('1/1 rounds');
-    await expect(page.getByRole('button', { name: 'Queue', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Cancel turn', exact: true })).toBeVisible();
     await message.fill('Queued during the Goal round'); await page.getByRole('button', { name: 'Queue', exact: true }).click();
     await expect(queue.locator('[data-inbound-sequence]')).toContainText('Queued during the Goal round');
     await expect(queue.locator('[data-submission-echo]')).toHaveCount(0);

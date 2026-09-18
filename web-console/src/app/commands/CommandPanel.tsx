@@ -9,7 +9,7 @@ import { CommandSession, type HistoricalSelection, type HistoryAction } from './
 import type { CommandId } from './registry';
 import css from './Commands.module.css';
 
-type Choice = { kind: 'model'; model: string } | { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
+type Choice = { kind: 'model'; model: string; profile?: string } | { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
 interface Row { id: string; label: string; detail?: string; choice: Choice }
 export interface CommandRequest { id: Exclude<CommandId, 'new'> | 'retry' | 'tree'; messageId?: string }
 export function CommandPanel({ request, client, sessionId, current, close, succeeded, opened }: {
@@ -57,7 +57,10 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
         case 'model': {
           const result = await scope.models(); if (!valid()) return;
           setDetail(`Current: ${result.current.configured.model}. Choosing a model uses its native defaults.`);
-          setRows((result.catalog.models ?? []).map(model => ({ id: model.model, label: model.model, detail: model.model === result.current.configured.model ? 'Current' : undefined, choice: { kind: 'model', model: model.model } }))); break;
+          setRows((result.catalog.models ?? []).flatMap(model => [
+            { id: model.model, label: model.model, detail: `Native default${model.defaultReasoningProfile ? ` · ${model.defaultReasoningProfile}` : ''}`, choice: { kind: 'model' as const, model: model.model } },
+            ...(model.reasoningProfiles ?? []).map(profile => ({ id: `${model.model}:${profile.id}`, label: `${model.model} · ${profile.id}`, detail: 'Reasoning profile', choice: { kind: 'model' as const, model: model.model, profile: profile.id } })),
+          ])); break;
         }
         case 'fork': case 'branch': case 'retry':
           setDetail(request.id === 'fork' ? 'Independent Session. Choose the exact User boundary; its prompt returns to the composer.' : request.id === 'retry' ? 'Create a native branch, switch the idle Session to it, and execute the selected prompt once. The original response remains in its original node.' : 'Create a native branch and switch the idle Session to it. The selected prompt returns to the composer.');
@@ -77,7 +80,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     selecting.current = true; setBusy(true); setError('');
     try {
       switch (choice.kind) {
-        case 'model': await scope.setModel(choice.model); if (valid() && scope.current()) { succeeded(); close(); } break;
+        case 'model': await scope.setModel(choice.model, choice.profile); if (valid() && scope.current()) { succeeded(); close(); } break;
         case 'node': if (await scope.openNode(choice.nodeId, choice.conversationId) && valid()) close(); break;
         case 'history': {
           const result = await scope.transition(choice.action, choice.selection);

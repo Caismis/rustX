@@ -5942,7 +5942,20 @@ fn load_transcript_page(
                 u64::try_from(position).map_err(|_| storage("negative transcript position"))?,
             );
             let item = load_transcript_item(connection, &reference_kind, &reference_id)?;
-            Ok(TranscriptEntry { cursor, item })
+            let mut tool_calls = Vec::new();
+            if let TranscriptItem::Message { message: MessageBlock::Assistant(assistant) } = &item {
+                for block in &assistant.content {
+                    if let crate::message::types::AssistantContentBlock::ToolCall(call) = block {
+                        let result_json: Option<String> = connection.query_row(
+                            "SELECT message_json FROM message_ledger WHERE json_extract(message_json, '$.role') = 'tool' AND json_extract(message_json, '$.tool_call_id') = ?1 AND json_extract(message_json, '$.tool_id') = ?2 LIMIT 1",
+                            params![call.id.as_str(), call.tool_id.as_str()], |row| row.get(0),
+                        ).optional().map_err(|error| storage(format!("transcript Tool lookup: {error}")))?;
+                        let result = result_json.map(|json| decode::<MessageBlock>(&json, "transcript Tool result")).transpose()?.and_then(|message| match message { MessageBlock::Tool(tool) => Some(tool.result), _ => None });
+                        tool_calls.push(crate::durable::inbox::TranscriptTool { call: call.clone(), result });
+                    }
+                }
+            }
+            Ok(TranscriptEntry { tool_calls, cursor, item })
         })
         .collect::<Result<Vec<_>, ConversationStoreError>>()?;
     Ok(TranscriptPage {
@@ -9097,6 +9110,86 @@ mod tests {
                 text: text.to_owned(),
             })],
         })
+    }
+
+    #[test]
+    fn agent_transcript_tools_resolve_native_results_across_page_boundaries() {
+        let store = store();
+        store.initialize(&[user_message("u", "Run")]).unwrap();
+        let calls = ["first", "second"].map(|id| ToolCall {
+            id: ToolCallId::new(id),
+            tool_id: ToolId::new("tool-bash"),
+            name: "bash".into(),
+            arguments: serde_json::json!({"command": id}),
+        });
+        store
+            .append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
+                id: MessageId::new("assistant"),
+                content: calls
+                    .iter()
+                    .cloned()
+                    .map(AssistantContentBlock::ToolCall)
+                    .collect(),
+            }))
+            .unwrap();
+        let before = store.load_transcript_page(None, 1).unwrap();
+        assert_eq!(before.entries[0].tool_calls.len(), 2);
+        assert!(
+            before.entries[0]
+                .tool_calls
+                .iter()
+                .all(|tool| tool.result.is_none())
+        );
+        // Physical/result publication order differs from canonical call order.
+        for (index, call) in calls.iter().enumerate().rev() {
+            store
+                .append_canonical(&MessageBlock::Tool(ToolMessageBlock {
+                    id: MessageId::new(format!("result-{index}")),
+                    tool_call_id: call.id.clone(),
+                    tool_id: call.tool_id.clone(),
+                    result: ToolExecutionResult {
+                        status: if index == 0 {
+                            ToolExecutionStatus::Success
+                        } else {
+                            ToolExecutionStatus::Failed {
+                                error: "native failure".into(),
+                            }
+                        },
+                        content: Vec::new(),
+                        duration_ms: 1,
+                        exit_code: None,
+                        artifacts: Vec::new(),
+                        truncation: None,
+                        workflow: None,
+                        managed_output: None,
+                    },
+                }))
+                .unwrap();
+        }
+        let tail = store.load_transcript_page(None, 2).unwrap();
+        let older = store.load_transcript_page(tail.next_cursor, 1).unwrap();
+        assert_eq!(older.entries[0].cursor, before.entries[0].cursor);
+        let tools = &older.entries[0].tool_calls;
+        assert_eq!(
+            tools
+                .iter()
+                .map(|tool| tool.call.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
+        assert!(matches!(
+            tools[0].result.as_ref().unwrap().status,
+            ToolExecutionStatus::Success
+        ));
+        assert!(matches!(
+            tools[1].result.as_ref().unwrap().status,
+            ToolExecutionStatus::Failed { .. }
+        ));
+        let projected = crate::runtime_client::snapshot::transcript_page_view(older).unwrap();
+        assert!(projected.entries[0].tool_calls.iter().all(|tool| matches!(
+            tool.state,
+            crate::runtime_client::snapshot::ForegroundToolState::Settled { .. }
+        )));
     }
 
     #[test]

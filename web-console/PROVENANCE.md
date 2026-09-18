@@ -4,8 +4,8 @@
 
 Upstream: https://github.com/deepseek-ai/deepseek-harness
 
-The reset pins **`ddefc45fbc7f8e46dd73185e68295696d1297887`**, the current `master`
-release HEAD (dsh 0.1.6-alpha.2) fetched and inspected at implementation start.
+The reset pins **`ddefc45fbc7f8e46dd73185e68295696d1297887`**, the #345 release baseline (dsh 0.1.6-alpha.2), inspected again at that exact
+commit for #346. No newer branch was substituted.
 The browser mount/seed, composed layout, Sidebar and workspace registrations,
 Settings composition, locale provider and primitive dependency closure were read
 before selecting this commit. The reference checkout is an audit input only.
@@ -13,7 +13,9 @@ No build or runtime downloads upstream code or follows a floating branch.
 
 This replaces the previous extract-and-rewrite shell. See
 [SHELL-ARCHITECTURE.md](SHELL-ARCHITECTURE.md) for the A/B/C classification and
-[RESET-345-VALIDATION.md](RESET-345-VALIDATION.md) for acceptance evidence.
+[RESET-345-VALIDATION.md](RESET-345-VALIDATION.md) for shell acceptance;
+[AGENT-ARCHITECTURE.md](AGENT-ARCHITECTURE.md) and
+[RESET-346-VALIDATION.md](RESET-346-VALIDATION.md) cover the completed Agent integration.
 
 ## Actual source closure
 
@@ -114,14 +116,59 @@ remain in place: raw HTML is text, links allow HTTP(S)/mailto, remote images are
 inert alt text, and settled output is rendered canonically. No Harness file action,
 image resolver, Session event assembler or content search service was imported.
 
-## Retained interior provenance
+## Agent closure (#346)
 
-The following files remain derived from the earlier exact commit
-`c291e7961a515f6d7af9304e7fd1d257929aef26`; they are **not falsely relabelled as
-new upstream source**. They serve Agent/conversation/composer/Tool/interaction,
-attachment, command or CFG3 business interiors which #345 expressly defers.
-Their shared primitive imports now reach the one new foundation. The old shell,
-Sidebar, primitive rewrites and Settings chrome do not remain alongside it.
+All new Agent sources use the same exact `ddefc45fbc7f8e46dd73185e68295696d1297887`
+pin. The pre-implementation A/B/C decision is in AGENT-ARCHITECTURE.md. The following
+table is generated from the reviewed per-file inventory; hashes and direct imports
+remain recorded there.
+
+| Upstream source | Local destination | Class |
+| --- | --- | --- |
+| `packages/client/ui-conversation/src/client/skeleton/InputBar.module.css` | `src/presentation/agent/Composer.module.css` | A |
+| `packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css` | `src/presentation/agent/Conversation.module.css` | A |
+| `packages/client/ui-chat/src/client/chat/MessageItem.module.css` | `src/presentation/agent/Message.module.css` | A |
+| `packages/client/ui-chat/src/client/chat/ChatView.module.css` | `src/presentation/agent/Chat.module.css` | A |
+| `packages/client/ui-chat/src/client/chat/ReasoningRow.module.css` | `src/presentation/agent/Reasoning.module.css` | A |
+| `packages/client/ui-tool/src/client/tool/components/ToolRow.module.css` | `src/presentation/agent/Tool.module.css` | A |
+| `packages/client/ui-tool/src/client/tool/ToolCallTree.module.css` | `src/presentation/agent/ToolTree.module.css` | A |
+| `packages/client/ui-approval/src/client/ApprovalPanel.module.css` | `src/presentation/agent/Approval.module.css` | A |
+| `packages/client/ui-user-questions/src/client/QuestionComposer.module.css` | `src/presentation/agent/Question.module.css` | A |
+| `packages/client/ui-model-selection/src/client/ModelSelect.module.css` | `src/presentation/agent/ModelSelect.module.css` | A |
+| `packages/client/ui-permission-presets/src/client/PermissionSelect.module.css` | `src/presentation/agent/PermissionSelect.module.css` | A |
+| `packages/client/ui-chat/src/client/chat/MessageItem.tsx` | `src/presentation/agent/Message.tsx` | B |
+| `packages/client/ui-chat/src/client/chat/ReasoningRow.tsx` | `src/presentation/agent/Reasoning.tsx` | B |
+| `packages/client/ui-tool/src/client/tool/components/ToolRow.tsx` | `src/presentation/agent/ToolCard.tsx` | B |
+| `packages/client/ui-approval/src/client/ApprovalPanel.tsx` | `src/presentation/agent/ApprovalTakeover.tsx` | B |
+| `packages/client/ui-model-selection/src/client/ModelSelect.tsx` | `src/presentation/agent/ModelSelect.tsx` | B |
+| `packages/client/ui-permission-presets/src/client/PermissionSelect.tsx` | `src/presentation/agent/PermissionSelect.tsx` | B |
+| `packages/client/ui-conversation/src/client/skeleton/InputBar.tsx` | `src/app/agent/AgentComposer.tsx` | B |
+| `packages/client/ui-user-questions/src/client/QuestionComposer.tsx` | `src/app/agent/Questionnaire.tsx` | B |
+| `packages/client/ui-theme/src/styles/gradient-shadow-text.css` | `src/presentation/theme/gradient-shadow-text.css` | A |
+
+ConversationRoot/ChatView composition and ToolCallTree's single keyed dispatch were
+inspected directly. The adapter consumes native ordered transcript entries, not
+Harness Chat nodes or Session events. Native Tool types select the shared row body;
+structured upstream file/search/terminal data that rustX does not expose is not
+fabricated. Read/search show native output; Edit/Write label requested changes;
+images use existing native ArtifactResources. There is no inferred subcall tree.
+
+The original editor's Cordis slots become explicit React seats and a textarea;
+model/profile and permission menus use the shared Harness Menu focus/placement
+primitive. Questionnaire binds the native schema instead of upstream questions.
+The pinned gradient-shadow-text sheet completes the Agent's elevation/Markdown
+token dependency, including the light Composer outline. No theme was redesigned.
+
+Deleted: the former Conversation, InputBar, ChatMessage, MessageItem, ToolRow,
+ApprovalPanel and QuestionComposer path and their replaced CSS. No compatibility
+exports or old/new Agent mode remain.
+
+## Retained audited utility provenance
+
+The following utilities/extensions retain their honestly recorded earlier exact
+`c291e7961a515f6d7af9304e7fd1d257929aef26` origin. Markdown parsing, stable scroll
+anchoring, attachments, command discovery, native docks and CFG3 interiors are
+bounded reused capabilities, not a second Agent presentation architecture.
 
 | Retained local destination | Original upstream source |
 | --- | --- |
@@ -131,16 +178,6 @@ Sidebar, primitive rewrites and Settings chrome do not remain alongside it.
 | `src/app/commands/Commands.module.css` | `packages/client/ui-commands/src/client/PopupSelectView.module.css` |
 | `src/presentation/primitives/DisclosureRow.tsx` | `packages/client/ui-primitives/src/DisclosureRow.tsx` |
 | `src/presentation/primitives/DisclosureRow.module.css` | `packages/client/ui-primitives/src/DisclosureRow.module.css` |
-| `src/app/components/MessageItem.tsx` | `packages/client/ui-chat/src/client/chat/MessageItem.tsx` |
-| `src/app/components/MessageItem.module.css` | `packages/client/ui-chat/src/client/chat/MessageItem.module.css` |
-| `src/app/components/InputBar.tsx` | `packages/client/ui-conversation/src/client/skeleton/InputBar.tsx` |
-| `src/app/components/InputBar.module.css` | `packages/client/ui-conversation/src/client/skeleton/InputBar.module.css` |
-| `src/app/components/ToolRow.tsx` | `packages/client/ui-tool/src/client/tool/components/ToolRow.tsx` |
-| `src/app/components/ToolRow.module.css` | `packages/client/ui-tool/src/client/tool/components/ToolRow.module.css` |
-| `src/app/components/ApprovalPanel.tsx` | `packages/client/ui-approval/src/client/ApprovalPanel.tsx` |
-| `src/app/components/ApprovalPanel.module.css` | `packages/client/ui-approval/src/client/ApprovalPanel.module.css` |
-| `src/app/components/QuestionComposer.tsx` | `packages/client/ui-user-questions/src/client/QuestionComposer.tsx` |
-| `src/app/components/QuestionComposer.module.css` | `packages/client/ui-user-questions/src/client/QuestionComposer.module.css` |
 | `public/LICENSE-DeepSeek-Harness.txt` | `LICENSE` |
 | `src/presentation/markdown/MarkdownText.tsx` | `packages/client/ui-primitives/src/markdown/MarkdownText.tsx` |
 | `src/presentation/markdown/parse.ts` | `packages/client/ui-primitives/src/markdown/parse.ts` |
@@ -218,7 +255,8 @@ Excluded throughout: Harness Host, Remote, Session Controller, Workspace Control
 Agent Loop, Cordis/module loader/plugin runtime, durable event/history stores,
 provisional Session identity, archive membership, workspace ownership, desktop
 caption/update systems, file/terminal/dock runtime, configuration mirrors and
-interaction settlement. No backend semantics were added for upstream widgets.
+interaction settlement. The only native additions are read projections: canonical transcript Tool lifecycles
+and resolved prospective approval policy. No upstream runtime semantics are imported.
 
 ## License, dependencies and branding
 

@@ -232,6 +232,7 @@ explicitly rejected as an invalid request before any action occurs.
 | `turn/start`, `turn/steer`, `turn/cancel` | Native inbound and attempt-cancellation owners; acceptance is not terminal execution |
 | `interaction/respond`, `interaction/cancel` | Originating runtime/coordinator, including routed child interactions |
 | `settings/read`, `settings/replace` | Explicit durable Session selections with revision CAS; cold composition consumes them |
+| `settings/model`, `settings/models`, `settings/setModel` | Live attached Session model read/catalog/mutation; native validation and persistence, exact model and advertised profile references |
 | `settings/selectModel` | Explicit durable Session model selection (or clear to authored default), with revision CAS |
 | `configuration/sourcesRead`, `configuration/sourceWrite` | Native structured User/Workspace documents and exact revisions; bounded semantic-unit CAS writes |
 | `configuration/effective`, `configuration/reload` | Published generation/provenance and the one explicit full-generation reload |
@@ -767,3 +768,19 @@ identities in public and native Session projections.
 Reconnect reads authoritative snapshots and never replays mutations.
 
 Protocol 6 refuses obsolete development versions; no dual decoding exists.
+
+## Agent read projections (#346)
+
+`RuntimeClientTranscriptEntry.tool_calls` exposes the native Tool lifecycle at its
+canonical Assistant block position. The durable transcript owner resolves results
+by native call/Tool identity across page boundaries, and runtime-client conversion
+uses the same `ForegroundToolExecution` shape as live `attempt.foreground`. It adds
+no event protocol, browser assembler, lifecycle owner or durable schema. Consumers
+must not independently join Tool call/result messages or infer ordering from events.
+
+`SourceSettings.prospective_approval_mode` is the native configuration resolver's
+prospective policy (absent when the candidate is invalid). It describes authored
+source intent, not loaded/attempt authority. Source writes remain revision-CAS
+semantic-unit mutations. Explicit Reload publishes the generation; active attempts
+retain `attempt.execution_settings.approval_mode`. `effective_approval_mode` remains
+the loaded runtime fact. Neither field introduces a Session approval override.

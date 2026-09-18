@@ -69,3 +69,17 @@ it('reattachment in the same connection rejects the old page and duplicate load 
   expect(server.client.getSnapshot().views.A.history?.page.entries).toEqual([entry(10)]);
   expect(server.requests.filter(item => item.request.method === 'session/transcript')).toHaveLength(1);
 });
+
+it('fresh native Tool projections replace overlaps; unresolved old projections force an authoritative window rebase', () => {
+  const call = entry(8);
+  call.tool_calls = [{ call_id: 'native-call', tool_id: 'tool-bash', name: 'bash', state: { type: 'assembled', arguments: '{}' } }];
+  const first = replaceTranscript({ entries: [call, entry(9)], next_cursor: '8' });
+  const rebased = refreshTranscript(first, { entries: [entry(9), entry(10)], next_cursor: '9' });
+  expect(rebased.page.entries).toEqual([entry(9), entry(10)]);
+  expect(rebased.epoch).toBeGreaterThan(first.epoch);
+  expect(rebased.error).toContain('reread unresolved native Tools');
+  const settled = structuredClone(call);
+  settled.tool_calls![0].state = { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: 1 } };
+  const repaired = refreshTranscript(first, { entries: [settled, entry(9)], next_cursor: '8' });
+  expect(repaired.page.entries![0].tool_calls![0].state.type).toBe('settled');
+});

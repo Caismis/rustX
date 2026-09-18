@@ -126,6 +126,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     const canonical = page.getByLabel('Canonical conversation');
     const load = canonical.getByRole('button', { name: 'Load attachment' });
     await expect(canonical.locator('[data-tool-call-id="chat-image"]')).toHaveCount(1);
+    await canonical.locator('[data-tool-call-id="chat-image"]').getByRole('button', { expanded: false }).click();
     await expect(load).toHaveCount(1);
     const decode = async () => {
       await load.click();
@@ -142,6 +143,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     expect(await urlCount()).toBe(1);
     await connectionAction(page, 'Reconnect');
     await expect(page.locator('.status strong')).toHaveText('connected');
+    await canonical.locator('[data-tool-call-id="chat-image"]').getByRole('button', { expanded: false }).click();
     await expect(load).toHaveCount(1);
     expect(await urlCount()).toBe(0);
     await decode();

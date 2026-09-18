@@ -82,7 +82,7 @@ describe('Todo dock binds only the composed native Todo projection', () => {
   it('follows native projection changes and never reconstructs from historical todo Tool facts', async () => {
     await mount(withTodoHistory(snapshot()));
     // History is visible as execution fact, yet no Todo extension means no current dock.
-    expect(screen.getByText('Tool call · call-todo')).toBeTruthy();
+    expect(screen.getByText('Assembling todo…')).toBeTruthy();
     expect(region('To-dos')).toBeNull();
     await update(withTodoHistory(withTodos([])));
     expect(dock('To-dos').getAttribute('data-todo-state')).toBe('empty');
@@ -372,8 +372,8 @@ describe('Queue dock binds the native inbound mailbox', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Steer' })).toBeNull();
     await update(running());
-    expect(screen.getByRole('button', { name: 'Queue' })).toBeTruthy();
-    expect(screen.getByText('Attempt running · Queue and Steer both enter the native mailbox at a safe boundary')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cancel turn' })).toBeTruthy();
+    expect(screen.getByText('Queue and Steer enter the native mailbox at a safe boundary')).toBeTruthy();
     await sendQueued('While running');
     await server.waitFor('turn/start', 1);
     expect(methods()).not.toContain('turn/steer');

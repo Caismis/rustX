@@ -15,7 +15,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, Save and reload f
     await expect(page.locator('.status strong')).toHaveText('connected');
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
-    await expect(page.locator('.session-toolbar small')).toContainText('attached');
+    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('attached');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     const saved = async () => { await expect(settings.getByText(/Source saved. The loaded runtime/)).toBeVisible(); };

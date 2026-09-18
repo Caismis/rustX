@@ -7137,6 +7137,14 @@
       "description": "One derived transcript item and its stable durable cursor.",
       "type": "object",
       "properties": {
+        "tool_calls": {
+          "description": "Canonical calls in block order with their native committed results.\nA missing result means no committed result, never success or cancellation.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ForegroundToolExecution"
+          },
+          "default": []
+        },
         "cursor": {
           "description": "The durable transcript position, not the Runtime Client event cursor.",
           "$ref": "#/$defs/RuntimeClientTranscriptCursor"
@@ -7149,6 +7157,616 @@
       "required": [
         "cursor",
         "item"
+      ]
+    },
+    "ForegroundToolExecution": {
+      "description": "The foreground tool execution read model of one logical tool call.\n\nKeyed by the canonical logical tool-call identity, so parallel physical\ncompletion timing can never corrupt logical identities or canonical\nordering. Native, MCP, and Python foreground executions converge through\nthis one shape.",
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "description": "The logical tool-call identity.",
+          "$ref": "#/$defs/ToolCallId"
+        },
+        "tool_id": {
+          "description": "The canonical tool identity.",
+          "$ref": "#/$defs/ToolId"
+        },
+        "name": {
+          "description": "The model-facing tool name at call time.",
+          "type": "string"
+        },
+        "state": {
+          "description": "The externally meaningful execution state.",
+          "$ref": "#/$defs/ForegroundToolState"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "call_id",
+        "tool_id",
+        "name",
+        "state"
+      ]
+    },
+    "ForegroundToolState": {
+      "description": "The externally meaningful state of one foreground tool execution.",
+      "oneOf": [
+        {
+          "description": "The call is known and its arguments are assembled; execution has\nnot started.",
+          "type": "object",
+          "properties": {
+            "arguments": {
+              "description": "The assembled JSON arguments.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "assembled"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "arguments"
+          ]
+        },
+        {
+          "description": "The execution is running.",
+          "type": "object",
+          "properties": {
+            "arguments": {
+              "description": "The assembled JSON arguments.",
+              "type": "string"
+            },
+            "progress": {
+              "description": "The latest bounded progress, when any.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ToolProgress"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "running"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "arguments"
+          ]
+        },
+        {
+          "description": "The execution settled with its normalized result.",
+          "type": "object",
+          "properties": {
+            "arguments": {
+              "description": "The assembled JSON arguments.",
+              "type": "string"
+            },
+            "result": {
+              "description": "The normalized execution result.",
+              "$ref": "#/$defs/ToolExecutionResult"
+            },
+            "type": {
+              "type": "string",
+              "const": "settled"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "arguments",
+            "result"
+          ]
+        }
+      ]
+    },
+    "ToolProgress": {
+      "description": "A bounded structured progress notification of one tool execution.\n\nProgress is an execution fact, never canonical message history. All\nfields are optional; an empty `ToolProgress` is a bare tick. The progress\nmessage text is bounded by [`MAX_PROGRESS_MESSAGE_BYTES`].\n\n[`MAX_PROGRESS_MESSAGE_BYTES`]: crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES",
+      "type": "object",
+      "properties": {
+        "message": {
+          "description": "A short human-readable progress message, when there is one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "completed": {
+          "description": "Completed units, when a total is known.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "total": {
+          "description": "Total units, when known.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    },
+    "ToolExecutionResult": {
+      "description": "The normalized outcome of one tool execution.\n\n`ToolMessageBlock` composes this type instead of duplicating its fields,\nkeeping one source of truth for tool results.",
+      "type": "object",
+      "properties": {
+        "workflow": {
+          "description": "Immutable native Workflow identity on the existing outer result.\nHistorical identity only: no execution state or continuation authority.\nIts retention is exactly that of this result, never a separate registry.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowToolIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "description": "Typed execution status, including unknown external outcomes.",
+          "$ref": "#/$defs/ToolExecutionStatus"
+        },
+        "content": {
+          "description": "Tool-owned result content.\n\nThis content is TOOL-OWNED: [`ToolResultContent::Json`] is arbitrary\ntool-owned structured data, and the runtime never infers semantics\nfrom its property names. rustX reserves no ordinary JSON field names;\nruntime-owned facts live in the typed fields of this struct. A\nprovider-independent, bounded model-facing representation is produced\nby [`Self::model_facing_projection`]; producers do not append runtime\nstatus or managed-output continuation text here.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolResultContent"
+          },
+          "default": []
+        },
+        "duration_ms": {
+          "description": "Execution duration in integer milliseconds (stable for persistence).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exit_code": {
+          "description": "Process exit code where the tool executed a process.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "artifacts": {
+          "description": "Durable artifact/file references produced by the execution.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FileReference"
+          },
+          "default": []
+        },
+        "truncation": {
+          "description": "Truncation metadata where output was truncated.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TruncationState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "managed_output": {
+          "description": "Runtime-owned managed textual-output continuation metadata: where\nthe complete — or honestly partial — textual output of this result\nlives in the conversation's managed tool-output store (Issue #86).\nAbsent for results whose output fits the model-facing content.\n\nThis is the one typed source of truth for complete-vs-partial\nmanaged output; producers never encode these facts as magic\nproperties of tool-owned JSON, and generic runtime publication code\nconsumes only this typed field, never arbitrary JSON keys.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManagedOutputContinuation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "duration_ms"
+      ]
+    },
+    "WorkflowToolIdentity": {
+      "description": "Runtime-owned identity, independent of model `ToolCall` text.\nRetained with the canonical outer result, not with an execution owner.",
+      "type": "object",
+      "properties": {
+        "workflow_id": {
+          "$ref": "#/$defs/WorkflowId"
+        },
+        "program_digest": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "workflow_id",
+        "program_digest"
+      ]
+    },
+    "ToolExecutionStatus": {
+      "description": "Typed execution status of a tool call.\n\nThe terminal vocabulary is explicit about **outcome certainty**: a\nterminal status may claim only facts the owning runtime/executor can\nprove. `Success`, `Failed`, `Denied`, `Cancelled`, and `TimedOut` are\nconfirmed terminal outcomes; `OutcomeUnknown` means an admitted call\ncrossed the external-effect frontier but rustX cannot prove its final\nexternal result. An unknown outcome is never silently collapsed into\nsuccess, generic failure, confirmed timeout, or confirmed cancellation,\nand every non-success status produces bounded model-facing feedback\nthrough [`Self::feedback_text`].",
+      "oneOf": [
+        {
+          "description": "The tool completed successfully and the outcome is known.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "success"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "The tool reached a known failed terminal outcome.\n\nThis is never used merely because communication with an external\nexecutor failed after dispatch while the external operation could\nstill have succeeded; that situation is [`Self::OutcomeUnknown`].",
+          "type": "object",
+          "properties": {
+            "error": {
+              "description": "Human-readable error message.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "type",
+            "error"
+          ]
+        },
+        {
+          "description": "The pre-tool policy denied the already-resolved invocation before an\nexecutor future was created.",
+          "type": "object",
+          "properties": {
+            "reason": {
+              "description": "The policy or human-readable approval reason.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "denied"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ]
+        },
+        {
+          "description": "The execution's cancellation settlement is established.\n\nCancellation is an authoritative terminal outcome only when rustX can\nprove the execution's cancellation settlement: pre-start\n([`ToolCancellationPhase::BeforeStart`]) or proven stopped after start\n([`ToolCancellationPhase::DuringExecution`]). A cancellation *request*\nis not a confirmed cancellation result: when the call crossed the\nexternal-effect frontier and final settlement cannot be proven, the\nstatus is [`Self::OutcomeUnknown`].",
+          "type": "object",
+          "properties": {
+            "reason": {
+              "description": "Why the execution was cancelled.",
+              "$ref": "#/$defs/CancellationReason"
+            },
+            "phase": {
+              "description": "Whether cancellation won before executor start or while execution\nwas already in flight.",
+              "$ref": "#/$defs/ToolCancellationPhase"
+            },
+            "type": {
+              "type": "string",
+              "const": "cancelled"
+            }
+          },
+          "required": [
+            "type",
+            "reason",
+            "phase"
+          ]
+        },
+        {
+          "description": "The execution deadline expired and the owning runtime/executor\nestablished terminal settlement for the execution: it was stopped and\nproven unable to continue (for example, a local process tree that was\nkilled, waited/reaped, and proven terminal).\n\n`TimedOut` means more than \"rustX stopped awaiting the operation\". A\ndeadline expiry whose termination cannot be confirmed (for example a\nremote call whose cancellation is unconfirmed) is\n[`Self::OutcomeUnknown`], never `TimedOut`.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "timed_out"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "The admitted call crossed the external-effect frontier, but rustX\ncannot prove its final external outcome: a runtime restart before the\ndurable outcome commit, transport loss after dispatch, or a\ncancellation/deadline whose remote termination could not be\nconfirmed. The operation may have partially or fully completed.",
+          "type": "object",
+          "properties": {
+            "detail": {
+              "description": "A producer-owned diagnostic describing why certainty is\nunavailable. It is rendered into the bounded model-facing\nprojection and is never parsed to decide semantics; the typed\nvariant itself is the certainty claim.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "outcome_unknown"
+            }
+          },
+          "required": [
+            "type",
+            "detail"
+          ]
+        }
+      ]
+    },
+    "CancellationReason": {
+      "description": "Why an operation was cancelled.",
+      "oneOf": [
+        {
+          "description": "The user requested cancellation of the attempt or its work.",
+          "type": "string",
+          "const": "user_requested"
+        },
+        {
+          "description": "The conversation runtime is shutting down.",
+          "type": "string",
+          "const": "runtime_shutdown"
+        },
+        {
+          "description": "A parent operation that owns this work was cancelled.",
+          "type": "string",
+          "const": "parent_cancelled"
+        },
+        {
+          "description": "A conversation-owned subagent reached its definition-level whole-\nlifecycle execution deadline.",
+          "type": "string",
+          "const": "subagent_execution_deadline_exceeded"
+        }
+      ]
+    },
+    "ToolCancellationPhase": {
+      "description": "The semantic phase at which a tool call was cancelled.\n\nThis is a closed, provider-independent fact owned by the canonical tool\nresult contract and shared by foreground and background runtime-owned\nresults. The foreground Agent Loop selects it from its per-call executor\nstart frontier; the background registry selects it from its detached-runner\nfrontier. Executors may report a provisional physical cancellation status,\nbut they do not own the canonical phase classification. Clients only\nconsume or project the canonical typed fact; provider adapters likewise\ntranslate that fact without inferring its phase.",
+      "oneOf": [
+        {
+          "description": "The accepted call had execution authority, but its owner's executor\nstart frontier was never crossed.",
+          "type": "string",
+          "const": "before_start"
+        },
+        {
+          "description": "The owner's executor start frontier was crossed and cancellation won\nbefore normal completion with proven terminal settlement. This does\nnot promise rollback or absence of side effects. A cancellation that\ncannot be proven settled is not `Cancelled` at all: it is\n[`ToolExecutionStatus::OutcomeUnknown`].",
+          "type": "string",
+          "const": "during_execution"
+        }
+      ]
+    },
+    "ToolResultContent": {
+      "description": "A content block inside a tool result.",
+      "oneOf": [
+        {
+          "description": "Plain text output.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "description": "The text content.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "Structured output preserved as arbitrary JSON.",
+          "type": "object",
+          "properties": {
+            "value": {
+              "description": "The structured tool output value."
+            },
+            "type": {
+              "type": "string",
+              "const": "json"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
+          "description": "A file reference produced by the tool.",
+          "type": "object",
+          "properties": {
+            "artifact_id": {
+              "description": "Durable artifact identity of the file.",
+              "$ref": "#/$defs/ArtifactId"
+            },
+            "name": {
+              "description": "Optional display name.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mime_type": {
+              "description": "Optional MIME type.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "description": "Optional human-readable description.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "file"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "artifact_id"
+          ]
+        },
+        {
+          "description": "An image reference produced by the tool.",
+          "type": "object",
+          "properties": {
+            "artifact_id": {
+              "description": "Durable artifact identity of the image.",
+              "$ref": "#/$defs/ArtifactId"
+            },
+            "alt": {
+              "description": "Optional short description or alt text.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "artifact_id"
+          ]
+        }
+      ]
+    },
+    "FileReference": {
+      "description": "A reference to a Tool-generated managed file artifact; never a user upload.",
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "description": "Durable artifact identity of the file.",
+          "$ref": "#/$defs/ArtifactId"
+        },
+        "name": {
+          "description": "Optional display name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mime_type": {
+          "description": "Optional MIME type.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Optional human-readable description.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "artifact_id"
+      ]
+    },
+    "TruncationState": {
+      "description": "Truncation metadata for tool output.",
+      "type": "object",
+      "properties": {
+        "truncated": {
+          "description": "Whether the result content was truncated.",
+          "type": "boolean"
+        },
+        "original_bytes": {
+          "description": "Size of the untruncated output in bytes, when known.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "truncated"
+      ]
+    },
+    "ManagedOutputContinuation": {
+      "description": "Runtime-owned managed textual-output continuation metadata of one tool\nresult (Issue #86): where the complete — or honestly partial — textual\noutput of the execution lives in the conversation's managed tool-output\nstore.\n\nThis is rustX runtime metadata, explicitly typed and separate from\narbitrary tool-owned structured content (`ToolResultContent::Json`). It\nis not a semantic artifact, not a `FileReference`, and not a File\nmodality: textual output stays textual. The locator is an advisory\nmodel-facing absolute path inside the read-only managed tool-output\nroot — it is a locator, never filesystem authority.\n\nThe two managed-output lifecycles both use this type: a foreground\nresult references its lazy result spill (`results/result_N.txt`) only\nwhen the complete representation crossed the shared preview threshold,\nwhile a background result references its dispatch-allocated live-output\nfile (`tasks/exec_N.output`). A size-only cutoff is never a semantic tool\nfailure; `Partial`/`Unavailable` make output-storage failure explicit.",
+      "oneOf": [
+        {
+          "description": "The complete textual output of the result is retained at the\nabsolute managed-output locator; the bounded result content is a\npreview of it.",
+          "type": "object",
+          "properties": {
+            "locator": {
+              "description": "The absolute locator inside the managed tool-output root.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "complete"
+            }
+          },
+          "required": [
+            "type",
+            "locator"
+          ]
+        },
+        {
+          "description": "Output storage did not settle completely: the locator holds only\npartial output and must never be presented as the complete output.",
+          "type": "object",
+          "properties": {
+            "locator": {
+              "description": "The absolute locator inside the managed tool-output root.",
+              "type": "string"
+            },
+            "diagnostic": {
+              "description": "The output-storage failure diagnostic. Advisory only: it is\nbounded whenever the continuation is rendered.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "partial"
+            }
+          },
+          "required": [
+            "type",
+            "locator",
+            "diagnostic"
+          ]
+        },
+        {
+          "description": "No managed-output file exists for the result — output storage\nfailed before or without allocation — so the bounded result content\nis the only record.",
+          "type": "object",
+          "properties": {
+            "diagnostic": {
+              "description": "The output-storage failure diagnostic. Advisory only: it is\nbounded whenever the continuation is rendered.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "unavailable"
+            }
+          },
+          "required": [
+            "type",
+            "diagnostic"
+          ]
+        }
       ]
     },
     "RuntimeClientTranscriptItem": {
@@ -8079,480 +8697,6 @@
       "required": [
         "id",
         "content"
-      ]
-    },
-    "ToolExecutionResult": {
-      "description": "The normalized outcome of one tool execution.\n\n`ToolMessageBlock` composes this type instead of duplicating its fields,\nkeeping one source of truth for tool results.",
-      "type": "object",
-      "properties": {
-        "workflow": {
-          "description": "Immutable native Workflow identity on the existing outer result.\nHistorical identity only: no execution state or continuation authority.\nIts retention is exactly that of this result, never a separate registry.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/WorkflowToolIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "status": {
-          "description": "Typed execution status, including unknown external outcomes.",
-          "$ref": "#/$defs/ToolExecutionStatus"
-        },
-        "content": {
-          "description": "Tool-owned result content.\n\nThis content is TOOL-OWNED: [`ToolResultContent::Json`] is arbitrary\ntool-owned structured data, and the runtime never infers semantics\nfrom its property names. rustX reserves no ordinary JSON field names;\nruntime-owned facts live in the typed fields of this struct. A\nprovider-independent, bounded model-facing representation is produced\nby [`Self::model_facing_projection`]; producers do not append runtime\nstatus or managed-output continuation text here.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ToolResultContent"
-          },
-          "default": []
-        },
-        "duration_ms": {
-          "description": "Execution duration in integer milliseconds (stable for persistence).",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "exit_code": {
-          "description": "Process exit code where the tool executed a process.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32",
-          "minimum": -2147483648,
-          "maximum": 2147483647
-        },
-        "artifacts": {
-          "description": "Durable artifact/file references produced by the execution.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/FileReference"
-          },
-          "default": []
-        },
-        "truncation": {
-          "description": "Truncation metadata where output was truncated.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TruncationState"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "managed_output": {
-          "description": "Runtime-owned managed textual-output continuation metadata: where\nthe complete — or honestly partial — textual output of this result\nlives in the conversation's managed tool-output store (Issue #86).\nAbsent for results whose output fits the model-facing content.\n\nThis is the one typed source of truth for complete-vs-partial\nmanaged output; producers never encode these facts as magic\nproperties of tool-owned JSON, and generic runtime publication code\nconsumes only this typed field, never arbitrary JSON keys.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ManagedOutputContinuation"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "status",
-        "duration_ms"
-      ]
-    },
-    "WorkflowToolIdentity": {
-      "description": "Runtime-owned identity, independent of model `ToolCall` text.\nRetained with the canonical outer result, not with an execution owner.",
-      "type": "object",
-      "properties": {
-        "workflow_id": {
-          "$ref": "#/$defs/WorkflowId"
-        },
-        "program_digest": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "workflow_id",
-        "program_digest"
-      ]
-    },
-    "ToolExecutionStatus": {
-      "description": "Typed execution status of a tool call.\n\nThe terminal vocabulary is explicit about **outcome certainty**: a\nterminal status may claim only facts the owning runtime/executor can\nprove. `Success`, `Failed`, `Denied`, `Cancelled`, and `TimedOut` are\nconfirmed terminal outcomes; `OutcomeUnknown` means an admitted call\ncrossed the external-effect frontier but rustX cannot prove its final\nexternal result. An unknown outcome is never silently collapsed into\nsuccess, generic failure, confirmed timeout, or confirmed cancellation,\nand every non-success status produces bounded model-facing feedback\nthrough [`Self::feedback_text`].",
-      "oneOf": [
-        {
-          "description": "The tool completed successfully and the outcome is known.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "success"
-            }
-          },
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "description": "The tool reached a known failed terminal outcome.\n\nThis is never used merely because communication with an external\nexecutor failed after dispatch while the external operation could\nstill have succeeded; that situation is [`Self::OutcomeUnknown`].",
-          "type": "object",
-          "properties": {
-            "error": {
-              "description": "Human-readable error message.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "failed"
-            }
-          },
-          "required": [
-            "type",
-            "error"
-          ]
-        },
-        {
-          "description": "The pre-tool policy denied the already-resolved invocation before an\nexecutor future was created.",
-          "type": "object",
-          "properties": {
-            "reason": {
-              "description": "The policy or human-readable approval reason.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "denied"
-            }
-          },
-          "required": [
-            "type",
-            "reason"
-          ]
-        },
-        {
-          "description": "The execution's cancellation settlement is established.\n\nCancellation is an authoritative terminal outcome only when rustX can\nprove the execution's cancellation settlement: pre-start\n([`ToolCancellationPhase::BeforeStart`]) or proven stopped after start\n([`ToolCancellationPhase::DuringExecution`]). A cancellation *request*\nis not a confirmed cancellation result: when the call crossed the\nexternal-effect frontier and final settlement cannot be proven, the\nstatus is [`Self::OutcomeUnknown`].",
-          "type": "object",
-          "properties": {
-            "reason": {
-              "description": "Why the execution was cancelled.",
-              "$ref": "#/$defs/CancellationReason"
-            },
-            "phase": {
-              "description": "Whether cancellation won before executor start or while execution\nwas already in flight.",
-              "$ref": "#/$defs/ToolCancellationPhase"
-            },
-            "type": {
-              "type": "string",
-              "const": "cancelled"
-            }
-          },
-          "required": [
-            "type",
-            "reason",
-            "phase"
-          ]
-        },
-        {
-          "description": "The execution deadline expired and the owning runtime/executor\nestablished terminal settlement for the execution: it was stopped and\nproven unable to continue (for example, a local process tree that was\nkilled, waited/reaped, and proven terminal).\n\n`TimedOut` means more than \"rustX stopped awaiting the operation\". A\ndeadline expiry whose termination cannot be confirmed (for example a\nremote call whose cancellation is unconfirmed) is\n[`Self::OutcomeUnknown`], never `TimedOut`.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "timed_out"
-            }
-          },
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "description": "The admitted call crossed the external-effect frontier, but rustX\ncannot prove its final external outcome: a runtime restart before the\ndurable outcome commit, transport loss after dispatch, or a\ncancellation/deadline whose remote termination could not be\nconfirmed. The operation may have partially or fully completed.",
-          "type": "object",
-          "properties": {
-            "detail": {
-              "description": "A producer-owned diagnostic describing why certainty is\nunavailable. It is rendered into the bounded model-facing\nprojection and is never parsed to decide semantics; the typed\nvariant itself is the certainty claim.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "outcome_unknown"
-            }
-          },
-          "required": [
-            "type",
-            "detail"
-          ]
-        }
-      ]
-    },
-    "CancellationReason": {
-      "description": "Why an operation was cancelled.",
-      "oneOf": [
-        {
-          "description": "The user requested cancellation of the attempt or its work.",
-          "type": "string",
-          "const": "user_requested"
-        },
-        {
-          "description": "The conversation runtime is shutting down.",
-          "type": "string",
-          "const": "runtime_shutdown"
-        },
-        {
-          "description": "A parent operation that owns this work was cancelled.",
-          "type": "string",
-          "const": "parent_cancelled"
-        },
-        {
-          "description": "A conversation-owned subagent reached its definition-level whole-\nlifecycle execution deadline.",
-          "type": "string",
-          "const": "subagent_execution_deadline_exceeded"
-        }
-      ]
-    },
-    "ToolCancellationPhase": {
-      "description": "The semantic phase at which a tool call was cancelled.\n\nThis is a closed, provider-independent fact owned by the canonical tool\nresult contract and shared by foreground and background runtime-owned\nresults. The foreground Agent Loop selects it from its per-call executor\nstart frontier; the background registry selects it from its detached-runner\nfrontier. Executors may report a provisional physical cancellation status,\nbut they do not own the canonical phase classification. Clients only\nconsume or project the canonical typed fact; provider adapters likewise\ntranslate that fact without inferring its phase.",
-      "oneOf": [
-        {
-          "description": "The accepted call had execution authority, but its owner's executor\nstart frontier was never crossed.",
-          "type": "string",
-          "const": "before_start"
-        },
-        {
-          "description": "The owner's executor start frontier was crossed and cancellation won\nbefore normal completion with proven terminal settlement. This does\nnot promise rollback or absence of side effects. A cancellation that\ncannot be proven settled is not `Cancelled` at all: it is\n[`ToolExecutionStatus::OutcomeUnknown`].",
-          "type": "string",
-          "const": "during_execution"
-        }
-      ]
-    },
-    "ToolResultContent": {
-      "description": "A content block inside a tool result.",
-      "oneOf": [
-        {
-          "description": "Plain text output.",
-          "type": "object",
-          "properties": {
-            "text": {
-              "description": "The text content.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "text"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "text"
-          ]
-        },
-        {
-          "description": "Structured output preserved as arbitrary JSON.",
-          "type": "object",
-          "properties": {
-            "value": {
-              "description": "The structured tool output value."
-            },
-            "type": {
-              "type": "string",
-              "const": "json"
-            }
-          },
-          "required": [
-            "type",
-            "value"
-          ]
-        },
-        {
-          "description": "A file reference produced by the tool.",
-          "type": "object",
-          "properties": {
-            "artifact_id": {
-              "description": "Durable artifact identity of the file.",
-              "$ref": "#/$defs/ArtifactId"
-            },
-            "name": {
-              "description": "Optional display name.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "mime_type": {
-              "description": "Optional MIME type.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "description": {
-              "description": "Optional human-readable description.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "type": "string",
-              "const": "file"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "artifact_id"
-          ]
-        },
-        {
-          "description": "An image reference produced by the tool.",
-          "type": "object",
-          "properties": {
-            "artifact_id": {
-              "description": "Durable artifact identity of the image.",
-              "$ref": "#/$defs/ArtifactId"
-            },
-            "alt": {
-              "description": "Optional short description or alt text.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "type": "string",
-              "const": "image"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "artifact_id"
-          ]
-        }
-      ]
-    },
-    "FileReference": {
-      "description": "A reference to a Tool-generated managed file artifact; never a user upload.",
-      "type": "object",
-      "properties": {
-        "artifact_id": {
-          "description": "Durable artifact identity of the file.",
-          "$ref": "#/$defs/ArtifactId"
-        },
-        "name": {
-          "description": "Optional display name.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "mime_type": {
-          "description": "Optional MIME type.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "description": {
-          "description": "Optional human-readable description.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "artifact_id"
-      ]
-    },
-    "TruncationState": {
-      "description": "Truncation metadata for tool output.",
-      "type": "object",
-      "properties": {
-        "truncated": {
-          "description": "Whether the result content was truncated.",
-          "type": "boolean"
-        },
-        "original_bytes": {
-          "description": "Size of the untruncated output in bytes, when known.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        }
-      },
-      "required": [
-        "truncated"
-      ]
-    },
-    "ManagedOutputContinuation": {
-      "description": "Runtime-owned managed textual-output continuation metadata of one tool\nresult (Issue #86): where the complete — or honestly partial — textual\noutput of the execution lives in the conversation's managed tool-output\nstore.\n\nThis is rustX runtime metadata, explicitly typed and separate from\narbitrary tool-owned structured content (`ToolResultContent::Json`). It\nis not a semantic artifact, not a `FileReference`, and not a File\nmodality: textual output stays textual. The locator is an advisory\nmodel-facing absolute path inside the read-only managed tool-output\nroot — it is a locator, never filesystem authority.\n\nThe two managed-output lifecycles both use this type: a foreground\nresult references its lazy result spill (`results/result_N.txt`) only\nwhen the complete representation crossed the shared preview threshold,\nwhile a background result references its dispatch-allocated live-output\nfile (`tasks/exec_N.output`). A size-only cutoff is never a semantic tool\nfailure; `Partial`/`Unavailable` make output-storage failure explicit.",
-      "oneOf": [
-        {
-          "description": "The complete textual output of the result is retained at the\nabsolute managed-output locator; the bounded result content is a\npreview of it.",
-          "type": "object",
-          "properties": {
-            "locator": {
-              "description": "The absolute locator inside the managed tool-output root.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "complete"
-            }
-          },
-          "required": [
-            "type",
-            "locator"
-          ]
-        },
-        {
-          "description": "Output storage did not settle completely: the locator holds only\npartial output and must never be presented as the complete output.",
-          "type": "object",
-          "properties": {
-            "locator": {
-              "description": "The absolute locator inside the managed tool-output root.",
-              "type": "string"
-            },
-            "diagnostic": {
-              "description": "The output-storage failure diagnostic. Advisory only: it is\nbounded whenever the continuation is rendered.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "partial"
-            }
-          },
-          "required": [
-            "type",
-            "locator",
-            "diagnostic"
-          ]
-        },
-        {
-          "description": "No managed-output file exists for the result — output storage\nfailed before or without allocation — so the bounded result content\nis the only record.",
-          "type": "object",
-          "properties": {
-            "diagnostic": {
-              "description": "The output-storage failure diagnostic. Advisory only: it is\nbounded whenever the continuation is rendered.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "unavailable"
-            }
-          },
-          "required": [
-            "type",
-            "diagnostic"
-          ]
-        }
       ]
     },
     "ToolMessageBlock": {
@@ -9630,35 +9774,6 @@
           "const": "outcome_unknown"
         }
       ]
-    },
-    "ToolProgress": {
-      "description": "A bounded structured progress notification of one tool execution.\n\nProgress is an execution fact, never canonical message history. All\nfields are optional; an empty `ToolProgress` is a bare tick. The progress\nmessage text is bounded by [`MAX_PROGRESS_MESSAGE_BYTES`].\n\n[`MAX_PROGRESS_MESSAGE_BYTES`]: crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES",
-      "type": "object",
-      "properties": {
-        "message": {
-          "description": "A short human-readable progress message, when there is one.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "completed": {
-          "description": "Completed units, when a total is known.",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "total": {
-          "description": "Total units, when known.",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        }
-      }
     },
     "RuntimeClientSubagent": {
       "description": "The Runtime Client view of one subagent child (Issue #60).\n\nA read-model materialization of the authoritative registry snapshot:\nevery field is derived, and the durable ownership/terminal events —\nnever this view — are the recovery authority.\n\nSince Issue #178 the view also carries the child's live activity\nprojection (`observation`), its redacted execution profile\n(`execution_profile`), and its start time (`started_at`). These are\nobservation-plane facts: the lifecycle `state` remains the only\nauthority on whether the child is alive, settling, or settled.",
@@ -12335,113 +12450,6 @@
             "tool_id",
             "name",
             "arguments"
-          ]
-        }
-      ]
-    },
-    "ForegroundToolExecution": {
-      "description": "The foreground tool execution read model of one logical tool call.\n\nKeyed by the canonical logical tool-call identity, so parallel physical\ncompletion timing can never corrupt logical identities or canonical\nordering. Native, MCP, and Python foreground executions converge through\nthis one shape.",
-      "type": "object",
-      "properties": {
-        "call_id": {
-          "description": "The logical tool-call identity.",
-          "$ref": "#/$defs/ToolCallId"
-        },
-        "tool_id": {
-          "description": "The canonical tool identity.",
-          "$ref": "#/$defs/ToolId"
-        },
-        "name": {
-          "description": "The model-facing tool name at call time.",
-          "type": "string"
-        },
-        "state": {
-          "description": "The externally meaningful execution state.",
-          "$ref": "#/$defs/ForegroundToolState"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "call_id",
-        "tool_id",
-        "name",
-        "state"
-      ]
-    },
-    "ForegroundToolState": {
-      "description": "The externally meaningful state of one foreground tool execution.",
-      "oneOf": [
-        {
-          "description": "The call is known and its arguments are assembled; execution has\nnot started.",
-          "type": "object",
-          "properties": {
-            "arguments": {
-              "description": "The assembled JSON arguments.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "assembled"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "arguments"
-          ]
-        },
-        {
-          "description": "The execution is running.",
-          "type": "object",
-          "properties": {
-            "arguments": {
-              "description": "The assembled JSON arguments.",
-              "type": "string"
-            },
-            "progress": {
-              "description": "The latest bounded progress, when any.",
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ToolProgress"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "type": {
-              "type": "string",
-              "const": "running"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "arguments"
-          ]
-        },
-        {
-          "description": "The execution settled with its normalized result.",
-          "type": "object",
-          "properties": {
-            "arguments": {
-              "description": "The assembled JSON arguments.",
-              "type": "string"
-            },
-            "result": {
-              "description": "The normalized execution result.",
-              "$ref": "#/$defs/ToolExecutionResult"
-            },
-            "type": {
-              "type": "string",
-              "const": "settled"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "arguments",
-            "result"
           ]
         }
       ]
@@ -15298,6 +15306,17 @@
     "SourceSettings": {
       "type": "object",
       "properties": {
+        "prospective_approval_mode": {
+          "description": "Native current-file approval resolution. None when prospective configuration is invalid.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "prospective_resources": {
           "description": "Current-file analysis, separate from the published runtime. Never prepares sources.",
           "anyOf": [

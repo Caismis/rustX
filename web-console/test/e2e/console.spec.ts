@@ -27,11 +27,11 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await connect();
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
-    await expect(page.locator('.session-toolbar small')).toHaveText(`${fixture.workspaceA} · attached`);
-    const idA = await page.locator('.session-toolbar strong').innerText();
+    await expect(page.getByLabel('Session location and attachment', { exact: true })).toHaveText(`${fixture.workspaceA} · attached`);
+    const idA = await page.getByLabel('Session title', { exact: true }).innerText();
     await chooseWorkspace(page, 'Workspace B'); await page.getByRole('button', { name: 'Create Session', exact: true }).click();
-    await expect(page.locator('.session-toolbar small')).toHaveText(`${fixture.workspaceB} · attached`);
-    const idB = await page.locator('.session-toolbar strong').innerText();
+    await expect(page.getByLabel('Session location and attachment', { exact: true })).toHaveText(`${fixture.workspaceB} · attached`);
+    const idB = await page.getByLabel('Session title', { exact: true }).innerText();
     await expect(page.getByRole('tab', { name: /^ses_/ })).toHaveCount(2);
     await page.getByRole('tab', { name: idA, exact: true }).click();
     await send('Long action in A'); await fixture.gate('finish-a');
@@ -63,14 +63,14 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     await expect(remote.attach(idB)).rejects.toMatchObject({ kind: 'controller_in_use' });
     await page.getByRole('button', { name: 'Detach', exact: true }).click();
-    await expect(page.locator('.session-toolbar small')).toContainText('detached');
+    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('detached');
     const terminalB = await remote.attach(idB);
     expect(JSON.stringify(terminalB.state.transcript)).toContain('B stayed responsive.');
     expect((await remote.readSession(idA)).id).toBe(idA);
     await terminalB.resync();
     await remote.detach(idB);
     await page.getByRole('button', { name: 'Attach / cold resume' }).click();
-    await expect(page.locator('.session-toolbar small')).toContainText('attached');
+    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('attached');
     await remote.shutdown(); remote = undefined;
 
     await page.getByRole('tab', { name: idA, exact: true }).click();
@@ -97,8 +97,8 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
       await page.getByRole('button', { name: `Close view ${id}` }).click();
       await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('title', /detached/i);
       await page.locator(`button[data-session-id="${id}"]`).click();
-      await expect(page.locator('.session-toolbar small')).toContainText('attached');
-      await expect(page.locator('.session-toolbar strong')).toHaveText(id);
+      await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('attached');
+      await expect(page.getByLabel('Session title', { exact: true })).toHaveText(id);
     }
     await page.getByRole('tab', { name: idA, exact: true }).click();
     await send('Approval please'); await expect(page.getByRole('button', { name: 'Allow once' })).toBeEnabled();
@@ -134,11 +134,11 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.getByRole('button', { name: 'Resync', exact: true }).click();
     await expect(page.getByLabel('Runtime facts')).toContainText('console-model');
     await page.getByRole('button', { name: 'Unload runtime', exact: true }).click();
-    await expect(page.locator('.session-toolbar small')).toContainText('unloaded');
+    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('unloaded');
     await page.getByRole('button', { name: 'Attach / cold resume' }).click();
     await expect(page.getByLabel('Runtime facts')).toContainText('second-model');
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
-    await expect(page.locator('.session-toolbar small')).toContainText(fixture.workspaceA);
+    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText(fixture.workspaceA);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('second-model');
     await page.getByLabel('Method filter').fill('session/attach');
     await expect(page.locator('.protocol-log')).toContainText('session/attach');
@@ -152,7 +152,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole('tab', { name: idB, exact: true }).click();
     await page.getByRole('button', { name: 'Unload runtime', exact: true }).click();
-    await expect(page.locator('.session-toolbar small')).toContainText('unloaded');
+    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('unloaded');
     await page.locator(`button[data-session-id="${idB}"]`).hover();
     await page.locator(`button[data-session-actions="${idB}"]`).click();
     await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();
@@ -161,7 +161,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByRole('alert')).toContainText('"status": "deleted"');
     await expect(page.locator(`button[data-session-id="${idB}"]`)).toHaveCount(0);
     await expect(page.getByRole('tab', { name: /^ses_/ })).toHaveCount(1);
-    await expect(page.locator('.session-toolbar strong')).toHaveText(idA);
+    await expect(page.getByLabel('Session title', { exact: true })).toHaveText(idA);
     expect(readFileSync(`${fixture.workspaceA}/console-effect`, 'utf8')).toBe('x');
     expect((await fixture.control('requests')).requests).toHaveLength(8);
     expect(errors).toEqual([]); passed = true;

@@ -1,4 +1,4 @@
-# Composer context docks (WEB-04)
+# Agent Composer and native controls
 
 The composer column is one stack with a fixed order:
 
@@ -112,8 +112,8 @@ write extension enablement, and disabling the extension deletes no Goal state.
 ### Queue and composer delivery
 
 Queue rows are the native pending inbound items, in inbound sequence order, with
-their provenance (for example a Goal continuation). The dock is read-only: queue
-edit/remove and per-row steer belong to WEB-06.
+their provenance (for example a Goal continuation). Exact pending edit/remove use the native inbound revision contract; presentation
+never reorders or adopts mailbox entries.
 
 `turn/start` and `turn/steer` dispatch to the same native `submit_inbound`
 (`src/app_server/connection.rs`). **Send** while idle dispatches `turn/start`.
@@ -158,11 +158,10 @@ same axis, in normal flow (no fixed or sticky positioning). Todo and Queue lists
 bounded at 180px; Goal text ellipsizes and wraps below its actions on narrow
 viewports. The real-server browser test measures the alignment at 1440px and 390px.
 
-## Relationship to #319 / PR #320
+## Uploads
 
-PR #320 (#319) is merged. User uploads are Session-owned workspace uploads and the
-App Server protocol is **v4**; this slice is rebased onto that `main`. The stack
-wraps the existing `InputBar` without changing upload behaviour: a draft transfers
+User uploads are Session-owned workspace uploads on App Server **v6**. The stack
+wraps `app/agent/AgentComposer` and the pinned Harness card/footer seats: a draft transfers
 through `session/upload` first, and either delivery action carries the resulting
 typed `UploadReceipt`s as ordinary content.
 
@@ -170,8 +169,7 @@ typed `UploadReceipt`s as ordinary content.
 send(sessionId, text, uploadReceipts, delivery) -> turn/start or turn/steer
 ```
 
-There is no `artifact/upload` user path and no v3/v4 or old/new upload compatibility
-path. Upload receipts are content only:
+There is no `artifact/upload` user path or upload compatibility path. Upload receipts are content only:
 they never participate in the accepted-`MessageId` identity contract above, and an
 uncertain upload leaves its draft card uncertain rather than being replayed.
 
@@ -199,7 +197,7 @@ keeping the capability panel open; consumption and panel dismissal are separate.
 | Command | Typed integration |
 | --- | --- |
 | `/model` | `settings/model` + `settings/models`, then `settings/setModel` with an exact catalog model reference and native defaults |
-| Global approval policy | Settings → User or Workspace → Runtime; Save source bytes, then Reload separately |
+| Approval mode control | Native Workspace Approval source-unit CAS; desired/published/running distinction and explicit Reload |
 | `/compact` | Native `context/compact`, available with no active Attempt; pending inbound alone is permitted by native maintenance |
 | `/new` | `session/create` using native Session cwd; attach/open only after success |
 | `/fork` | Native exact user-boundary selection and independent `session/fork` |
@@ -207,7 +205,7 @@ keeping the capability panel open; consumption and panel dismissal are separate.
 | `/goal` | Focus existing GoalDomain-backed dock controls when a current Goal is visible |
 | `/tools` | Read-only `resources/read` capability inspection |
 
-`/settings` is omitted: there is no current product settings editor to navigate to.
+`/settings` is omitted from the typed grammar; Settings remains available in the shell.
 Stable execution-idle means no active Attempt, no authoritative pending inbound,
 and no acknowledged MessageId still awaiting projection reconciliation. Destructive
 lineage switching additionally requires no unresolved `turn/start`/`turn/steer`
@@ -236,5 +234,39 @@ snapshots/settings; reopening a selector rereads model/current/catalog state.
 Unknown outcomes remain diagnostics: inspect the Session list/tree rather than
 guessing which operation succeeded. A failed mutation locks that selection until
 the user closes it and rereads authority. The fixed Todo → Goal → Queue → Composer
-stack and accepted-MessageId echo contract remain intact. Exact accepted queue
-edit/remove/reorder is still #309.
+stack and accepted-MessageId echo contract remain intact. Exact accepted queue edit/remove uses native CAS; no browser queue authority exists.
+
+## Harness Agent controls (#346)
+
+`AgentComposer` binds native draft/upload/command operations to the pinned Harness
+editor, tools, modes and trailing seats. IME composition (including keyCode 229),
+Enter/Shift+Enter, focus restoration, upload receipts and command discovery keep
+one implementation. The active empty editor exposes Stop; a nonempty draft adds
+Queue/Steer submission. Stop acknowledgement only records a cancellation request.
+The native attempt phase alone supplies terminal presentation; disconnect is inert.
+
+`AgentControls` reads exact `settings/models` and `settings/model` data. Both the
+composer menu and `/model` popup advertise only returned model references and
+reasoning profile IDs. The native default is represented by omitting the profile.
+`settings/setModel` is the current target-bound live mutation. `settings/selectModel`
+is the distinct durable Session revision-CAS authoring operation; it does not
+replace the live Agent operation. An acknowledged or uncertain model change fences
+dependent Send/lineage actions until a fresh authoritative snapshot is read.
+Catalog caches and open menus are discarded on attachment/generation replacement.
+
+The permission menu offers only `policy` and `full_access`. Native
+`SourceSettings.prospective_approval_mode` resolves desired source policy; the
+browser does not parse config or compute an overlay. Save uses the exact Workspace
+source revision and Approval semantic unit. It never publishes a runtime generation.
+The running label reads `attempt.execution_settings.approval_mode`; idle effective
+policy reads `snapshot.effective_approval_mode`. Pending Reload is explicit. Apply
+saved policy invokes existing `configuration/reload` only while idle; native busy
+and publication checks remain final. This is an Agent control, not a CFG3 editor.
+
+Native pending interactions take over the composer seat, preserving the hidden
+local draft. Approval uses native Allow/Deny; Questionnaire supports schema-defined
+choice/multichoice/boolean/text/numeric/custom values and page navigation. Only
+`interaction/respond` or permitted `interaction/cancel` sends a response. Escape,
+dismissal, navigation and unmount never settle anything. Successful acknowledgements
+keep the pending surface until snapshot absence proves settlement. Lost replies
+stay uncertain, cannot be resent and repair through native reconnect/reread.

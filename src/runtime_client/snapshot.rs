@@ -250,6 +250,10 @@ pub struct RuntimeClientTranscriptPage {
 /// One derived transcript item and its stable durable cursor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RuntimeClientTranscriptEntry {
+    /// Canonical calls in block order with their native committed results.
+    /// A missing result means no committed result, never success or cancellation.
+    #[serde(default)]
+    pub tool_calls: Vec<ForegroundToolExecution>,
     /// The durable transcript position, not the Runtime Client event cursor.
     pub cursor: RuntimeClientTranscriptCursor,
     /// The typed item resolved from a canonical durable owner.
@@ -445,6 +449,23 @@ pub(crate) fn transcript_page_view(
             };
             Ok(RuntimeClientTranscriptEntry {
                 cursor: entry.cursor.into(),
+                tool_calls: entry
+                    .tool_calls
+                    .into_iter()
+                    .map(|tool| {
+                        let arguments =
+                            serde_json::to_string(&tool.call.arguments).expect("JSON arguments");
+                        ForegroundToolExecution {
+                            call_id: tool.call.id,
+                            tool_id: tool.call.tool_id,
+                            name: tool.call.name,
+                            state: match tool.result {
+                                Some(result) => ForegroundToolState::Settled { arguments, result },
+                                None => ForegroundToolState::Assembled { arguments },
+                            },
+                        }
+                    })
+                    .collect(),
                 item,
             })
         })

@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
-// Presentation extracted from DeepSeek Harness ui-conversation/InputBar.
+// Presentation extracted from DeepSeek Harness ui-conversation/AgentComposer.
 // Native textarea replaces Lexical. Commands are client grammar; effects are typed.
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, type ReactNode } from 'react';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from '../../client/uploads';
 import type { UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v6';
 import { commands, available, discoveryQuery, parseCommand, type CommandId } from '../commands/registry';
@@ -11,9 +11,9 @@ import { editableContent } from '../composer/editor-content';
 import { isOutcomeUncertain } from '../../client/app-server';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
-import css from './InputBar.module.css';
-export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel, onCommand, hasGoal = false, lineageSwitchSafe = false, initialContent = [], consumed }: {
-  disabled: boolean; busy: boolean; active: boolean;
+import css from '../../presentation/agent/Composer.module.css';
+export function AgentComposer({ disabled, busy, active, onSend, onUpload, onCancel, onCommand, hasGoal = false, lineageSwitchSafe = false, initialContent = [], consumed, model, permission, stopDisabled = false }: {
+  disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode; stopDisabled?: boolean;
   onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer') => Promise<boolean>;
   onUpload: (files: readonly File[]) => Promise<UploadedFile[]>; onCancel: () => void;
   onCommand?: (id: CommandId) => void; hasGoal?: boolean; lineageSwitchSafe?: boolean; initialContent?: UserInputBlock[];
@@ -58,6 +58,7 @@ export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel, o
   const [restored, setRestored] = useState(() => restoreSupported ? initialContent.flatMap(block => block.type === 'upload' ? [block] : []) : []);
   const [dismissed, setDismissed] = useState(false), [highlight, setHighlight] = useState(0);
   const [delivery, setDelivery] = useState<'send' | 'steer'>('send');
+  const picker = useRef<HTMLInputElement>(null);
   const input = useRef<HTMLTextAreaElement>(null), root = useRef<HTMLDivElement>(null);
   const query = discoveryQuery(draft);
   const menu = onCommand && query !== undefined && !dismissed && !disabled && !busy;
@@ -85,7 +86,7 @@ export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel, o
       return;
     }
     const submitted = draft;
-    if (await onSend(submitted, [...restored, ...files.map(file => file.receipt!)], active ? delivery : 'send')) { setDraft(current => current === submitted ? '' : current); setFiles([]); setRestored([]); }
+    if (await onSend(submitted, [...restored, ...files.map(file => file.receipt!)], active ? delivery : 'send')) { setDraft(current => current === submitted ? '' : current); setFiles([]); setRestored([]); input.current?.focus(); }
   };
   return <div ref={root} className={css.root} onDragOver={event => { if (!disabled && !busy && event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(true); } }}
     onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
@@ -113,15 +114,20 @@ export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel, o
           }} />
       </div></div>
       <div className={css.row}>
-        {onCommand && <Button aria-label="Commands" disabled={disabled || busy} onClick={() => { if (draft.trim() && discoveryQuery(draft) === undefined) { setError('Type / in an empty composer to discover commands. Your draft is preserved.'); return; } setDraft('/'); setDismissed(false); setHighlight(0); input.current?.focus(); }}>+</Button>}
-        <label>Attach files<input type="file" multiple aria-label="Attach files" disabled={disabled || busy} onChange={event => { pick(Array.from(event.target.files ?? [])); event.target.value = ''; }} /></label>
-        <span className="muted" data-delivery={active ? delivery === 'steer' ? 'steer' : 'queue' : 'send'}>{active ? 'Attempt running · Queue and Steer both enter the native mailbox at a safe boundary' : 'Enter to send · Shift+Enter for newline'}</span>
-        {active && <label>Delivery<select aria-label="Delivery" disabled={disabled || busy} value={delivery} onChange={event => setDelivery(event.target.value as 'send' | 'steer')}><option value="send">Queue</option><option value="steer">Steer (same mailbox)</option></select></label>}
+        <div className={css.tools}>
+          {onCommand && <button type="button" className={css.add} aria-label="Commands" disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={() => { if (draft.trim() && discoveryQuery(draft) === undefined) { setError('Type / in an empty composer to discover commands. Your draft is preserved.'); return; } setDraft('/'); setDismissed(false); setHighlight(0); input.current?.focus(); }}>+</button>}
+          <input ref={picker} type="file" hidden multiple aria-label="Attach files" disabled={disabled || busy} onChange={event => { pick(Array.from(event.target.files ?? [])); event.target.value = ''; }}/>
+          <button type="button" className={css.add} aria-label="Add attachments" disabled={disabled || busy} onClick={() => picker.current?.click()}>↗</button>
+          <div className={css.modes}>{permission}</div>
+        </div>
         <div className={css.trailing}>
-          {active && <Button size="sm" variant="outline" disabled={disabled || busy} onClick={onCancel}>Cancel turn</Button>}
-          <Button variant="primary" disabled={disabled || busy || pending || (!draft.trim() && !files.length && !restored.length)} onClick={() => void submit()}>{busy ? 'Awaiting acknowledgement…' : active ? delivery === 'steer' ? 'Steer' : 'Queue' : 'Send'}</Button>
+          {active && <select aria-label="Delivery" title="Queue and Steer enter the native mailbox at a safe boundary" disabled={disabled || busy} value={delivery} onChange={event => setDelivery(event.target.value as 'send' | 'steer')}><option value="send">Queue</option><option value="steer">Steer (same mailbox)</option></select>}
+          {model}
+          {active && <button type="button" className={css.primary} aria-label="Cancel turn" title="Stop" disabled={disabled || stopDisabled} onMouseDown={event => event.preventDefault()} onClick={onCancel}><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg></button>}
+          {(!active || !!draft.trim() || files.length > 0 || restored.length > 0) && <button type="button" className={css.primary} aria-label={busy ? 'Awaiting acknowledgement…' : active ? delivery === 'steer' ? 'Steer' : 'Queue' : 'Send'} disabled={disabled || busy || pending || (!draft.trim() && !files.length && !restored.length)} onMouseDown={event => event.preventDefault()} onClick={() => void submit()}><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><path d="M8 13V3m-4 4 4-4 4 4" fill="none" stroke="currentColor" strokeWidth="2"/></svg></button>}
         </div>
       </div>
+      <span className="agent-composer-hint" data-delivery={active ? delivery === 'steer' ? 'steer' : 'queue' : 'send'}>{busy ? 'Awaiting acknowledgement…' : active ? 'Queue and Steer enter the native mailbox at a safe boundary' : 'Enter to send · Shift+Enter for newline'}</span>
     </div>
   </div>;
 }

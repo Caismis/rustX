@@ -2,9 +2,9 @@
 // DeepSeek Harness ApprovalFlow presentation. Pending.answer/answered state and
 // Remote-waterfall ownership removed; authoritative rustX binding supplies status.
 import type { ReactNode } from 'react';
-import { Button } from '../../presentation/primitives/Button';
-import css from './ApprovalPanel.module.css';
-export function ApprovalPanel({ title, detail, status, disabled, onAllow, onDeny }: {
+import { Button } from '../primitives/Button';
+import css from './Approval.module.css';
+export function ApprovalTakeover({ title, detail, status, disabled, onAllow, onDeny }: {
   title: string; detail: ReactNode; status: string; disabled: boolean;
   onAllow: () => void; onDeny: () => void;
 }) {

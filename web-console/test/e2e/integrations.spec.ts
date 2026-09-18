@@ -17,7 +17,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and explicit publ
     await expect(page.locator('.status strong')).toHaveText('connected');
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
-    await expect(page.locator('.session-toolbar small')).toContainText('attached');
+    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('attached');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await expect(settings.getByRole('tab', { name: 'Effective', exact: true })).toHaveAttribute('aria-selected', 'true');

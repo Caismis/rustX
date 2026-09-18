@@ -28,6 +28,13 @@ export function refreshTranscript(previous: TranscriptCache | undefined, page: R
   if (!previous) return replaceTranscript(page);
   const overlap = (previous.page.entries ?? []).some(old => (page.entries ?? []).some(entry => entry.cursor === old.cursor && entryIdentity(entry) === entryIdentity(old)));
   if (!overlap) return replaceTranscript(page, previous);
+  // Mutable native Tool read projections cannot be retained indefinitely outside
+  // the fresh page. Rebase rather than freeze a formerly assembled/running call
+  // after its authoritative terminal record has moved beyond this window.
+  const fresh = new Set((page.entries ?? []).map(entryIdentity));
+  if ((previous.page.entries ?? []).some(entry => !fresh.has(entryIdentity(entry)) && entry.tool_calls?.some(tool => tool.state.type !== 'settled'))) {
+    return { ...replaceTranscript(page, previous), error: 'History was refreshed to reread unresolved native Tools. Load earlier for their current results.' };
+  }
   const entries = merge(previous.page.entries ?? [], page.entries ?? []);
   if (entries.length > HISTORY_LIMIT || JSON.stringify(entries).length * 2 > HISTORY_MAX_BYTES) return { ...replaceTranscript(page, previous), error: 'History read window reached its bound and was replaced with the current page.' };
   return { ...previous, page: { entries, next_cursor: previous.page.next_cursor } };

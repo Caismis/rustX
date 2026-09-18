@@ -1,4 +1,4 @@
-# WEB-RESET-01 — presentation ownership decision
+# Harness presentation ownership
 
 Base: rustX `533cd341a3cd899e5fa9fdc693899cd35cd9a15b`.
 Upstream: https://github.com/deepseek-ai/deepseek-harness at
@@ -6,7 +6,8 @@ Upstream: https://github.com/deepseek-ai/deepseek-harness at
 at implementation start; immutable source, never a runtime dependency).
 
 Harness owns the presentation baseline; rustX owns product/runtime semantics.
-This record precedes implementation; the inventory records the final closure.
+The shell decision from #345 remains in force. #346 completes the Agent seats;
+[AGENT-ARCHITECTURE.md](AGENT-ARCHITECTURE.md) records their ownership.
 
 | Surface | Classification | Treatment |
 | --- | --- | --- |
@@ -18,7 +19,7 @@ This record precedes implementation; the inventory records the final closure.
 | SidebarRoot | B Harness UI + rustX binding | Preserve brand/new/rail/region/footer; callbacks replace registry |
 | Workspace browser/rows | B Harness UI + rustX binding | Compact tree/search/hover/menu; native DTO projections; archive becomes native deletion preview |
 | SettingsRoot | B Harness UI + rustX binding | Modal/nav/content seats; existing CFG3 editors; no Settings Controller |
-| Conversation/composer/tools/interactions | B deferred interior integration | Retain native content inside new frame, no Agent experience rewrite |
+| Conversation/composer/tools/interactions/model/permission | B Harness UI + rustX binding | Pinned Agent presentation, bounded native adapters; see AGENT-ARCHITECTURE.md |
 | Connection/Inspector/CFG3 scopes | C rustX extension | Harness primitives/panel seats; native product semantics |
 
 ## Boundary

@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { commands, discoveryQuery, parseCommand, available } from '../src/app/commands/registry';
 import { activeAttempt, executionIdle, lineageSwitchSafe } from '../src/bindings/projection';
 import { matchCommands } from '../src/app/commands/matching';
-import { InputBar } from '../src/app/components/InputBar';
+import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { CommandSession, NavigationEpoch, createSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
@@ -42,7 +42,7 @@ describe('one narrow browser command grammar', () => {
   });
   it('supports keyboard highlight, Escape, outside dismissal and plus without losing drafts; unknown slash never sends', async () => {
     const send = vi.fn(async () => true), command = vi.fn();
-    render(<InputBar disabled={false} busy={false} active={false} onCommand={command} onSend={send} onUpload={async () => []} onCancel={() => {}} />);
+    render(<AgentComposer disabled={false} busy={false} active={false} onCommand={command} onSend={send} onUpload={async () => []} onCancel={() => {}} />);
     const input = screen.getByLabelText('Message'); input.focus();
     fireEvent.change(input, { target: { value: '/' } });
     expect(screen.getByRole('listbox', { name: 'Commands' })).toBeTruthy();
@@ -265,7 +265,7 @@ describe('restored native editor content', () => {
     const errors = vi.spyOn(console, 'error');
     await server.attached('A');
     const send = vi.fn(async (text, receipts, delivery) => { await server.client.send('A', text, receipts, delivery); return true; });
-    render(<InputBar disabled={false} busy={false} active={false} initialContent={[...uploads, { type: 'text', text: 'unchanged text' }]} onSend={send} onUpload={async () => []} onCancel={() => {}} />);
+    render(<AgentComposer disabled={false} busy={false} active={false} initialContent={[...uploads, { type: 'text', text: 'unchanged text' }]} onSend={send} onUpload={async () => []} onCancel={() => {}} />);
     expect(screen.getAllByText('Native restored upload batch same-batch')).toHaveLength(2);
     fireEvent.click(screen.getAllByRole('button', { name: 'Remove draft upload' })[index]);
     expect(screen.getAllByText('Native restored upload batch same-batch')).toHaveLength(1);
@@ -277,7 +277,7 @@ describe('restored native editor content', () => {
   it('supported restored input round-trips exact native order without changes', async () => {
     await server.attached('A');
     const content: UserInputBlock[] = [...uploads, { type: 'text', text: 'original\ntext' }];
-    render(<InputBar disabled={false} busy={false} active={false} initialContent={content} onSend={async (text, receipts, delivery) => { await server.client.send('A', text, receipts, delivery); return true; }} onUpload={async () => []} onCancel={() => {}} />);
+    render(<AgentComposer disabled={false} busy={false} active={false} initialContent={content} onSend={async (text, receipts, delivery) => { await server.client.send('A', text, receipts, delivery); return true; }} onUpload={async () => []} onCancel={() => {}} />);
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
     expect((await server.waitFor('turn/start', 1)).params).toMatchObject({ content });
   });
@@ -287,7 +287,7 @@ describe('restored native editor content', () => {
     [uploads[0], { type: 'text', text: '' }],
   ] as UserInputBlock[][])('refuses an unrepresentable native shape without reordering: %j', async (...content) => {
     const original = structuredClone(content), send = vi.fn(async () => true);
-    render(<InputBar disabled={false} busy={false} active={false} initialContent={content} onSend={send} onUpload={async () => []} onCancel={() => {}} />);
+    render(<AgentComposer disabled={false} busy={false} active={false} initialContent={content} onSend={send} onUpload={async () => []} onCancel={() => {}} />);
     expect(screen.getByRole('alert').textContent).toContain('Cannot restore this ordered native input');
     expect(screen.getByLabelText('Message')).toHaveProperty('disabled', true);
     expect(screen.queryByRole('button', { name: 'Remove draft upload' })).toBeNull();

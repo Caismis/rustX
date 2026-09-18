@@ -1115,6 +1115,112 @@ export type ToolCallId = string;
  */
 export type ToolId = string;
 /**
+ * A content block inside a tool result.
+ */
+export type ToolResultContent =
+  | {
+      /**
+       * The text content.
+       */
+      text: string;
+      type: 'text';
+    }
+  | {
+      /**
+       * The structured tool output value.
+       */
+      value: {
+        [k: string]: unknown;
+      };
+      type: 'json';
+    }
+  | {
+      /**
+       * Identifies a durable artifact produced or referenced by the runtime.
+       *
+       * An artifact is identified by an opaque runtime-owned id, never by a
+       * local filesystem path: paths are executor concerns and are not a
+       * universal durable artifact identity.
+       */
+      artifact_id: string;
+      /**
+       * Optional display name.
+       */
+      name?: string | null;
+      /**
+       * Optional MIME type.
+       */
+      mime_type?: string | null;
+      /**
+       * Optional human-readable description.
+       */
+      description?: string | null;
+      type: 'file';
+    }
+  | {
+      /**
+       * Identifies a durable artifact produced or referenced by the runtime.
+       *
+       * An artifact is identified by an opaque runtime-owned id, never by a
+       * local filesystem path: paths are executor concerns and are not a
+       * universal durable artifact identity.
+       */
+      artifact_id: string;
+      /**
+       * Optional short description or alt text.
+       */
+      alt?: string | null;
+      type: 'image';
+    };
+/**
+ * Runtime-owned managed textual-output continuation metadata of one tool
+ * result (Issue #86): where the complete — or honestly partial — textual
+ * output of the execution lives in the conversation's managed tool-output
+ * store.
+ *
+ * This is rustX runtime metadata, explicitly typed and separate from
+ * arbitrary tool-owned structured content (`ToolResultContent::Json`). It
+ * is not a semantic artifact, not a `FileReference`, and not a File
+ * modality: textual output stays textual. The locator is an advisory
+ * model-facing absolute path inside the read-only managed tool-output
+ * root — it is a locator, never filesystem authority.
+ *
+ * The two managed-output lifecycles both use this type: a foreground
+ * result references its lazy result spill (`results/result_N.txt`) only
+ * when the complete representation crossed the shared preview threshold,
+ * while a background result references its dispatch-allocated live-output
+ * file (`tasks/exec_N.output`). A size-only cutoff is never a semantic tool
+ * failure; `Partial`/`Unavailable` make output-storage failure explicit.
+ */
+export type ManagedOutputContinuation =
+  | {
+      /**
+       * The absolute locator inside the managed tool-output root.
+       */
+      locator: string;
+      type: 'complete';
+    }
+  | {
+      /**
+       * The absolute locator inside the managed tool-output root.
+       */
+      locator: string;
+      /**
+       * The output-storage failure diagnostic. Advisory only: it is
+       * bounded whenever the continuation is rendered.
+       */
+      diagnostic: string;
+      type: 'partial';
+    }
+  | {
+      /**
+       * The output-storage failure diagnostic. Advisory only: it is
+       * bounded whenever the continuation is rendered.
+       */
+      diagnostic: string;
+      type: 'unavailable';
+    };
+/**
  * A content block inside a `UserMessageBlock`.
  */
 export type UserContentBlock =
@@ -1286,112 +1392,6 @@ export type OpenAiResponsesContinuation =
          */
         items: unknown[];
       };
-    };
-/**
- * A content block inside a tool result.
- */
-export type ToolResultContent =
-  | {
-      /**
-       * The text content.
-       */
-      text: string;
-      type: 'text';
-    }
-  | {
-      /**
-       * The structured tool output value.
-       */
-      value: {
-        [k: string]: unknown;
-      };
-      type: 'json';
-    }
-  | {
-      /**
-       * Identifies a durable artifact produced or referenced by the runtime.
-       *
-       * An artifact is identified by an opaque runtime-owned id, never by a
-       * local filesystem path: paths are executor concerns and are not a
-       * universal durable artifact identity.
-       */
-      artifact_id: string;
-      /**
-       * Optional display name.
-       */
-      name?: string | null;
-      /**
-       * Optional MIME type.
-       */
-      mime_type?: string | null;
-      /**
-       * Optional human-readable description.
-       */
-      description?: string | null;
-      type: 'file';
-    }
-  | {
-      /**
-       * Identifies a durable artifact produced or referenced by the runtime.
-       *
-       * An artifact is identified by an opaque runtime-owned id, never by a
-       * local filesystem path: paths are executor concerns and are not a
-       * universal durable artifact identity.
-       */
-      artifact_id: string;
-      /**
-       * Optional short description or alt text.
-       */
-      alt?: string | null;
-      type: 'image';
-    };
-/**
- * Runtime-owned managed textual-output continuation metadata of one tool
- * result (Issue #86): where the complete — or honestly partial — textual
- * output of the execution lives in the conversation's managed tool-output
- * store.
- *
- * This is rustX runtime metadata, explicitly typed and separate from
- * arbitrary tool-owned structured content (`ToolResultContent::Json`). It
- * is not a semantic artifact, not a `FileReference`, and not a File
- * modality: textual output stays textual. The locator is an advisory
- * model-facing absolute path inside the read-only managed tool-output
- * root — it is a locator, never filesystem authority.
- *
- * The two managed-output lifecycles both use this type: a foreground
- * result references its lazy result spill (`results/result_N.txt`) only
- * when the complete representation crossed the shared preview threshold,
- * while a background result references its dispatch-allocated live-output
- * file (`tasks/exec_N.output`). A size-only cutoff is never a semantic tool
- * failure; `Partial`/`Unavailable` make output-storage failure explicit.
- */
-export type ManagedOutputContinuation =
-  | {
-      /**
-       * The absolute locator inside the managed tool-output root.
-       */
-      locator: string;
-      type: 'complete';
-    }
-  | {
-      /**
-       * The absolute locator inside the managed tool-output root.
-       */
-      locator: string;
-      /**
-       * The output-storage failure diagnostic. Advisory only: it is
-       * bounded whenever the continuation is rendered.
-       */
-      diagnostic: string;
-      type: 'partial';
-    }
-  | {
-      /**
-       * The output-storage failure diagnostic. Advisory only: it is
-       * bounded whenever the continuation is rendered.
-       */
-      diagnostic: string;
-      type: 'unavailable';
     };
 /**
  * One consolidated block of an immutable publication audit.
@@ -4454,6 +4454,11 @@ export interface RuntimeClientTranscriptPage {
  */
 export interface RuntimeClientTranscriptEntry {
   /**
+   * Canonical calls in block order with their native committed results.
+   * A missing result means no committed result, never success or cancellation.
+   */
+  tool_calls?: ForegroundToolExecution[];
+  /**
    * The cursor domain of durable transcript paging.
    */
   cursor: string;
@@ -4615,6 +4620,228 @@ export interface RuntimeClientTranscriptEntry {
             };
         type: 'interaction_settled';
       };
+}
+/**
+ * The foreground tool execution read model of one logical tool call.
+ *
+ * Keyed by the canonical logical tool-call identity, so parallel physical
+ * completion timing can never corrupt logical identities or canonical
+ * ordering. Native, MCP, and Python foreground executions converge through
+ * this one shape.
+ */
+export interface ForegroundToolExecution {
+  /**
+   * Identifies one tool call issued by the current agent.
+   */
+  call_id: string;
+  /**
+   * Identifies a tool definition in the capability set.
+   */
+  tool_id: string;
+  /**
+   * The model-facing tool name at call time.
+   */
+  name: string;
+  /**
+   * The externally meaningful execution state.
+   */
+  state:
+    | {
+        /**
+         * The assembled JSON arguments.
+         */
+        arguments: string;
+        type: 'assembled';
+      }
+    | {
+        /**
+         * The assembled JSON arguments.
+         */
+        arguments: string;
+        /**
+         * The latest bounded progress, when any.
+         */
+        progress?: ToolProgress | null;
+        type: 'running';
+      }
+    | {
+        /**
+         * The assembled JSON arguments.
+         */
+        arguments: string;
+        result: ToolExecutionResult;
+        type: 'settled';
+      };
+}
+/**
+ * A bounded structured progress notification of one tool execution.
+ *
+ * Progress is an execution fact, never canonical message history. All
+ * fields are optional; an empty `ToolProgress` is a bare tick. The progress
+ * message text is bounded by [`MAX_PROGRESS_MESSAGE_BYTES`].
+ *
+ * [`MAX_PROGRESS_MESSAGE_BYTES`]: crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES
+ */
+export interface ToolProgress {
+  /**
+   * A short human-readable progress message, when there is one.
+   */
+  message?: string | null;
+  /**
+   * Completed units, when a total is known.
+   */
+  completed?: number | null;
+  /**
+   * Total units, when known.
+   */
+  total?: number | null;
+}
+/**
+ * The normalized execution result.
+ */
+export interface ToolExecutionResult {
+  /**
+   * Immutable native Workflow identity on the existing outer result.
+   * Historical identity only: no execution state or continuation authority.
+   * Its retention is exactly that of this result, never a separate registry.
+   */
+  workflow?: WorkflowToolIdentity | null;
+  /**
+   * Typed execution status, including unknown external outcomes.
+   */
+  status:
+    | {
+        type: 'success';
+      }
+    | {
+        /**
+         * Human-readable error message.
+         */
+        error: string;
+        type: 'failed';
+      }
+    | {
+        /**
+         * The policy or human-readable approval reason.
+         */
+        reason: string;
+        type: 'denied';
+      }
+    | {
+        /**
+         * Why the execution was cancelled.
+         */
+        reason:
+          | 'user_requested'
+          | 'runtime_shutdown'
+          | 'parent_cancelled'
+          | 'subagent_execution_deadline_exceeded';
+        /**
+         * Whether cancellation won before executor start or while execution
+         * was already in flight.
+         */
+        phase: 'before_start' | 'during_execution';
+        type: 'cancelled';
+      }
+    | {
+        type: 'timed_out';
+      }
+    | {
+        /**
+         * A producer-owned diagnostic describing why certainty is
+         * unavailable. It is rendered into the bounded model-facing
+         * projection and is never parsed to decide semantics; the typed
+         * variant itself is the certainty claim.
+         */
+        detail: string;
+        type: 'outcome_unknown';
+      };
+  /**
+   * Tool-owned result content.
+   *
+   * This content is TOOL-OWNED: [`ToolResultContent::Json`] is arbitrary
+   * tool-owned structured data, and the runtime never infers semantics
+   * from its property names. rustX reserves no ordinary JSON field names;
+   * runtime-owned facts live in the typed fields of this struct. A
+   * provider-independent, bounded model-facing representation is produced
+   * by [`Self::model_facing_projection`]; producers do not append runtime
+   * status or managed-output continuation text here.
+   */
+  content?: ToolResultContent[];
+  /**
+   * Execution duration in integer milliseconds (stable for persistence).
+   */
+  duration_ms: number;
+  /**
+   * Process exit code where the tool executed a process.
+   */
+  exit_code?: number | null;
+  /**
+   * Durable artifact/file references produced by the execution.
+   */
+  artifacts?: FileReference[];
+  /**
+   * Truncation metadata where output was truncated.
+   */
+  truncation?: TruncationState | null;
+  /**
+   * Runtime-owned managed textual-output continuation metadata: where
+   * the complete — or honestly partial — textual output of this result
+   * lives in the conversation's managed tool-output store (Issue #86).
+   * Absent for results whose output fits the model-facing content.
+   *
+   * This is the one typed source of truth for complete-vs-partial
+   * managed output; producers never encode these facts as magic
+   * properties of tool-owned JSON, and generic runtime publication code
+   * consumes only this typed field, never arbitrary JSON keys.
+   */
+  managed_output?: ManagedOutputContinuation | null;
+}
+/**
+ * Runtime-owned identity, independent of model `ToolCall` text.
+ * Retained with the canonical outer result, not with an execution owner.
+ */
+export interface WorkflowToolIdentity {
+  workflow_id: WorkflowId;
+  program_digest: string;
+}
+/**
+ * A reference to a Tool-generated managed file artifact; never a user upload.
+ */
+export interface FileReference {
+  /**
+   * Identifies a durable artifact produced or referenced by the runtime.
+   *
+   * An artifact is identified by an opaque runtime-owned id, never by a
+   * local filesystem path: paths are executor concerns and are not a
+   * universal durable artifact identity.
+   */
+  artifact_id: string;
+  /**
+   * Optional display name.
+   */
+  name?: string | null;
+  /**
+   * Optional MIME type.
+   */
+  mime_type?: string | null;
+  /**
+   * Optional human-readable description.
+   */
+  description?: string | null;
+}
+/**
+ * Truncation metadata for tool output.
+ */
+export interface TruncationState {
+  /**
+   * Whether the result content was truncated.
+   */
+  truncated: boolean;
+  /**
+   * Size of the untruncated output in bytes, when known.
+   */
+  original_bytes?: number | null;
 }
 /**
  * Inbound information supplied to the current agent.
@@ -4861,12 +5088,12 @@ export interface ToolMessageBlock {
    * Identifies a tool definition in the capability set.
    */
   tool_id: string;
-  result: ToolExecutionResult;
+  result: ToolExecutionResult1;
 }
 /**
  * The normalized execution result.
  */
-export interface ToolExecutionResult {
+export interface ToolExecutionResult1 {
   /**
    * Immutable native Workflow identity on the existing outer result.
    * Historical identity only: no execution state or continuation authority.
@@ -4963,52 +5190,6 @@ export interface ToolExecutionResult {
    * consumes only this typed field, never arbitrary JSON keys.
    */
   managed_output?: ManagedOutputContinuation | null;
-}
-/**
- * Runtime-owned identity, independent of model `ToolCall` text.
- * Retained with the canonical outer result, not with an execution owner.
- */
-export interface WorkflowToolIdentity {
-  workflow_id: WorkflowId;
-  program_digest: string;
-}
-/**
- * A reference to a Tool-generated managed file artifact; never a user upload.
- */
-export interface FileReference {
-  /**
-   * Identifies a durable artifact produced or referenced by the runtime.
-   *
-   * An artifact is identified by an opaque runtime-owned id, never by a
-   * local filesystem path: paths are executor concerns and are not a
-   * universal durable artifact identity.
-   */
-  artifact_id: string;
-  /**
-   * Optional display name.
-   */
-  name?: string | null;
-  /**
-   * Optional MIME type.
-   */
-  mime_type?: string | null;
-  /**
-   * Optional human-readable description.
-   */
-  description?: string | null;
-}
-/**
- * Truncation metadata for tool output.
- */
-export interface TruncationState {
-  /**
-   * Whether the result content was truncated.
-   */
-  truncated: boolean;
-  /**
-   * Size of the untruncated output in bytes, when known.
-   */
-  original_bytes?: number | null;
 }
 /**
  * The bounded immutable publication audit.
@@ -5277,30 +5458,7 @@ export interface RuntimeClientBackgroundExecution {
   /**
    * The bounded terminal result, when terminal.
    */
-  result?: ToolExecutionResult1 | null;
-}
-/**
- * A bounded structured progress notification of one tool execution.
- *
- * Progress is an execution fact, never canonical message history. All
- * fields are optional; an empty `ToolProgress` is a bare tick. The progress
- * message text is bounded by [`MAX_PROGRESS_MESSAGE_BYTES`].
- *
- * [`MAX_PROGRESS_MESSAGE_BYTES`]: crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES
- */
-export interface ToolProgress {
-  /**
-   * A short human-readable progress message, when there is one.
-   */
-  message?: string | null;
-  /**
-   * Completed units, when a total is known.
-   */
-  completed?: number | null;
-  /**
-   * Total units, when known.
-   */
-  total?: number | null;
+  result?: ToolExecutionResult2 | null;
 }
 /**
  * The normalized outcome of one tool execution.
@@ -5308,7 +5466,7 @@ export interface ToolProgress {
  * `ToolMessageBlock` composes this type instead of duplicating its fields,
  * keeping one source of truth for tool results.
  */
-export interface ToolExecutionResult1 {
+export interface ToolExecutionResult2 {
   /**
    * Immutable native Workflow identity on the existing outer result.
    * Historical identity only: no execution state or continuation authority.
@@ -6620,162 +6778,6 @@ export interface InFlightAssistantMessage {
   blocks?: InFlightBlock[];
 }
 /**
- * The foreground tool execution read model of one logical tool call.
- *
- * Keyed by the canonical logical tool-call identity, so parallel physical
- * completion timing can never corrupt logical identities or canonical
- * ordering. Native, MCP, and Python foreground executions converge through
- * this one shape.
- */
-export interface ForegroundToolExecution {
-  /**
-   * Identifies one tool call issued by the current agent.
-   */
-  call_id: string;
-  /**
-   * Identifies a tool definition in the capability set.
-   */
-  tool_id: string;
-  /**
-   * The model-facing tool name at call time.
-   */
-  name: string;
-  /**
-   * The externally meaningful execution state.
-   */
-  state:
-    | {
-        /**
-         * The assembled JSON arguments.
-         */
-        arguments: string;
-        type: 'assembled';
-      }
-    | {
-        /**
-         * The assembled JSON arguments.
-         */
-        arguments: string;
-        /**
-         * The latest bounded progress, when any.
-         */
-        progress?: ToolProgress | null;
-        type: 'running';
-      }
-    | {
-        /**
-         * The assembled JSON arguments.
-         */
-        arguments: string;
-        result: ToolExecutionResult2;
-        type: 'settled';
-      };
-}
-/**
- * The normalized outcome of one tool execution.
- *
- * `ToolMessageBlock` composes this type instead of duplicating its fields,
- * keeping one source of truth for tool results.
- */
-export interface ToolExecutionResult2 {
-  /**
-   * Immutable native Workflow identity on the existing outer result.
-   * Historical identity only: no execution state or continuation authority.
-   * Its retention is exactly that of this result, never a separate registry.
-   */
-  workflow?: WorkflowToolIdentity | null;
-  /**
-   * Typed execution status, including unknown external outcomes.
-   */
-  status:
-    | {
-        type: 'success';
-      }
-    | {
-        /**
-         * Human-readable error message.
-         */
-        error: string;
-        type: 'failed';
-      }
-    | {
-        /**
-         * The policy or human-readable approval reason.
-         */
-        reason: string;
-        type: 'denied';
-      }
-    | {
-        /**
-         * Why the execution was cancelled.
-         */
-        reason:
-          | 'user_requested'
-          | 'runtime_shutdown'
-          | 'parent_cancelled'
-          | 'subagent_execution_deadline_exceeded';
-        /**
-         * Whether cancellation won before executor start or while execution
-         * was already in flight.
-         */
-        phase: 'before_start' | 'during_execution';
-        type: 'cancelled';
-      }
-    | {
-        type: 'timed_out';
-      }
-    | {
-        /**
-         * A producer-owned diagnostic describing why certainty is
-         * unavailable. It is rendered into the bounded model-facing
-         * projection and is never parsed to decide semantics; the typed
-         * variant itself is the certainty claim.
-         */
-        detail: string;
-        type: 'outcome_unknown';
-      };
-  /**
-   * Tool-owned result content.
-   *
-   * This content is TOOL-OWNED: [`ToolResultContent::Json`] is arbitrary
-   * tool-owned structured data, and the runtime never infers semantics
-   * from its property names. rustX reserves no ordinary JSON field names;
-   * runtime-owned facts live in the typed fields of this struct. A
-   * provider-independent, bounded model-facing representation is produced
-   * by [`Self::model_facing_projection`]; producers do not append runtime
-   * status or managed-output continuation text here.
-   */
-  content?: ToolResultContent[];
-  /**
-   * Execution duration in integer milliseconds (stable for persistence).
-   */
-  duration_ms: number;
-  /**
-   * Process exit code where the tool executed a process.
-   */
-  exit_code?: number | null;
-  /**
-   * Durable artifact/file references produced by the execution.
-   */
-  artifacts?: FileReference[];
-  /**
-   * Truncation metadata where output was truncated.
-   */
-  truncation?: TruncationState | null;
-  /**
-   * Runtime-owned managed textual-output continuation metadata: where
-   * the complete — or honestly partial — textual output of this result
-   * lives in the conversation's managed tool-output store (Issue #86).
-   * Absent for results whose output fits the model-facing content.
-   *
-   * This is the one typed source of truth for complete-vs-partial
-   * managed output; producers never encode these facts as magic
-   * properties of tool-owned JSON, and generic runtime publication code
-   * consumes only this typed field, never arbitrary JSON keys.
-   */
-  managed_output?: ManagedOutputContinuation | null;
-}
-/**
  * The redacted client-facing projection of one attempt's frozen model
  * snapshot.
  *
@@ -7850,6 +7852,10 @@ export interface AdmittedConfiguration {
 }
 export interface SourceSettings {
   /**
+   * Native current-file approval resolution. None when prospective configuration is invalid.
+   */
+  prospective_approval_mode?: ApprovalMode | null;
+  /**
    * Current-file analysis, separate from the published runtime. Never prepares sources.
    */
   prospective_resources?: CapabilityInspection1 | null;
@@ -8554,7 +8560,7 @@ export interface RuntimeClientBackgroundExecution1 {
   /**
    * The bounded terminal result, when terminal.
    */
-  result?: ToolExecutionResult1 | null;
+  result?: ToolExecutionResult2 | null;
 }
 /**
  * The Runtime Client view of one subagent child (Issue #60).

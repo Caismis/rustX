@@ -48,15 +48,17 @@ export class CommandSession {
       this.client.request({ method: 'settings/model', params: { target: this.target } }, 'model'),
       this.client.request({ method: 'settings/models', params: { target: this.target } }, 'models'),
     ]);
+    this.requireCurrent();
+    if (this.client.getSnapshot().views[this.sessionId]?.modelMutation) await this.client.repairAgentModel(this.sessionId);
     this.requireCurrent(); return { current: current.model, catalog: catalog.catalog };
   }
-  async setModel(model: string) {
+  async setModel(model: string, reasoningProfile?: string) {
     this.requireCurrent();
     // Pick an exact catalog identity. Changing model resets model-specific overrides
     // to its native defaults; no provider inference or configuration editor.
-    await this.client.request({ method: 'settings/setModel', params: { target: this.target, config: { model } } }, 'model');
+    await this.client.setAgentModel(this.sessionId, { model, ...(reasoningProfile === undefined ? {} : { reasoningProfile }) });
     if (!this.current()) return;
-    await this.client.refresh(this.sessionId);
+    await this.client.repairAgentModel(this.sessionId);
     if (this.current()) return this.models();
   }
   async boundaries(offset = 0) {

@@ -25,12 +25,16 @@ import { SettingsTrigger } from '../presentation/settings/SettingsRoot';
 import { Modal } from '../presentation/primitives/Modal';
 import { IconApiOutline14, IconInspectOutline12 } from '../presentation/primitives/icons';
 import { RightPanel } from '../presentation/right-panel/RightPanel';
-import { InputBar } from './components/InputBar';
+import { AgentComposer } from './agent/AgentComposer';
+import { AgentControls } from './agent/AgentControls';
+import agentCss from '../presentation/agent/Conversation.module.css';
 import { Button } from '../presentation/primitives/Button';
 import { Input } from '../presentation/primitives/Input';
 import { Pill } from '../presentation/primitives/Pill';
 import { StateDot } from '../presentation/primitives/StateDot';
-import { Conversation, Interactions, RuntimeFacts } from './Conversation';
+import { AgentTranscript } from './agent/AgentTranscript';
+import { Interactions } from './agent/Interactions';
+import { RuntimeFacts } from './agent/Activity';
 import { Inspector } from './Inspector';
 
 const PREFERENCES = 'rustx-console-view-v1';
@@ -84,7 +88,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
   useEffect(() => () => artifacts?.dispose(), [artifacts]);
   const connected = state.connection === 'connected';
   const attached = connected && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
-  const composerDisabled = !attached || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
+  const composerDisabled = !attached || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   const commandOpen = !!command && command.sessionId === selected && command.generation === state.generation && command.current();
   const invokeCommand = (request: CommandRequest | { id: 'new' }) => {
     if (!view || composerDisabled) return;
@@ -219,39 +223,44 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
         setError(`Deletion result: ${json(result)}`); setPreview(undefined);
       })}>Confirm delete</Button></div>
     </section>}
-    {view ? <section className="session-panel" id="session-view" role="tabpanel" aria-labelledby={`session-tab-${view.id}`}>
-      <section className="session-toolbar"><div><strong>{view.id}</strong><small>{view.settings?.cwd ?? 'cwd unavailable'} · {view.attachment}</small></div>
+    {view ? <section className={`session-panel ${agentCss.root}`} data-phase="active" id="session-view" role="tabpanel" aria-labelledby={`session-tab-${view.id}`}>
+      <section className={agentCss.header}><div className={`${agentCss.titleRow} agent-title-row`}><div className={agentCss.titleCluster}><strong aria-label="Session title">{state.sessions.find(session => session.id === view.id)?.name ?? view.id}</strong><small aria-label="Session location and attachment">{view.settings?.cwd ?? 'cwd unavailable'} · {view.attachment}</small></div>
         <div className="row"><Button size="sm" disabled={!connected} onClick={() => focusSession(view.id, { attach: true, preserveDraft: true })}>{view.target && view.attachmentIntent === 'wanted' ? 'Resync' : 'Attach / cold resume'}</Button>
           <Button size="sm" disabled={!attached || commandOpen || !lineageSwitchSafe(view)} onClick={() => invokeCommand({ id: 'tree' })}>Session tree</Button>
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, false))}>Detach</Button>
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, true))}>Unload runtime</Button></div>
+      </div>
+      <div className={agentCss.tabs} role="tablist" aria-label="Conversation view" onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <Button className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? 'Chat' : 'Trajectory'}</Button>)}</div>
       </section>
+      {view.modelMutation && <p className="notice" role="status">Model change {view.modelMutation.status}. Sending is paused until native state is reread.</p>}
       {view.attachment !== 'attached' && <p className="notice">{view.attachment}: last observed values may be stale. Execution and pending interactions remain server-owned. {view.error}</p>}
-      <div className="row" role="tablist" aria-label="Conversation view" onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <Button key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? 'Chat' : 'Trajectory'}</Button>)}</div>
-      <section className="conversation-panel" id="conversation-view" role="tabpanel" aria-labelledby={`view-tab-${conversationMode}`} tabIndex={0}>
+
+      <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role="tabpanel" aria-labelledby={`view-tab-${conversationMode}`} tabIndex={0}>
       <ArtifactContext.Provider value={artifacts}>{conversationMode === 'trajectory' && view.trace ? <Trajectory key={view.id} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} loadEarlier={() => run(() => client.loadEarlierTrace(view.id))} latest={() => client.latestTrace(view.id)} /> : <ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
-        {view.snapshot && <><Conversation snapshot={view.snapshot} history={view.history} loadEarlier={() => run(() => client.loadEarlier(view.id))} latest={() => client.latestTranscript(view.id)}
+        {view.snapshot && <><AgentTranscript snapshot={view.snapshot} history={view.history} loadEarlier={() => run(() => client.loadEarlier(view.id))} latest={() => client.latestTranscript(view.id)}
           lineageSwitchSafe={lineageSwitchSafe(view)} historicalDisabled={composerDisabled || commandOpen} onHistorical={(id, messageId) => invokeCommand({ id, messageId })} /><RuntimeFacts snapshot={view.snapshot} />
-          <div className="attempt-status" role="status">Attempt: {view.snapshot.attempt ? `${view.snapshot.attempt.attempt_id} · ${view.snapshot.attempt.phase.type}` : 'none observed'}{view.snapshot.attempt?.phase.type === 'settled' && ` · ${view.snapshot.attempt.phase.outcome.type}`}</div>
-          <Interactions client={client} state={state} view={view} run={run} />
+          <div className="attempt-status" role="status">{view.cancellation && <span>{view.cancellation.status === "uncertain" ? "Cancellation outcome uncertain" : "Stop requested; waiting for native settlement"} · </span>}Attempt: {view.snapshot.attempt ? `${view.snapshot.attempt.attempt_id} · ${view.snapshot.attempt.phase.type}` : 'none observed'}{view.snapshot.attempt?.phase.type === 'settled' && ` · ${view.snapshot.attempt.phase.outcome.type}`}</div>
+
         </>}
       </ChatViewport>}</ArtifactContext.Provider>
       {/* Keyed by Session: no dock or draft state crosses Session views. */}
-      <ComposerContextStack key={view.id}
+      <div className={agentCss.composerSeat}><div hidden={!!view.snapshot?.pending_interactions?.length}><ComposerContextStack key={view.id}
         todo={<TodoDock state={todoDock(view.snapshot)} />}
         goal={<GoalDock state={goalDock(view.snapshot)} observation={view.snapshot} disabled={composerDisabled}
           mutate={(expected, mutation) => client.controlGoal(view.id, expected, mutation)} />}
         queue={<QueueDock key={`${view.id}:${view.target?.attachment_id ?? state.generation}`} disabled={composerDisabled} observation={view.snapshot} edit={(expected, text) => client.editInbound(view.id, expected, text)} remove={expected => client.removeInbound(view.id, expected)} rows={queueRows(view.snapshot)} submissions={view.submissions ?? []} running={activeAttempt(view.snapshot)} />}
-        composer={<InputBar key={`${view.snapshot?.conversation_id ?? view.id}:${restored?.conversation === view.snapshot?.conversation_id ? 'restored' : 'draft'}`} initialContent={restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined}
+        composer={<AgentComposer key={`${view.snapshot?.conversation_id ?? view.id}:${restored?.conversation === view.snapshot?.conversation_id ? 'restored' : 'draft'}`} initialContent={restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined}
           disabled={composerDisabled} busy={sending[view.id] === state.generation} active={activeAttempt(view.snapshot)}
           lineageSwitchSafe={lineageSwitchSafe(view)} hasGoal={!!goalDock(view.snapshot)} onCommand={id => invokeCommand({ id })}
-          consumed={consumed}
+          consumed={consumed} stopDisabled={!!view.cancellation}
+          model={<AgentControls key={`model:${view.id}`} client={client} view={view} kind="model"/>}
+          permission={<AgentControls key={`permission:${view.id}`} client={client} view={view} kind="permission"/>}
           onCancel={() => run(() => client.cancelTurn(view.id))} onUpload={files => client.upload(view.id, files)} onSend={async (text, receipts, delivery) => {
             const generation = state.generation; setSending(current => ({ ...current, [view.id]: generation })); setError('');
             try { await client.send(view.id, text, receipts, delivery); return generation === client.getSnapshot().generation; }
             catch (cause) { if (generation === client.getSnapshot().generation) setError(String(cause)); return false; }
             finally { if (generation === client.getSnapshot().generation) setSending(current => { const next = { ...current }; delete next[view.id]; return next; }); }
-          }} />} />
+          }} />} /></div><Interactions client={client} state={state} view={view} run={run}/></div>
       </section>
       {commandOpen && <CommandPanel key={`${command.generation}:${command.sessionId}:${command.request.id}:${command.request.messageId ?? ''}`} request={command.request} client={client} sessionId={command.sessionId} current={() => command.current() && client.getSnapshot().generation === command.generation}
         succeeded={() => { setConsumed(previous => ({ id: command.request.id, sequence: (previous?.sequence ?? 0) + 1 })); }}
