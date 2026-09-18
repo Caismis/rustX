@@ -56,7 +56,7 @@ compat = { chat_reasoning_replay = "omit" }
     expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain(token);
     await chooseWorkspace(page, 'workspace with spaces');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
-    await expect(page.locator('.session-toolbar small')).toContainText('attached');
+    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('attached');
     expect(errors).toEqual([]);
     expect(pids).toHaveLength(2);
     expect(await launcher.settle(130)).toBe(130);

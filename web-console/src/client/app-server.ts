@@ -34,6 +34,8 @@ export interface SessionView {
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;
+  modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
+  cancellation?: { attemptId: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;
 }
 /** Exists only after `inbound_accepted` names the server MessageId, which is its
@@ -525,6 +527,10 @@ export class AppServerClient {
   }
   private reconcileInteractions(id: string) {
     const snapshot = this.state.views[id].snapshot!;
+    const mutation = this.state.views[id].modelMutation;
+    if (mutation && mutation.generation !== this.state.generation) this.setSession(id, { modelMutation: undefined });
+    const cancellation = this.state.views[id].cancellation;
+    if (cancellation && (snapshot.attempt?.attempt_id !== cancellation.attemptId || snapshot.attempt.phase.type === 'settled')) this.setSession(id, { cancellation: undefined });
     const pending = new Set(snapshot.pending_interactions?.map(item => interactionKey(item.interaction)));
     const operations = { ...this.state.interactionOperations };
     // Only an authoritative fresh snapshot can establish absence. Include routed
@@ -573,6 +579,7 @@ export class AppServerClient {
   }
   async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send') {
     const target = this.target(id);
+    if (this.state.views[id].modelMutation) throw new Error('Reread native model state before sending.');
     // `turn/start` and `turn/steer` share one native inbound owner: an idle runtime
     // admits a fresh attempt, a running one drains the mailbox at a safe boundary.
     // The request pipeline owns unresolved transport and its acknowledgement
@@ -659,7 +666,48 @@ export class AppServerClient {
     if (observed && view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
     return observed;
   }
-  async cancelTurn(id: string) { return this.request({ method: 'turn/cancel', params: { target: this.target(id) } }, 'cancellation_accepted'); }
+  /** Transport continuation guard, not Session model authority. A successful
+   * mutation response alone cannot enable a dependent Send. */
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v6').SessionModelConfig) {
+    const target = this.target(id), generation = this.state.generation;
+    if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
+    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
+    const operation = { generation, status: 'in-flight' as const };
+    this.setSession(id, { modelMutation: operation });
+    try {
+      await this.request({ method: 'settings/setModel', params: { target, config } }, 'model');
+      if (!current()) return;
+      this.setSession(id, { modelMutation: { generation, status: 'acknowledged' } });
+    } catch (error) {
+      if (this.getSnapshot().views[id]?.modelMutation === operation) this.setSession(id, { modelMutation: { generation, status: isOutcomeUncertain(error) ? 'uncertain' : 'acknowledged' } });
+      throw error;
+    }
+  }
+  async repairAgentModel(id: string) {
+    const target = this.target(id), generation = this.state.generation;
+    await this.refresh(id);
+    if (this.current(generation) && sameTarget(this.state.views[id]?.target, target) && this.state.views[id].modelMutation?.status !== 'in-flight') this.setSession(id, { modelMutation: undefined });
+  }
+  async cancelTurn(id: string) {
+    const target = this.target(id), generation = this.state.generation;
+    const view = this.state.views[id], attempt = view.snapshot?.attempt;
+    if (view.cancellation || !attempt || attempt.phase.type === 'settled') return;
+    const attemptId = attempt.attempt_id;
+    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
+    const operation = { attemptId, status: 'in-flight' as const };
+    this.setSession(id, { cancellation: operation });
+    try {
+      await this.request({ method: 'turn/cancel', params: { target } }, 'cancellation_accepted');
+      if (current() && this.state.views[id].cancellation?.attemptId === attemptId) {
+        this.setSession(id, { cancellation: { attemptId, status: 'acknowledged' } });
+        await this.refresh(id);
+      }
+    } catch (error) {
+      if (isOutcomeUncertain(error) && this.state.views[id]?.cancellation === operation) this.setSession(id, { cancellation: { attemptId, status: 'uncertain' } });
+      else if (current() && this.state.views[id]?.cancellation === operation) this.setSession(id, { cancellation: undefined });
+      throw error;
+    }
+  }
   async answer(id: string, interaction: InteractionRef, response?: InteractionResponse) {
     const key = interactionKey(interaction);
     if (this.state.interactionOperations[key]) throw new Error('Response already in flight or uncertain. Refresh authoritative state.');

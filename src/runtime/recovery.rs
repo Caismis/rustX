@@ -309,7 +309,7 @@ enum ToolExternalSummary {
 ///
 /// The evidence is keyed by its owning attempt **and** call id: the durable
 /// authority does not guarantee `ToolCallId` uniqueness across the whole
-/// conversation lifetime (providers mint call ids; only the active Surface
+/// conversation lifetime (providers mint call ids; only each provider response
 /// is uniqueness-checked), so events of historical attempts must never
 /// alias the current unresolved call.
 ///
@@ -1516,6 +1516,8 @@ struct ToolTurnRepair {
 /// One missing canonical `ToolResult` and the durable evidence behind it.
 #[derive(Debug, Clone, PartialEq)]
 struct MissingToolResult {
+    /// Exact position in the owning canonical Assistant.
+    pub block_index: crate::message::types::ContentBlockIndex,
     call_id: ToolCallId,
     tool_id: ToolId,
     result: ToolExecutionResult,
@@ -1729,11 +1731,11 @@ impl RecoveryPlan {
     /// an already-terminal attempt (Class D) that crashed between its terminal
     /// and its result batch must be repaired exactly the same way.
     fn plan_tool_repairs(evidence: &RecoveryEvidence) -> Vec<ToolTurnRepair> {
-        let mut answered: std::collections::BTreeSet<ToolCallId> =
+        let mut answered: std::collections::BTreeSet<crate::message::types::ToolCallOccurrenceRef> =
             std::collections::BTreeSet::new();
         for message in &evidence.active {
             if let MessageBlock::Tool(tool) = message {
-                answered.insert(tool.tool_call_id.clone());
+                answered.insert(tool.occurrence.clone());
             }
         }
         let mut repairs = Vec::new();
@@ -1742,11 +1744,17 @@ impl RecoveryPlan {
                 continue;
             };
             let mut missing = Vec::new();
-            for block in &assistant.content {
+            for (index, block) in assistant.content.iter().enumerate() {
                 let AssistantContentBlock::ToolCall(call) = block else {
                     continue;
                 };
-                if answered.contains(&call.id) {
+                let block_index = crate::message::types::ContentBlockIndex::new(
+                    u32::try_from(index).expect("canonical block index"),
+                );
+                if answered.contains(&crate::message::types::ToolCallOccurrenceRef::new(
+                    assistant.id.clone(),
+                    block_index,
+                )) {
                     continue;
                 }
                 // The exact owning attempt of this active call, from the
@@ -1764,6 +1772,7 @@ impl RecoveryPlan {
                         lifecycle: ToolExternalLifecycle::StartedOutcomeUnknown,
                         tool_id,
                     }) => MissingToolResult {
+                        block_index,
                         call_id: call.id.clone(),
                         tool_id: tool_id.clone(),
                         result: unknown_outcome_result(),
@@ -1775,6 +1784,7 @@ impl RecoveryPlan {
                         lifecycle: ToolExternalLifecycle::OutcomeKnown(result),
                         tool_id,
                     }) => MissingToolResult {
+                        block_index,
                         call_id: call.id.clone(),
                         tool_id: tool_id.clone(),
                         result: (**result).clone(),
@@ -1783,6 +1793,7 @@ impl RecoveryPlan {
                     // nothing external happened and nothing is unknown: it was
                     // abandoned with its owning attempt.
                     None => MissingToolResult {
+                        block_index,
                         call_id: call.id.clone(),
                         tool_id: call.tool_id.clone(),
                         result: ToolExecutionResult {
@@ -1983,6 +1994,10 @@ impl RecoveryPlan {
                 ));
                 blocks.push(MessageBlock::Tool(ToolMessageBlock {
                     id: message_id.clone(),
+                    occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                        repair.assistant_message_id.clone(),
+                        missing.block_index,
+                    ),
                     tool_call_id: missing.call_id.clone(),
                     tool_id: missing.tool_id.clone(),
                     result: missing.result.clone(),

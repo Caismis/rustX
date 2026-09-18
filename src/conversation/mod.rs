@@ -218,27 +218,36 @@ impl std::error::Error for RecoverySafetyError {}
 /// not admit asynchronous inbound, which would cross the tool-call/result
 /// structure.
 #[must_use]
+///
+/// # Panics
+///
+/// Panics if an Assistant contains more blocks than `ContentBlockIndex` can represent.
 pub fn pending_tool_call(messages: &[MessageBlock]) -> Option<ToolCallId> {
-    let mut tool_calls: BTreeSet<ToolCallId> = BTreeSet::new();
-    let mut tool_results: BTreeSet<ToolCallId> = BTreeSet::new();
+    let results: BTreeSet<_> = messages
+        .iter()
+        .filter_map(|message| match message {
+            MessageBlock::Tool(tool) => Some(&tool.occurrence),
+            _ => None,
+        })
+        .collect();
     for message in messages {
-        match message {
-            MessageBlock::Assistant(assistant) => {
-                for block in &assistant.content {
-                    if let AssistantContentBlock::ToolCall(call) = block {
-                        tool_calls.insert(call.id.clone());
+        if let MessageBlock::Assistant(assistant) = message {
+            for (index, block) in assistant.content.iter().enumerate() {
+                if let AssistantContentBlock::ToolCall(call) = block {
+                    let occurrence = crate::message::types::ToolCallOccurrenceRef::new(
+                        assistant.id.clone(),
+                        crate::message::types::ContentBlockIndex::new(
+                            u32::try_from(index).expect("canonical block index"),
+                        ),
+                    );
+                    if !results.contains(&occurrence) {
+                        return Some(call.id.clone());
                     }
                 }
             }
-            MessageBlock::Tool(tool) => {
-                tool_results.insert(tool.tool_call_id.clone());
-            }
-            MessageBlock::User(_) => {}
         }
     }
-    tool_calls
-        .into_iter()
-        .find(|call| !tool_results.contains(call))
+    None
 }
 
 /// Whether a current model-visible Surface may be resumed without crossing an
@@ -772,6 +781,10 @@ mod tests {
 
     fn tool(call: &str) -> MessageBlock {
         MessageBlock::Tool(ToolMessageBlock {
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                crate::runtime::identity::MessageId::new("a1"),
+                crate::message::types::ContentBlockIndex::new(0),
+            ),
             id: MessageId::new(format!("tool-{call}")),
             tool_call_id: ToolCallId::new(call),
             tool_id: ToolId::new("tool-a"),

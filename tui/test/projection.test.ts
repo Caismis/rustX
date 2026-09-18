@@ -645,9 +645,19 @@ describe("presentation projection", () => {
     assert.deepEqual(sources, ["human", "runtime"]);
   });
 
+  it("execution observations cannot manufacture an unknown Tool occurrence", () => {
+    const state = fold(initial(), [
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "tool_execution_started", attempt_id: "a1", tool_call_id: "c1", tool_id: "tool-bash" },
+      { type: "tool_execution_progress", attempt_id: "a1", tool_call_id: "c1", tool_id: "tool-bash", progress: { message: "running" } },
+    ]);
+    assert.deepEqual(state.attempt?.foreground, []);
+  });
+
   it("tracks foreground tool lifecycle by logical call identity", () => {
     const state = fold(initial(), [
       { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "tool_call_started", attempt_id: "a1", message_id: "m1", block_index: 2, call: { id: "c1", tool_id: "tool-bash", name: "bash" } },
       {
         type: "tool_execution_started",
         attempt_id: "a1",
@@ -673,12 +683,16 @@ describe("presentation projection", () => {
     assert.equal(state.attempt?.foreground.length, 1);
     const execution = state.attempt?.foreground[0];
     assert.equal(execution?.call_id, "c1");
+    assert.equal(execution?.message_id, "m1");
+    assert.equal(execution?.block_index, 2);
     assert.equal(execution?.state.type, "settled");
   });
 
   it("keeps parallel foreground calls on their own identities", () => {
     const state = fold(initial(), [
       { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "tool_call_started", attempt_id: "a1", message_id: "m1", block_index: 0, call: { id: "c1", tool_id: "t1", name: "one" } },
+      { type: "tool_call_started", attempt_id: "a1", message_id: "m1", block_index: 1, call: { id: "c2", tool_id: "t2", name: "two" } },
       { type: "tool_execution_started", attempt_id: "a1", tool_call_id: "c1", tool_id: "t1" },
       { type: "tool_execution_started", attempt_id: "a1", tool_call_id: "c2", tool_id: "t2" },
       // The second call settles first; the first must not be corrupted.
@@ -796,11 +810,11 @@ describe("presentation projection", () => {
             outcome: { type: "cancelled", reason: "runtime_shutdown" },
           },
           foreground: [
-            foreground("c1", "tool-bash", "bash", {
+            { ...foreground("c1", "tool-bash", "bash", {
               type: "settled",
               arguments: "",
               result,
-            }),
+            }), message_id: "m1" },
           ],
         }),
       }),

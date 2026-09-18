@@ -709,6 +709,30 @@ pub struct RefusalBlock {
     pub text: String,
 }
 
+/// Exact rustX canonical ownership of a Tool call, independent of provider IDs.
+/// Message identity is remapped by lineage; the canonical content position stays fixed.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct ToolCallOccurrenceRef {
+    /// The canonical Assistant that issued the call.
+    pub assistant_message_id: MessageId,
+    /// The `ToolCall` block within that Assistant's content.
+    pub block_index: ContentBlockIndex,
+}
+
+impl ToolCallOccurrenceRef {
+    /// Creates an exact canonical reference; owners validate it before commit.
+    #[must_use]
+    pub const fn new(assistant_message_id: MessageId, block_index: ContentBlockIndex) -> Self {
+        Self {
+            assistant_message_id,
+            block_index,
+        }
+    }
+}
+
 /// The result of one tool call produced by the current agent.
 ///
 /// This block is the canonical conversation record of an execution outcome
@@ -721,7 +745,9 @@ pub struct RefusalBlock {
 pub struct ToolMessageBlock {
     /// Durable message identity.
     pub id: MessageId,
-    /// Identity of the tool call this block answers.
+    /// Exact native canonical owner of this result.
+    pub occurrence: ToolCallOccurrenceRef,
+    /// Opaque provider correlation, scoped to its request/publication, not global identity.
     pub tool_call_id: ToolCallId,
     /// Identity of the executed tool.
     pub tool_id: ToolId,
@@ -761,6 +787,10 @@ mod tests {
             })],
         });
         let tool = MessageBlock::Tool(ToolMessageBlock {
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                crate::runtime::identity::MessageId::new("assistant"),
+                crate::message::types::ContentBlockIndex::new(0),
+            ),
             id: MessageId::new("msg-tool-1"),
             tool_call_id: ToolCallId::new("call_01"),
             tool_id: ToolId::new("tool-bash"),

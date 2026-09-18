@@ -1997,7 +1997,29 @@ impl<'a> AgentExecution<'a> {
         // cancelled after the structurally complete result batch is
         // committed; no next model turn starts after cancellation.
         let settled = match self
-            .execute_tools(&turn_assembly.tool_calls, preflight)
+            .execute_tools(
+                &turn_assembly.tool_calls,
+                turn_assembly
+                    .content
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, block)| {
+                        matches!(
+                            block,
+                            crate::message::types::AssistantContentBlock::ToolCall(_)
+                        )
+                    })
+                    .map(|(index, _)| {
+                        crate::message::types::ToolCallOccurrenceRef::new(
+                            assistant_message_id.clone(),
+                            crate::message::types::ContentBlockIndex::new(
+                                u32::try_from(index).expect("canonical block index"),
+                            ),
+                        )
+                    })
+                    .collect(),
+                preflight,
+            )
             .await
         {
             Ok(settled) => settled,
@@ -4334,6 +4356,7 @@ impl<'a> AgentExecution<'a> {
     async fn execute_tools(
         &mut self,
         calls: &[ToolCall],
+        occurrences: Vec<crate::message::types::ToolCallOccurrenceRef>,
         preflight: Vec<PreflightOutcome>,
     ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
         // `None` is either "this composition has no Todo extension" or "the
@@ -4352,7 +4375,8 @@ impl<'a> AgentExecution<'a> {
                     .is_some_and(|profile| profile.extensions.todo().is_some())
             })
             .and_then(crate::tools::todo::ConversationTodoList::open_batch);
-        self.execute_tools_staged(calls, preflight, batch).await
+        self.execute_tools_staged(calls, occurrences, preflight, batch)
+            .await
     }
 
     /// The batch itself: schedule, settle, and commit every call.
@@ -4360,6 +4384,7 @@ impl<'a> AgentExecution<'a> {
     async fn execute_tools_staged(
         &mut self,
         calls: &[ToolCall],
+        occurrences: Vec<crate::message::types::ToolCallOccurrenceRef>,
         preflight: Vec<PreflightOutcome>,
         todos: Option<crate::tools::todo::TodoBatch>,
     ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
@@ -4604,6 +4629,7 @@ impl<'a> AgentExecution<'a> {
                     "{}-tool-{}-{}",
                     self.request.attempt_id, self.turn, slot.call.id
                 )),
+                occurrence: occurrences[batch_position].clone(),
                 tool_call_id: slot.call.id.clone(),
                 tool_id: slot.tool_id.clone(),
                 result: result.clone(),

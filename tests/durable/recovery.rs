@@ -175,11 +175,16 @@ fn success_result(body: &str) -> ToolExecutionResult {
 fn commit_recovery_tool_repair(
     store: &SqliteConversationStore,
     assistant_message_id: &str,
+    block_index: u32,
     call_id: &str,
     result: ToolExecutionResult,
 ) {
     let message_id = MessageId::new(format!("{assistant_message_id}-recovered-tool-{call_id}"));
     let block = MessageBlock::Tool(ToolMessageBlock {
+        occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+            rustx::runtime::identity::MessageId::new(assistant_message_id),
+            rustx::message::types::ContentBlockIndex::new(block_index),
+        ),
         id: message_id.clone(),
         tool_call_id: ToolCallId::new(call_id),
         tool_id: ToolId::new("tool-a"),
@@ -1884,6 +1889,7 @@ fn second_crash_after_tool_repair_preserves_external_start_evidence() {
         commit_recovery_tool_repair(
             &store,
             "assistant-1",
+            0,
             "call-1",
             ToolExecutionResult {
                 status: ToolExecutionStatus::OutcomeUnknown {
@@ -2050,7 +2056,7 @@ fn second_crash_after_known_outcome_repair_preserves_external_start() {
                 .expect("tool fact");
         }
         // Recovery #1 repair transition: the exact result becomes canonical.
-        commit_recovery_tool_repair(&store, "assistant-1", "call-1", exact.clone());
+        commit_recovery_tool_repair(&store, "assistant-1", 0, "call-1", exact.clone());
         // CRASH #2: before the recovery attempt terminal.
     }
 
@@ -2109,6 +2115,103 @@ fn second_crash_after_known_outcome_repair_preserves_external_start() {
     );
 }
 
+#[test]
+fn recovery_repairs_exact_occurrences_when_provider_ids_repeat_on_the_surface() {
+    let durable = Durable::new();
+    {
+        let store = durable.open();
+        store.initialize(&[user_block("user", "run")]).unwrap();
+        for (ordinal, owner) in [(0, "assistant-A"), (1, "assistant-B")] {
+            let attempt = AttemptId::for_conversation(&conversation_id(), ordinal);
+            store
+                .append_event(envelope(
+                    &format!("start-{ordinal}"),
+                    Some(attempt.clone()),
+                    None,
+                    RuntimeEvent::AttemptStarted {
+                        attempt_id: attempt.clone(),
+                    },
+                ))
+                .unwrap();
+            store
+                .append_canonical_with_event(
+                    &assistant_with_calls(owner, &["call-1"]),
+                    envelope(
+                        &format!("commit-{ordinal}"),
+                        Some(attempt.clone()),
+                        Some(TurnId::new("0")),
+                        RuntimeEvent::AssistantMessageCommitted {
+                            message_id: MessageId::new(owner),
+                        },
+                    ),
+                )
+                .unwrap();
+            if ordinal == 0 {
+                commit_recovery_tool_repair(
+                    &store,
+                    owner,
+                    0,
+                    "call-1",
+                    success_result("old-result"),
+                );
+                store
+                    .append_event(envelope(
+                        "terminal-A",
+                        Some(attempt.clone()),
+                        None,
+                        RuntimeEvent::AttemptFailed {
+                            attempt_id: attempt,
+                            error: AttemptFailure::Runtime {
+                                error: RuntimeError::Internal {
+                                    message: "settled A".into(),
+                                },
+                            },
+                        },
+                    ))
+                    .unwrap();
+            }
+        }
+    }
+    let store = durable.open();
+    let evidence = RecoveryEvidence::reconstruct(&store).unwrap();
+    let report = RecoveryPlan::classify(&evidence)
+        .reconcile(&store, &FixedClock)
+        .unwrap();
+    assert_eq!(
+        report.reconciliation().repaired_tool_results,
+        vec![ToolCallId::new("call-1")]
+    );
+    let canonical = store.load_canonical().unwrap();
+    let results: Vec<_> = canonical
+        .iter()
+        .filter_map(|message| match message {
+            MessageBlock::Tool(tool) => Some(tool),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 2);
+    assert_eq!(
+        results[0].occurrence.assistant_message_id,
+        MessageId::new("assistant-A")
+    );
+    assert_eq!(results[0].result, success_result("old-result"));
+    assert_eq!(
+        results[1].occurrence.assistant_message_id,
+        MessageId::new("assistant-B")
+    );
+    assert_eq!(results[1].occurrence.block_index.get(), 0);
+    assert!(matches!(
+        results[1].result.status,
+        ToolExecutionStatus::Cancelled { .. }
+    ));
+    assert!(
+        !serde_json::to_string(results[1])
+            .unwrap()
+            .contains("old-result")
+    );
+    rustx::conversation::StructuralIndex::build(&canonical).unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // Finding-15 regression — historical attempt evidence never aliases the
 // current unresolved call
@@ -2116,8 +2219,8 @@ fn second_crash_after_known_outcome_repair_preserves_external_start() {
 
 /// The recovery fold keys tool evidence by owning attempt **and** call id
 /// because the durable authority does not guarantee `ToolCallId` uniqueness
-/// across the conversation lifetime (providers mint call ids; only the
-/// active Surface rejects duplicates).
+/// across the conversation lifetime (providers mint call ids; each
+/// provider response rejects duplicates).
 ///
 /// Here a **terminal** historical attempt still carries a started-unknown
 /// tool call whose owning Assistant turn is active (the Class-D repair
@@ -2754,6 +2857,10 @@ fn a_long_settled_attempt_retains_bounded_repair_evidence() {
             store
                 .append_canonical_batch_with_events(
                     &[MessageBlock::Tool(ToolMessageBlock {
+                        occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+                            rustx::runtime::identity::MessageId::new(format!("assistant-{call}")),
+                            rustx::message::types::ContentBlockIndex::new(0),
+                        ),
                         id: tool_message_id.clone(),
                         tool_call_id: call_id.clone(),
                         tool_id: ToolId::new("tool-a"),
@@ -2903,6 +3010,10 @@ fn a_mixed_unresolved_batch_keeps_unknown_dominance_after_repair() {
         store
             .append_canonical_batch_with_events(
                 &[MessageBlock::Tool(ToolMessageBlock {
+                    occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+                        rustx::runtime::identity::MessageId::new("assistant-1"),
+                        rustx::message::types::ContentBlockIndex::new(0),
+                    ),
                     id: tool_message_a.clone(),
                     tool_call_id: ToolCallId::new("call-a"),
                     tool_id: ToolId::new("tool-a"),
@@ -2961,6 +3072,7 @@ fn a_mixed_unresolved_batch_keeps_unknown_dominance_after_repair() {
     commit_recovery_tool_repair(
         &store,
         "assistant-1",
+        1,
         "call-b",
         ToolExecutionResult {
             status: ToolExecutionStatus::OutcomeUnknown {

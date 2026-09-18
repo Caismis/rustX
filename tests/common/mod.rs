@@ -1087,6 +1087,10 @@ pub fn todo_result_message(
     snapshot: &rustx::tools::todo::TodoSnapshot,
 ) -> rustx::message::types::MessageBlock {
     rustx::message::types::MessageBlock::Tool(rustx::message::types::ToolMessageBlock {
+        occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+            rustx::runtime::identity::MessageId::new("assistant"),
+            rustx::message::types::ContentBlockIndex::new(0),
+        ),
         id: rustx::runtime::identity::MessageId::new(format!("message-{id}")),
         tool_call_id: rustx::runtime::identity::ToolCallId::new(format!("call-{id}")),
         tool_id: rustx::runtime::identity::ToolId::new(rustx::tools::todo::TODO_TOOL_ID),

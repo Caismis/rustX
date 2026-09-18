@@ -1777,6 +1777,10 @@ mod tests {
             Err(FreshInboundError::UnknownMessage(MessageId::new("ghost")))
         );
         let tool = MessageBlock::Tool(crate::message::types::ToolMessageBlock {
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                crate::runtime::identity::MessageId::new("assistant"),
+                crate::message::types::ContentBlockIndex::new(0),
+            ),
             id: MessageId::new("tool-1"),
             tool_call_id: crate::runtime::identity::ToolCallId::new("call-1"),
             tool_id: crate::runtime::identity::ToolId::new("tool-alpha"),

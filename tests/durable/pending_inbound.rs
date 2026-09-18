@@ -354,17 +354,12 @@ fn failed_acceptance_leaves_nothing() {
     );
 }
 
-fn assistant_block(id: &str) -> MessageBlock {
-    MessageBlock::Assistant(AssistantMessageBlock {
-        id: MessageId::new(id),
-        content: vec![AssistantContentBlock::Text(TextBlock {
-            text: format!("assistant {id}"),
-        })],
-    })
-}
-
 fn tool_block(id: &str) -> MessageBlock {
     MessageBlock::Tool(ToolMessageBlock {
+        occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+            rustx::runtime::identity::MessageId::new("assistant-1"),
+            rustx::message::types::ContentBlockIndex::new(0),
+        ),
         id: MessageId::new(id),
         tool_call_id: ToolCallId::new("call-1"),
         tool_id: ToolId::new("tool-a"),
@@ -459,7 +454,17 @@ fn canonical_ledger_preserves_intervening_assistant_and_tool_facts_across_reopen
     // Intervening canonical facts (assistant + tool) between the two
     // inbound adoptions, appended through the canonical durability seam.
     store
-        .append_canonical(&assistant_block("assistant-1"))
+        .append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("assistant-1"),
+            content: vec![AssistantContentBlock::ToolCall(
+                rustx::tools::types::ToolCall {
+                    id: ToolCallId::new("call-1"),
+                    tool_id: ToolId::new("tool-a"),
+                    name: "alpha".into(),
+                    arguments: serde_json::json!({}),
+                },
+            )],
+        }))
         .expect("assistant");
     store.append_canonical(&tool_block("tool-1")).expect("tool");
     // Inbound batch 2.

@@ -4856,8 +4856,10 @@ The Ledger retains every replaced message unchanged and addressable. The
 Surface replacement takes the span's start position. No partial Assistant
 message is projected, and a tool call/result pair may not be split: Assistant
 owns the `ToolCall` identity and arguments, while Tool owns the result and
-references the `ToolCallId`. Orphan calls/results, duplicate call identity,
-duplicate result, and invalid structural spans are rejected.
+references its exact `ToolCallOccurrenceRef` (Assistant MessageId + block index).
+Provider `ToolCallId` remains correlation only; reuse across Assistant messages is
+valid. Orphan results, mismatched call/Tool IDs, duplicate call IDs within one
+Assistant, duplicate settlement of an occurrence, and split pairs are rejected.
 
 The committed summary has two halves with different authorities (Issue #140):
 
@@ -6638,8 +6640,8 @@ runtime supervision/quiescence contract.
   the conversation is never left structurally unable to form a later model
   request. Per-call tool repair evidence is keyed by owning attempt **and**
   call id: the durable authority does not guarantee `ToolCallId` uniqueness
-  across the conversation lifetime (providers mint call ids; only the active
-  Surface rejects duplicates), so historical attempts never alias the current
+  across the conversation lifetime (providers mint call ids; only each provider response
+  rejects duplicates), so historical attempts never alias the current
   unresolved call;
 
 - **bounded tool-evidence ownership**: detailed per-tool recovery evidence

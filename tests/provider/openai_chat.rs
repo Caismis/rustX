@@ -1360,6 +1360,10 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
             },
         )),
         rustx::model::ModelInputMessage::Canonical(MessageBlock::Tool(ToolMessageBlock {
+            occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+                rustx::runtime::identity::MessageId::new("msg-a1"),
+                rustx::message::types::ContentBlockIndex::new(0),
+            ),
             id: MessageId::new("msg-t1"),
             tool_call_id: rustx::runtime::identity::ToolCallId::new("call_1"),
             tool_id: rustx::runtime::identity::ToolId::new("tool-list"),

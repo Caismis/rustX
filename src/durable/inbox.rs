@@ -594,10 +594,23 @@ pub enum TranscriptItem {
 /// One ordered item in a bounded transcript page.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptEntry {
+    /// Native call/result association resolved from the canonical ledger.
+    pub tool_calls: Vec<TranscriptTool>,
     /// The stable exclusive cursor for this item.
     pub cursor: TranscriptCursor,
     /// The resolved read-model item.
     pub item: TranscriptItem,
+}
+
+/// One canonical call and its optional committed result, never client-assembled.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptTool {
+    /// Canonical Assistant identity; provider call IDs can repeat across history.
+    pub message_id: MessageId,
+    /// Exact content position inside that Assistant.
+    pub block_index: crate::message::types::ContentBlockIndex,
+    pub call: crate::tools::types::ToolCall,
+    pub result: Option<crate::tools::types::ToolExecutionResult>,
 }
 
 /// A bounded page of the derived durable transcript.

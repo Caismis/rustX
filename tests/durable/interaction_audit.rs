@@ -1763,3 +1763,119 @@ fn review_audit_validates_exact_instance_and_remains_inert_across_reopen() {
         assert!(!has_tool_start(&store));
     }
 }
+
+/// Provider IDs are reused by different native publication generations. Results
+/// bind to the exact Assistant occurrence, regardless of physical commit order.
+#[test]
+fn transcript_tool_occurrences_do_not_alias_across_attempts_and_reopen() {
+    use rustx::durable::TranscriptItem;
+    use rustx::message::types::ToolMessageBlock;
+    use rustx::tools::types::{ToolExecutionResult, ToolExecutionStatus};
+    for reverse in [false, true] {
+        let durable = Durable::new();
+        let store = durable.open();
+        store.initialize(&[]).unwrap();
+        let mut older = Generation::next("attempt-A", "1", "call-1");
+        older.call.tool_id = ToolId::new("tool-bash");
+        let mut newer = Generation::next("attempt-B", "1", "call-1");
+        newer.call.tool_id = older.call.tool_id.clone();
+        for generation in [&older, &newer] {
+            start_attempt(&store, &generation.attempt);
+            commit_generation(&store, generation);
+        }
+        let page_b = store.load_transcript_page(None, 1).unwrap();
+        let cursor_b = page_b.entries[0].cursor;
+        assert_eq!(
+            page_b.entries[0].tool_calls[0].message_id,
+            newer.message_id()
+        );
+        let commit_result = |generation: &Generation, text: &str| {
+            let id = MessageId::new(format!("{}-result", generation.attempt));
+            let result = ToolExecutionResult {
+                status: ToolExecutionStatus::Success,
+                content: vec![rustx::tools::types::ToolResultContent::Text(
+                    rustx::message::content::TextBlock { text: text.into() },
+                )],
+                duration_ms: 1,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            };
+            store
+                .append_canonical_with_event(
+                    &MessageBlock::Tool(ToolMessageBlock {
+                        occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+                            generation.message_id(),
+                            rustx::message::types::ContentBlockIndex::new(0),
+                        ),
+                        id: id.clone(),
+                        tool_call_id: generation.call.id.clone(),
+                        tool_id: generation.call.tool_id.clone(),
+                        result,
+                    }),
+                    generation.envelope(
+                        &format!("{id}-committed"),
+                        RuntimeEvent::ToolMessageCommitted {
+                            message_id: id,
+                            tool_call_id: generation.call.id.clone(),
+                        },
+                    ),
+                )
+                .unwrap();
+        };
+        let assert_entry = |entry: &rustx::durable::TranscriptEntry,
+                            owner: &Generation,
+                            expected: Option<&str>| {
+            assert!(
+                matches!(&entry.item, TranscriptItem::Message { message: MessageBlock::Assistant(assistant) } if assistant.id == owner.message_id())
+            );
+            assert_eq!(entry.tool_calls.len(), 1);
+            let tool = &entry.tool_calls[0];
+            assert_eq!(tool.message_id, owner.message_id());
+            assert_eq!(tool.block_index, ContentBlockIndex::new(0));
+            assert_eq!(tool.call.id.as_str(), "call-1");
+            match expected {
+                None => assert!(
+                    tool.result.is_none(),
+                    "another Attempt cannot settle this occurrence"
+                ),
+                Some(text) => assert!(serde_json::to_string(&tool.result).unwrap().contains(text)),
+            }
+        };
+        if reverse {
+            commit_result(&newer, "new-result");
+        } else {
+            commit_result(&older, "old-result");
+        }
+        // The result is outside both one-row Assistant pages.
+        let tail = store.load_transcript_page(None, 1).unwrap();
+        let b = store.load_transcript_page(tail.next_cursor, 1).unwrap();
+        assert_entry(&b.entries[0], &newer, reverse.then_some("new-result"));
+        let a = store.load_transcript_page(Some(cursor_b), 1).unwrap();
+        assert_entry(&a.entries[0], &older, (!reverse).then_some("old-result"));
+        if reverse {
+            commit_result(&older, "old-result");
+        } else {
+            commit_result(&newer, "new-result");
+        }
+        drop(store);
+        let reopened = durable.open();
+        let tail = reopened.load_transcript_page(None, 2).unwrap();
+        let b = reopened.load_transcript_page(tail.next_cursor, 1).unwrap();
+        let a = reopened.load_transcript_page(Some(cursor_b), 1).unwrap();
+        assert_entry(&a.entries[0], &older, Some("old-result"));
+        assert_entry(&b.entries[0], &newer, Some("new-result"));
+        assert!(
+            !serde_json::to_string(&b.entries[0])
+                .unwrap()
+                .contains("old-result")
+        );
+        assert!(
+            !serde_json::to_string(&a.entries[0])
+                .unwrap()
+                .contains("new-result")
+        );
+    }
+}

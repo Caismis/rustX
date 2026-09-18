@@ -18,6 +18,6 @@ export function executionIdle(view?: Pick<SessionView, 'snapshot' | 'submissions
  * Neither request ownership nor acknowledged evidence is browser queue authority. */
 export function lineageSwitchSafe(view?: SessionView): boolean {
   return view?.attachment === 'attached' && view.attachmentIntent === 'wanted'
-    && executionIdle(view) && !view.inboundRequests;
+    && executionIdle(view) && !view.inboundRequests && !view.modelMutation;
 }
 export const json = (value: unknown) => JSON.stringify(value, null, 2) ?? 'Unavailable';

@@ -80,8 +80,12 @@ fn assistant(id: &str, blocks: Vec<AssistantContentBlock>) -> MessageBlock {
     })
 }
 
-fn tool_message(id: &str, call_id: &str) -> MessageBlock {
+fn tool_message(id: &str, owner: &str, index: u32, call_id: &str) -> MessageBlock {
     MessageBlock::Tool(ToolMessageBlock {
+        occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+            rustx::runtime::identity::MessageId::new(owner),
+            rustx::message::types::ContentBlockIndex::new(index),
+        ),
         id: MessageId::new(id),
         tool_call_id: ToolCallId::new(call_id),
         tool_id: ToolId::new("tool-alpha"),
@@ -1020,7 +1024,7 @@ fn simple_complete_turn_boundary() {
     let history = state(vec![
         user("u1", ""),
         assistant("a1", vec![call_block("c1")]),
-        tool_message("t1", "c1"),
+        tool_message("t1", "a1", 0, "c1"),
     ]);
     let projection = engine
         .build_projection(&history, &[], None, "")
@@ -1049,8 +1053,8 @@ fn multiple_tool_calls_stay_with_their_results() {
     let mut conversation_state = state(vec![
         user("u1", ""),
         assistant("a1", vec![call_block("c1"), call_block("c2")]),
-        tool_message("t1", "c1"),
-        tool_message("t2", "c2"),
+        tool_message("t1", "a1", 0, "c1"),
+        tool_message("t2", "a1", 1, "c2"),
     ]);
     // The Assistant message can never be replaced without its results.
     for end in ["a1", "t1"] {
@@ -1115,7 +1119,10 @@ fn multiple_tool_calls_stay_with_their_results() {
 #[test]
 fn orphan_tool_message_is_rejected() {
     let engine = engine(200, 0, 5, weighted(100, 10, 100));
-    let history = state(vec![user("u1", ""), tool_message("t1", "ghost")]);
+    let history = state(vec![
+        user("u1", ""),
+        tool_message("t1", "missing", 0, "ghost"),
+    ]);
     let error = engine
         .build_projection(&history, &[], None, "")
         .expect_err("malformed history");
@@ -1130,9 +1137,9 @@ fn no_edge_crosses_the_chosen_cut() {
     let history = state(vec![
         user("u1", ""),
         assistant("a1", vec![call_block("c1")]),
-        tool_message("t1", "c1"),
+        tool_message("t1", "a1", 0, "c1"),
         assistant("a2", vec![call_block("c2")]),
-        tool_message("t2", "c2"),
+        tool_message("t2", "a2", 0, "c2"),
         user("u2", ""),
     ]);
     let projection = engine
@@ -1166,10 +1173,10 @@ fn candidate_selection_is_deterministic() {
     let history = state(vec![
         user("u1", ""),
         assistant("a1", vec![call_block("c1")]),
-        tool_message("t1", "c1"),
+        tool_message("t1", "a1", 0, "c1"),
         user("u2", ""),
         assistant("a2", vec![call_block("c2")]),
-        tool_message("t2", "c2"),
+        tool_message("t2", "a2", 0, "c2"),
     ]);
     let projection = engine
         .build_projection(&history, &[], None, "")
@@ -1349,7 +1356,7 @@ fn structural_rule_may_force_extra_retention() {
     let history = state(vec![
         user("u1", ""),
         assistant("a1", vec![call_block("c1")]),
-        tool_message("t1", "c1"),
+        tool_message("t1", "a1", 0, "c1"),
         user("u2", ""),
     ]);
     let projection = engine
@@ -1415,7 +1422,7 @@ fn oversized_material_is_retired_as_complete_messages() {
     let history = state(vec![
         user("u1", ""),
         assistant("a1", vec![call_block("c1")]),
-        tool_message("t1", "c1"),
+        tool_message("t1", "a1", 0, "c1"),
     ]);
     let projection = engine
         .build_projection(&history, &[], None, "")
@@ -1980,7 +1987,7 @@ fn first_compaction_commits_one_summary_and_one_replacement() {
     let history = state(vec![
         user("u1", ""),
         assistant("a1", vec![call_block("c1")]),
-        tool_message("t1", "c1"),
+        tool_message("t1", "a1", 0, "c1"),
         user("u2", ""),
     ]);
     let projection = engine
@@ -2303,7 +2310,7 @@ fn continuation_constraint_covers_the_owning_turn_completely() {
     let history = state(vec![
         user("u1", ""),
         assistant("a1", vec![call_block("c1")]),
-        tool_message("t1", "c1"),
+        tool_message("t1", "a1", 0, "c1"),
     ]);
     let projection = engine
         .build_projection(&history, &[], None, "")
@@ -2345,8 +2352,8 @@ fn continuation_owner_is_never_split() {
                 text_block("outro"),
             ],
         ),
-        tool_message("t1", "c1"),
-        tool_message("t2", "c2"),
+        tool_message("t1", "a1", 1, "c1"),
+        tool_message("t2", "a1", 3, "c2"),
     ]);
     let projection = engine
         .build_projection(&history, &[], None, "")

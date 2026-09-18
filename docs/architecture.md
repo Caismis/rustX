@@ -1888,7 +1888,8 @@ Key contracts:
   Surface order; it never creates a partial Assistant projection.
 - Canonical history has only conversational User, Assistant, and Tool roles.
   `Assistant` owns `ToolCall` identity and arguments; `Tool` owns the result
-  and references `ToolCallId`. A runtime compaction summary remains a `User`
+  and references `ToolCallOccurrenceRef` (Assistant MessageId + block index),
+  retaining `ToolCallId` only for provider correlation. A runtime compaction summary remains a `User`
   message with `UserSource::Runtime` and
   `InboundKind::CompactionSummary`.
   System authority is request-time state and therefore cannot be retired or
@@ -6538,7 +6539,7 @@ Per plane:
   reclassify an indeterminate attempt as Class B. Tool repair evidence is
   keyed by owning attempt **and** call id: the durable authority does not
   guarantee `ToolCallId` uniqueness across the conversation lifetime
-  (providers mint call ids; only the active Surface rejects duplicates), so
+  (providers mint call ids; each provider response rejects duplicates), so
   historical attempts can never alias the current unresolved call. No tool
   is re-executed. The missing siblings of one Assistant turn commit as one
   atomic batch in canonical model-call order, so no durable prefix of a
@@ -6953,3 +6954,36 @@ revisions, CAS, redaction and publication. Clients own drafts and presentation.
 A source Save commits bytes independently of Reload. Stale writes fail without
 overwriting or dropping drafts; uncertain outcomes require authoritative reread.
 See [Web Settings](web-settings.md) and [configuration](configuration.md).
+
+## Canonical Tool ownership and lineage (#349)
+
+`ToolCallId` is an opaque, provider-issued correlation string, not a rustX global
+identity. It remains unchanged on OpenAI Chat tool results, Responses
+`function_call_output.call_id`, and Anthropic `tool_result.tool_use_id`.
+`ToolCallOccurrenceRef { assistant_message_id: MessageId, block_index: ContentBlockIndex }`
+is the canonical rustX identity. Every `ToolMessageBlock` requires `occurrence`
+alongside its own `id`, provider `tool_call_id`, native `tool_id`, and `result`.
+`ToolExecutionId` is a separate runtime-owned UUID for detached execution; it is
+neither provider correlation nor canonical occurrence identity.
+
+The Agent supplies occurrence ownership from its committed Assistant blocks before
+the result commit. Recovery retains AttemptId + ToolCallId execution evidence and
+resolves missing results against exact canonical Assistant blocks; synthesized
+results carry that occurrence before commit. Canonical history alone therefore
+contains every call/result relationship, without source execution events.
+
+SQLite schema **40** retains `canonical_tool_calls` only as a derived index. Its
+primary key is `(assistant_message_id, block_index)`; Assistant/call and result
+MessageId uniqueness constraints prevent duplicate provider IDs within one
+Assistant and duplicate settlement. Tool commits validate the exact indexed
+occurrence, call ID and Tool ID, then insert the canonical result and link its
+MessageId atomically. The index is reproducible from canonical messages. No active
+Surface search discovers result ownership. Schemas 38/39 are refused without
+migration, dual decoding, backfill or fallback JSON scanning.
+
+Clone, fork and tree copies remap canonical MessageIds and each result's
+`occurrence.assistant_message_id`, preserving block positions and provider IDs.
+These IDs remain historical provider correlation values, not new invocations;
+rewriting them has no native ownership purpose. Reuse across Assistant messages is
+valid, including within the retained Surface. Fork cuts and compaction boundaries
+validate exact occurrence relationships and cannot retain only one side of a pair.

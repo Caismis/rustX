@@ -1163,3 +1163,45 @@ fn named_agent_save_validates_complete_definition_before_committing() {
             .any(|entry| entry.name == "reviewer" && entry.valid)
     );
 }
+
+#[test]
+fn agent_permission_projection_uses_native_resolution_and_source_cas() {
+    use rustx::local_runtime::configuration::settings::{
+        ConfigMutation, SettingsError, SourceMutation, SourceScope,
+    };
+    use rustx::runtime::ApprovalMode;
+    let root = tempfile::tempdir().unwrap();
+    let (host, request) = sources(
+        root.path(),
+        &format!("approval_mode = \"full_access\"\n{PROVIDER}{MODEL}{ROOT}"),
+        "approval_mode = \"policy\"\n",
+    );
+    let (owner, input) = request.session_input(&host).unwrap();
+    let before = owner.read_source_settings(&input).unwrap();
+    assert_eq!(before.prospective_approval_mode, Some(ApprovalMode::Policy));
+    let mutation = SourceMutation::Config {
+        scope: SourceScope::Workspace,
+        mutation: ConfigMutation::Approval {
+            authored: Some(ApprovalMode::FullAccess),
+        },
+    };
+    let after = owner
+        .write_source_settings(&input, &before.workspace.revision, mutation.clone())
+        .unwrap();
+    assert_eq!(
+        after.prospective_approval_mode,
+        Some(ApprovalMode::FullAccess)
+    );
+    assert!(matches!(
+        owner.write_source_settings(&input, &before.workspace.revision, mutation),
+        Err(SettingsError::Conflict { .. })
+    ));
+    std::fs::write(&after.workspace.path, "approval_mode = 'unsupported'").unwrap();
+    assert_eq!(
+        owner
+            .read_source_settings(&input)
+            .unwrap()
+            .prospective_approval_mode,
+        None
+    );
+}

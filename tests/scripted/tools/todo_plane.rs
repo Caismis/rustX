@@ -455,12 +455,33 @@ async fn a_new_tool_runtime_rebuilds_the_list_from_conversation_history() {
     // The canonical record of the two calls, exactly as the runtime commits
     // them: the second result carries the whole list, so it alone decides
     // what a later runtime opens on.
-    let history = vec![MessageBlock::Tool(ToolMessageBlock {
-        id: MessageId::new("message-todo"),
-        tool_call_id: ToolCallId::new("call-todo"),
-        tool_id: ToolId::new(rustx::tools::todo::TODO_TOOL_ID),
-        result: committed.clone(),
-    })];
+    let history = vec![
+        rustx::message::types::MessageBlock::Assistant(
+            rustx::message::types::AssistantMessageBlock {
+                id: rustx::runtime::identity::MessageId::new("assistant"),
+                content: vec![rustx::message::types::AssistantContentBlock::ToolCall(
+                    rustx::tools::types::ToolCall {
+                        id: rustx::runtime::identity::ToolCallId::new("call-todo"),
+                        tool_id: rustx::runtime::identity::ToolId::new(
+                            rustx::tools::todo::TODO_TOOL_ID,
+                        ),
+                        name: "todo".into(),
+                        arguments: serde_json::json!({}),
+                    },
+                )],
+            },
+        ),
+        MessageBlock::Tool(ToolMessageBlock {
+            occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+                rustx::runtime::identity::MessageId::new("assistant"),
+                rustx::message::types::ContentBlockIndex::new(0),
+            ),
+            id: MessageId::new("message-todo"),
+            tool_call_id: ToolCallId::new("call-todo"),
+            tool_id: ToolId::new(rustx::tools::todo::TODO_TOOL_ID),
+            result: committed.clone(),
+        }),
+    ];
 
     let dir = tempfile::tempdir().expect("temporary conversation");
     let workspace = dir.path().join("workspace");

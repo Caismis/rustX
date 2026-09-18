@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ArtifactResources, ARTIFACT_MAX_BYTES } from '../src/client/artifacts';
 import { Artifact, ArtifactContext } from '../src/app/components/Artifact';
-import { InputBar } from '../src/app/components/InputBar';
+import { AgentComposer } from '../src/app/agent/AgentComposer';
 import type { UploadedFile } from '../../protocol/app-server/v6';
 import { Server } from './fixture';
 let server: Server;
@@ -48,7 +48,7 @@ it('decode failure does not reload and repeated mount/unmount releases every URL
 });
 it('mixed draft order and failed admission retain text and attachments, with deterministic URL cleanup', async () => {
   const send = vi.fn(async () => false);
-  const ui = render(<InputBar disabled={false} busy={false} active={false} onUpload={async () => [completed("first.png", "one"), completed("second.txt", "two")]} onSend={send} onCancel={() => {}} />);
+  const ui = render(<AgentComposer disabled={false} busy={false} active={false} onUpload={async () => [completed("first.png", "one"), completed("second.txt", "two")]} onSend={send} onCancel={() => {}} />);
   fireEvent.change(ui.getByLabelText('Message'), { target: { value: 'keep me' } });
   const image = new File(['png'], 'first.png', { type: 'image/png' });
   const file = new File(['text'], 'second.txt', { type: 'text/plain' });
@@ -131,7 +131,7 @@ it('Blob uses safe authoritative MIME while semantic image bytes may omit MIME',
 it('committed durability uncertainty remains an uncertain draft without replay', async () => {
   await server.attached('A'); server.held.add('session/upload');
   const send = vi.fn(async () => true);
-  const ui = render(<InputBar disabled={false} busy={false} active={false} onUpload={files => server.client.upload('A', files)} onSend={send} onCancel={() => {}} />);
+  const ui = render(<AgentComposer disabled={false} busy={false} active={false} onUpload={files => server.client.upload('A', files)} onSend={send} onCancel={() => {}} />);
   const file = new File(['x'], 'file.txt'); Object.defineProperty(file, 'arrayBuffer', { value: async () => new Uint8Array([1]).buffer });
   await act(async () => fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [file] } }));
   const request = await server.waitFor('session/upload', 1);
@@ -147,7 +147,7 @@ it.each(['picker', 'drop', 'paste'] as const)('explicitly refuses a second %s se
   let finish!: (files: UploadedFile[]) => void;
   const first = new Promise<UploadedFile[]>(resolve => { finish = resolve; });
   const upload = vi.fn().mockReturnValueOnce(first).mockResolvedValueOnce([completed('second.txt', 'two')]);
-  const ui = render(<InputBar disabled={false} busy={false} active={false} onUpload={upload} onSend={vi.fn()} onCancel={() => {}} />);
+  const ui = render(<AgentComposer disabled={false} busy={false} active={false} onUpload={upload} onSend={vi.fn()} onCancel={() => {}} />);
   const a = new File(['a'], 'first.txt'), b = new File(['b'], 'second.txt');
   fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [a] } });
   if (source === 'picker') fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [b] } });

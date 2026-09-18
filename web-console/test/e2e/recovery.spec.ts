@@ -71,7 +71,7 @@ test('CFG3 committed write and reload response loss reconstructs native state wi
     await settings.getByLabel('MCP command', { exact: true }).fill('unsaved-draft');
     await chooseWorkspace(page, 'Workspace B');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
-    await expect(page.locator('.session-toolbar small')).toContainText(fixture.workspaceB);
+    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText(fixture.workspaceB);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await settings.getByRole('tab', { name: 'User', exact: true }).click();
     await settings.getByRole('button', { name: 'MCP', exact: true }).click();

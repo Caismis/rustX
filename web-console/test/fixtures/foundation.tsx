@@ -9,6 +9,7 @@ import { Modal } from '../../src/presentation/primitives/Modal';
 import { DisclosureRow } from '../../src/presentation/primitives/DisclosureRow';
 import { MarkdownText } from '../../src/presentation/markdown/MarkdownText';
 import '../../src/presentation/theme/base.css';
+import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/shiki.css';
 import '../../src/presentation/theme/reset.css';

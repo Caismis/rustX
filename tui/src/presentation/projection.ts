@@ -437,6 +437,8 @@ export function reduce(
       }));
       return withForeground(next, state, event.attempt_id, (foreground) =>
         upsertForeground(foreground, event.call.id, (existing) => ({
+          message_id: event.message_id,
+          block_index: event.block_index,
           call_id: event.call.id,
           tool_id: event.call.tool_id,
           name: event.call.name,
@@ -491,7 +493,8 @@ export function reduce(
 
     case "tool_execution_started":
       return withForeground(next, state, event.attempt_id, (foreground) =>
-        upsertForeground(foreground, event.tool_call_id, (existing) => ({
+        updateForeground(foreground, event.tool_call_id, (existing) => ({
+          ...existing,
           call_id: event.tool_call_id,
           tool_id: event.tool_id,
           name: existing?.name ?? "",
@@ -513,7 +516,8 @@ export function reduce(
         return next;
       }
       return withForeground(next, state, event.attempt_id, (foreground) =>
-        upsertForeground(foreground, event.tool_call_id, (existing) => ({
+        updateForeground(foreground, event.tool_call_id, (existing) => ({
+          ...existing,
           call_id: event.tool_call_id,
           tool_id: event.tool_id,
           name: existing?.name ?? "",

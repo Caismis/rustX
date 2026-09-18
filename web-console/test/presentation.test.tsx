@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { App } from '../src/app/App';
-import { QuestionComposer } from '../src/app/components/QuestionComposer';
+import { Questionnaire } from '../src/app/agent/Questionnaire';
 import { conversation } from '../src/bindings/projection';
 import { interaction, Server, snapshot } from './fixture';
 let server: Server;
@@ -58,7 +58,7 @@ it('pending interaction remains visible but disabled across transport loss and r
 });
 it('option labels are presentation; duplicate labels still submit the selected native index', () => {
   let submitted: unknown;
-  render(<QuestionComposer disabled={false} status="Pending" questions={[{ header: 'Pick', question: 'Which one?', answer: {
+  render(<Questionnaire disabled={false} status="Pending" questions={[{ header: 'Pick', question: 'Which one?', answer: {
     type: 'single_choice', allow_custom: false, options: [{ label: 'Same', description: 'First' }, { label: 'Same', description: 'Second' }],
   } }]} onDecline={() => {}} onSubmit={value => { submitted = value; }} />);
   fireEvent.click(screen.getAllByRole('radio')[1]); fireEvent.click(screen.getByRole('button', { name: 'Submit answers' }));

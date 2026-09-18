@@ -46,11 +46,11 @@ use crate::durable::{
     ConversationStore, ConversationStoreError, LineageSeed, SqliteConversationStore,
 };
 use crate::message::types::{
-    AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
-    UserContentBlock, UserMessageBlock,
+    AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock, UserContentBlock,
+    UserMessageBlock,
 };
 use crate::model::session::SessionModelConfig;
-use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
+use crate::runtime::identity::{ConversationId, MessageId};
 
 #[cfg(test)]
 #[path = "session/tests/cfg3_identity.rs"]
@@ -2117,8 +2117,8 @@ fn replaced_span(
     Ok(active[from..=to].to_vec())
 }
 
-/// Reconstructs a destination seed with destination-owned message and tool
-/// identities. Runtime lifecycle identities are not present in this input and
+/// Reconstructs a destination seed with destination-owned canonical message/occurrence
+/// identities. Provider correlation strings remain unchanged. Runtime lifecycle identities are not present in this input and
 /// therefore cannot leak into the destination.
 ///
 /// `canonical` is the destination's whole Ledger cut and `surface_history` is
@@ -2132,7 +2132,6 @@ pub(crate) fn remap_seed(
 ) -> Result<LineageSeed, SessionError> {
     let messages = canonical;
     let mut message_ids = BTreeMap::new();
-    let mut call_ids = BTreeMap::new();
     for (index, message) in messages.iter().enumerate() {
         let old = message_id_of(message);
         let new = MessageId::new(format!("{destination}-message-{}", index + 1));
@@ -2141,27 +2140,11 @@ pub(crate) fn remap_seed(
                 detail: format!("source seed repeats MessageId {old}"),
             });
         }
-        if let MessageBlock::Assistant(assistant) = message {
-            for (call_index, content) in assistant.content.iter().enumerate() {
-                if let AssistantContentBlock::ToolCall(call) = content {
-                    let new_call = ToolCallId::new(format!(
-                        "{destination}-tool-call-{}-{}",
-                        index + 1,
-                        call_index + 1
-                    ));
-                    if call_ids.insert(call.id.clone(), new_call).is_some() {
-                        return Err(SessionError::Seed {
-                            detail: format!("source seed repeats ToolCallId {}", call.id),
-                        });
-                    }
-                }
-            }
-        }
     }
 
     let canonical = messages
         .iter()
-        .map(|message| remap_message(message, &message_ids, &call_ids))
+        .map(|message| remap_message(message, &message_ids))
         .collect::<Result<Vec<_>, SessionError>>()?;
     let seeded = |id: &MessageId| {
         message_ids
@@ -2198,7 +2181,6 @@ pub(crate) fn remap_seed(
 fn remap_message(
     message: &MessageBlock,
     message_ids: &BTreeMap<MessageId, MessageId>,
-    call_ids: &BTreeMap<ToolCallId, ToolCallId>,
 ) -> Result<MessageBlock, SessionError> {
     let message_id = |id: &MessageId| {
         message_ids
@@ -2207,11 +2189,6 @@ fn remap_message(
             .ok_or_else(|| SessionError::Seed {
                 detail: format!("source seed references unknown MessageId {id}"),
             })
-    };
-    let call_id = |id: &ToolCallId| {
-        call_ids.get(id).cloned().ok_or_else(|| SessionError::Seed {
-            detail: format!("source seed references unknown ToolCallId {id}"),
-        })
     };
 
     match message {
@@ -2224,25 +2201,17 @@ fn remap_message(
         })),
         MessageBlock::Assistant(assistant) => Ok(MessageBlock::Assistant(AssistantMessageBlock {
             id: message_id(&assistant.id)?,
-            content: assistant
-                .content
-                .iter()
-                .map(|content| match content {
-                    AssistantContentBlock::ToolCall(call) => Ok(AssistantContentBlock::ToolCall(
-                        crate::tools::types::ToolCall {
-                            id: call_id(&call.id)?,
-                            tool_id: call.tool_id.clone(),
-                            name: call.name.clone(),
-                            arguments: call.arguments.clone(),
-                        },
-                    )),
-                    other => Ok(other.clone()),
-                })
-                .collect::<Result<Vec<_>, SessionError>>()?,
+            // Copied calls are history, not newly issued provider invocations.
+            // Preserve the provider correlation on both sides of each occurrence.
+            content: assistant.content.clone(),
         })),
         MessageBlock::Tool(tool) => Ok(MessageBlock::Tool(ToolMessageBlock {
             id: message_id(&tool.id)?,
-            tool_call_id: call_id(&tool.tool_call_id)?,
+            occurrence: crate::message::types::ToolCallOccurrenceRef {
+                assistant_message_id: message_id(&tool.occurrence.assistant_message_id)?,
+                block_index: tool.occurrence.block_index,
+            },
+            tool_call_id: tool.tool_call_id.clone(),
             tool_id: tool.tool_id.clone(),
             result: tool.result.clone(),
         })),
@@ -2905,6 +2874,10 @@ model = "provider/model"
                 ],
             }),
             MessageBlock::Tool(ToolMessageBlock {
+                occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                    crate::runtime::identity::MessageId::new("source-assistant"),
+                    crate::message::types::ContentBlockIndex::new(1),
+                ),
                 id: MessageId::new("source-tool-result"),
                 tool_call_id: ToolCallId::new("source-call"),
                 tool_id: ToolId::new("tool-test"),
@@ -3957,6 +3930,195 @@ model = "provider/model"
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One shared source exercises every product lineage cut.
+    fn lineage_product_paths_preserve_reused_provider_ids_without_compaction() {
+        use crate::message::types::{ContentBlockIndex, ToolCallOccurrenceRef};
+        let (_directory, mut catalog, _config) = open_catalog();
+        let assistant = |id: &str, index: usize| {
+            let mut content = vec![
+                AssistantContentBlock::Text(TextBlock {
+                    text: "reason".into()
+                });
+                index
+            ];
+            content.push(AssistantContentBlock::ToolCall(ToolCall {
+                id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-bash"),
+                name: "bash".into(),
+                arguments: serde_json::json!({"command": "pwd"}),
+            }));
+            MessageBlock::Assistant(AssistantMessageBlock {
+                id: MessageId::new(id),
+                content,
+            })
+        };
+        let result = |id: &str, owner: &str, index: u32, text: &str| {
+            MessageBlock::Tool(ToolMessageBlock {
+                id: MessageId::new(id),
+                occurrence: ToolCallOccurrenceRef::new(
+                    MessageId::new(owner),
+                    ContentBlockIndex::new(index),
+                ),
+                tool_call_id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-bash"),
+                result: ToolExecutionResult {
+                    status: ToolExecutionStatus::Success,
+                    content: vec![crate::tools::types::ToolResultContent::Text(TextBlock {
+                        text: text.into(),
+                    })],
+                    duration_ms: 1,
+                    exit_code: None,
+                    artifacts: vec![],
+                    truncation: None,
+                    workflow: None,
+                    managed_output: None,
+                },
+            })
+        };
+        let history = vec![
+            user("user-A", "A"),
+            assistant("assistant-A", 1),
+            result("result-A", "assistant-A", 1, "old-result"),
+            user("user-B", "B"),
+            assistant("assistant-B", 2),
+            result("result-B", "assistant-B", 2, "new-result"),
+            user("after-B", "continue"),
+        ];
+        let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
+        let source_store = store_for(&catalog, &source_session, &source_conversation);
+        let revision = source_store.load_head().unwrap().revision;
+        // Exactly the canonical/Surface/history materialization used by SessionController.
+        let source = lineage_at(&source_store, &source_conversation, revision);
+        assert_eq!(source.messages, source.canonical);
+        assert!(
+            source
+                .surface_history
+                .iter()
+                .all(|op| matches!(op, crate::conversation::SurfaceOp::Append { .. }))
+        );
+        crate::conversation::StructuralIndex::build(&source.messages).unwrap();
+        let clone = catalog.prepare_clone_session(&state(), &source).unwrap();
+        let (early, _) = catalog
+            .prepare_fork_session(&state(), &source, &MessageId::new("user-B"))
+            .unwrap();
+        let (late, _) = catalog
+            .prepare_fork_session(&state(), &source, &MessageId::new("after-B"))
+            .unwrap();
+        let (tree, _) = catalog
+            .prepare_tree_node_at_user_message(
+                &source_session,
+                &state(),
+                &source,
+                &MessageId::new("after-B"),
+            )
+            .unwrap();
+        for (destination, expected) in [(&clone, 2), (&early, 1), (&late, 2), (&tree, 2)] {
+            // prepare_* has already called the real remap_seed -> initialize_lineage.
+            let store = store_for(
+                &catalog,
+                &destination.session_id,
+                &destination.conversation_id,
+            );
+            let copied = store.load_canonical().unwrap();
+            crate::conversation::StructuralIndex::build(&copied).unwrap();
+            let results: Vec<_> = copied
+                .iter()
+                .filter_map(|m| match m {
+                    MessageBlock::Tool(t) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(results.len(), expected);
+            for (index, tool) in results.iter().enumerate() {
+                assert_eq!(tool.tool_call_id, ToolCallId::new("call-1"));
+                assert_eq!(tool.occurrence.block_index.get() as usize, index + 1);
+                assert_ne!(
+                    tool.occurrence.assistant_message_id.as_str(),
+                    ["assistant-A", "assistant-B"][index]
+                );
+                let owner = copied
+                    .iter()
+                    .find(|m| m.id() == &tool.occurrence.assistant_message_id)
+                    .unwrap();
+                let MessageBlock::Assistant(owner) = owner else {
+                    panic!("Assistant owner")
+                };
+                let AssistantContentBlock::ToolCall(call) = &owner.content[index + 1] else {
+                    panic!("Tool block")
+                };
+                assert_eq!(call.id, tool.tool_call_id);
+                assert_eq!(call.tool_id, tool.tool_id);
+                assert_eq!(
+                    tool.result.content,
+                    vec![crate::tools::types::ToolResultContent::Text(TextBlock {
+                        text: ["old-result", "new-result"][index].into()
+                    })]
+                );
+            }
+            if expected == 1 {
+                assert!(
+                    !serde_json::to_string(&copied)
+                        .unwrap()
+                        .contains("new-result")
+                );
+            }
+            drop(store);
+            let reopened = store_for(
+                &catalog,
+                &destination.session_id,
+                &destination.conversation_id,
+            );
+            let mut before = None;
+            let mut observed = 0;
+            loop {
+                let page = reopened.load_transcript_page(before, 1).unwrap();
+                for entry in page.entries {
+                    for tool in entry.tool_calls {
+                        let canonical_result = results
+                            .iter()
+                            .find(|result| {
+                                result.occurrence.assistant_message_id == tool.message_id
+                                    && result.occurrence.block_index == tool.block_index
+                            })
+                            .expect("indexed result has its exact canonical owner after reopen");
+                        assert_eq!(tool.result.as_ref(), Some(&canonical_result.result));
+                        assert_eq!(tool.call.id, ToolCallId::new("call-1"));
+                        observed += 1;
+                    }
+                }
+                before = page.next_cursor;
+                if before.is_none() {
+                    break;
+                }
+            }
+            assert_eq!(observed, expected);
+        }
+        catalog
+            .publish_session(
+                &clone,
+                SessionNodeOrigin::Clone {
+                    source_session: source_session.clone(),
+                    source_node: source_node.clone(),
+                    source_surface_revision: revision,
+                },
+            )
+            .unwrap();
+        catalog
+            .publish_node(
+                &source_session,
+                &tree,
+                source_node.clone(),
+                SessionNodeOrigin::Fork {
+                    source_session: source_session.clone(),
+                    source_node,
+                    source_surface_revision: revision,
+                    source_user_message: MessageId::new("after-B"),
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
     fn clone_uses_exact_revision_and_isolates_execution_identity_domains() {
         let (_directory, mut catalog, _config) = open_catalog();
         let history = source_history();
@@ -4009,7 +4171,7 @@ model = "provider/model"
             })
             .expect("cloned tool call");
         assert_ne!(assistant.id, MessageId::new("source-assistant"));
-        assert_ne!(call.id, ToolCallId::new("source-call"));
+        assert_eq!(call.id, ToolCallId::new("source-call"));
         let result = cloned_before_source_mutation
             .iter()
             .find_map(|message| match message {
@@ -4272,6 +4434,10 @@ model = "provider/model"
     /// structured content.
     fn todo_result(id: &str, call: &str, subject: &str) -> MessageBlock {
         MessageBlock::Tool(ToolMessageBlock {
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                crate::runtime::identity::MessageId::new("source-todo-call"),
+                crate::message::types::ContentBlockIndex::new(0),
+            ),
             id: MessageId::new(id),
             tool_call_id: ToolCallId::new(call),
             tool_id: ToolId::new(crate::tools::todo::TODO_TOOL_ID),

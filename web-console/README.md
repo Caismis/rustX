@@ -1,4 +1,11 @@
-# rustX Developer Web Console
+# rustX Web console
+
+Harness owns the presentation baseline; rustX owns all runtime/product semantics.
+The normal Agent path uses the integrated Conversation, Composer, specialized
+Tool cards, interaction takeover and model/permission controls. See
+[Agent architecture](AGENT-ARCHITECTURE.md) and [#346 validation](RESET-346-VALIDATION.md).
+There is no legacy Agent mode or compatibility component API.
+
 
 The rustX Full Web client: a Vite/React product over the native App Server.
 Start with the canonical [local development launchers](../DEVELOPMENT.md).
@@ -281,7 +288,8 @@ The normal real-server acceptance test still runs against the production build.
 Additional browser contracts use an isolated Vite fixture on port 5174, excluded
 from the production entry tree, to exercise native focus and layout at 390/900/1440px.
 See [PROVENANCE.md](PROVENANCE.md) for the source/closure audit and
-[RESET-345-VALIDATION.md](RESET-345-VALIDATION.md) for current shell evidence.
+[RESET-345-VALIDATION.md](RESET-345-VALIDATION.md) for the shell baseline and
+[RESET-346-VALIDATION.md](RESET-346-VALIDATION.md) for integrated Agent evidence.
 
 ## CFG3 Settings
 

@@ -99,7 +99,7 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     await expect(canonical.getByText('acceptance.txt', { exact: true })).toBeVisible();
     expect(wire.requests.filter(request => request.method === 'artifact/read')).toHaveLength(0);
     await page.getByRole('button', { name: 'Unload runtime', exact: true }).click();
-    await expect(page.locator('.session-toolbar small')).toContainText('unloaded');
+    await expect(page.getByLabel('Session location and attachment', { exact: true })).toContainText('unloaded');
     await page.locator(`button[data-session-id="${destination}"]`).hover();
     await page.locator(`button[data-session-actions="${destination}"]`).click();
     await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();

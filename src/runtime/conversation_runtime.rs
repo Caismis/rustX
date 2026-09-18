@@ -17835,6 +17835,10 @@ mod tests {
 
     fn tool_result_block(call: &str) -> MessageBlock {
         MessageBlock::Tool(crate::message::types::ToolMessageBlock {
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                crate::runtime::identity::MessageId::new("assistant-tool"),
+                crate::message::types::ContentBlockIndex::new(0),
+            ),
             id: crate::runtime::identity::MessageId::new(format!("tool-{call}")),
             tool_call_id: crate::runtime::identity::ToolCallId::new(call),
             tool_id: crate::runtime::identity::ToolId::new("tool-a"),

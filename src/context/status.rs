@@ -1855,6 +1855,10 @@ mod tests {
 
     fn todo_result(snapshot: &TodoSnapshot) -> MessageBlock {
         MessageBlock::Tool(ToolMessageBlock {
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                crate::runtime::identity::MessageId::new("assistant"),
+                crate::message::types::ContentBlockIndex::new(0),
+            ),
             id: MessageId::new("todo-status-result"),
             tool_call_id: ToolCallId::new("todo-status-call"),
             tool_id: ToolId::new(TODO_TOOL_ID),

@@ -1,4 +1,4 @@
-# Full Web conformance gate — #313 / Epic #303
+# Full Web conformance gate
 
 This is a map of executable evidence, not a new semantic specification. The
 browser tests use one existing Playwright configuration and `startDogfood` fixture,
@@ -107,3 +107,22 @@ editors are structured; full Skill/Python/Workflow source editors are not requir
 No Rust semantic defect required a new implementation, protocol DTO or native
 owner change in this PR. No compatibility mode, new browser semantic authority,
 extra E2E runner or parallel provenance inventory is introduced.
+
+## Integrated Harness Agent (#346)
+
+`RESET-346-VALIDATION.md` records the current commands, results, immutable browser
+authority and intentional reference changes. `agent.spec.ts` adds nine deterministic
+Agent references; the real-server suite runs the same production entry path.
+
+| Contract | Deterministic evidence |
+| --- | --- |
+| Cold attach, transcript/subscription, replay gap and stale generation/target/incarnation | `client.test.ts`, `transcript.test.ts`, native App Server contracts |
+| Streaming/native canonical identity, reasoning/Tool order | `chat.test.tsx`, `presentation.test.tsx`, `agent.test.tsx` |
+| One Tool lifecycle, cross-page results, native status and unknown fallback | native `agent_transcript_tools_resolve_native_results_across_page_boundaries`; `agent.test.tsx` |
+| Approval absent-browser recovery, one response, acknowledgement is not settlement | `agent.test.tsx`, existing `client.test.ts` uncertainty contracts |
+| Questionnaire pages and exact schema values | `presentation.test.tsx`, `questionnaire.test.ts`, `agent.spec.ts` |
+| One Stop request; native terminal phase; disconnect inert | `agent.test.tsx`, `client.test.ts` |
+| Queue/Steer native mailbox semantics, IME/uploads/typed commands | `composer-context.test.tsx`, `commands.test.tsx`, real `composer.spec.ts` |
+| Native model/catalog/profile, no inferred options, uncertain mutation Send fence | `agent.test.tsx`, `commands.test.tsx` |
+| Desired source CAS versus active frozen policy and explicit Reload | `agent.test.tsx`, native `agent_permission_projection_uses_native_resolution_and_source_cas`, CFG3 tests |
+| Light/dark/narrow and shared shell | pinned `agent.spec.ts`, `shell.spec.ts`, `foundation.spec.ts`; keyboard real-server acceptance |

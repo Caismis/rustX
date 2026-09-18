@@ -1167,6 +1167,10 @@ async fn continuation_tail_preserves_tool_then_users_order() {
             },
         )),
         rustx::model::ModelInputMessage::Canonical(MessageBlock::Tool(ToolMessageBlock {
+            occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+                rustx::runtime::identity::MessageId::new("assistant"),
+                rustx::message::types::ContentBlockIndex::new(0),
+            ),
             id: MessageId::new("msg-tool-1"),
             tool_call_id: ToolCallId::new("call_1"),
             tool_id: rustx::runtime::identity::ToolId::new("tool-list"),

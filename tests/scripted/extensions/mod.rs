@@ -1690,7 +1690,24 @@ async fn ext259_disabling_todo_preserves_history_and_re_enabling_reconstructs_it
     // The canonical evidence is what makes the settlement truthful, so it is
     // committed to the Ledger, not merely handed to the batch.
     store
-        .initialize(std::slice::from_ref(&evidence))
+        .initialize(&[
+            rustx::message::types::MessageBlock::Assistant(
+                rustx::message::types::AssistantMessageBlock {
+                    id: rustx::runtime::identity::MessageId::new("assistant"),
+                    content: vec![rustx::message::types::AssistantContentBlock::ToolCall(
+                        rustx::tools::types::ToolCall {
+                            id: rustx::runtime::identity::ToolCallId::new("call-accepted"),
+                            tool_id: rustx::runtime::identity::ToolId::new(
+                                rustx::tools::todo::TODO_TOOL_ID,
+                            ),
+                            name: "todo".into(),
+                            arguments: serde_json::json!({}),
+                        },
+                    )],
+                },
+            ),
+            evidence.clone(),
+        ])
         .expect("commit the canonical todo result");
     batch.settle(std::slice::from_ref(&evidence));
     assert_eq!(first.todo_snapshot().expect("composed"), accepted);

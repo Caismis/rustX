@@ -1928,6 +1928,10 @@ mod tests {
 
     fn todo_result(snapshot: &TodoSnapshot) -> MessageBlock {
         MessageBlock::Tool(ToolMessageBlock {
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                crate::runtime::identity::MessageId::new("assistant"),
+                crate::message::types::ContentBlockIndex::new(0),
+            ),
             id: MessageId::new("message-todo"),
             tool_call_id: ToolCallId::new("call-todo"),
             tool_id: ToolId::new(TODO_TOOL_ID),
@@ -2101,6 +2105,10 @@ mod tests {
         // committed published a list, so the authority does not move.
         assert_eq!(
             batch.settle(&[MessageBlock::Tool(ToolMessageBlock {
+                occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                    crate::runtime::identity::MessageId::new("assistant"),
+                    crate::message::types::ContentBlockIndex::new(0)
+                ),
                 id: MessageId::new("message-bash"),
                 tool_call_id: ToolCallId::new("call-bash"),
                 tool_id: ToolId::new("tool-bash"),
@@ -2505,6 +2513,10 @@ mod tests {
         let rebuilt = ConversationTodoList::rebuilt(
             ConversationId::new("conv_97f22362-c165-70d9-8ae7-6f04b44108e1"),
             &[MessageBlock::Tool(ToolMessageBlock {
+                occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                    crate::runtime::identity::MessageId::new("assistant"),
+                    crate::message::types::ContentBlockIndex::new(0),
+                ),
                 id: MessageId::new("message-bash"),
                 tool_call_id: ToolCallId::new("call-bash"),
                 tool_id: ToolId::new("tool-bash"),

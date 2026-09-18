@@ -524,6 +524,7 @@ export function toolMessage(
 ): MessageBlock {
   return {
     role: "tool",
+    occurrence: { assistant_message_id: "m1", block_index: 0 },
     id,
     tool_call_id: callId,
     tool_id: toolId,
@@ -553,7 +554,7 @@ export function foreground(
   name: string,
   state: ForegroundToolExecution["state"],
 ): ForegroundToolExecution {
-  return { call_id: callId, tool_id: toolId, name, state };
+  return { message_id: "assistant-1", block_index: 0, call_id: callId, tool_id: toolId, name, state };
 }
 
 /** One catalog entry. */

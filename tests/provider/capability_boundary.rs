@@ -78,6 +78,10 @@ fn history_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
             ],
         }),
         MessageBlock::Tool(ToolMessageBlock {
+            occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
+                rustx::runtime::identity::MessageId::new("msg-a1"),
+                rustx::message::types::ContentBlockIndex::new(1),
+            ),
             id: MessageId::new("msg-t1"),
             tool_call_id: ToolCallId::new("call_1"),
             tool_id: ToolId::new("tool-list"),
@@ -475,6 +479,8 @@ async fn chat_translates_full_history_roles() {
     )
     .await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    assert!(!server.request_body(0).contains("assistant_message_id"));
+    assert!(!server.request_body(0).contains("occurrence"));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
     let messages = body["messages"].as_array().expect("messages");
@@ -515,6 +521,8 @@ async fn responses_translates_full_history() {
     )
     .await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    assert!(!server.request_body(0).contains("assistant_message_id"));
+    assert!(!server.request_body(0).contains("occurrence"));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
     assert!(
@@ -558,6 +566,8 @@ async fn anthropic_translates_full_history() {
     )
     .await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    assert!(!server.request_body(0).contains("assistant_message_id"));
+    assert!(!server.request_body(0).contains("occurrence"));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
     assert_eq!(body["system"][0]["text"], "Be concise.");

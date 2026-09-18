@@ -1,5 +1,6 @@
 {
   "role": "tool",
+  "occurrence": { "assistant_message_id": "msg-agent-a-gen-3", "block_index": 2 },
   "id": "msg-tool-1",
   "tool_call_id": "call_01",
   "tool_id": "tool-list",

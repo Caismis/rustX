@@ -3042,6 +3042,10 @@ chat_reasoning_replay = "omit"
         snapshot: &crate::tools::todo::TodoSnapshot,
     ) -> crate::message::types::MessageBlock {
         crate::message::types::MessageBlock::Tool(crate::message::types::ToolMessageBlock {
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                crate::runtime::identity::MessageId::new("assistant"),
+                crate::message::types::ContentBlockIndex::new(0),
+            ),
             id: crate::runtime::identity::MessageId::new(format!("message-{id}")),
             tool_call_id: crate::runtime::identity::ToolCallId::new(format!("call-{id}")),
             tool_id: crate::runtime::identity::ToolId::new(crate::tools::todo::TODO_TOOL_ID),
