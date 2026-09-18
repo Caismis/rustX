@@ -164,9 +164,7 @@ close/open and exact native detach acknowledgements. Shell references now includ
 idle, queued, stopping, reconnect and uncertainty, alongside desktop light/dark,
 Inspector and narrow layouts. Existing four-width keyboard acceptance remains.
 
-Reference and native acceptance tests use separate Playwright projects/workers,
-in the same pinned browser container. A zero-tolerance composer-border comparison
-passed in isolation but differed after native accessibility tests shared its
-browser; separating the browser lifetime makes update and normal reference runs
-use the same isolation. No raster tolerance, retry, semantic sleep or composer
-style workaround was added. Both projects run in the normal full command.
+Each Agent reference mode runs as its own test/page/context rather than sharing
+one multi-navigation capture. This keeps reference setup independent, including
+the browser's paint caches. Screenshot tolerances remain zero; no composer style
+workaround, semantic sleep or retry is introduced.
