@@ -1,3 +1,4 @@
+import { closeSessionView } from './shell-actions';
 import { unloadSession } from './shell-actions';
 import { showInspector } from './shell-actions';
 import { chooseWorkspace, connectionAction, closeSettings } from './shell-actions';
@@ -13,7 +14,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
   const wire = await wireProbe(page);
   const closeView = async (id: string) => {
     const count = wire.responses.filter(row => row.method === 'session/detach').length;
-    await page.locator(`[id="session-tab-${id}"]`).locator('..').getByRole('button').click();
+    await closeSessionView(page, id);
     await expect.poll(() => wire.responses.filter(row => row.method === 'session/detach').length).toBe(count + 1);
   };
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
@@ -40,8 +41,9 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await chooseWorkspace(page, 'Workspace B'); await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.getByLabel('Session location', { exact: true })).toHaveText(`${fixture.workspaceB}`);
     const idB = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId as string;
-    await expect(page.getByRole('tablist', { name: 'Open Session views' }).getByRole('tab')).toHaveCount(2);
-    await page.locator(`[id="session-tab-${idA}"]`).click();
+    await expect(page.getByRole('tree', { name: 'Session browser' })).toHaveCount(1);
+    await expect(page.getByRole('tablist', { name: 'Open Session views' })).toHaveCount(0);
+    await page.locator(`button[data-session-id="${idA}"]`).click();
     await send('Long action in A'); await fixture.gate('finish-a');
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     // Configuration source commits cannot rewrite a running admitted attempt.
@@ -64,7 +66,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(settings.getByText(/Source saved. The loaded runtime/)).toBeVisible();
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 
-    await page.locator(`[id="session-tab-${idB}"]`).click(); await send('Use B while A runs');
+    await page.locator(`button[data-session-id="${idB}"]`).click(); await send('Use B while A runs');
     await expect(page.getByText('B stayed responsive.', { exact: true })).toBeVisible();
     // The actual TUI client joins the browser's server. Handoff is explicit;
     // neither client needs a private API or a second writable controller.
@@ -80,7 +82,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await remote.shutdown(); remote = undefined;
 
-    await page.locator(`[id="session-tab-${idA}"]`).click();
+    await page.locator(`button[data-session-id="${idA}"]`).click();
     await connectionAction(page, 'Disconnect');
     await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
     await connectionAction(page, 'Reconnect');
@@ -89,8 +91,8 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await reload(); await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     const incarnationA = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).runtime_incarnation;
     await closeView(idA);
-    await expect(page.locator(`[id="session-tab-${idA}"]`)).toHaveCount(0);
-    await expect(page.locator(`button[data-session-id="${idA}"]`)).toHaveAttribute('title', /Open Session/);
+    await expect(page.locator(`button[data-session-id="${idA}"]`)).toBeVisible();
+    await expect(page.locator(`button[data-session-id="${idA}"]`)).toHaveAttribute('title', '');
     // The only controller has been released before the provider finishes A.
     await fixture.release('finish-a');
     await fixture.control('observations/await?kind=response_completed&count=2&timeoutMs=30000');
@@ -102,12 +104,12 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     for (let i = 0; i < 34; i++) {
       const id = i % 2 === 0 ? idA : idB;
       await closeView(id);
-      await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('title', /Open Session/);
+      await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('title', '');
       await page.locator(`button[data-session-id="${id}"]`).click();
       await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
       await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId).toBe(id);
     }
-    await page.locator(`[id="session-tab-${idA}"]`).click();
+    await page.locator(`button[data-session-id="${idA}"]`).click();
     await send('Approval please'); await expect(page.getByRole('button', { name: 'Allow once' })).toBeEnabled();
     const pendingApproval = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).pending_interactions[0].interaction;
     await connectionAction(page, 'Disconnect'); await reload();
@@ -157,7 +159,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(fixture.token);
     expect(await page.locator('body').innerText()).not.toContain('fake-provider-only');
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.locator(`[id="session-tab-${idB}"]`).click();
+    await page.locator(`button[data-session-id="${idB}"]`).click();
     await unloadSession(page);
     await expect(page.getByLabel('Session status').getByRole('button', { name: 'Open Session', exact: true })).toBeVisible();
     await page.locator(`button[data-session-id="${idB}"]`).hover();
@@ -165,9 +167,9 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Confirm Session deletion' })).toBeVisible();
     await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('"status": "deleted"');
+    await expect(page.getByRole('alert')).toContainText('Session deleted.');
     await expect(page.locator(`button[data-session-id="${idB}"]`)).toHaveCount(0);
-    await expect(page.getByRole('tablist', { name: 'Open Session views' }).getByRole('tab')).toHaveCount(1);
+    await expect(page.getByLabel('Session title')).toHaveText('Long action in A');
     await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId).toBe(idA);
     expect(readFileSync(`${fixture.workspaceA}/console-effect`, 'utf8')).toBe('x');
     expect((await fixture.control('requests')).requests).toHaveLength(8);

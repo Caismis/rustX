@@ -59,5 +59,5 @@ it('native paging sends offsets and does not create browser-owned Session member
   expect(server.requests.filter(row => row.request.method === 'session/list').map(row => row.request.params)).toEqual([
     { offset: 0, limit: 32, query: '' }, { offset: 32, limit: 32, query: '' }, { offset: 0, limit: 32, query: '' },
   ]);
-  expect(JSON.parse(localStorage.getItem('rustx-console-view-v1')!)).toEqual({ endpoint: 'ws://127.0.0.1:8080/', tabs: [] });
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!)).toEqual({ endpoint: 'ws://127.0.0.1:8080/', openViews: [] });
 });

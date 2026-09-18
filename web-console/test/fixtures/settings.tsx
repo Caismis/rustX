@@ -27,5 +27,5 @@ source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/works
 server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: source, session_revision: '1' }));
 server.handlers.set('configuration/effective', () => ({ type: 'effective_configuration', projection: effective }));
 await server.attached('A');
-localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint, tabs: ['A'] }));
+localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
 createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost} />);

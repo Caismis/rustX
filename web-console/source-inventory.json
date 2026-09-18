@@ -879,7 +879,7 @@
     },
     {
       "upstream": "packages/client/ui-trajectory/tests/table.client.spec.tsx",
-      "treatment": "inspected and rewritten for native Trace props; rustX-authored historical lifecycle selection regression",
+      "treatment": "inspected and rewritten for native Trace props; rustX-authored historical lifecycle selection regression; WEB-12 review repair: view restoration fixture uses openViews preferences. Native authority unchanged.",
       "upstream_sha256": "2394738759cc3300e46bf01b97c9c3b59458f6b65809e11919505e264138f775",
       "destination": "web-console/test/trajectory.test.tsx",
       "retained_dependencies": [
@@ -901,7 +901,7 @@
         "provider configuration authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "609754c60afe12f5a9c6cc6dc90dd0e683bdfa0b059ccd333eae7aa312a6abf7"
+      "local_sha256": "d45ce013f98c5eb08ae4a09c1c5071799b66fa916b1e125426797e6efa1444e8"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx",
@@ -1017,7 +1017,7 @@
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
       "destination": "web-console/src/app/composer/QueueDock.tsx",
-      "treatment": "adapted: collapsible queue, inline text editing, remove, busy controls and preserved drafts; native exact pending CAS and authoritative readback; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs",
+      "treatment": "adapted: collapsible queue, inline text editing, remove, busy controls and preserved drafts; native exact pending CAS and authoritative readback; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Use latest version conflict copy; exact expected revision remains native. Native authority unchanged.",
       "upstream_sha256": "682d5bb4aa11478acbac0f2e21ed1e129baddd18cbff732c64ae5bdb95fb738e",
       "retained_dependencies": [
         "../../../../protocol/app-server/v6",
@@ -1035,7 +1035,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "fc0958db297a68a759de8aa3d1f49a4dc68d9c24a37ccd019d2e3f7741b506f3"
+      "local_sha256": "8e58bb60bb469f497e1cf38f213295f468a94d87ce86ae5453a58af1c52ca8ba"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
@@ -1054,12 +1054,13 @@
     {
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
       "destination": "web-console/src/workspaces/WorkspaceNavigation.tsx",
-      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs",
+      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Sidebar-only selection/close callbacks, native display-title projection and Session-scoped uncertainty. Native authority unchanged.",
       "upstream_sha256": "541bcf73a753b049ca25ade38a6565ddeabc750d8b4098eee4901c6d4a461d09",
       "retained_dependencies": [
         "../app/commands/native",
         "../bindings/projection",
         "../bindings/session-product",
+        "../bindings/session-title",
         "../client/app-server",
         "../presentation/primitives/Button",
         "../presentation/primitives/Input",
@@ -1095,7 +1096,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "393e5d1fd826325539d4cebb87e5a6816c9533c24f7d7110c1166b4180535e88"
+      "local_sha256": "97e6d829689540fa9a00172015f381cb0e80d8da662b2293c9d6a6867597ceb3"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -1489,7 +1490,7 @@
       "destination": "web-console/src/presentation/workspace/Rows.tsx",
       "upstream": "packages/client/ui-workspace/src/client/rows/Rows.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: upstream project, Session and search rows; native view models and callbacks; accessible open/toggle controls; omit provisional identity, archive, reorder and schedule affordances; native deletion preview replaces archive",
+      "treatment": "B: upstream project, Session and search rows; native view models and callbacks; accessible open/toggle controls; omit provisional identity, archive, reorder and schedule affordances; native deletion preview replaces archive; WEB-12 review repair: Sidebar Close view menu callback and visible product observation for Session/search rows. Native authority unchanged.",
       "upstream_sha256": "e61586fd63c0ae8f54ab6076905d8c96c97482576770964552c0a03acbcce6d4",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1510,14 +1511,14 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "8803ed7863295a250210a9a9256d3d69eedfed4b3a66f913cb57cdea0a48ad7a",
+      "local_sha256": "4a32d9ae71f2dc3dad2a301714f7865d1cbeed4f67d3ecc8066651c4b37bcdf0",
       "classification": "B"
     },
     {
       "destination": "web-console/src/presentation/workspace/Rows.module.css",
       "upstream": "packages/client/ui-workspace/src/client/rows/Rows.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation; WEB-12 review repair: bounded second-line observation with flexible Session row height. Native authority unchanged.",
       "upstream_sha256": "baee8fbdccbfb13855ed6254d3c2cadab524e15c16bb277d463f74c1bf16377f",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1526,7 +1527,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "38a31429bf8c4230ea9075408e1967d862ac5e9a6d3edcef48b815d8024a76b1",
+      "local_sha256": "92f335164bf02e27ba5e02cfa9420eb8c80349cf377227d141023ba434a7445e",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -1626,7 +1627,7 @@
       "destination": "web-console/src/presentation/workspace/WorkspaceBrowser.tsx",
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection",
+      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection; WEB-12 review repair: passes presentation-only Close view callback to open Sidebar rows. Native authority unchanged.",
       "upstream_sha256": "861c3a98489e6ddb7c9383c514a0af7ce59eedd03317b09d51063b0c69c6c775",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1646,7 +1647,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "b63a53003f7d0622ddb3f996b9781b567a1ee542f91a89d300907bbd4d9a4947",
+      "local_sha256": "cf65628de3f2f0ddd63afb99607ea68a0823574df1dfe73f578dec27d3564be2",
       "classification": "B"
     },
     {

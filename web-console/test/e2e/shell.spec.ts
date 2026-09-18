@@ -1,4 +1,38 @@
 import { test, expect } from '@playwright/test';
+for (const mode of ['empty', 'preview', 'named', 'delete', 'other-uncertain', 'background'] as const) test(`Sidebar-only Session surface: ${mode}`, async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html');
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  if (mode !== 'background') await page.evaluate(mode => window.sessionFixture.presentation(mode), mode);
+  await expect(page.getByRole('tree', { name: 'Session browser' })).toHaveCount(1);
+  await expect(page.getByRole('tablist')).toHaveCount(1);
+  if (mode === 'background') {
+    await page.locator('button[data-session-id="B"]').click();
+    await expect(page.getByLabel('Session title')).toHaveText('Session B');
+    await expect(page.locator('button[data-session-id="A"]')).toContainText('Working…');
+  }
+  if (mode === 'other-uncertain') {
+    await expect(page.getByLabel('Session status')).toHaveText('Working…');
+    await expect(page.locator('button[data-session-id="B"]')).toContainText('Needs verification');
+  }
+  if (mode === 'delete') {
+    await page.locator('button[data-session-id="A"]').hover();
+    await page.locator('button[data-session-actions="A"]').click();
+    await page.getByRole('menuitem', { name: 'Delete Session' }).click();
+    await expect(page.getByRole('region', { name: 'Confirm Session deletion' })).toContainText('Delete Inspect the Session ownership boundary?');
+  }
+  await expect(page).toHaveScreenshot(`sidebar-${mode}-light.png`);
+  if (mode === 'other-uncertain') {
+    await page.getByRole('button', { name: 'Toggle Inspector' }).click();
+    await page.getByText('Complete native runtime facts', { exact: true }).click();
+    expect(JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).uncertain_operations).toEqual([]);
+    await expect(page).toHaveScreenshot('sidebar-scoped-inspector.png');
+  }
+  expect(errors).toEqual([]);
+});
 // Intentional updates in the pinned browser environment: pnpm test:e2e:update
 // Fixed time, native-protocol fixture and reduced motion keep evidence reviewable.
 test('Harness shell reference states and presentation-only navigation', async ({ page }) => {

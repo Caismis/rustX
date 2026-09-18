@@ -48,7 +48,7 @@ if (mode === 'questionnaire') {
 }
 server.snapshots.set('A', s);
 await server.attached('A');
-localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint, tabs: ['A'] }));
+localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
 createRoot(document.getElementById('root')!).render(mode === 'restored' ? <RestoredComposerFixture /> : <App client={server.client} workspaceHost={server.workspaceHost}/>);
 
 // Browser-only controls for deterministic composer projection/transport tests.

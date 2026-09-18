@@ -2,7 +2,7 @@
 export interface SessionNode {
   id: string; title: string; pendingInteraction?: 'approval' | 'plan-review' | 'question';
   running: boolean; runningSubagentCount: number;
-  updatedAt: number; observation?: string;
+  updatedAt: number; observation?: string; viewOpen?: boolean;
 }
 export interface GroupNode {
   key: string; workspaceId: string | undefined; cwd: string | undefined; createdAt: number | undefined;

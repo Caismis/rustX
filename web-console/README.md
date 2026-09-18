@@ -108,6 +108,20 @@ and one dirty bit coalesce bursts. `resyncRequired` causes snapshot followed by
 subscribe at the returned cursor. No unbounded event queue or browser replay log
 exists. This intentionally favors clear ownership over token-by-token rendering.
 
+Session selection lives only in the Sidebar. The center header identifies the
+current Session and offers bounded actions, Inspector, and Chat/Trajectory views;
+there is no top Session tab strip or alternate picker. Close view is in each open
+Session's Sidebar row menu; the 32-view bound is actionable there. Internal
+`openViews` represents actual browser controller ownership, never a hidden tab UI.
+
+Every ordinary Session label uses `sessionDisplayTitle`: explicit native name >
+native `SessionSummary.preview` > **New session**. Session IDs stay in Inspector.
+Manual naming remains `session/name`; no LLM call, generated title, truncation or
+first-message summarizer exists in React. After authoritative canonical user-message
+observation, a previously unnamed view rereads its native catalog row once. Drafts,
+accepted inbound and optimistic submission never supply preview text. Native rows
+are retained with open views when Sidebar pagination/search changes.
+
 Every new connection has a new generation. Socket callbacks, resolved request
 continuations and attachment workers are fenced. A fresh attach/snapshot replaces
 stale observations; old attachment work cannot overwrite a new incarnation, even
@@ -117,22 +131,23 @@ its acknowledgement applies only to the attachment lifecycle that requested it.
 **Disconnect** closes only the socket and stays disconnected. An unexpected loss
 marks observations stale. **Reconnect** is explicit: initialize, list, reattach
 Sessions whose current `attachmentIntent` is `wanted`, then replace snapshots.
-There is no automatic connection loop. Three facts stay separate: React tabs own
-visibility; `attachmentIntent` records this browser's desired controller ownership;
+There is no automatic connection loop. Selection controls focus; `openViews`
+tracks bounded browser views; `attachmentIntent` records desired controller ownership;
 `attachment`/target and uncertain-operation diagnostics record server observations.
-Open/Attach sets intent to `wanted`. Detach, unload and closing a tab set it to
+Open/Attach sets intent to `wanted`. Detach, unload and closing a view set it to
 `released` immediately, before any RPC acknowledgement or failure. Server results
 never change intent. Loss marks an observed route stale regardless of intent.
 
-Closing a tab removes presentation immediately and sends only **session/detach**
+Closing a view through its Sidebar row menu removes its open-view hint immediately
+and sends only **session/detach**
 when an observed target is available. If attach is in flight, the release waits for
 its exact target; an explicit reopen waits for release before acquiring a fresh
 attachment. These operations are serialized per Session, bounded to 64 queued or
 running changes, and fenced by connection generation. They are never retried.
-A detach failure/uncertain result stays diagnostic without reopening the tab.
-Switching tabs and React unmounting alone remain presentation-only.
+A detach failure/uncertain result stays diagnostic without reopening the view.
+Switching Sessions and React unmounting alone remain presentation-only.
 
-Disconnect, closing a tab, switching focus, and React unmounting never cancel,
+Disconnect, closing a view, switching focus, and React unmounting never cancel,
 answer, unload or delete. Detach releases only external controller/subscription
 ownership, so work, loaded runtimes and pending interactions survive. Explicit
 **Unload runtime**, available only in **Session actions → Advanced Session controls**,
@@ -142,10 +157,10 @@ attaching or cold-loading the Session to discover the outcome. Only a later
 explicit **Open Session** sets wanted intent again. A fresh attach
 cannot by itself prove the previous mutation's outcome, so uncertainty remains.
 
-The existing endpoint/tab navigation hints retain only wanted views for automatic
-page-reload restoration. A detached tab can remain visible on this page without
-remaining a resume hint; no new persisted intent, observation or request state is
-introduced. On a fresh page the Session remains available through the native list
+The endpoint/openViews navigation hints retain only wanted views for automatic
+page-reload restoration. A released Session remains in the Sidebar catalog, without
+remaining a resume hint; no persisted observation or request state is introduced.
+On a fresh page the Session remains available through the native list
 for explicit Open. Opening or resuming resolves through rustX's canonical
 configuration owners.
 
@@ -158,7 +173,10 @@ discarded. Reconnect reads authority first; no mutation is automatically replaye
 Non-interaction uncertainty remains a diagnostic even when a snapshot is suggestive:
 the protocol cannot prove request identity. The product warning and Inspector
 retain that unresolved evidence. Up to 64 unresolved mutations can be retained; new mutations are
-refused before diagnostics would be silently dropped.
+refused before diagnostics would be silently dropped. After inspecting evidence and
+verifying affected work, Connection → Review uncertain operations permits explicit
+browser-local acknowledgement of non-interaction notices. This sends no RPC,
+asserts no outcome, and never retries; Inspector remains read-only.
 
 Pending interactions come only from authoritative snapshots, including routed
 Subagent interactions. Approval, Questionnaire (all six native answer shapes and

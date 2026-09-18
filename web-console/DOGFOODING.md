@@ -232,6 +232,15 @@ attachment counts, object URL release and bounded caches/log retention directly.
 ## 7. Product surface audit
 
 Use [PRODUCT-SURFACE.md](PRODUCT-SURFACE.md) to classify every visible control.
+Select Sessions only in Sidebar; verify no horizontal Session selector exists.
+Open A and B, leave A working, select B, and close A's browser view from its row
+menu: only the explicit close releases its controller; neither action stops A.
+Verify empty labels say New session, unnamed committed work uses native preview,
+and manual names win permanently. No LLM naming is implemented. Check deletion
+title and impact counts without raw identity/revision. With A healthy and B uncertain,
+verify B's visible row warning, A's clean status, and Inspector ownership separation.
+Read global uncertainty separately; review/acknowledge non-interaction notices only
+after checking affected work, through Connection → Review uncertain operations.
 Fresh/idle Sessions have no exact Attempt or attachment line. A running turn says
 Working; queued input stays in Queue; a stop request says Stopping until authority
 settles it. Disconnect exposes Reconnect. A lost response says Needs verification

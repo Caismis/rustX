@@ -1,3 +1,4 @@
+import { closeSessionView } from './shell-actions';
 import { unloadSession } from './shell-actions';
 import { test, expect } from '@playwright/test';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -37,7 +38,7 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     const outside = join(a.directory, 'outside-host-roots'); mkdirSync(outside);
     const denied = await remoteA.createSession({ cwd: outside });
     const deniedBefore = await remoteA.readSettings(denied.session.id);
-    await page.addInitScript(({ endpoint, id }) => localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint, tabs: [id] })), { endpoint: a.endpoint, id: denied.session.id });
+    await page.addInitScript(({ endpoint, id }) => localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: [id] })), { endpoint: a.endpoint, id: denied.session.id });
     await routeWorkspaceHost(page, a); await page.goto('/'); await expect(page).toHaveTitle(/rustX/);
     await page.getByLabel('WebSocket endpoint').fill(a.endpoint); await page.getByLabel('Transport token').fill(a.token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
@@ -56,7 +57,7 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     expect(await read()).toEqual(original);
     const resident = (await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot;
     expect(resident.loaded).toBe(1);
-    await page.locator(`[id="session-tab-${id}"]`).locator('..').getByRole('button').click();
+    await closeSessionView(page, id);
     await expect.poll(async () => (await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.external_attachments).toBe(0);
     const attached = await remoteA.client.call('session/attach', { session_id: id }, 'attached');
     await remoteA.client.call('configuration/reload', { target: attached.target }, 'configuration_reloaded');

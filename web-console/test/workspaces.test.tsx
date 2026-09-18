@@ -129,8 +129,8 @@ it('late cold open cannot restore focus after Workspace navigation', async () =>
 });
 it('stale or unloaded snapshots cannot claim running work', () => {
   const view = { id: 'A', attachmentIntent: 'wanted' as const, attachment: 'unloaded' as const, snapshot: snapshot('A') };
-  expect(sessionObservation(view, true)).toBe('Connection interrupted');
-  expect(sessionObservation(view, false)).toBe('Connection interrupted');
+  expect(sessionObservation({ ...server.client.getSnapshot(), views: { A: view }, connection: 'connected' }, 'A')).toBe('Connection interrupted');
+  expect(sessionObservation({ ...server.client.getSnapshot(), views: { A: view }, connection: 'disconnected' }, 'A')).toBe('Connection interrupted');
 });
 it('sidebar Fork uses the exact native boundary and late completion cannot undo Workspace focus', async () => {
   const boundary = { surface_revision: '37', message: { id: 'user-cut', kind: 'message' as const, source: 'human' as const, content: [{ type: 'text' as const, text: 'Fork this native boundary' }] } };
@@ -205,9 +205,9 @@ it('stale authorized summary cannot authorize current outside cwd', async () => 
   expect(methods()).not.toContain('session/attach'); expect(server.loaded.size).toBe(0);
   expect(methods()).not.toContain('settings/replace'); expect(methods()).not.toContain('session/delete');
 });
-it('unauthorized saved tabs cannot cold attach on initial restoration or reconnect', async () => {
+it('unauthorized saved views cannot cold attach on initial restoration or reconnect', async () => {
   const host = hostFixture();
-  localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint, tabs: ['A'] }));
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
   server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={host} />); await server.connect(); });
   await act(async () => { server.client.disconnect(); await server.connect(); });
@@ -243,7 +243,7 @@ async function invokeNew() {
   fireEvent.change(input, { target: { value: '/new' } });
   await act(async () => fireEvent.keyDown(input, { key: 'Enter' }));
 }
-it('top tabs synchronize Workspace context and /new resolves A after visiting B', async () => {
+it('Sidebar selection synchronizes Workspace context and /new resolves A after visiting B', async () => {
   const host = await mount();
   server.handlers.set('session/create', request => {
     if (request.method !== 'session/create') throw new Error('wrong request');
@@ -254,8 +254,8 @@ it('top tabs synchronize Workspace context and /new resolves A after visiting B'
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
   expect(screen.getByRole('button', { name: 'Select Workspace Workspace B' }).getAttribute('aria-current')).toBe('page');
-  await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Session A' })));
-  expect(screen.getByRole('tab', { name: 'Session A' }).getAttribute('aria-selected')).toBe('true');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  expect(screen.getByRole('button', { name: 'Open Session A' }).getAttribute('aria-current')).toBe('page');
   expect(screen.getByRole('button', { name: 'Select Workspace Workspace A' }).getAttribute('aria-current')).toBe('page');
   await invokeNew();
   expect(host.resolveWorkspace).toHaveBeenCalledExactlyOnceWith('wA', endpoint);
@@ -266,7 +266,7 @@ it('focusing an authorized-unregistered Session clears old Workspace context and
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
   await host.removeWorkspace('wA');
-  await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Session A' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(document.querySelector('[aria-label^="Select Workspace"][aria-current="page"]')).toBeNull();
   await invokeNew();
   expect(host.resolveWorkspace).not.toHaveBeenCalled(); expect(methods()).not.toContain('session/create');

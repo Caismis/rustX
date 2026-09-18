@@ -1,4 +1,9 @@
 import { expect, type Page } from '@playwright/test';
+export async function closeSessionView(page: Page, id: string) {
+  await page.locator(`button[data-session-id="${id}"]`).hover();
+  await page.locator(`button[data-session-actions="${id}"]`).click();
+  await page.getByRole('menuitem', { name: /^Close .+ view$/ }).click();
+}
 export async function closeSettings(page: Page) {
   const close = page.getByRole('button', { name: 'Close Settings', exact: true });
   if (await close.isVisible()) await close.click();

@@ -76,7 +76,7 @@ it('Chat / Trajectory switching stays on one attachment while authoritative live
   server = new Server();
   server.snapshots.set('A', { ...snapshot(), trace: { entries: [traceEntry(0)] } });
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A'] }));
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   const attachments = server.requests.filter(item => item.request.method === 'session/attach').length;
   fireEvent.click(screen.getByRole('tab', { name: 'Trajectory' }));

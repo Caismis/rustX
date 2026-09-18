@@ -1,6 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-workspace browser/rows/picker; see PROVENANCE.md. */
 import { useEffect, useState } from 'react';
-import type { AppServerClient, ClientView, SessionView } from '../client/app-server';
+import type { AppServerClient, ClientView } from '../client/app-server';
+import { sessionDisplayTitle } from '../bindings/session-title';
 import { activeAttempt } from '../bindings/projection';
 import { deriveSessionProductState } from '../bindings/session-product';
 import { NavigationEpoch } from '../app/commands/native';
@@ -14,15 +15,19 @@ import type { ProductHostWorkspaces, WorkspaceCatalog, SessionLocation } from '.
 
 
 /** Activity requires a current attachment; cached snapshots cannot claim execution. */
-export function sessionObservation(view: SessionView | undefined, connected: boolean) {
-  if (connected && (!view || view.attachmentIntent === 'released')) return 'Open Session';
-  return deriveSessionProductState({ connection: connected ? 'connected' : 'disconnected', uncertain: [] }, view).label ?? '';
+export function sessionObservation(state: ClientView, id: string) {
+  const view = state.views[id];
+  const product = deriveSessionProductState(state, view, id);
+  if (product.status === 'uncertain') return product.label;
+  if (state.connection === 'connected' && (!view || view.attachmentIntent === 'released')) return '';
+  return product.label ?? '';
 }
-export function WorkspaceNavigation({ host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, createSession, forkSession, deleteSession, creating, metadataChanged, wide, expand, createOpen, closeCreate }: {
+export function WorkspaceNavigation({ host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, openViews, closeView, createSession, forkSession, deleteSession, creating, metadataChanged, wide, expand, createOpen, closeCreate }: {
   host: ProductHostWorkspaces; client: AppServerClient; state: ClientView; endpoint: string; navigation: NavigationEpoch;
   wide: boolean; expand: () => void; createOpen: boolean; closeCreate: () => void;
   creating: boolean; metadataChanged: (removed?: string) => void;
   workspace?: string; selected?: string; selectWorkspace: (id?: string) => void;
+  openViews: readonly string[]; closeView: (id: string) => void;
   openSession: (id: string) => void; createSession: (id: string) => void; forkSession: (id: string) => void; deleteSession: (id: string) => void;
 }) {
   const [catalog, setCatalog] = useState<WorkspaceCatalog>();
@@ -67,10 +72,10 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
     const view = state.views[session.id];
     const current = connected && view?.attachment === 'attached' && view.attachmentIntent === 'wanted';
     const pending = current ? view.snapshot?.pending_interactions?.[0] : undefined;
-    return { id: session.id, title: session.name ?? session.preview ?? 'Session',
+    return { id: session.id, title: sessionDisplayTitle(session), viewOpen: openViews.includes(session.id),
       running: !!current && activeAttempt(view.snapshot), pendingInteraction: pending ? pending.request.kind.type === 'approval' ? 'approval' : pending.request.kind.type === 'review' ? 'plan-review' : 'question' : undefined,
       runningSubagentCount: 0,
-      updatedAt: Date.parse(session.updated_at) || 0, observation: sessionObservation(view, connected) };
+      updatedAt: Date.parse(session.updated_at) || 0, observation: sessionObservation(state, session.id) };
   };
   const groupNodes: GroupNode[] = (bound ? catalog?.workspaces ?? [] : []).map(row => ({ key: row.id, workspaceId: row.id,
     cwd: row.displayPath, createdAt: undefined, label: row.displayName, expanded: true,
@@ -80,7 +85,7 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
     containsCurrent: rows.some(item => item.group === null && item.session.id === selected), sessionCount: rows.filter(item => item.group === null).length,
     sessions: rows.filter(item => item.group === null).map(item => toNode(item.session)) });
   return <>
-    <WorkspaceBrowser wide={wide} expand={expand} groups={groupNodes} sessions={state.sessions.map(toNode)} selected={selected}
+    <WorkspaceBrowser wide={wide} expand={expand} groups={groupNodes} sessions={state.sessions.map(toNode)} selected={selected} closeView={closeView}
       query={query} search={text => connected && search(text)} open={id => connected && openSession(id)} rename={(id, title) => edit('session', id, title)} fork={forkSession} remove={deleteSession}
       selectWorkspace={selectWorkspace} create={id => connected && !creating && createSession(id)} renameWorkspace={(id, title) => edit('workspace', id, title)} removeWorkspace={(id, title) => edit('remove', id, title)}
       addWorkspace={catalog?.picker.kind === 'configured' && bound ? () => setDialog({ kind: 'add', id: '', name: '' }) : undefined}
@@ -99,7 +104,7 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
           : dialog.kind === 'remove' ? <><p>Only the navigation registration is removed. Sessions, cwd, history, and running work remain untouched.</p><Button disabled={busy} onClick={() => void mutate(() => host.removeWorkspace(dialog.id), dialog.id)}>Unregister</Button></>
             : <form onSubmit={event => { event.preventDefault(); const current = navigation.capture(); void mutate(async () => {
               if (dialog.kind === 'workspace') await host.renameWorkspace(dialog.id, name);
-              else { await client.request({ method: 'session/name', params: { session_id: dialog.id, name } }, 'session'); if (current()) await client.listSessions(offset, query, current); }
+              else { await client.request({ method: 'session/name', params: { session_id: dialog.id, name } }, 'session'); if (current()) { await client.refreshSessionSummary(dialog.id); await client.listSessions(offset, query, current); } }
             }, dialog.kind === 'workspace'); }}><Input autoFocus aria-label="Name" value={name} onChange={event => setName(event.target.value)} /><Button type="submit" disabled={busy || !name.trim()}>Save name</Button></form>}
     </Modal>}
   </>;

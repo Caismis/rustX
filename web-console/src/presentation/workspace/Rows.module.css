@@ -104,7 +104,7 @@
 
 /* Session cell (figma): pad 8, a 16px status slot, then a 4px title gap. */
 .sessionRow {
-  height: 32px;
+  min-height: 32px;
   gap: 0;
   /* Mount fade: session rows appear by unfolding a group (or the tree
      mounting). Stable row keys keep already-visible rows from replaying it. */
@@ -114,6 +114,8 @@
 .sessionRow .title {
   margin: 0 6px 0 4px;
 }
+
+.observation { display: block; font-size: 10px; line-height: 14px; color: var(--dsw-alias-label-secondary); }
 
 .flatSessionRowWithoutStatus .title {
   margin-left: 0;

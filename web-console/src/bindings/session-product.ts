@@ -11,7 +11,7 @@ export interface SessionProductState {
 
 /** Pure display projection. Stale snapshots never imply current execution or
  * settlement. Recovery only names an existing client operation; no replay. */
-export function deriveSessionProductState(state: Pick<ClientView, 'connection' | 'uncertain'>, view?: SessionView): SessionProductState {
+export function deriveSessionProductState(state: Pick<ClientView, 'connection' | 'uncertain'>, view?: SessionView, sessionId = view?.id): SessionProductState {
   const connecting = ['connecting', 'reconnecting', 'resynchronizing'].includes(state.connection);
   const recovery: SessionProductState['recovery'] = connecting ? undefined
     : state.connection === 'incompatible' ? { action: 'connection-settings', label: 'Connection settings' }
@@ -19,7 +19,7 @@ export function deriveSessionProductState(state: Pick<ClientView, 'connection' |
     : !view || view.attachment === 'attaching' || view.attachment === 'resynchronizing' ? undefined
     : view.attachmentIntent !== 'wanted' || !view.target ? { action: 'open', label: 'Open Session' }
     : view.attachment !== 'attached' ? { action: 'refresh', label: 'Retry connection' } : undefined;
-  const uncertain = state.uncertain.some(item => !item.sessionId || item.sessionId === view?.id)
+  const uncertain = state.uncertain.some(item => sessionId !== undefined && item.sessionId === sessionId)
     || view?.cancellation?.status === 'uncertain' || view?.modelMutation?.status === 'uncertain'
     || view?.snapshot?.background?.some(tool => tool.state === 'outcome_unknown')
     || view?.snapshot?.attempt?.foreground?.some(tool => tool.state.type === 'settled' && tool.state.result.status.type === 'outcome_unknown')

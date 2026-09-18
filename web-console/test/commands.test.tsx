@@ -110,7 +110,7 @@ async function subject() {
 describe('successful command draft consumption', () => {
   async function open(draft: string) {
     await subject();
-    localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A'] }));
+    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
     render(<App client={server.client} workspaceHost={server.workspaceHost} />);
     const input = screen.getByLabelText('Message'); input.focus();
     fireEvent.change(input, { target: { value: draft } });
@@ -303,7 +303,7 @@ describe('typed native operations and continuation fencing', () => {
     if (source === 'pending-settled') history.attempt = { attempt_id: 'settled-attempt', turn: 1, phase: { type: 'settled', outcome: { type: 'completed', finish_reason: { type: 'stop' } } } };
     history.transcript.entries!.unshift({ cursor: '0', item: { type: 'message', message: { role: 'user', source: 'human', id: 'user-cut', content: [{ type: 'text', text: 'Try this' }] } } });
     await server.update('A', history);
-    localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A'] }));
+    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
     render(<App client={server.client} workspaceHost={server.workspaceHost} />);
     const pending = { revision: "0", sequence: '1', message: { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'Accepted task' }] } };
     if (source === 'acknowledgement') {
@@ -534,7 +534,7 @@ describe('typed native operations and continuation fencing', () => {
   });
   it.each(['fork', 'branch'] as const)('App navigation after committed %s cannot be redirected by a late reply', async action => {
     const { fixture } = await subject();
-    localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A', 'B'] }));
+    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
     render(<App client={server.client} workspaceHost={server.workspaceHost} />);
     const input = screen.getByLabelText('Message');
     fireEvent.change(input, { target: { value: `/${action}` } });
@@ -548,7 +548,7 @@ describe('typed native operations and continuation fencing', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
     const attachments = methods().filter(method => method === 'session/attach').length;
     await act(async () => server.socket.deliver(response));
-    expect(screen.getByRole('tab', { name: 'Session B', selected: true })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open Session B', current: 'page' })).toBeTruthy();
     expect(methods().filter(method => method === 'session/attach')).toHaveLength(attachments);
     expect(methods()).not.toContain('session/unload');
     expect(fixture.committed).toHaveLength(1);

@@ -18,21 +18,23 @@ it('boots the source-derived shell with no Host backend and exposes only support
 });
 it('switching and unmounting open Session views remains presentation-only', async () => {
   await server.attached('A', 'B');
-  localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A', 'B'] }));
-  const ui = render(<App client={server.client} workspaceHost={server.workspaceHost} />);
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
+  let ui!: ReturnType<typeof render>;
+  await act(async () => { ui = render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   const baseline = server.requests.length;
-  fireEvent.click(screen.getByRole('tab', { name: 'Session B' }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
   expect(screen.getByLabelText('Session location').textContent).toBe('/workspace/B');
-  fireEvent.click(screen.getByRole('tab', { name: 'Session A' }));
-  expect(screen.getAllByRole('tab', { name: /^Session / })).toHaveLength(2);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  expect(screen.getAllByRole('tree', { name: 'Session browser' })).toHaveLength(1);
+  expect(screen.queryByRole('tablist', { name: 'Open Session views' })).toBeNull();
   ui.unmount();
-  expect(server.requests.slice(baseline).every(row => row.request.method === 'settings/read')).toBe(true);
+  expect(server.requests.slice(baseline).every(row => ['settings/read', 'session/snapshot'].includes(row.request.method))).toBe(true);
   expect(server.client.getSnapshot().views.A.attachment).toBe('attached');
   expect(server.client.getSnapshot().views.B.attachment).toBe('attached');
 });
 it('renders streaming then one committed response, and an authoritative Approval removes obsolete controls', async () => {
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A'] }));
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   const live = { ...snapshot(), attempt: { attempt_id: 'attempt-A', phase: { type: 'running' as const }, turn: 1,
     in_flight: { message_id: 'assistant-1', blocks: [{ type: 'text' as const, block_index: 0, text: 'Streaming response' }] } } };
@@ -48,7 +50,7 @@ it('renders streaming then one committed response, and an authoritative Approval
 it('pending interaction remains visible but disabled across transport loss and recovers after connect', async () => {
   server.snapshots.get('A')!.pending_interactions = [interaction('questionnaire')];
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A'] }));
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   act(() => server.socket.close());
   expect(screen.getByRole('region', { name: 'Questionnaire' })).toBeTruthy();
@@ -71,7 +73,7 @@ it('native Review preserves instance and subject digest and waits for authoritat
   const instance = { block: { run: { conversation_id: 'conversation-A', attempt_id: 'attempt-A', invocation: '1' }, definition: { workflow_id: 'workflow', blocks: [] }, invocations: [0] }, node: 'review', visit: 1 };
   review.request.kind = { type: 'review', subject_digest: 'native-subject-digest', review: { instance, subject: { type: 'plan', content: 'Review this plan' }, context: [] } };
   server.snapshots.get('A')!.pending_interactions = [review]; await server.attached('A');
-  localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A'] }));
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Accept review' })); await server.waitFor('interaction/respond', 1); await server.client.refresh('A'); });
   const request = server.requests.find(item => item.request.method === 'interaction/respond')!.request;
@@ -82,12 +84,13 @@ it('native Review preserves instance and subject digest and waits for authoritat
 it('closing A immediately emits exactly its detach, preserving B, runtime work and pending facts', async () => {
   server.snapshots.set('A', { ...snapshot(), attempt: { attempt_id: 'active-A', phase: { type: 'running' }, turn: 1 }, pending_interactions: [interaction('approval')] });
   await server.attached('A', 'B'); server.held.add('session/detach');
-  localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A', 'B'] }));
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   const target = server.client.target('A'), beforeA = server.client.getSnapshot().views.A.snapshot, beforeB = server.client.getSnapshot().views.B;
   const baseline = server.requests.length;
-  act(() => { fireEvent.click(screen.getByRole('button', { name: 'Close Session A view' })); });
-  expect(screen.queryByRole('tab', { name: 'Session A' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Close Session A view' }));
+  expect(screen.getByLabelText('Session title').textContent).toBe('Session B');
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   const detach = await server.waitFor('session/detach', 1);
   expect(server.requests.slice(baseline).filter(({ request }) => request.method !== 'settings/read').map(({ request }) => ({ method: request.method, params: request.params }))).toEqual([{ method: 'session/detach', params: { target } }]);
@@ -105,36 +108,37 @@ it('closing A immediately emits exactly its detach, preserving B, runtime work a
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('wanted');
   expect(server.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach' && request.params.session_id === 'A')).toHaveLength(1);
 });
-it('lost close-tab detach acknowledgement leaves the tab closed and intent released across reconnect', async () => {
+it('lost close-view acknowledgement leaves intent released across reconnect and marks the affected Sidebar row', async () => {
   await server.attached('A', 'B'); server.held.add('session/detach');
-  localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A', 'B'] }));
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
-  act(() => { fireEvent.click(screen.getByRole('button', { name: 'Close Session A view' })); });
+  fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Close Session A view' }));
   const detach = await server.waitFor('session/detach', 1); server.commit(detach);
   await act(async () => { server.socket.close(); await server.connect(); });
-  expect(screen.queryByRole('tab', { name: 'Session A' })).toBeNull();
-  expect(screen.getByText(/Other Sessions need verification/)).toBeTruthy();
+  expect(screen.getByLabelText('Session title').textContent).toBe('Session B');
+  expect(screen.getByRole('button', { name: 'Open Session A' }).textContent).toContain('Needs verification');
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   expect(server.claims().map(item => item.session_id)).toEqual(['B']);
   expect(server.requests.filter(({ request }) => request.method === 'session/detach')).toHaveLength(1);
   expect(server.requests.filter(({ request }) => request.method === 'session/attach' && request.params.session_id === 'A')).toHaveLength(1);
-  expect(JSON.parse(localStorage.getItem('rustx-console-view-v1')!).tabs).toEqual(['B']);
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!).openViews).toEqual(['B']);
 });
 
-it('releasing an open tab also removes its existing reload hint without closing its presentation', async () => {
+it('releasing an open view also removes its existing reload hint without removing its Sidebar row', async () => {
   await server.attached('A', 'B'); server.held.add('session/unload');
-  localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A', 'B'] }));
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
   const ui = render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   act(() => { fireEvent.click(screen.getByRole('button', { name: 'Session actions' })); });
   act(() => { fireEvent.click(screen.getByRole('menuitem', { name: 'Advanced Session controls' })); });
   act(() => { fireEvent.click(screen.getByRole('button', { name: 'Unload runtime' })); });
   const unload = await server.waitFor('session/unload', 1); server.commit(unload);
-  expect(screen.getByRole('tab', { name: 'Session A' })).toBeTruthy();
-  expect(JSON.parse(localStorage.getItem('rustx-console-view-v1')!).tabs).toEqual(['B']);
+  expect(screen.getByRole('button', { name: 'Open Session A' })).toBeTruthy();
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!).openViews).toEqual(['B']);
   await act(async () => { server.socket.close(); }); ui.unmount();
   const fresh = new Server(); fresh.snapshots = server.snapshots;
   const page = render(<App client={fresh.client} workspaceHost={fresh.workspaceHost} />); await act(() => fresh.connect());
   expect(fresh.claims().map(item => item.session_id)).toEqual(['B']);
-  expect(screen.queryByRole('tab', { name: 'Session A' })).toBeNull();
+  expect(screen.getByLabelText('Session title').textContent).toBe('Session B');
   page.unmount(); fresh.client.disconnect();
 });

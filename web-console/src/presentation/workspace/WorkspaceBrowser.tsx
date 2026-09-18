@@ -10,10 +10,11 @@ import { t } from '../locale/translate';
 import css from './WorkspaceBrowser.module.css';
 
 /** Native adapters supply facts/gestures. This component owns only visual state. */
-export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, query, search, open, rename, fork, remove,
+export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, query, search, open, rename, fork, remove, closeView,
   selectWorkspace, create, renameWorkspace, removeWorkspace, addWorkspace, refresh, previous, next, notices }: {
   wide: boolean; expand: () => void; groups: readonly GroupNode[]; sessions: readonly SessionNode[]; selected?: string;
   query: string; search: (text: string) => void; open: (id: string) => void; rename: (id: string, title: string) => void;
+  closeView?: (id: string) => void;
   fork: (id: string) => void; remove: (id: string) => void; selectWorkspace: (id: string) => void; create: (id: string) => void;
   renameWorkspace: (id: string, title: string) => void; removeWorkspace: (id: string, title: string) => void;
   addWorkspace?: () => void; refresh: () => void; previous?: () => void; next?: () => void; notices?: ReactNode;
@@ -21,7 +22,7 @@ export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, que
   const [searchExpanded, setSearchExpanded] = useState(false), [flat, setFlat] = useState(false), [menu, setMenu] = useState(false);
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const searchInput = useRef<HTMLInputElement>(null);
-  const row = (node: SessionNode) => <SessionNodeItem key={node.id} node={node} currentId={selected} now={Date.now()} onOpen={open} onRename={rename} onFork={fork} onDelete={remove} flat={flat || !!query} t={t} />;
+  const row = (node: SessionNode) => <SessionNodeItem key={node.id} node={node} currentId={selected} now={Date.now()} onOpen={open} onRename={rename} onFork={fork} onDelete={remove} onClose={node.viewOpen ? closeView : undefined} flat={flat || !!query} t={t} />;
   return <section className={clsx(css.root, !wide && css.rail)} aria-label="Workspaces and Sessions">
     <div className={css.sectionHeader}>
       {wide && <span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>{flat ? 'Sessions' : 'Workspaces'}</span>}

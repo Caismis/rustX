@@ -30,8 +30,8 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
     approval_mode: snapshot?.effective_approval_mode,
     shutting_down: snapshot?.shutting_down, durability_failure: snapshot?.durability_failure,
     cancellation: view?.cancellation, inbound: snapshot?.inbound, submissions: view?.submissions,
-    inbound_requests: view?.inboundRequests, interactions: state.interactionOperations,
-    uncertain_operations: state.uncertain, model_mutation: view?.modelMutation,
+    inbound_requests: view?.inboundRequests, interactions: Object.fromEntries(Object.entries(state.interactionOperations).filter(([, operation]) => view && operation.sessionId === view.id)),
+    uncertain_operations: state.uncertain.filter(operation => view && operation.sessionId === view.id), model_mutation: view?.modelMutation,
     goal: snapshot?.goal, todos: snapshot?.todos, statuses: snapshot?.statuses,
     background: snapshot?.background, subagents: snapshot?.subagents,
     trace: view?.trace, session_residency: view ? state.sessionResidencies?.[view.id] : undefined,
@@ -41,6 +41,7 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
     <div className="eyebrow">RUSTX / INSPECTOR</div>
     <h2>Runtime facts</h2>
     <p className="muted">Read from the selected Session. Stale values describe the last observation.</p>
+    <section aria-label="Selected Session diagnostics">
     <SettingsCard title="Identity"><Facts rows={[["Session ID", view?.id], ["Conversation ID", facts.ConversationId], ["cwd", facts.cwd]]} /></SettingsCard>
     <SettingsCard title="Execution"><Facts rows={[["Attempt ID", snapshot?.attempt?.attempt_id], ["Exact phase", snapshot?.attempt?.phase.type], ["Exact outcome", snapshot?.attempt?.phase.type === 'settled' ? snapshot.attempt.phase.outcome.type : undefined], ["Cancellation request", view?.cancellation?.status]]} />
       <details><summary>Attempt and cancellation evidence</summary><pre>{json({ attempt: snapshot?.attempt, cancellation: view?.cancellation })}</pre></details>
@@ -54,7 +55,12 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
     <SettingsCard title="Protocol"><Facts rows={[["Connection", state.connection], ["Connection generation", state.generation], ["Cursor", facts.cursor]]} /><details><summary>Complete native runtime facts</summary><pre aria-label="Native diagnostic JSON">{json(facts)}</pre></details></SettingsCard>
     <details><summary>Server capabilities</summary><pre>{json(state.capabilities)}</pre></details>
     <details><summary>Explicit Session selections</summary><pre>{json(view?.settings)}</pre></details>
-    <h2>Wire protocol</h2>
+    </section>
+    <section aria-label="Global / other Session diagnostics"><h2>Global / other Session diagnostics</h2>
+      <p className="muted">Unscoped operations and evidence belonging to other Sessions, not the selected Session.</p>
+      <pre>{json({ uncertain: state.uncertain.filter(operation => !view || operation.sessionId !== view.id), interactions: Object.fromEntries(Object.entries(state.interactionOperations).filter(([, operation]) => !view || operation.sessionId !== view.id)) })}</pre>
+    </section>
+    <h2>Wire protocol · all Sessions</h2>
     <p className="muted">Actual JSON-RPC frames · before view adaptation</p>
     <div className="log-controls">
       <Input aria-label="Method filter" placeholder="Method filter" value={method} onChange={event => setMethod(event.target.value)} />

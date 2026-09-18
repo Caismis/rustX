@@ -6,7 +6,12 @@ remain inputs, not redesign targets.
 
 | Current item | Classification | Final treatment | Reason |
 | --- | --- | --- | --- |
-| Session title | Product | One Session header | Identify current work |
+| Session selection | Product | Sidebar Session browser only; top Session strip deleted | One selector, no duplicate tabs/dropdown |
+| Current Session header | Product | Identity/status/actions and Chat/Trajectory, not a Session picker | Identify current work |
+| Session display title | Product | Explicit name > native first-message preview > New session | Reuse native catalog, no browser summarization |
+| Session ID | Developer Inspector | Identity / scoped runtime facts | Never a product fallback or accessible label |
+| Close browser view | Product | Corresponding Sidebar Session row menu | Release one controller, free the 32-view capacity, retain server work |
+| Automatic LLM title | Remove | Not implemented | Deterministic offline naming only; manual rename retained |
 | Workspace identity/location, cwd/path | Product | Quiet location under title | Identify execution location without lifecycle suffix |
 | Chat / Trajectory | Product | Header view tabs | Conversation and execution history navigation |
 | Session tree | Product | Session menu and existing command | Native branch/history navigation |
@@ -41,6 +46,14 @@ remain inputs, not redesign targets.
 The pure product projection reads client/native observations. It owns no timer,
 transition, retry, persistence, settlement or queue. Inspector receives only
 observations and the browser-local protocol log, never the runtime client.
+
+Sidebar status includes only its Session's uncertainty. Selected Inspector sections
+are Session-scoped; Global / other Session diagnostics explicitly separates other
+and unscoped evidence. Connection's advanced disclosure permits explicit browser-local
+acknowledgement of reviewed non-interaction notices (no RPC or inferred outcome).
+Interaction uncertainty still requires native reconciliation. Queue conflicts say
+"Use latest version" without changing CAS. Deletion shows the display title and
+ownership counts; its exact target revision remains an internal operation argument.
 
 Harness inspection: Epic baseline `c291e7961a515f6d7af9304e7fd1d257929aef26`
 and re-fetched current `ddefc45fbc7f8e46dd73185e68295696d1297887`.

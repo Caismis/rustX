@@ -149,6 +149,22 @@ changed composer behind their overlays; no shell or Settings redesign is implied
 
 ## WEB-12 product / Inspector boundary
 
+`session-surface.test.tsx` proves Sidebar-only selection, background work across
+focus changes, finite view capacity and explicit close/release, native-only naming
+and first-commit catalog invalidation (including file-only input), manual name
+precedence, A/B and unscoped uncertainty, scoped interaction evidence, local-only
+diagnostic acknowledgement and exact revision-confirmed deletion without raw DTOs.
+The former Session-tab selectors are removed; Chat/Trajectory keep tab semantics.
+
+Repair validation: 419 deterministic tests in 29 files; all 39 browser acceptance
+tests; 23 intentional snapshot/geometry update cases followed by normal zero-tolerance
+E2E. Keyboard acceptance now explicitly reaches Sidebar row actions/Close view and
+Inspector at all four widths. Reviewed rendered light/dark/narrow, native preview,
+manual name, empty Session, background work, scoped uncertainty, Inspector and deletion
+captures. Typecheck, production build, 104-source provenance/100-package notices,
+upstream reference audit and the 30-test development-launcher lane pass. No Rust or
+protocol source changes, skipped tests, screenshot tolerance changes or semantic sleeps.
+
 `session-product.test.tsx` covers deterministic status priority, idle silence,
 accepted versus unaccepted inbound, cancellation request versus settlement,
 attachment recovery, durability and uncertain outcomes. It proves exact native

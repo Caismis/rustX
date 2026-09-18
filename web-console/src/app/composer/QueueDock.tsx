@@ -112,9 +112,9 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
         <div className={css.actions}>
           <button type="button" className={css.action} disabled={locked || staleDraft || !draft.text.trim() || !edit} onClick={() => { if (edit) void apply(() => edit(draft.expected, draft.text), true); }}>Save</button>
           <button type="button" className={css.action} disabled={locked} onClick={() => { setDraft(undefined); setNotice(''); }}>Cancel edit</button>
-          {staleDraft && currentDraft && <button type="button" className={css.action} disabled={locked} onClick={() => setDraft({ ...draft, expected: expected(currentDraft) })}>Use current revision</button>}
+          {staleDraft && currentDraft && <button type="button" className={css.action} disabled={locked} onClick={() => setDraft({ ...draft, expected: expected(currentDraft) })}>Use latest version</button>}
         </div>
-        {staleDraft && <p role="status">{currentDraft ? 'The current row has changed. Review it before using its revision.' : 'This occurrence is no longer pending.'}</p>}
+        {staleDraft && <p role="status">{currentDraft ? 'This queued message changed. Review the latest version before saving.' : 'This message is no longer queued.'}</p>}
       </div>}
       {operation?.status === 'pending' && <p className={css.notice} role="status">Updating queue…</p>}
       {notice && <p className={css.notice} role="status">{notice}</p>}

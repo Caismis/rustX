@@ -2,6 +2,14 @@
 
 ## WEB-12 Session convergence
 
+PR #361 repair retains these exact upstream pins and imports no new Harness code.
+Existing WorkspaceNavigation, WorkspaceBrowser, Rows/Rows.module.css and QueueDock
+adaptations now carry Sidebar-only selection/close callbacks, visible scoped status,
+and product conflict wording. Their reviewed local hashes/import inventories are
+updated; upstream hashes, MIT headers and license/notice closure are unchanged.
+The title helper and bounded native catalog cache invalidation are rustX-authored.
+No LLM title generation or browser-owned naming authority is introduced.
+
 Re-fetched upstream remains `ddefc45fbc7f8e46dd73185e68295696d1297887`.
 Compared the Epic baseline `c291e7961a515f6d7af9304e7fd1d257929aef26`
 and current `ui-conversation/src/client/skeleton/ConversationSession.tsx`,

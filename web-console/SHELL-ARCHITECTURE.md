@@ -29,6 +29,14 @@ Session actions menu (tree navigation and advanced lifecycle), and the existing
 Inspector corner/side-panel seat. The former duplicate title/connection bar and
 permanent attach/resync/detach/unload toolbar are removed. Paths identify the
 execution location without attachment suffixes; Sidebar tooltips use product copy.
+Sidebar is the sole Session selector. The top Session strip is deleted, not hidden.
+`openViews` tracks real browser controller ownership/restoration (maximum 32), not
+visual tabs. Sidebar row menus expose Close view; switching focus retains background
+observation and never releases, cancels or unloads work. Chat/Trajectory retain tabs.
+`sessionDisplayTitle` uses explicit name > native SessionSummary.preview > New session.
+No UUID fallback or automatic LLM naming exists. A bounded native catalog reread after
+canonical user-message observation refreshes unnamed labels; no draft or admission
+can generate a title. Cached native rows retain header identity across catalog pages.
 See [the complete classification](PRODUCT-SURFACE.md).
 
 `bindings/session-product.ts` is a pure projection, shared by Session status and
@@ -37,6 +45,8 @@ Transport reconnect, attachment open and snapshot refresh remain distinct action
 Inspector accepts observations and `ProtocolLog` only, so its controls cannot
 dispatch runtime operations. Unresolved evidence stays in the client; reading,
 filtering, clearing or pausing the log cannot acknowledge it.
+Selected sections filter operation evidence by Session; separate global/other
+diagnostics never attribute another Session's uncertainty to the selected one.
 
 `presentation/` has no imports of app, bindings, workspaces, client or protocol.
 `app/` and `workspaces/` bind its props to the typed App Server client.

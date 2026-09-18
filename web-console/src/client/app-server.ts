@@ -17,9 +17,11 @@ export type InboundControlOutcome =
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'resynchronizing' | 'stale' | 'incompatible' | 'error';
 export interface SessionView {
   id: string;
+  /** Last native catalog row, retained when the Sidebar reads a different page. */
+  summary?: SessionSummary;
   // Local future-control intent; never inferred from an RPC acknowledgement.
   attachmentIntent: 'wanted' | 'released';
-  // Last server observation, independent of tab visibility and local intent.
+  // Last server observation, independent of focus and local intent.
   attachment: 'detached' | 'attaching' | 'attached' | 'resynchronizing' | 'stale' | 'unloaded' | 'error';
   target?: AttachmentTarget;
   /** Exact native node explicitly opened by this view; retained across reconnect. */
@@ -136,6 +138,9 @@ export class AppServerClient {
   private attachmentChanges = new Map<string, { kind: 'attach' | 'detach' | 'unload'; work: Promise<void> }>();
   private attachmentChangeCount = 0;
   private attachmentEpochs = new Map<string, number>();
+  private previewReads = new Set<string>();
+  private summaryReadSequence = 0;
+  private summaryReads = new Map<string, number>();
   private state: ClientView = {
     connection: 'disconnected', generation: 0, sessions: [], views: {}, uncertain: [], interactionOperations: {},
   };
@@ -147,7 +152,7 @@ export class AppServerClient {
     for (const listener of this.listeners) listener();
   }
   private setSession(id: string, patch: Partial<SessionView>) {
-    const view = this.state.views[id] ?? { id, attachmentIntent: 'released' as const, attachment: 'detached' as const };
+    const view = this.state.views[id] ?? { id, summary: this.state.sessions.find(row => row.id === id), attachmentIntent: 'released' as const, attachment: 'detached' as const };
     this.publish({ views: { ...this.state.views, [id]: { ...view, ...patch } } });
   }
   // Product policy is injected by the Web owner, not interpreted by this transport.
@@ -356,10 +361,47 @@ export class AppServerClient {
   private listQuery = '';
   async listSessions(offset = this.listOffset, query = this.listQuery, current: () => boolean = () => true) {
     const epoch = ++this.listEpoch;
+    const summaryRead = ++this.summaryReadSequence;
     this.listOffset = offset; this.listQuery = query;
     const generation = this.state.generation;
     const result = await this.request({ method: 'session/list', params: { offset, limit: 32, query } }, 'sessions');
-    if (this.current(generation) && epoch === this.listEpoch && current()) this.publish({ sessions: result.sessions, sessionResidencies: result.residencies, nextOffset: result.next_offset });
+    if (this.current(generation) && epoch === this.listEpoch && current()) {
+      const views = { ...this.state.views };
+      const sessions = result.sessions.map(row => {
+        const cached = views[row.id]?.summary ?? this.state.sessions.find(item => item.id === row.id);
+        const summary = (this.summaryReads.get(row.id) ?? 0) > summaryRead && cached ? cached : row;
+        if (summary === row) this.summaryReads.set(row.id, summaryRead);
+        if (views[row.id]) views[row.id] = { ...views[row.id], summary };
+        return summary;
+      });
+      // Retain ordering fences only for metadata actually cached by this client.
+      for (const id of this.summaryReads.keys()) if (!views[id] && !sessions.some(row => row.id === id)) this.summaryReads.delete(id);
+      this.publish({ sessions, sessionResidencies: result.residencies, nextOffset: result.next_offset, views });
+    }
+  }
+  /** A committed canonical user message invalidates an unnamed catalog label once
+   * per open view. This only rereads native metadata; admission/mailbox/drafts do
+   * not establish a preview. File-only messages may legitimately yield no label.
+   * Catalog read ordering and connection replacement fence stale metadata. */
+  private async refreshUnnamedCatalog(id: string) {
+    const view = this.state.views[id];
+    const summary = this.state.sessions.find(row => row.id === id) ?? view?.summary;
+    if (!view || view.attachmentIntent !== 'wanted' || summary?.name || summary?.preview || this.previewReads.has(id)
+      || !view.snapshot?.transcript.entries?.some(entry => entry.item.type === 'message' && entry.item.message.role === 'user')) return;
+    this.previewReads.add(id);
+    await this.refreshSessionSummary(id).catch(() => {});
+  }
+  /** Native catalog reread without changing Sidebar search or pagination. */
+  async refreshSessionSummary(id: string) {
+    const generation = this.state.generation, summaryRead = ++this.summaryReadSequence;
+    // Optional metadata failure cannot invalidate a valid runtime observation.
+    // Explicit list refresh and reconnect remain available; no mutation is retried.
+    const result = await this.request({ method: 'session/list', params: { offset: 0, limit: 32, query: id } }, 'sessions');
+    const summary = result.sessions.find(row => row.id === id);
+    if (!summary || !this.current(generation) || (this.summaryReads.get(id) ?? 0) > summaryRead) return;
+    this.summaryReads.set(id, summaryRead);
+    this.publish({ sessions: this.state.sessions.map(row => row.id === id ? summary : row),
+      views: this.state.views[id] ? { ...this.state.views, [id]: { ...this.state.views[id], summary } } : this.state.views });
   }
   async deleteSession(id: string, expectedRevision: string) {
     const generation = this.state.generation;
@@ -428,6 +470,12 @@ export class AppServerClient {
       const settings = await this.request({ method: 'settings/read', params: { session_id: id } }, 'settings');
       if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
       this.setSession(id, { settings: settings.settings });
+      // A restored/branched view may be outside the visible catalog page. Read
+      // its native identity even before any user message exists; never invent it.
+      if (!this.state.views[id]?.summary) await this.refreshSessionSummary(id).catch(() => {});
+      if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
+      await this.refreshUnnamedCatalog(id);
+      if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
       if (this.dirty.has(id)) { this.resubscribe.add(id); await this.refresh(id); }
     } catch (error) {
       if (current() && (!target || sameTarget(this.state.views[id]?.target, target))) this.setSession(id, { attachment: 'error', error: String(error) });
@@ -460,6 +508,8 @@ export class AppServerClient {
         if (BigInt(result.cursor) >= BigInt(this.state.views[id].cursor ?? '0')) {
           this.setSession(id, { snapshot: result.snapshot, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: refreshTrace(this.state.views[id]?.trace, result.snapshot.trace, result.snapshot.trace_updates), error: undefined });
           this.reconcileInteractions(id); this.settleSubmissions(id);
+          await this.refreshUnnamedCatalog(id);
+          if (!current()) return;
         }
         if (resync) await this.request({ method: 'session/subscribe', params: { target, after_cursor: result.cursor } }, 'subscribed');
         if (current()) this.setSession(id, { attachment: 'attached' });
@@ -763,6 +813,7 @@ export class AppServerClient {
     }
   }
   private retireAttachmentWork(id: string) {
+    this.previewReads.delete(id);
     this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);
     this.setSession(id, { history: undefined, submissions: undefined });
   }
