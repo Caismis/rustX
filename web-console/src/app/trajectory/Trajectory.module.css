@@ -396,14 +396,11 @@
   font-size: 11px;
 }
 
-.sectionLabelHeading,
-.sectionLabel:where(h3) {
-  font-size: 12px;
-}
-
-.inspectorBody h3.sectionLabel,
-.inspectorBody .sectionLabel:is(h3) {
+.sectionLabelHeading {
   margin: 14px 0 4px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .blockLabel {

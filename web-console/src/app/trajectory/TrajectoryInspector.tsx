@@ -429,9 +429,9 @@ export function TrajectoryInspector({
 
         {active === 'Input' && request && (
           <>
-            <h3 className={css.sectionLabel}>Effective system prompt</h3>
+            <h3 className={css.sectionLabelHeading}>Effective system prompt</h3>
             <Text value={request.effective_system_prompt} />
-            <h3 className={css.sectionLabel}>Reconstructed request context</h3>
+            <h3 className={css.sectionLabelHeading}>Reconstructed request context</h3>
             <p className={css.note}>
               The exact provider-neutral messages this request carried, rebuilt from its frozen
               snapshot and the historical Surface revision it referenced.
@@ -463,7 +463,7 @@ export function TrajectoryInspector({
 
         {active === 'Input' && tool && (
           <>
-            <h3 className={css.sectionLabel}>Recorded arguments</h3>
+            <h3 className={css.sectionLabelHeading}>Recorded arguments</h3>
             {tool.arguments ? (
               <Structured value={tool.arguments} label={`${tool.name ?? tool.tool_id} arguments`} />
             ) : (
@@ -476,7 +476,7 @@ export function TrajectoryInspector({
 
         {active === 'Source' && tool?.source && (
           <>
-            <h3 className={css.sectionLabel}>
+            <h3 className={css.sectionLabelHeading}>
               Program source · <span className={css.machine}>{tool.source.field}</span>
             </h3>
             <p className={css.note}>
@@ -537,7 +537,7 @@ export function TrajectoryInspector({
             </dl>
             {tool.result.detail && (
               <>
-                <h3 className={css.sectionLabel}>Status detail</h3>
+                <h3 className={css.sectionLabelHeading}>Status detail</h3>
                 <Text value={tool.result.detail} />
               </>
             )}

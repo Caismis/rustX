@@ -461,7 +461,7 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
       "destination": "web-console/src/app/trajectory/Trajectory.module.css",
-      "treatment": "adapted dense ledger geometry: event/content regions, kind tags, hierarchy rail, section hairlines, fold summaries and inspector frame",
+      "treatment": "adapted dense ledger geometry: event/content regions, kind tags, hierarchy rail, section hairlines, fold summaries and inspector frame; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers",
       "upstream_sha256": "b616ba24e9274a66c63d7027ac7700b9813f640ca41e6910106286d1bbeba925",
       "retained_dependencies": [
         "existing theme tokens"
@@ -476,7 +476,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "553d7e2e4d239c5a5e050e6981ef752c57b72356c3fe762ee598b7d5e4499a4e"
+      "local_sha256": "21be10a81d157fec38e14eaf22e19fdda46cba2060124325cfadb2f99c1d386e"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -525,12 +525,12 @@
           "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1"
         }
       ],
-      "local_sha256": "062b45392d1eeaa91e7a43b61799cc6e2b7726bbfb8a50858eac210d3d06ff48"
+      "local_sha256": "871dd8f3cc53fdc228742e60d64651be4b15676fd456c2aea1beb070c9f989c1"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryInspector.tsx",
-      "treatment": "adapted per-kind inspector sections onto native Trace detail; Markdown, JSON tree, code and artifact rendering use the existing audited rustX primitives; refetch detail after authoritative lifecycle repair; preserve the virtualization enable boundary and bounded canonical message batches",
+      "treatment": "adapted per-kind inspector sections onto native Trace detail; Markdown, JSON tree, code and artifact rendering use the existing audited rustX primitives; refetch detail after authoritative lifecycle repair; preserve the virtualization enable boundary and bounded canonical message batches; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v9",
@@ -566,12 +566,12 @@
           "upstream_sha256": "a31b4253ba9c7c2490f942768d060c769ff1b5b4fb653ccf67ab54af1e1593b7"
         }
       ],
-      "local_sha256": "54100ae6b34d790adf1fb5c85d7ed56f1bb62f83e13b8f5c457273aa5d17f111"
+      "local_sha256": "2d88d5de2dbc3ec0bd3d42ec3874d29cd4224fa9702159ae10666955df8e8f3b"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
       "destination": "web-console/src/app/trajectory/TrajectoryTimeline.module.css",
-      "treatment": "adapted overview geometry, lane rows, focus interval, boundary rules and span/marker treatments",
+      "treatment": "adapted overview geometry, lane rows, focus interval, boundary rules and span/marker treatments; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers",
       "upstream_sha256": "3703f1e5815200ee894b32deb944cbaa70806ae5353f51853002ff322740339c",
       "retained_dependencies": [
         "existing theme tokens"
@@ -586,12 +586,12 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "5bff9c2403437a878b86090d59919256008a732f118e43691717c00c85c58a16"
+      "local_sha256": "51c7785fa17b6a9b494d397ef325629160be5dd3b92e96c1e213f7ca20d2f444"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryTimeline.tsx",
-      "treatment": "adapted lane overview with drag-to-focus, wheel zoom, right-button clear/pan and the recorded TTFT/decode split; spans come only from two authoritative timestamps",
+      "treatment": "adapted lane overview with drag-to-focus, wheel zoom, right-button clear/pan and the recorded TTFT/decode split; spans come only from two authoritative timestamps; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers",
       "upstream_sha256": "c062d06535a38498051346095bb713a292f45085e7de817a9400a92292c4eedc",
       "retained_dependencies": [
         "../../../../protocol/app-server/v9",
@@ -609,7 +609,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "51a478f99d6913c9fb5d576397686418d49409b3c1ee75d8fad50d9f3e27b110"
+      "local_sha256": "6019c245b526bddfa2cb1a0fea71957ef2276749eb4c16dc7976e14162230081"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/layout.ts",

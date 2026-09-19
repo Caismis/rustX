@@ -61,10 +61,10 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     const traceAnchor = trajectory.locator('[data-trace-id]').nth(8);
     const traceAnchorId = await traceAnchor.getAttribute('data-trace-id');
     const traceAnchorTop = await traceAnchor.evaluate(el => el.getBoundingClientRect().top);
-    await trajectory.getByRole('button', { name: 'Load earlier records', exact: true }).click();
+    await trajectory.getByRole('button', { name: 'Load older', exact: true }).click();
     await expect(ledger).toHaveAttribute('aria-rowcount', '64');
     for (const count of [96, 128]) {
-      await trajectory.getByRole('button', { name: 'Load earlier records', exact: true }).click();
+      await trajectory.getByRole('button', { name: 'Load older', exact: true }).click();
       await expect(ledger).toHaveAttribute('aria-rowcount', String(count));
     }
     expect(await trajectory.locator('[data-trace-id]').count()).toBeLessThan(64);
@@ -175,11 +175,10 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     await expect.poll(urlCount).toBe(0);
     await trajectory.getByLabel('Search loaded Trace').fill('chat-image');
-    await trajectory.getByLabel('Trace category').selectOption('tool');
-    const tool = trajectory.locator('[data-trace-id]');
+    const tool = trajectory.locator('[data-trace-id][data-kind="tool"]');
     await expect(tool).toHaveCount(1);
     const stableToolId = await tool.getAttribute('data-trace-id');
-    await tool.locator('button').click();
+    await tool.click();
     await expect(trajectory.getByLabel('Trace record inspector')).toContainText('chat-image');
     await page.screenshot({ path: 'test-results/trajectory-inspector.png', fullPage: true });
     await connectionAction(page, 'Reconnect');

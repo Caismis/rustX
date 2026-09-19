@@ -177,6 +177,15 @@ export function TrajectoryTimeline({
   };
 
   const focus = draft ?? range;
+  const labelledBoundaries = new Set<number>();
+  let lastLabel = -15;
+  for (const boundary of model.boundaries) {
+    const at = percent(boundary.at);
+    if (at >= 0 && at <= 90 && at - lastLabel >= 15) {
+      labelledBoundaries.add(boundary.at);
+      lastLabel = at;
+    }
+  }
 
   return (
     <section className={css.root} aria-label="Timing overview">
@@ -214,7 +223,7 @@ export function TrajectoryTimeline({
             aria-hidden="true"
             style={{ left: `${percent(boundary.at)}%` } as CSSProperties}
           >
-            <span>{boundary.label}</span>
+            {labelledBoundaries.has(boundary.at) && <span>{boundary.label}</span>}
           </div>
         ))}
         {TRAJECTORY_LANES.map((lane, index) => (

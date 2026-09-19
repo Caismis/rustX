@@ -209,7 +209,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
       else if (!anchor.virtualized) {
         // The virtualizer has no prior keyed anchor on its first enabled
         // render. Transfer the existing reader offset across that boundary.
-        virtualizer.scrollToOffset(anchor.scrollTop + virtualizer.getTotalSize() - anchor.scrollHeight);
+        virtualizer.scrollToOffset(anchor.scrollTop + pane.scrollHeight - anchor.scrollHeight);
       }
       prependAnchor.current = null;
       followsTail.current = false;
