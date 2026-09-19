@@ -2844,6 +2844,41 @@ impl SubagentRegistry {
             .map(|&index| state.records[index].snapshot())
     }
 
+    /// Resolve only an exact child owned by this registry. Opening an existing
+    /// store is read-only and cannot create a Conversation or extend execution.
+    pub(crate) fn transcript_store(
+        &self,
+        subagent_id: &SubagentId,
+    ) -> Result<crate::durable::SqliteConversationStore, super::SubagentTranscriptError> {
+        use super::SubagentTranscriptError;
+        let child = {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let index = state
+                .index
+                .get(subagent_id)
+                .ok_or_else(|| SubagentTranscriptError::Unknown(subagent_id.clone()))?;
+            state.records[*index].child_conversation_id.clone()
+        };
+        let root = &self.config.spawn.product_root;
+        let path = super::child_conversation_store_path(
+            root.root(),
+            &self.config.spawn.session_id,
+            &child,
+        );
+        let unavailable = SubagentTranscriptError::Unavailable;
+        let access = crate::runtime::local_storage::ConversationAccess::existing(
+            root,
+            path.parent().expect("child database has a parent"),
+        )
+        .map_err(|error| unavailable(error.to_string()))?;
+        let path = access
+            .confined(&path)
+            .map_err(|error| unavailable(error.to_string()))?;
+        crate::durable::SqliteConversationStore::open_existing(child, &path)
+            .map(|store| store.with_lifecycle(std::sync::Arc::new(access)))
+            .map_err(|error| unavailable(error.to_string()))
+    }
+
     /// **Observation plane (Issue #178).** Applies one live activity
     /// projection reported by the child driver.
     ///

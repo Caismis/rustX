@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v11.js';
+import type {ProtocolMessage} from './v12.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -73,7 +73,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 11,
+      "protocol_version": 12,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -90,7 +90,7 @@ export const fixtures = [
     "id": 7,
     "result": {
       "type": "initialized",
-      "protocol_version": 11,
+      "protocol_version": 12,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,
@@ -328,6 +328,22 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "exact-u64",
+    "method": "subagent/transcript",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "subagent_id": "subagent-fixture",
+      "before": "9007199254740993",
+      "limit": 32
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
     "method": "goal/control",
     "params": {
       "target": {
@@ -446,6 +462,30 @@ export const fixtures = [
           ],
           "omitted_runs": 0
         }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 291,
+    "error": {
+      "code": -32000,
+      "message": "Operation rejected",
+      "data": {
+        "kind": "unknown_subagent",
+        "subagent_id": "subagent-fixture"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 291,
+    "error": {
+      "code": -32000,
+      "message": "Operation rejected",
+      "data": {
+        "kind": "subagent_history_unavailable",
+        "subagent_id": "subagent-fixture"
       }
     }
   },

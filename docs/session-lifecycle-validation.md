@@ -91,14 +91,14 @@ actual destructive exclusion.
 ## Protocol and clients
 
 The original Session lifecycle transition was App Server v7 → v8; the current
-mandatory protocol is **v11**. `rustx.app-server.v11` is the only WebSocket
+mandatory protocol is **v12**. `rustx.app-server.v12` is the only WebSocket
 subprotocol. Rust initialization, TUI initialization/decoder/transport, Web
-initialization/transport, fixtures, schema generation and drift checking all use v11.
+initialization/transport, fixtures, schema generation and drift checking all use v12.
 The previous version is rejected, with no fallback.
 
 - Removed `session/unload`, its `unloaded` result, list `residencies`, and deletion blockers `current_session` / residency-only `in_use`.
 - Added semantic `session/switchNode`. The speculative `session/restart` method was removed during review because neither product client consumes it. Internal manager replacement and safe live configuration reload remain.
-- Generated `protocol/app-server/v11.ts`, `v11.schema.json`, `fixtures.ts`, `fixtures.json`; removed v7 files under the single-current-version convention.
+- Generated `protocol/app-server/v12.ts`, `v12.schema.json`, `fixtures.ts`, `fixtures.json`; removed v7 files under the single-current-version convention.
 - TUI: removed `/unload`, registration/help/completion, selector residency badges and switch-away deletion restriction; branch confirmation says “Switch to this branch”. Focused deletion and reconnect verification use native outcomes.
 - Web: removed public unload/advanced residency controls and `sessionResidencies`; Close view only detaches, Open Session implicitly acquires residency. Current deletion disables controls and removes the view after authoritative completion. Settings uses semantic Open/Reload wording.
 - Inspector retains attachment/incarnation and observed runtime facts; explicit server diagnostics retain internal residency. Harness-first Sidebar/navigation and naming are preserved.

@@ -1,6 +1,6 @@
-# App Server protocol v11
+# App Server protocol v12
 
-App Server v11 identifies one complete mandatory vocabulary, including exact
+App Server v12 identifies one complete mandatory vocabulary, including exact
 `session/summary` and bounded historical Trace detail. v10 and all earlier initialization and WebSocket admission
 versions are rejected; there is no downgrade or compatibility path.
 
@@ -107,13 +107,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v11",
+  "rustx.app-server.v12",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v11` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v12` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -130,7 +130,7 @@ The [local Web launcher](../web-console/CONNECTION.md) implements delivery throu
 a separate browser launch-token exchange and a process-ephemeral browser proof in
 origin-scoped sessionStorage (not a Cookie). A dedicated header authenticates
 same-origin carrier APIs. Its bootstrap returns the exact native
-endpoint/token; the browser then connects directly using the v11 subprotocols above.
+endpoint/token; the browser then connects directly using the v12 subprotocols above.
 The browser launch credential is never a valid substitute for the native credential.
 Remote Web attachment is explicit Settings configuration. Neither browser login
 nor remote attachment grants Product Host Workspace filesystem authority.
@@ -211,7 +211,7 @@ an ID does not deduplicate a mutation. Integer correlation IDs must fit the
 JavaScript safe integer range. String IDs are recommended for arbitrary IDs.
 
 ```json
-{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{"protocol_version":11,"client":{"name":"example","version":"1"},"presentation":{"images":true,"questionnaires":true,"reviews":true}}}
+{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{"protocol_version":12,"client":{"name":"example","version":"1"},"presentation":{"images":true,"questionnaires":true,"reviews":true}}}
 ```
 
 `APP_SERVER_PROTOCOL_VERSION` is independent of crate, manifest, journal,
@@ -227,7 +227,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v11; pipeline individual requests instead. This limitation is
+supported in v12; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -316,7 +316,7 @@ fenced. Attachment cleanup does not grant durable deletion authority.
 
 ## Attachment and observation lifetime
 
-Protocol v11 admits at most one writable external controller per resident
+Protocol v12 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -395,8 +395,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v11.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v11.ts`: TypeScript generated from that schema using pinned
+- `v12.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v12.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -648,7 +648,7 @@ use the existing subscription as invalidation signals. Neither historical reads
 nor Trace cursors advance a subscription cursor. See [Trace architecture](trace.md)
 for source authorities, ordering, read cuts, repair, bounds and unavailable facts.
 
-Generated Rust Schema/TypeScript, Web Console and TUI all negotiate version 11.
+Generated Rust Schema/TypeScript, Web Console and TUI all negotiate version 12.
 Earlier versions are rejected; there are no aliases or dual-version paths.
 
 `session/snapshot` optionally accepts `trace_records: TraceCursor[]` (maximum 512)
@@ -661,7 +661,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v11; no compatibility path is provided.
+This remains mandatory protocol v12; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -691,7 +691,7 @@ The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 42 carries this vocabulary;
 version 38 clients are rejected by strict negotiation. This remains mandatory
-App Server protocol v11, with no compatibility field and no activation mode.
+App Server protocol v12, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
 `Paused` and `Blocked` offer Resume, and there is no separate Play/arm control
@@ -706,7 +706,7 @@ boundary.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v11 includes `inbound/edit { target, expected, text }` and
+Protocol v12 includes `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and controller attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -883,11 +883,11 @@ independent Root metadata scalars through the same revision/CAS, validation,
 serialization and Save-versus-Reload boundary as `instructions`. `null` removes
 the authored unit in that scope. Clients never write whole config documents.
 
-## Breaking v11 Session lifecycle transition
+## Breaking v12 Session lifecycle transition
 
-Initialization requires exactly v11 and WebSocket requires `rustx.app-server.v11`.
-The previous version is rejected without fallback. Rust DTOs generate `v11.ts`,
-`v11.schema.json`, and the serialized fixtures; only the current version is kept.
+Initialization requires exactly v12 and WebSocket requires `rustx.app-server.v12`.
+The previous version is rejected without fallback. Rust DTOs generate `v12.ts`,
+`v12.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -916,18 +916,18 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
-explicit recovery action. App Server v11 and native Runtime Client v42 are unchanged.
+explicit recovery action. App Server v12 and native Runtime Client v42 are unchanged.
 
 ## Rich historical Trace inspection (#364)
 
-Protocol v11 replaces TraceEntry with bounded TraceRecord summaries and adds
+Protocol v12 replaces TraceEntry with bounded TraceRecord summaries and adds
 `session/traceDetail { target, record_id } -> { type: "trace_detail", detail }`.
 Detail is nullable when no allowlisted record exists at the captured read cut.
 List payloads never carry complete request contexts or Tool results. Inspection
 reads do not mutate runtime state or advance live cursors. See [Trace](trace.md)
 for native ownership, limits, allowlists and the historical read boundary.
 
-## Session archive preparation (v11)
+## Session archive preparation (v12)
 
 `session/exportPrepare { session_id }` returns a `session_archive` result with a
 short-lived, single-use native download descriptor. All clients consume the same
@@ -936,7 +936,47 @@ HTTP(S) downloads share the App Server listener; owned stdio children advertise 
 loopback stream port. See [Session archive](session-archive.md) for cut semantics,
 authentication, resource bounds and cancellation. Durable SQLite remains v41.
 
-Archive v11 preparation failures preserve a closed safe reason through
+Archive v12 preparation failures preserve a closed safe reason through
 `archive_preparation_failed`, plus the fixed native diagnostic in `message`.
 Unknown Session/capacity use their existing failures. No raw storage/provider
 error is projected. See [Session archive safety and errors](session-archive.md).
+
+
+## Read-only native Subagent conversations (v12)
+
+`subagent/transcript { target, subagent_id, before, limit }` returns the existing
+`transcript { page }` result. `target` is the **parent** AttachmentTarget (Session,
+Conversation, runtime incarnation, attachment). App Server validates that route;
+Runtime Client checks its live runtime; the parent's SubagentRegistry resolves the
+exact committed SubagentId to its owned child Conversation. No caller-supplied
+child ConversationId or filesystem path is accepted. Unknown identity yields
+`unknown_subagent`; an owned child whose existing history cannot be read yields
+`subagent_history_unavailable`. Both carry the exact SubagentId. Missing stores
+are never created by inspection, and storage diagnostics are not exposed.
+
+The registry acquires existing Conversation allocation access and opens the
+identity-validated SQLite store read-only. The shared Runtime Client transcript
+reader uses the child's durable transcript cursor/projection and response-fact
+decorator, exactly as root reads do. App Server only routes/translates. This path
+reads committed history, not uncommitted streaming tokens. It works while the
+child runs or waits and after success, failure or cancellation while ownership
+and durable history remain retained. Workspace retention/disposal is independent
+of conversation history. Lifecycle status never supplies transcript settlement.
+
+Pages use the same native limit validation (1–256) and exclusive `before` cursor
+as root reads; clients default to 32 entries. A newest read omits `before`, and
+`next_cursor` is the explicit older continuation. Viewing does not admit a child
+Session, acquire a child controller, activate a runtime, or grant execution,
+Composer, steer, cancellation, permission, model, Goal or lifecycle authority.
+Live child HITL still reaches the root queue and is answered only through its
+exact routed InteractionRef; historical interaction audit is merely transcript.
+
+The TUI reads only one finite child page. On its newest page it polls this read
+operation every 1.5 seconds, with at most one refresh in flight. Browsing older
+pages pauses polling; Home returns to newest. Parent attachment epochs fence
+reads across repair, replacement and release. A disposable child-view generation
+also fences selection, page replacement and closing; neither stale successes nor
+stale errors update a replacement. Resync/reconnect remembers only the selected
+SubagentId, reconstructs through the new parent authority, and explicitly shows
+unavailability if lookup fails. It does not reuse cached child history or replay
+mutations.

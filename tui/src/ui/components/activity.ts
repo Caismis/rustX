@@ -219,7 +219,7 @@ export function renderSubagentSection(
       subagent.workspace.resource_state !== "none" &&
       subagent.workspace.resource_state !== "disposed",
   ).length;
-  const actions = ["Ctrl+↑↓ select", "Enter inspect"];
+  const actions = ["Ctrl+↑↓ select", "Enter conversation", "i details", "Esc Main"];
   if (retained > 0) actions.push("D dispose retained");
   return [
     role.strong(
