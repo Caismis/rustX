@@ -16,6 +16,7 @@ export class ComposerEditor extends Editor {
   running: () => boolean = () => false;
   readonly #paste = new PasteGuard();
   #pastedLeadingToken = false;
+  #pasteAtTokenEnd: number | undefined;
   constructor(tui: TUI) {
     super(tui, editorTheme, { paddingX: 1 });
     this.onSubmit = () => {};
@@ -24,18 +25,21 @@ export class ComposerEditor extends Editor {
     const content = this.#paste.content(data);
     if (content) {
       if (data.includes("\x1b[200~")) {
+        this.#finishCommandPaste();
         // Pasting arguments after an explicitly authored command token keeps
         // command intent. Pasting into/before that token makes it literal.
         // Cursor offsets refer to Pi's own text representation, not cell width.
         const lines = this.getLines();
         const cursor = this.getCursor();
         const offset = lines.slice(0, cursor.line).reduce((n, line) => n + line.length + 1, 0) + cursor.col;
-        const prefix = /^\s*\/\S+\s/.exec(lines.join("\n"));
+        const prefix = /^\s*\/\S+/.exec(lines.join("\n"));
         if (!prefix || offset < prefix[0].length) this.#pastedLeadingToken = true;
+        else if (offset === prefix[0].length) this.#pasteAtTokenEnd = offset;
       }
       super.handleInput(data);
       return;
     }
+    this.#finishCommandPaste();
     if (!this.disableSubmit && this.running() && matchesKey(data, "tab")) {
       this.onQueue?.(this.getExpandedText());
       return;
@@ -46,10 +50,23 @@ export class ComposerEditor extends Editor {
     super.handleInput(data);
     if (!this.getExpandedText()) this.#pastedLeadingToken = false;
   }
+  /** Pi assembles fragmented paste before the next keyboard action. At the
+   * token boundary, whitespace starts arguments; any other insertion extends
+   * the token. Empty paste does not change provenance.
+   */
+  #finishCommandPaste(): void {
+    if (this.#pasteAtTokenEnd === undefined) return;
+    const first = this.getExpandedText()[this.#pasteAtTokenEnd];
+    if (first !== undefined && !/\s/.test(first)) this.#pastedLeadingToken = true;
+    this.#pasteAtTokenEnd = undefined;
+  }
   override setText(text: string): void {
     // Explicit replacement starts a new provenance boundary; restoring the
     // same text (for example after a busy submission) retains its provenance.
-    if (!text || text !== this.getExpandedText()) this.#pastedLeadingToken = false;
+    if (!text || text !== this.getExpandedText()) {
+      this.#pastedLeadingToken = false;
+      this.#pasteAtTokenEnd = undefined;
+    }
     super.setText(text);
   }
 }

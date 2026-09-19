@@ -181,3 +181,33 @@ test("typed permissions remains a command and clearing or replacing resets paste
   assert.equal(h.transport.transportCount("configuration/sourcesRead"), 3);
   assert.equal(h.transport.transportCount("turn/start"), 0);
 });
+
+test("typed attach token accepts a pasted separator and path across whole and fragmented paste", async t => {
+  const temp = TempFixture.create("rustx-tui-token-boundary-"); t.after(() => temp.cleanup());
+  const h = await appHarness(t);
+  const path = temp.path("my file.txt"); writeFileSync(path, "selected bytes");
+  for (const [typed, fragments] of [["/attach", [`\x1b[200~ ${path}\x1b[201~`]], ["  /attach", ["\x1b[200~", " ", path, "\x1b[20", "1~"]]] as const) {
+    h.input(typed); for (const fragment of fragments) h.input(fragment);
+    const count = h.transport.transportCount("session/upload"); h.input("\r");
+    const upload = await nextRequest(h, "session/upload", count);
+    assert.deepEqual(upload.params, { target: h.target, files: [{ name: "my file.txt", data: Buffer.from("selected bytes").toString("base64") }] });
+    h.transport.respond(upload.id, { type: "session_uploaded", files: [{ receipt: { session_id: h.session.sessionId, batch_id: `batch-${count}`, token: "receipt" }, file: { batch_id: `batch-${count}`, name: "my file.txt" }, path: "/server/native/path" }] });
+    await continuation();
+  }
+  assert.equal(h.transport.transportCount("turn/start"), 0);
+});
+
+test("pasted token extensions and a pasted leading slash remain literal Agent input", async t => {
+  const h = await appHarness(t);
+  for (const [typed, pasted, suffix] of [["/att", "ach /tmp/a", ""], ["  /att", "ach /tmp/a", ""], ["", "/", "attach /tmp/a"]] as const) {
+    if (typed) h.input(typed);
+    h.input("\x1b[200~"); h.input(pasted); h.input("\x1b[201~");
+    if (suffix) h.input(suffix);
+    const count = h.transport.transportCount("turn/start"); h.input("\r");
+    const request = await nextRequest(h, "turn/start", count);
+    assert.deepEqual(request.params, { target: h.target, content: [{ type: "text", text: typed + pasted + suffix }] });
+    h.transport.respond(request.id, { type: "inbound_accepted", message_id: `m-${count}`, inbound_sequence: String(count + 1) });
+    await continuation();
+  }
+  assert.equal(h.transport.transportCount("session/upload"), 0);
+});
