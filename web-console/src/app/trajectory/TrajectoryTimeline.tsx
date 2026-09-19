@@ -20,6 +20,7 @@ import {
   type TrajectoryTimeRange,
   type TrajectoryTimelineMode,
 } from './timeline';
+import { Button } from '../../presentation/primitives/Button';
 import css from './TrajectoryTimeline.module.css';
 
 /** Pointer travel below which a drag is treated as a click. */
@@ -29,6 +30,8 @@ const MINIMUM_ZOOM_SPAN = 4;
 
 interface Drag {
   pointerId: number;
+  recordId?: string;
+  clientX: number;
   anchor: number;
   current: number;
   moved: boolean;
@@ -132,7 +135,7 @@ export function TrajectoryTimeline({
     }
     if (event.button !== 0) return;
     const at = pointAt(event.clientX);
-    dragRef.current = { pointerId: event.pointerId, anchor: at, current: at, moved: false };
+    dragRef.current = { pointerId: event.pointerId, clientX: event.clientX, recordId: (event.target as HTMLElement).closest<HTMLElement>('[data-record-id]')?.dataset.recordId, anchor: at, current: at, moved: false };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
@@ -150,7 +153,7 @@ export function TrajectoryTimeline({
     const drag = dragRef.current;
     if (drag === null || drag.pointerId !== event.pointerId) return;
     drag.current = pointAt(event.clientX);
-    if (Math.abs(drag.current - drag.anchor) > 0) drag.moved = true;
+    if (Math.abs(event.clientX - drag.clientX) >= MINIMUM_DRAG_PX) drag.moved = true;
     setDraft({ start: Math.min(drag.anchor, drag.current), end: Math.max(drag.anchor, drag.current) });
   };
 
@@ -168,9 +171,7 @@ export function TrajectoryTimeline({
     dragRef.current = null;
     setDraft(null);
     if (!drag.moved) {
-      const at = drag.anchor;
-      const hit = model.spans.find(candidate => candidate.start <= at && candidate.end >= at);
-      if (hit !== undefined) onSelect(hit.id);
+      if (drag.recordId !== undefined) onSelect(drag.recordId);
       return;
     }
     onRangeChange({ start: Math.min(drag.anchor, drag.current), end: Math.max(drag.anchor, drag.current) });
@@ -191,13 +192,29 @@ export function TrajectoryTimeline({
     <section className={css.root} aria-label="Timing overview">
       <div className={css.legend}>
         <span>Overview</span>
-        <small>
-          Recorded timing · loaded window · drag to focus, wheel to zoom, right-click to clear
-        </small>
+        <small>Loaded window · drag to focus · wheel to zoom</small>
+        <div className={css.controls}>
+          <Button size="sm" aria-label="Zoom timeline in" onClick={() => {
+            const next = Math.max(MINIMUM_ZOOM_SPAN, span * .8);
+            if (next < span) setViewport({ start: domain.start, end: domain.start + next });
+          }}>+</Button>
+          <Button size="sm" aria-label="Reset timeline" onClick={() => { setViewport(null); onRangeChange(null); }}>Reset</Button>
+        </div>
       </div>
       <div
         ref={rootRef}
         className={css.canvas}
+        tabIndex={0}
+        aria-label="Timeline navigation: arrow keys pan, Escape clears focus"
+        data-domain-start={domain.start}
+        data-domain-end={domain.end}
+        onKeyDown={event => {
+          if (event.key === 'Escape') { onRangeChange(null); return; }
+          if (event.target !== event.currentTarget || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+          event.preventDefault();
+          const start = Math.max(model.start, Math.min(model.end - span, domain.start + span * (event.key === 'ArrowLeft' ? -.1 : .1)));
+          setViewport({ start, end: start + span });
+        }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -262,6 +279,8 @@ export function TrajectoryTimeline({
                       type="button"
                       className={css.span}
                       data-kind={candidate.kind}
+                      data-record-id={candidate.id}
+                      aria-pressed={candidate.id === selectedId}
                       data-error={candidate.error || undefined}
                       data-selected={candidate.id === selectedId || undefined}
                       data-marker={marker || undefined}
@@ -270,6 +289,8 @@ export function TrajectoryTimeline({
                       }
                       aria-label={`Inspect ${candidate.label}`}
                       title={detail}
+                      onFocus={() => setHover(candidate.id)}
+                      onBlur={() => setHover(null)}
                       onPointerEnter={() => setHover(candidate.id)}
                       onPointerLeave={() => setHover(current => (current === candidate.id ? null : current))}
                       onClick={event => { event.stopPropagation(); onSelect(candidate.id); }}

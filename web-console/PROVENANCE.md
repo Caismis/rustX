@@ -430,3 +430,40 @@ The rebase preserves #366 Goal chat presentation while retaining exact native
 Goal Tool identity, arguments and result in Trajectory. Its regression uses the
 new summary/detail vocabulary. Lifecycle repairs invalidate cached and pending
 details so a selected running Tool cannot retain a pre-settlement payload.
+
+## WEB-15 Harness-first Trajectory (#371)
+
+The pinned reference remains `ddefc45fbc7f8e46dd73185e68295696d1297887`.
+The inventory records the inspected Trajectory View/Table/Cell/Turn/TurnHeader,
+Toolbar/Timeline, layout/record/preview/virtual-row modules, request-header and
+Tool definitions, code inspector and five requested test files. ToolRow,
+GenericToolCard and conversation request/record contracts were also inspected.
+
+`TrajectoryCell.tsx` adapts the current Table's role icons, compact role tags,
+Tool name / argument / result composition and content-led previews. Existing
+MarkdownText, CodeBlock, JsonTree, Artifact, Tooltip, tabs and clipboard primitives
+remain the renderers. The legacy standalone Harness Cell is inspected, not copied.
+The generic runtime kind/state/duration table is replaced by an event/content
+rail: native Attempt/Step evidence is structural, Request evidence subdued,
+Assistant previews use Markdown, and successful lifecycle state is unobtrusive.
+Native identity moves behind an inspector disclosure. Tool Summary includes native
+source/input and result; Prompt, Context, Thinking, Code and Artifacts tabs exist
+only when supported by the native detail. No dependency was added.
+
+Local adaptations preserve the native finite cache, order, location, selected
+identity, historical request snapshot and dispatch-relative timing. A fixed-height
+history boundary fixes the browser-tested final-page prepend shift. Timeline
+selection reveals folded groups and scrolls to the exact native identity; keyboard
+selection, zoom/reset and pan supplement pointer gestures. Desktop and 390px
+screenshots are pinned with the repository's immutable Playwright container.
+
+Issue #372 remains a native dependency: there is no browser prompt comparison,
+standalone System/Context fabrication, Tool-domain ownership guess, or Subtool
+model. Background/Subagent/Workflow/Interaction remain independent records.
+Unscoped records never acquire Attempt ownership, including during folding.
+Harness event definitions, interrupted lifecycle synthesis, Session/Cordis
+assembly, step-relative TTFT and Tool-name-based code detection stay excluded.
+
+Changed derived files have reviewed local SHA-256/import records; original hashes
+and MIT/DeepSeek attribution remain intact. `check:provenance` and the external
+`--reference /tmp/rustx-371-harness` audit verify local and upstream bytes.

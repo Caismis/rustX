@@ -163,3 +163,7 @@
   .boundary span { display: none; }
   .canvas { padding-top: 0; }
 }
+
+.controls { display: flex; gap: 2px; margin-left: auto; }
+.controls button { min-height: 20px; height: 20px; padding: 0 5px; font-size: 10px; }
+.canvas:focus-visible, .span:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }

@@ -69,8 +69,8 @@ export function stepFoldKey(record: TraceRecord): string {
 /**
  * Section label shown on the row that opens a section.
  *
- * An Attempt is the rustX equivalent of a Harness Turn: the unit that owns a
- * conversation's answer to one adopted inbound batch.
+ * Sections use native Attempt ownership, not Harness Turn semantics.
+ * Ordinals name only the sections visible in this loaded window.
  */
 export function sectionLabel(attempt: string | null, ordinal: number): string {
   return attempt == null ? 'Outside an Attempt' : `Attempt ${ordinal}`;
@@ -130,7 +130,7 @@ export function sectionOrdinals(rows: readonly TrajectoryRow[]): Map<number, num
 function summarize(rows: readonly TrajectoryRow[]): string {
   const counts = new Map<string, number>();
   for (const row of rows) {
-    const label = row.record.tool?.name ?? row.record.kind;
+    const label = row.record.tool?.name ?? (row.record.kind === 'assistant' ? 'Assistant' : row.record.kind);
     counts.set(label, (counts.get(label) ?? 0) + 1);
   }
   return [...counts].map(([label, count]) => (count > 1 ? `${label} x${count}` : label)).join(' · ');
