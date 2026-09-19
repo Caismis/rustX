@@ -20,7 +20,7 @@ pub const MAX_CLIENTS: usize = 32;
 /// Incomplete/authentication handshakes cannot retain slots indefinitely.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Browser clients offer this protocol plus `rustx-token.<dedicated token>`.
-pub const SUBPROTOCOL: &str = "rustx.app-server.v10";
+pub const SUBPROTOCOL: &str = "rustx.app-server.v11";
 
 /// Dedicated transport credential. Deliberately has no Debug/Serialize.
 #[derive(Clone)]

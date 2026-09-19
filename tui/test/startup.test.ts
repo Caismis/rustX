@@ -27,7 +27,7 @@ async function connected() {
   const transport = new FakeTransport();
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
-  transport.respond(request!.id, { type: "initialized", protocol_version: 10, capabilities: SERVER_CAPABILITIES });
+  transport.respond(request!.id, { type: "initialized", protocol_version: 11, capabilities: SERVER_CAPABILITIES });
   return { transport, host: new AppServerHost({ client: await pending, ownership: "external" }) };
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {

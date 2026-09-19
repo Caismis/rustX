@@ -3,7 +3,7 @@
 `rustx-session-archive/v1` is a ZIP64/DEFLATE inspection archive produced by
 `src/session_archive.rs`. `SessionArchiveProducer` is a native library owner,
 independent of App Server, Web, TUI and Trace. This is neither a canonical log nor
-an import, recovery or persistence format. SQLite remains schema 41.
+an import, recovery or persistence format. SQLite uses schema 42 inherited from main; export changes no durable encoding.
 
 ## Logical files and authority
 
@@ -22,6 +22,7 @@ the manifest also identifies the rustX package version and native durable schema
 | `sessions/<ConversationId>/requests.jsonl` | Explicit `ArchiveRequestSnapshotV1` projection of immutable Request Snapshots |
 | `sessions/<ConversationId>/generations.jsonl` | Request ID, source Journal sequence and existing `GenerationEvidence`; a convenience index of Journal-owned facts |
 | `sessions/<ConversationId>/publication_audits.jsonl` | Settled noncanonical publication audit values |
+| `sessions/<ConversationId>/inherited_responses.jsonl` | Immutable native completed-response lineage provenance from bootstrap, never reconstructed destination execution |
 | `artifacts/<ConversationId>/<ArtifactId>/content` | ArtifactStore bytes; one recorded display descriptor stays in the manifest and original references |
 
 Artifact IDs are conversation-scoped in the native store (`artifact_1` can occur
@@ -60,7 +61,9 @@ lineage and settled bytes coexist at that instant. The full record-validation an
 artifact-reference scan happens after releasing those barriers, using only the
 immutable prefixes. No large history scan holds execution read barriers.
 Each cut records Journal sequence, Ledger position, Surface revision, Request
-Snapshot insertion frontier and publication-audit insertion frontier. Generation
+Snapshot insertion frontier, publication-audit insertion frontier and immutable
+bootstrap-row presence. Inherited response records come only from that bootstrap;
+readers decode one response at a time using the native JSON row. Generation
 membership is exactly the captured Journal prefix. Request start/completion
 marker columns and mutable runtime/recovery tables are not exported.
 
@@ -92,7 +95,7 @@ response without its final chunk, so a truncated transfer cannot report success.
 
 ## Transport and clients
 
-App Server v10 adds authenticated `session/exportPrepare { session_id }`, returning
+App Server v11 adds authenticated `session/exportPrepare { session_id }`, returning
 `session_archive { download }`. No destination path exists in the request type.
 The descriptor contains a deterministic filename, a 60-second lifetime and a
 256-bit single-use capability at `/session-archive/<capability>`. It authorizes
@@ -152,6 +155,7 @@ configuration and process-local runtime_resource_revision are deliberately absen
 | Requests | Explicit v1 DTO and shared closed option allowlist described above. No durable snapshot or invocation flattening. |
 | Publication audits | Direct native encoding: settled identities, timestamps and committed-for-release text/reasoning/refusal/Tool proposal content; no continuation or provider bindings. |
 | Generations | Explicit index of request ID, Journal sequence and native GenerationEvidence, whose fields are provider-independent numeric offsets. |
+| Inherited responses | Direct native CompletedResponseProvenance: lineage identities, timestamp, normalized token counts and timing measurements only; no provider binding or destination execution claim. |
 | Manifest/lineage | Explicit manifest fields and archive metadata structs; native SessionSnapshot/SessionNode contain public identity, topology, authored name and timestamps only. No Session configuration is read. |
 | Artifact metadata/bytes | Native File/Image/Tool artifact descriptors contain artifact identity and authored display metadata; bytes are Session-owned tool content. Paths never become identity. |
 
@@ -172,7 +176,7 @@ are absent, while authored secret-looking text and temperature remain present.
 
 `SessionArchivePrepareError` contains only closed semantic reasons, never raw
 OS/provider strings or implementation paths. Missing/unreadable descendants and
-required unavailable/unsettled artifacts become v10
+required unavailable/unsettled artifacts become v11
 `archive_preparation_failed { reason: descendant_unavailable | artifact_unavailable }`.
 Other reasons distinguish unavailable Conversation history, corrupt authority,
 storage/cut failure and cancellation. Unknown Session and capacity conditions use
@@ -203,6 +207,15 @@ or whole-root string serialization. rustX captures a cross-Conversation immutabl
 cut before streaming. Authenticated RPC mints one scoped capability instead of
 independent HEAD/GET preparation, preserving the exact prepared cut and supporting
 headless App Server/TUI consumers. There is no compression setting or new UI screen.
+
+## Base integration
+
+PR #369 merged while these review repairs were in progress. Its main commit
+`908399021b649ab7603498f43bdc5673f94c9352` already uses App Server v10,
+SQLite 42 and catalog 12. The rebased archive PR therefore advances the complete
+mandatory App Server vocabulary to v11, without a compatibility alias. This is
+not an archive-format change: archive v1 remains unpublished and is corrected in
+place. No SQLite/catalog schema increment is introduced by archive export.
 
 ## Validation
 

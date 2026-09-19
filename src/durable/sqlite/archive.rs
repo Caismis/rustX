@@ -13,6 +13,8 @@ pub struct ConversationArchiveFrontiers {
     pub surface: i64,
     pub requests: i64,
     pub publication_audits: i64,
+    /// Presence frontier of the immutable lineage bootstrap row.
+    pub inherited_responses: i64,
 }
 
 pub(crate) fn error(e: impl std::fmt::Display) -> io::Error {
@@ -57,6 +59,7 @@ impl SqliteConversationStore {
             surface: max("surface_ops", "revision")?,
             requests: max("request_snapshots", "rowid")?,
             publication_audits: max("publication_audits", "rowid")?,
+            inherited_responses: max("bootstrap_identity", "id")?,
         })
     }
 
@@ -69,6 +72,12 @@ impl SqliteConversationStore {
         through: i64,
     ) -> io::Result<Option<(i64, String)>> {
         use rusqlite::OptionalExtension;
+        if matches!(authority, Authority::InheritedResponses) {
+            return self.lock().map_err(error)?.query_row(
+                "SELECT json_each.key,json_each.value FROM bootstrap_identity,json_each(response_provenance) WHERE bootstrap_identity.id<=?2 AND json_each.key>?1 ORDER BY json_each.key LIMIT 1",
+                params![after, through], |r| Ok((r.get(0)?, r.get(1)?)),
+            ).optional().map_err(error);
+        }
         let (table, key, body) = authority.columns();
         self.lock().map_err(error)?.query_row(
             &format!("SELECT {key},{body} FROM {table} WHERE {key}>?1 AND {key}<=?2 ORDER BY {key} LIMIT 1"),
@@ -84,6 +93,7 @@ pub(crate) enum Authority {
     Surface,
     Requests,
     PublicationAudits,
+    InheritedResponses,
 }
 impl Authority {
     fn columns(self) -> (&'static str, &'static str, &'static str) {
@@ -93,6 +103,9 @@ impl Authority {
             Self::Surface => ("surface_ops", "revision", "op_json"),
             Self::Requests => ("request_snapshots", "rowid", "snapshot_json"),
             Self::PublicationAudits => ("publication_audits", "rowid", "audit_json"),
+            Self::InheritedResponses => {
+                unreachable!("bootstrap provenance uses its immutable presence frontier")
+            }
         }
     }
 }

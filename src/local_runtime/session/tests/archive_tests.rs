@@ -423,3 +423,61 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
     assert_eq!(failure["event"]["error"]["kind"], "authentication");
     assert!(failure["event"]["error"].get("message").is_none());
 }
+
+#[tokio::test]
+async fn archive_preserves_native_inherited_response_provenance_without_execution() {
+    use crate::durable::response::{CompletedResponseProvenance, ResponseOrigin};
+    use crate::message::types::{AssistantContentBlock, AssistantMessageBlock};
+    let (directory, mut catalog, _) = open_catalog();
+    let (conversation, session, node) = append_history(
+        &catalog,
+        &[
+            user("input", "authored"),
+            MessageBlock::Assistant(AssistantMessageBlock {
+                id: MessageId::new("answer"),
+                content: vec![AssistantContentBlock::Text(TextBlock {
+                    text: "inherited answer".into(),
+                })],
+            }),
+        ],
+    );
+    let store = store_for(&catalog, &session, &conversation);
+    let revision = store.load_head().unwrap().revision;
+    let mut source = lineage_at(&store, &conversation, revision);
+    let origin = ResponseOrigin {
+        conversation_id: conversation,
+        attempt_id: crate::runtime::identity::AttemptId::new("source-attempt"),
+        closing_message_id: MessageId::new("answer"),
+    };
+    source.completed_responses = vec![CompletedResponseProvenance {
+        closing_message_id: MessageId::new("answer"),
+        origin: origin.clone(),
+        completed_at: Utc::now(),
+        retry_message_id: Some(MessageId::new("input")),
+        usage: None,
+        timing: None,
+    }];
+    let cloned = catalog.prepare_clone_session(&state(), &source).unwrap();
+    catalog
+        .publish_session(
+            &cloned,
+            SessionNodeOrigin::Clone {
+                source_session: session,
+                source_node: node,
+                source_surface_revision: revision,
+            },
+        )
+        .unwrap();
+    let cut = SessionArchiveProducer::prepare(
+        directory.path(),
+        &cloned.session_id,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let files = decode(cut).await;
+    let responses = records(&files, &cloned.conversation_id, "inherited_responses");
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0]["origin"], serde_json::json!(origin));
+    assert!(records(&files, &cloned.conversation_id, "journal").is_empty());
+    assert!(records(&files, &cloned.conversation_id, "requests").is_empty());
+}

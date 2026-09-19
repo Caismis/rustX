@@ -273,7 +273,7 @@ impl SessionArchiveCut {
             "session": self.session, "cwd": self.cwd, "nodes": self.nodes,
             "conversations": self.conversations.iter().map(|c| &c.manifest).collect::<Vec<_>>(),
             "artifacts": self.artifacts.iter().map(|a| &a.manifest).collect::<Vec<_>>(),
-            "schemas": {"journal":1,"messages":1,"surface":1,"requests":1,"generations":1,"publication_audits":1},
+            "schemas": {"journal":1,"messages":1,"surface":1,"requests":1,"generations":1,"publication_audits":1,"inherited_responses":1},
             "integrity": "ZIP CRC32 per entry",
             "excluded": ["provider-private continuation state", "infrastructure configuration and credentials", "opaque request parameters outside the inspection allowlist", "provider and runtime diagnostic prose/codes", "workflow recovery comparison guards"],
             "unavailable": ["historical workspace-upload bytes are not immutable durable artifacts; recorded references remain in history"]
@@ -336,13 +336,18 @@ impl SessionArchiveCut {
 }
 
 impl ConversationCut {
-    fn authorities(&self) -> [(Authority, &'static str, i64); 5] {
+    fn authorities(&self) -> [(Authority, &'static str, i64); 6] {
         let f = &self.manifest.frontiers;
         [
             (Authority::Journal, "journal", f.journal),
             (Authority::Messages, "messages", f.messages),
             (Authority::Surface, "surface", f.surface),
             (Authority::Requests, "requests", f.requests),
+            (
+                Authority::InheritedResponses,
+                "inherited_responses",
+                f.inherited_responses,
+            ),
             (
                 Authority::PublicationAudits,
                 "publication_audits",
@@ -387,6 +392,7 @@ enum Record {
     Surface(crate::conversation::SurfaceOp),
     Requests(Box<crate::model::snapshot::RequestSnapshot>),
     Audits(crate::publication::PublicationAudit),
+    InheritedResponse(crate::durable::response::CompletedResponseProvenance),
 }
 impl Record {
     fn decode(authority: Authority, body: &str) -> io::Result<Self> {
@@ -396,6 +402,9 @@ impl Record {
             Authority::Surface => Self::Surface(serde_json::from_str(body).map_err(error)?),
             Authority::Requests => {
                 Self::Requests(Box::new(serde_json::from_str(body).map_err(error)?))
+            }
+            Authority::InheritedResponses => {
+                Self::InheritedResponse(serde_json::from_str(body).map_err(error)?)
             }
             Authority::PublicationAudits => {
                 Self::Audits(serde_json::from_str(body).map_err(error)?)
@@ -409,6 +418,7 @@ impl Record {
             Self::Surface(v) => json!(v),
             Self::Requests(v) => projection::request(v),
             Self::Audits(v) => json!(v),
+            Self::InheritedResponse(v) => json!(v),
         }
     }
 }
