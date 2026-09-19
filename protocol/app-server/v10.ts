@@ -2285,6 +2285,10 @@ export type Origin =
 export type CapabilityRevision = string;
 export type ErrorData =
   | {
+      reason: SessionArchivePrepareError;
+      kind: 'archive_preparation_failed';
+    }
+  | {
       reason: RuntimeResourceReloadBusyReason;
       kind: 'configuration_busy';
     }
@@ -2367,6 +2371,15 @@ export type ErrorData =
   | {
       kind: 'operation_failed';
     };
+export type SessionArchivePrepareError =
+  | 'unknown_session'
+  | 'busy'
+  | 'descendant_unavailable'
+  | 'conversation_unavailable'
+  | 'artifact_unavailable'
+  | 'corrupt_authority'
+  | 'storage'
+  | 'cancelled';
 /**
  * The semantic owner preventing a quiescent reload.
  */

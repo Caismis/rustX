@@ -7,18 +7,19 @@ an import, recovery or persistence format. SQLite remains schema 41.
 
 ## Logical files and authority
 
-All JSON is UTF-8. JSONL entries contain one existing native logical value per
-line, ordered by the corresponding native immutable append coordinate. Empty
+All JSON is UTF-8. JSONL entries contain one archive-v1 logical value per
+line, ordered by the corresponding native immutable append coordinate. Mixed
+historical/private native types cross explicit archive projections, not raw serde. Empty
 histories have empty entries. Logical file schemas are version 1 in this archive;
 the manifest also identifies the rustX package version and native durable schema.
 
 | Entry | Authority |
 | --- | --- |
 | `manifest.json` | Description of the cut, native Session metadata, cwd, graph nodes and lineage, frontiers, schemas, artifacts and omissions |
-| `sessions/<ConversationId>/journal.jsonl` | Event Journal envelopes, including exact sequence and request-owned settled generation evidence |
+| `sessions/<ConversationId>/journal.jsonl` | Projected Event Journal envelopes, including exact sequence and request-owned settled generation evidence; infrastructure diagnostics excluded |
 | `sessions/<ConversationId>/messages.jsonl` | Accepted Message Ledger values, including messages no longer on the active Surface |
 | `sessions/<ConversationId>/surface.jsonl` | Immutable Conversation Surface operations/revisions |
-| `sessions/<ConversationId>/requests.jsonl` | Immutable Request Snapshot bodies |
+| `sessions/<ConversationId>/requests.jsonl` | Explicit `ArchiveRequestSnapshotV1` projection of immutable Request Snapshots |
 | `sessions/<ConversationId>/generations.jsonl` | Request ID, source Journal sequence and existing `GenerationEvidence`; a convenience index of Journal-owned facts |
 | `sessions/<ConversationId>/publication_audits.jsonl` | Settled noncanonical publication audit values |
 | `artifacts/<ConversationId>/<ArtifactId>/content` | ArtifactStore bytes; one recorded display descriptor stays in the manifest and original references |
@@ -123,15 +124,68 @@ on success and removes its partial file on failure/cancellation. Existing files
 are never overwritten. A failed local cleanup may leave a partial file; no
 success is reported for the failed export.
 
-## Safety
+## Safety and native authority audit
 
-The producer reads typed Session history, never configuration, credentials,
-process environment, secret stores, synchronization state or Trace DTOs. It
-explicitly excludes Request Snapshot continuation and Assistant reasoning
-provider-private state, while retaining authored reasoning/text and legitimate
-recorded paths. It does not scan or scrub content that resembles a secret.
-Ordinary tool-owned JSON remains ordinary tool content; keys such as
-`artifact_id` in arbitrary JSON do not become artifact references.
+Archive v1 is a deliberate historical inspection contract. Adding fields to
+`RequestSnapshot` or its invocation does not add archive fields: the private
+`ArchiveRequestSnapshotV1` / invocation DTOs in `src/session_archive/projection.rs`
+name each exported field. They include request/Attempt/Step/retry and provisional
+Assistant identity, Surface revision, frozen prompt/System sections, model/protocol,
+context/output limits, reasoning state/profile, historical Tool definitions,
+capability/context generations, request context IDs, request-time upload projection,
+carryover content/source/anchor and Agent Status facts.
+
+Request options use the single closed native policy in `src/model/inspection.rs`,
+shared with Trace without depending on Trace. `invocation.request_options` contains
+only frequency_penalty, logit_bias, logprobs, min_p, n, presence_penalty,
+repetition_penalty, response_format, seed, stop, temperature, top_k, top_logprobs and
+top_p. `omitted_option_count` records how many other options were omitted, without
+exporting their names or values. Unknown future opaque keys stay excluded.
+Request continuation, raw request_params, invocation capabilities/adapter compat
+configuration and process-local runtime_resource_revision are deliberately absent.
+
+| Authority | v1 boundary and ownership rationale |
+| --- | --- |
+| Journal | Explicit envelope and exhaustive event classification. Pure identity/measurement/control facts and model-visible Tool results use native encoding. Mixed events project typed model failure/retry/timing evidence and runtime failure classes, excluding raw ModelError message/provider_code, unnormalized provider finish codes, runtime/executor diagnostic prose, workspace cleanup diagnostics and recovery comparison guards. New event variants require an explicit classification. |
+| Ledger | User and Tool native values are accepted model-visible historical content, including authored JSON and Tool failure feedback. Assistant projection names identity/content and reasoning text; provider_state is never serialized. Other Assistant blocks contain authored text, Tool calls or artifact references. |
+| Surface | Direct native encoding: only structural operations over canonical message identities. |
+| Requests | Explicit v1 DTO and shared closed option allowlist described above. No durable snapshot or invocation flattening. |
+| Publication audits | Direct native encoding: settled identities, timestamps and committed-for-release text/reasoning/refusal/Tool proposal content; no continuation or provider bindings. |
+| Generations | Explicit index of request ID, Journal sequence and native GenerationEvidence, whose fields are provider-independent numeric offsets. |
+| Manifest/lineage | Explicit manifest fields and archive metadata structs; native SessionSnapshot/SessionNode contain public identity, topology, authored name and timestamps only. No Session configuration is read. |
+| Artifact metadata/bytes | Native File/Image/Tool artifact descriptors contain artifact identity and authored display metadata; bytes are Session-owned tool content. Paths never become identity. |
+
+These safe direct native contracts remain subject to this ownership rule when
+extended; an infrastructure/private field requires an archive projection before
+it can be exposed. The archive does not scan or scrub content resembling a secret.
+Canonical authored text, model reasoning, Tool results and workflow agent output
+are preserved even if their content resembles authorization material. Recorded
+execution/workspace paths remain intact. Arbitrary Tool-authored JSON is neither
+configuration authority nor a source of guessed artifact references.
+
+The producer never reads credential stores, process environment or configuration.
+A decoded-ZIP regression proves that API/authorization/executor/unknown request
+parameters, continuation, private reasoning state and provider diagnostics/codes
+are absent, while authored secret-looking text and temperature remain present.
+
+## Typed preparation failures
+
+`SessionArchivePrepareError` contains only closed semantic reasons, never raw
+OS/provider strings or implementation paths. Missing/unreadable descendants and
+required unavailable/unsettled artifacts become v10
+`archive_preparation_failed { reason: descendant_unavailable | artifact_unavailable }`.
+Other reasons distinguish unavailable Conversation history, corrupt authority,
+storage/cut failure and cancellation. Unknown Session and capacity conditions use
+existing `unknown_session` and `request_capacity` protocol failures. The RPC message
+is fixed native wording for the reason, e.g. “Cannot export complete Session: a
+required descendant is missing or unreadable”. No successful descriptor is issued.
+
+Web displays this message through the existing error channel and never invokes
+the browser download callback on failure. TUI displays the same safe diagnostic;
+preparation failure happens before local file creation. Neither consumer retries
+preparation automatically. Native dispatch tests assert these exact errors against
+generated fixtures consumed by both client tests, including failure coalescing,
+no download/file creation and Session-ID-only RPC parameters.
 
 ## Harness reference
 

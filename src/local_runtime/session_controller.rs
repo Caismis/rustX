@@ -85,20 +85,16 @@ impl SessionController {
         &self,
         id: SessionId,
         cancel: tokio_util::sync::CancellationToken,
-    ) -> std::io::Result<crate::session_archive::SessionArchiveCut> {
-        let root = self
-            .catalog
-            .lock()
-            .await
-            .controller()
-            .map_err(std::io::Error::other)?
-            .root()
-            .to_path_buf();
+    ) -> Result<
+        crate::session_archive::SessionArchiveCut,
+        crate::session_archive::SessionArchivePrepareError,
+    > {
+        let root = self.catalog.lock().await.controller()?.root().to_path_buf();
         tokio::task::spawn_blocking(move || {
             crate::session_archive::SessionArchiveProducer::prepare(&root, &id, &cancel)
         })
         .await
-        .map_err(std::io::Error::other)?
+        .map_err(|_| crate::session_archive::SessionArchivePrepareError::Storage)?
     }
 
     /// Commit a transport-independent batch to the addressed Session workspace.

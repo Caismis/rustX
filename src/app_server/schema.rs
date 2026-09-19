@@ -366,6 +366,20 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             },
         },
     ))));
+    for reason in [
+        crate::session_archive::SessionArchivePrepareError::DescendantUnavailable,
+        crate::session_archive::SessionArchivePrepareError::ArtifactUnavailable,
+    ] {
+        fixtures.push(ProtocolMessage::Response(Response::Failure(Failure {
+            jsonrpc: JsonRpcVersion::V2,
+            id: Some(RequestId::String("archive-failure-fixture".into())),
+            error: RpcError {
+                code: -32000,
+                message: reason.to_string(),
+                data: Some(super::protocol::ErrorData::ArchivePreparationFailed { reason }),
+            },
+        })));
+    }
     fixtures
 }
 

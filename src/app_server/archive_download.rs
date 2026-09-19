@@ -2,7 +2,7 @@
 //! capability. The transport credential never enters a URL. Bytes are native.
 use super::host::AppServerHost;
 use crate::runtime::identity::SessionId;
-use crate::session_archive::SessionArchiveCut;
+use crate::session_archive::{SessionArchiveCut, SessionArchivePrepareError};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -72,13 +72,13 @@ impl ArchiveDownloads {
 pub(crate) async fn prepare(
     host: &AppServerHost,
     session: SessionId,
-) -> io::Result<ArchiveDownloadDescriptor> {
+) -> Result<ArchiveDownloadDescriptor, SessionArchivePrepareError> {
     let permit = host
         .archives()
         .capacity
         .clone()
         .try_acquire_owned()
-        .map_err(io::Error::other)?;
+        .map_err(|_| SessionArchivePrepareError::Busy)?;
     let cancel = CancellationToken::new();
     let _on_drop = cancel.clone().drop_guard();
     let cut = host
@@ -88,7 +88,7 @@ pub(crate) async fn prepare(
         .await?;
     let filename = cut.filename();
     let mut secret = [0; 32];
-    getrandom::fill(&mut secret).map_err(io::Error::other)?;
+    getrandom::fill(&mut secret).map_err(|_| SessionArchivePrepareError::Storage)?;
     let path = format!(
         "{PREFIX}{}",
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret)

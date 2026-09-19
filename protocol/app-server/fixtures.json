@@ -511,5 +511,29 @@
         "loopback_port": null
       }
     }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "archive-failure-fixture",
+    "error": {
+      "code": -32000,
+      "message": "Cannot export complete Session: a required descendant is missing or unreadable",
+      "data": {
+        "kind": "archive_preparation_failed",
+        "reason": "descendant_unavailable"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "archive-failure-fixture",
+    "error": {
+      "code": -32000,
+      "message": "Cannot export complete Session: required artifact content is missing, unreadable, changed, or still being written; wait for active tools to finish and retry",
+      "data": {
+        "kind": "archive_preparation_failed",
+        "reason": "artifact_unavailable"
+      }
+    }
   }
 ]

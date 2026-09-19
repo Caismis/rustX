@@ -473,6 +473,8 @@ export function describeRpcError(error: RpcError): string {
     return `${error.message} (code ${error.code})`;
   }
   switch (data.kind) {
+    case "archive_preparation_failed":
+      return error.message;
     case "request_capacity":
     case "residency_capacity":
     case "attachment_capacity":

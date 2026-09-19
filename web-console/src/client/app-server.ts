@@ -112,7 +112,7 @@ export function isOutcomeUncertain(error: unknown): boolean {
   return error instanceof OutcomeUncertain || (error instanceof RpcFailure && error.error.data?.kind === "committed_durability_uncertain");
 }
 export class RpcFailure extends Error {
-  constructor(readonly error: Extract<Response, { error: unknown }>['error']) { super(`${error.message} (${error.code})${error.data ? `: ${JSON.stringify(error.data)}` : ''}`); }
+  constructor(readonly error: Extract<Response, { error: unknown }>['error']) { super(error.data?.kind === 'archive_preparation_failed' ? error.message : `${error.message} (${error.code})${error.data ? `: ${JSON.stringify(error.data)}` : ''}`); }
 }
 /** GoalDomain serializes its bounded rejection into the error message. Only the
  * reason is displayed; its embedded `current` is never adopted as authority. */

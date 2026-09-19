@@ -438,9 +438,20 @@ impl AppServerConnection {
                 capabilities: ServerCapabilities::default(),
             }),
             Method::SessionExportPrepare { session_id } => {
-                let download = super::archive_download::prepare(&self.host, session_id)
+                let download = super::archive_download::prepare(&self.host, session_id.clone())
                     .await
-                    .map_err(|_| domain(ErrorData::OperationFailed))?;
+                    .map_err(|reason| {
+                        let data = match reason {
+                            crate::session_archive::SessionArchivePrepareError::UnknownSession => {
+                                ErrorData::UnknownSession { session_id }
+                            }
+                            crate::session_archive::SessionArchivePrepareError::Busy => {
+                                ErrorData::RequestCapacity
+                            }
+                            reason => ErrorData::ArchivePreparationFailed { reason },
+                        };
+                        rpc_error(-32000, &reason.to_string(), Some(data))
+                    })?;
                 Ok(MethodResult::SessionArchive { download })
             }
             Method::SessionList {

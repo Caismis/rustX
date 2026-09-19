@@ -36,3 +36,37 @@ describe('native Session export consumer', () => {
     expect(() => archiveDownloadUrl({ ...download, loopback_port: 1234 }, 'wss://native.example/')).toThrow();
   });
 });
+
+describe('generated native preparation failures through the Web client', () => {
+  it('keeps descendant/artifact diagnostics, coalesces failures and never starts a download', async () => {
+    const { fixtures } = await import('../../protocol/app-server/fixtures');
+    const { Server } = await import('./fixture');
+    const server = new Server();
+    await server.connect();
+    server.held.add('session/exportPrepare');
+    const save = vi.fn();
+    const controller = new SessionExportController(async id => {
+      const { download } = await server.client.request({ method: 'session/exportPrepare', params: { session_id: id } }, 'session_archive');
+      return { download, endpoint: 'ws://remote.example/' };
+    }, save);
+    let count = 0;
+    try {
+      for (const fixture of fixtures) {
+        const failure = 'error' in fixture ? fixture.error : undefined;
+      if (!failure || failure.data?.kind !== 'archive_preparation_failed') continue;
+        const pending = controller.download('session-A');
+        expect(controller.download('session-A')).toBe(pending);
+        const rejected = expect(pending).rejects.toThrow(failure.message);
+        await Promise.resolve();
+        const requests = server.requests.filter(item => item.request.method === 'session/exportPrepare');
+        expect(requests).toHaveLength(++count);
+        const request = requests.at(-1)!.request;
+        expect(request.params).toEqual({ session_id: 'session-A' });
+        server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: failure });
+        await rejected;
+        expect(save).not.toHaveBeenCalled();
+      }
+      expect(count).toBe(2);
+    } finally { server.client.disconnect(); }
+  });
+});

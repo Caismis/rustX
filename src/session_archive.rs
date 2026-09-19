@@ -1,4 +1,6 @@
 //! Finite, read-only packaging of native Session history. No runtime is loaded.
+mod prepare_error;
+mod projection;
 use crate::durable::SqliteConversationStore;
 use crate::durable::sqlite::archive::{Authority, error};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
@@ -8,6 +10,7 @@ use crate::runtime::identity::{ArtifactId, ConversationId, SessionId};
 use crate::runtime::local_storage::{ConversationAccess, ProductRoot};
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::types::{ToolExecutionResult, ToolResultContent};
+pub use prepare_error::SessionArchivePrepareError;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -74,18 +77,18 @@ impl SessionArchiveProducer {
         root: &Path,
         session: &SessionId,
         cancel: &CancellationToken,
-    ) -> io::Result<SessionArchiveCut> {
+    ) -> Result<SessionArchiveCut, SessionArchivePrepareError> {
+        check_cancel(cancel)?;
         let root = ProductRoot::existing(root)?;
         let ownership = root.freeze_ownership()?;
-        let catalog = SessionCatalog::read_under_guard(&root)
-            .map_err(error)?
-            .ok_or_else(|| error("missing Session catalog"))?;
-        let snapshot = catalog.snapshot(session).map_err(error)?;
-        let cwd = catalog.lineage(session, None).map_err(error)?.1.cwd;
+        let catalog =
+            SessionCatalog::read_under_guard(&root)?.ok_or(SessionArchivePrepareError::Storage)?;
+        let snapshot = catalog.snapshot(session)?;
+        let cwd = catalog.lineage(session, None)?.1.cwd;
         let nodes = catalog
             .deletion_nodes()
             .remove(session)
-            .ok_or_else(|| error("unknown Session"))?;
+            .ok_or(SessionArchivePrepareError::UnknownSession)?;
         let mut pending: Vec<_> = nodes
             .iter()
             .map(|n| {
@@ -103,15 +106,29 @@ impl SessionArchiveProducer {
         while let Some((id, parent, path)) = pending.pop() {
             check_cancel(cancel)?;
             if !seen.insert(id.clone()) {
-                return Err(error("duplicate or cyclic Conversation ownership"));
+                return Err(SessionArchivePrepareError::CorruptAuthority);
             }
-            let path = root.confined(&path)?;
-            let allocation = path.parent().ok_or_else(|| error("missing allocation"))?;
-            let access = ConversationAccess::existing(&root, allocation)?;
-            let store = SqliteConversationStore::open_existing(id.clone(), &path).map_err(error)?;
+            let unavailable = if parent.is_some() {
+                SessionArchivePrepareError::DescendantUnavailable
+            } else {
+                SessionArchivePrepareError::ConversationUnavailable
+            };
+            let path = root.confined(&path).map_err(|_| unavailable)?;
+            let allocation = path.parent().ok_or(unavailable)?;
+            let access =
+                ConversationAccess::existing(&root, allocation).map_err(|_| unavailable)?;
+            let store = SqliteConversationStore::open_existing(id.clone(), &path)
+                .map_err(|_| unavailable)?;
             let frontiers = ConversationArchiveFrontiers::default();
             for child in crate::local_runtime::session_deletion::read_facts_while(&store, || {
                 check_cancel(cancel)
+            })
+            .map_err(|_| {
+                if cancel.is_cancelled() {
+                    SessionArchivePrepareError::Cancelled
+                } else {
+                    SessionArchivePrepareError::CorruptAuthority
+                }
             })?
             .children
             {
@@ -168,13 +185,21 @@ impl SessionArchiveCut {
         format!("rustx-session-{}.zip", self.session.id)
     }
 
-    fn preflight(&mut self, cancel: &CancellationToken) -> io::Result<()> {
+    fn preflight(&mut self, cancel: &CancellationToken) -> Result<(), SessionArchivePrepareError> {
         for conversation in &self.conversations {
             let mut refs = BTreeMap::<ArtifactId, Value>::new();
-            conversation.records(cancel, |_, record| {
-                collect_record_artifacts(record, &mut refs);
-                Ok(())
-            })?;
+            conversation
+                .records(cancel, |_, record| {
+                    collect_record_artifacts(record, &mut refs);
+                    Ok(())
+                })
+                .map_err(|_| {
+                    if cancel.is_cancelled() {
+                        SessionArchivePrepareError::Cancelled
+                    } else {
+                        SessionArchivePrepareError::CorruptAuthority
+                    }
+                })?;
             for (id, metadata) in refs {
                 check_cancel(cancel)?;
                 let bytes = conversation
@@ -182,12 +207,11 @@ impl SessionArchiveCut {
                     .get(&id)
                     .copied()
                     .flatten()
-                    .ok_or_else(|| {
-                        error("required artifact was unavailable or still being written at the cut")
-                    })?;
-                let file = ArtifactStore::open_archive_reader(&conversation.root, &id)?;
+                    .ok_or(SessionArchivePrepareError::ArtifactUnavailable)?;
+                let file = ArtifactStore::open_archive_reader(&conversation.root, &id)
+                    .map_err(|_| SessionArchivePrepareError::ArtifactUnavailable)?;
                 if file.len != bytes {
-                    return Err(error("artifact changed after the captured cut"));
+                    return Err(SessionArchivePrepareError::ArtifactUnavailable);
                 }
                 self.artifacts.push(ArtifactCut {
                     manifest: ArtifactManifest {
@@ -251,7 +275,7 @@ impl SessionArchiveCut {
             "artifacts": self.artifacts.iter().map(|a| &a.manifest).collect::<Vec<_>>(),
             "schemas": {"journal":1,"messages":1,"surface":1,"requests":1,"generations":1,"publication_audits":1},
             "integrity": "ZIP CRC32 per entry",
-            "excluded": ["provider-private continuation state", "infrastructure configuration and credentials"],
+            "excluded": ["provider-private continuation state", "infrastructure configuration and credentials", "opaque request parameters outside the inspection allowlist", "provider and runtime diagnostic prose/codes", "workflow recovery comparison guards"],
             "unavailable": ["historical workspace-upload bytes are not immutable durable artifacts; recorded references remain in history"]
         })).map_err(error)?;
         for conversation in &self.conversations {
@@ -368,23 +392,10 @@ impl Record {
     fn decode(authority: Authority, body: &str) -> io::Result<Self> {
         Ok(match authority {
             Authority::Journal => Self::Journal(serde_json::from_str(body).map_err(error)?),
-            Authority::Messages => {
-                let mut message: MessageBlock = serde_json::from_str(body).map_err(error)?;
-                if let MessageBlock::Assistant(assistant) = &mut message {
-                    for block in &mut assistant.content {
-                        if let AssistantContentBlock::Reasoning(reasoning) = block {
-                            reasoning.provider_state = None;
-                        }
-                    }
-                }
-                Self::Messages(message)
-            }
+            Authority::Messages => Self::Messages(serde_json::from_str(body).map_err(error)?),
             Authority::Surface => Self::Surface(serde_json::from_str(body).map_err(error)?),
             Authority::Requests => {
-                let mut request: crate::model::snapshot::RequestSnapshot =
-                    serde_json::from_str(body).map_err(error)?;
-                request.continuation = None;
-                Self::Requests(Box::new(request))
+                Self::Requests(Box::new(serde_json::from_str(body).map_err(error)?))
             }
             Authority::PublicationAudits => {
                 Self::Audits(serde_json::from_str(body).map_err(error)?)
@@ -393,10 +404,10 @@ impl Record {
     }
     fn value(&self) -> Value {
         match self {
-            Self::Journal(v) => json!(v),
-            Self::Messages(v) => json!(v),
+            Self::Journal(v) => projection::journal(v),
+            Self::Messages(v) => projection::message(v),
             Self::Surface(v) => json!(v),
-            Self::Requests(v) => json!(v),
+            Self::Requests(v) => projection::request(v),
             Self::Audits(v) => json!(v),
         }
     }

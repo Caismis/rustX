@@ -20,6 +20,7 @@ pub mod frozen;
 pub mod generation;
 pub mod generation_evidence;
 pub mod input;
+pub(crate) mod inspection;
 pub mod invocation;
 pub mod session;
 pub mod snapshot;

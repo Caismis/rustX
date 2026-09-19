@@ -17113,6 +17113,23 @@
           "type": "object",
           "properties": {
             "reason": {
+              "$ref": "#/$defs/SessionArchivePrepareError"
+            },
+            "kind": {
+              "type": "string",
+              "const": "archive_preparation_failed"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
               "$ref": "#/$defs/RuntimeResourceReloadBusyReason"
             },
             "kind": {
@@ -17472,6 +17489,19 @@
           ],
           "additionalProperties": false
         }
+      ]
+    },
+    "SessionArchivePrepareError": {
+      "type": "string",
+      "enum": [
+        "unknown_session",
+        "busy",
+        "descendant_unavailable",
+        "conversation_unavailable",
+        "artifact_unavailable",
+        "corrupt_authority",
+        "storage",
+        "cancelled"
       ]
     },
     "RuntimeResourceReloadBusyReason": {

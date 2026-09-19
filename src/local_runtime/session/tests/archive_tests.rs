@@ -277,9 +277,8 @@ fn archive_missing_required_child_and_cancellation_fail_preparation() {
     assert_eq!(
         SessionArchiveProducer::prepare(directory.path(), &session, &cancelled)
             .err()
-            .unwrap()
-            .kind(),
-        std::io::ErrorKind::Interrupted
+            .unwrap(),
+        crate::session_archive::SessionArchivePrepareError::Cancelled
     );
 }
 
@@ -299,4 +298,128 @@ impl Write for GatedWriter {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn archive_request_projection_excludes_infrastructure_and_preserves_authored_history() {
+    use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, ReasoningBlock};
+    use crate::model::error::{ModelError, ModelErrorKind, ModelRetryDisposition};
+    use crate::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
+    let (directory, catalog, _) = open_catalog();
+    let (conversation, session, _) = append_history(
+        &catalog,
+        &[user(
+            "authored",
+            "Please analyze the literal string Authorization: Bearer AUTHORED_TEXT_SECRET",
+        )],
+    );
+    let store = store_for(&catalog, &session, &conversation);
+    let private = |secret: &str| {
+        Some(ProviderContinuationState::Anthropic(
+            AnthropicContinuation {
+                opaque: serde_json::json!(secret),
+            },
+        ))
+    };
+    store
+        .append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("reasoning"),
+            content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                text: Some("AUTHORED_REASONING_SECRET".into()),
+                provider_state: private("ARCHIVE_REASONING_SECRET"),
+            })],
+        }))
+        .unwrap();
+    let status_id = MessageId::new("archive-safe-status");
+    let mut snapshot = todo_status_start_snapshot(
+        store.load_head().unwrap().revision.next(),
+        status_id.clone(),
+        AgentStatusEmission {
+            module_id: AgentStatusModuleId::Todo,
+            key: "active_actionable".into(),
+            fingerprint: "safe".into(),
+        },
+    );
+    snapshot.invocation.request_params = serde_json::from_value(serde_json::json!({
+        "temperature":0.25, "api_key":"ARCHIVE_PROVIDER_SECRET",
+        "authorization":"Bearer ARCHIVE_AUTH_SECRET", "executor_env":"ARCHIVE_EXECUTOR_SECRET",
+        "some_unknown_future_secret_key":"ARCHIVE_UNKNOWN_SECRET"
+    }))
+    .unwrap();
+    snapshot.continuation = private("ARCHIVE_CONTINUATION_SECRET");
+    let receipt = store
+        .commit_model_turn_start(&[todo_status(status_id.as_str())], &snapshot, Utc::now())
+        .unwrap();
+    let mut event = receipt.started;
+    event.sequence = 0;
+    event.event_id = crate::runtime::identity::EventId::new("safe-model-failed");
+    event.event = crate::events::types::RuntimeEvent::ModelRequestFailed {
+        request_id: snapshot.request_id.clone(),
+        error: ModelError {
+            kind: ModelErrorKind::Authentication,
+            message: "ARCHIVE_PROVIDER_DIAGNOSTIC_SECRET".into(),
+            provider_code: Some("ARCHIVE_PROVIDER_CODE_SECRET".into()),
+            retry_disposition: ModelRetryDisposition::Never,
+            retry_after_ms: None,
+            context_overflow: None,
+            malformed_tool_proposal: None,
+            timeout_phase: None,
+            generation: None,
+        },
+        usage: None,
+        generation: None,
+    };
+    store.append_event(event).unwrap();
+    let files = decode(
+        SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
+            .unwrap(),
+    )
+    .await;
+    let all = files
+        .values()
+        .map(|v| String::from_utf8_lossy(v))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for secret in [
+        "ARCHIVE_PROVIDER_SECRET",
+        "ARCHIVE_AUTH_SECRET",
+        "ARCHIVE_EXECUTOR_SECRET",
+        "ARCHIVE_UNKNOWN_SECRET",
+        "ARCHIVE_CONTINUATION_SECRET",
+        "ARCHIVE_REASONING_SECRET",
+        "ARCHIVE_PROVIDER_DIAGNOSTIC_SECRET",
+        "ARCHIVE_PROVIDER_CODE_SECRET",
+    ] {
+        assert!(!all.contains(secret), "leaked {secret}");
+    }
+    let messages = records(&files, &conversation, "messages");
+    assert!(
+        messages[0].to_string().contains(
+            "Please analyze the literal string Authorization: Bearer AUTHORED_TEXT_SECRET"
+        )
+    );
+    assert!(
+        messages[1]
+            .to_string()
+            .contains("AUTHORED_REASONING_SECRET")
+    );
+    let request = &records(&files, &conversation, "requests")[0];
+    assert_eq!(
+        request["invocation"]["request_options"],
+        serde_json::json!({"temperature":0.25})
+    );
+    assert_eq!(request["invocation"]["omitted_option_count"], 4);
+    assert!(request.get("continuation").is_none());
+    assert!(request["invocation"].get("request_params").is_none());
+    assert_eq!(
+        request["request_id"],
+        serde_json::json!(snapshot.request_id)
+    );
+    let failure = records(&files, &conversation, "journal")
+        .into_iter()
+        .find(|v| v["event"]["type"] == "model_request_failed")
+        .unwrap();
+    assert_eq!(failure["event"]["error"]["kind"], "authentication");
+    assert!(failure["event"]["error"].get("message").is_none());
 }

@@ -935,3 +935,8 @@ short-lived, single-use native download descriptor. All clients consume the same
 HTTP(S) downloads share the App Server listener; owned stdio children advertise a
 loopback stream port. See [Session archive](session-archive.md) for cut semantics,
 authentication, resource bounds and cancellation. Durable SQLite remains v41.
+
+Archive v10 preparation failures preserve a closed safe reason through
+`archive_preparation_failed`, plus the fixed native diagnostic in `message`.
+Unknown Session/capacity use their existing failures. No raw storage/provider
+error is projected. See [Session archive safety and errors](session-archive.md).

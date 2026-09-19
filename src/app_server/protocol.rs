@@ -311,6 +311,9 @@ pub enum Method {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ErrorData {
+    ArchivePreparationFailed {
+        reason: crate::session_archive::SessionArchivePrepareError,
+    },
     ConfigurationBusy {
         reason: crate::runtime::RuntimeResourceReloadBusyReason,
     },

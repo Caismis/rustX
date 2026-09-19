@@ -74,3 +74,37 @@ test('cancellation stops the reader and removes only the partial file', async ()
     await assert.rejects(access(path));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('native generated preparation failures survive the remote client and create no destination', async () => {
+  const { AppServerClient } = await import('../src/app-server/client.ts');
+  const { AppServerHost } = await import('../src/app-server/host.ts');
+  const { FakeTransport } = await import('./support/app-server-peer.ts');
+  const { fixtures } = await import('../../protocol/app-server/fixtures.ts');
+  const root = await mkdtemp(join(tmpdir(), 'rustx-export-preflight-'));
+  const destination = join(root, 'client-private-destination.zip');
+  const transport = new FakeTransport();
+  const initializing = AppServerClient.initialize({ transport });
+  const [initialize] = await transport.log.awaitMethod('initialize');
+  transport.respond(initialize!.id, { type: 'initialized', protocol_version: 10, capabilities: {
+    multi_session: true, single_writable_controller: true, headless_interactions: true, experimental_methods: [],
+  } });
+  const client = await initializing;
+  const host = new AppServerHost({ client, ownership: 'external', endpoint: 'ws://remote.example/' });
+  let count = 0;
+  try {
+    for (const fixture of fixtures) {
+      const failure = 'error' in fixture ? fixture.error : undefined;
+      if (!failure || failure.data?.kind !== 'archive_preparation_failed') continue;
+      const pending = host.exportSession('session-A', destination);
+      const rejected = assert.rejects(pending, error => error instanceof Error && error.message === failure.message);
+      const requests = await transport.log.awaitMethod('session/exportPrepare', ++count);
+      const request = requests.at(-1)!;
+      assert.deepEqual(request.params, { session_id: 'session-A' });
+      transport.respondError(request.id, failure);
+      await rejected;
+      await assert.rejects(access(destination));
+      assert.equal(transport.transportCount('session/exportPrepare'), count);
+    }
+    assert.equal(count, 2, 'required descendant and artifact fixtures both crossed the client');
+  } finally { await host.shutdown(); await rm(root, { recursive: true, force: true }); }
+});
