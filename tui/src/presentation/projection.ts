@@ -168,6 +168,7 @@ export function replaceFromSnapshot(
     workflows: snapshot.workflows,
     cursor,
     transcript: orderTranscript(transcript),
+    statistics: snapshot.transcript.statistics,
     transcriptNextCursor: snapshot.transcript.next_cursor ?? undefined,
     attempt:
       attempt === undefined
@@ -733,6 +734,7 @@ function transcriptEntryFromWire(
         messageId,
         cursor: entry.cursor,
         message: entry.item.message,
+        ...(entry.completed_response == null ? {} : { completedResponse: entry.completed_response }),
       };
     }
     case "publication_audit":

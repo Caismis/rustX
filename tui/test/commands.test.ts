@@ -130,6 +130,7 @@ describe("command registry", () => {
     assert.deepEqual(
       COMMANDS.map((command) => command.name),
       [
+        "/capabilities", "/permissions", "/attach", "/queue",
         "/export",
         "/settings",
         "/help",
@@ -198,7 +199,7 @@ describe("slash-command autocomplete", () => {
     assert.ok(suggestions);
     assert.deepEqual(
       suggestions.items.map((item) => item.value),
-      ["/model"],
+      ["/model", "/permissions"],
     );
   });
 

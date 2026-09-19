@@ -49,6 +49,7 @@ import type {
 
 /** One committed canonical message, exactly as the runtime committed it. */
 export interface TranscriptCommitted {
+  completedResponse?: import("../protocol/app-server.ts").RuntimeClientTranscriptEntry["completed_response"];
   kind: "committed";
   /** Stable identity for rendering. Never derived from list position. */
   key: string;
@@ -145,6 +146,7 @@ export interface AttemptPresentation {
 }
 
 export interface PresentationState {
+  statistics?: import("../protocol/app-server.ts").RuntimeClientTranscriptPage["statistics"];
   goal: import("../protocol/app-server.ts").GoalView | null;
   settingsEvidence: import("../protocol/app-server.ts").SettingsEvidence;
   workflows: import("../protocol/app-server.ts").WorkflowSnapshot;

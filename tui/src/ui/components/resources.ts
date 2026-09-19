@@ -82,10 +82,25 @@ export function renderResourceBanner(
     sections.push(section("Skills", sorted(skillNames)));
   }
 
-  const toolNames = (state.capabilities.tools ?? []).map((tool) => tool.name);
-  if (toolNames.length > 0) {
-    sections.push(section("Tools", sorted(toolNames)));
+  const extensions = state.effectivePlugins;
+  if (extensions != null) {
+    const names = [extensions.agent_status && "Agent Status", extensions.todo && "Todo", extensions.goal && "Goal"].filter((name): name is string => typeof name === "string");
+    if (names.length) sections.push(section("Extensions", names));
   }
+  const main = state.resources.inspection.main;
+  if (main != null) {
+    if (main.agents.length) sections.push(section("Agents", main.agents));
+    if (main.workflows.length) sections.push(section("Workflows", main.workflows));
+  }
+  const groups = new Map<string, string[]>();
+  for (const tool of state.capabilities.tools ?? []) {
+    const origin = tool.origin;
+    const label = origin === "builtin" ? "Builtin" : "mcp" in origin ? `MCP · ${origin.mcp.server_id}` : `Managed Python · ${origin.managed_python.package}`;
+    const names = groups.get(label) ?? [];
+    names.push(tool.name);
+    groups.set(label, names);
+  }
+  if (groups.size) sections.push(`${style.heading("[Tools]")}\n${[...groups].map(([origin, names]) => `  ${origin}\n    ${names.join(" · ")}`).join("\n")}`);
 
   return sections.join("\n\n");
 }

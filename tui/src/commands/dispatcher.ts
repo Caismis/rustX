@@ -1,3 +1,4 @@
+import { isAttemptActive } from "../presentation/state.ts";
 import { archiveDestination } from "../app-server/archive.ts";
 /**
  * The command/input dispatcher.
@@ -211,7 +212,8 @@ export class CommandDispatcher {
         return { kind: "none" };
       }
       try {
-        await session.submitInbound([{ type: "text", text }]);
+        if (isAttemptActive(session.state)) await session.steer([{ type: "text", text }]);
+        else await session.submitInbound([{ type: "text", text }]);
         return { kind: "none" };
       } catch (error) {
         return failure(error);

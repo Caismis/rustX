@@ -176,7 +176,7 @@ describe("snapshot reconstruction", () => {
     assert.match(screen, /beta\/model-b/);
     assert.match(screen, /attempt alpha\/model-a/);
     assert.match(screen, /Waiting for approval of bash…/);
-    assert.match(screen, /↑12\.5k ↓840/);
+    assert.doesNotMatch(screen, /↑12\.5k ↓840/, "Attempt usage is not conversation totals");
     assert.doesNotMatch(screen, /queued 1|background 1/);
     assert.equal(screen.match(/Waiting for approval of bash…/g)?.length, 1);
   });

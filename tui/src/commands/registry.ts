@@ -20,11 +20,14 @@ export interface CommandSpec {
  * The command table.
  *
  * Deliberately small. There is no `!bash` escape, no `@file` attachment, and
- * no Skill invocation: shell, file, and Skill behaviour must travel through
- * the real rustX tool and capability path, and rustX has not yet defined a
- * client-facing attachment contract.
+ * no Skill invocation: Tool and Skill behaviour travel through
+ * native capabilities. Explicit /attach uploads selected bytes to the Session.
  */
 export const COMMANDS: readonly CommandSpec[] = [
+  { name: "/capabilities", description: "Inspect all native Agent capabilities in a scrollable view." },
+  { name: "/permissions", description: "Choose Workspace approval policy and publish saved changes." },
+  { name: "/attach", description: "Upload a selected local file to this Session.", argumentHint: "<local-path>" },
+  { name: "/queue", description: "Edit or remove exact observed queued Human input." },
   { name: "/export", description: "Export this Session archive to a client-local file.", argumentHint: "[output-path]" },
   { name: "/settings", description: "Inspect native settings, captured sources, and application boundaries." },
   { name: "/help", description: "List the available commands." },

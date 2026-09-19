@@ -215,7 +215,7 @@ describe("footer", () => {
     );
     assert.match(rendered, /alpha\/model-a/);
     assert.doesNotMatch(rendered, /provider alpha/);
-    assert.match(rendered, /context —\/128k/);
+    assert.match(rendered, /context unreported/);
     assert.doesNotMatch(rendered, /online|ready|\/help/);
     assert.doesNotMatch(rendered, /cap r3/);
   });
@@ -351,6 +351,7 @@ describe("footer", () => {
     assert.match(
       footer(
         stateOf({
+          transcript: { statistics: { completed_responses: "1", model_requests: "1", requests_with_usage: "1", reported_usage: { input_tokens: 12500, output_tokens: 840, total_tokens: 13340 } } },
           attempt: attemptView({
             last_usage: { input_tokens: 12_500, output_tokens: 840, total_tokens: 13_340 },
           }),
@@ -423,7 +424,7 @@ describe("footer", () => {
 
     const wide = footer(state, "connected", 200);
     assert.equal(wide.split("\n").length, 1);
-    assert.match(wide, /context 10%\/128k/);
+    assert.match(wide, /context unreported/);
 
     const narrow = footer(state, "connected", 40);
     const rows = narrow.split("\n");
@@ -495,9 +496,9 @@ describe("startup and context", () => {
     assert.match(rendered, /rustX/);
     assert.match(rendered, /model alpha\/model-a/);
     assert.match(rendered, /provider alpha · Responses/);
-    assert.match(rendered, /context —\/256k/);
+    assert.match(rendered, /context unreported/);
     assert.match(rendered, /reasoning on \(profile medium\)/);
-    assert.match(rendered, /session review branch · node node_a84cfe8a-8631-726c-9ac1-92ef5c781daf/);
+    assert.match(rendered, /session review branch/);
     assert.match(rendered, /Ctrl\+L model/);
     assert.match(rendered, /\/help commands/);
     assert.doesNotMatch(rendered, /attachment|conversation|cursor|cap r/i);
@@ -511,7 +512,9 @@ describe("startup and context", () => {
         last_usage: { input_tokens: 25_600, output_tokens: 512, total_tokens: 26_112 },
       }),
     });
-    assert.equal(contextLabel(state), "context 10%/256k");
+    assert.equal(contextLabel(state), "context unreported", "latest Attempt usage is not context authority");
+    state.context.last_request_occupancy = { input_tokens: 25600, context_window_tokens: 256000, model: "historical/model" };
+    assert.equal(contextLabel(state), "last context 25.6k/256k");
   });
 });
 
@@ -877,12 +880,13 @@ it("unknown context window is omitted and snapshot replacement rebuilds approval
   assert.match(footer(after, "connected"), /new\/model.*approval FULL ACCESS/);
   assert.doesNotMatch(footer(after, "connected"), /old\/model|next attempt/);
   const noWindow = stateOf({ model: { ...sessionModel("new/model"), effective: { ...sessionModel("new/model").effective, contextWindow: 0 } } });
-  assert.equal(contextLabel(noWindow), "");
-  assert.doesNotMatch(footer(noWindow, "connected"), /context/);
+  assert.equal(contextLabel(noWindow), "context unreported");
+  assert.match(footer(noWindow, "connected"), /context unreported/);
 });
 
 it("drops tokens then Session then context before essential facts require two rows", () => {
   const state = stateOf({ attempt: attemptView({ phase: { type: "settled", outcome: { type: "completed", finish_reason: { type: "stop" } } }, last_usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 } }) });
+  state.statistics = { completed_responses: "1", model_requests: "1", requests_with_usage: "1", reported_usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 } };
   const session = { name: "work" } as import("../src/protocol/app-server.ts").SessionView;
   const wide = footer(state, "connected", 200, session);
   assert.match(wide, /session work.*↑1 ↓2/);

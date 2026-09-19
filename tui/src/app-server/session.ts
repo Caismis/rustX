@@ -274,6 +274,46 @@ export class AppServerSession {
     };
   }
 
+  /** Steering and queue admission stay native; neither retains a client queue. */
+  async steer(content: UserInputBlock[]): Promise<void> {
+    await this.#client.call("turn/steer", { target: this.#target, content }, "inbound_accepted");
+  }
+
+  async editPending(expected: import("../protocol/app-server.ts").MethodParams<"inbound/edit">["expected"], text: string): Promise<void> {
+    const result = await this.#client.call("inbound/edit", { target: this.#target, expected, text }, "inbound_mutation");
+    if (result.outcome.status !== "applied") throw new Error(`Pending edit: ${result.outcome.status}. Not retried.`);
+  }
+
+  async removePending(expected: import("../protocol/app-server.ts").MethodParams<"inbound/remove">["expected"]): Promise<void> {
+    const result = await this.#client.call("inbound/remove", { target: this.#target, expected }, "inbound_mutation");
+    if (result.outcome.status !== "applied") throw new Error(`Pending removal: ${result.outcome.status}. Not retried.`);
+  }
+
+  async upload(name: string, bytes: Uint8Array): Promise<UserInputBlock[]> {
+    const result = await this.#client.call("session/upload", {
+      target: this.#target, files: [{ name, data: Buffer.from(bytes).toString("base64") }],
+    }, "session_uploaded");
+    return result.files.map(({ receipt }) => ({ type: "upload", ...receipt }));
+  }
+
+  async permissionSources() {
+    return (await this.#client.call("configuration/sourcesRead", { session_id: this.sessionId }, "source_settings")).projection;
+  }
+
+  async writePermission(revision: string, mode: import("../protocol/app-server.ts").ApprovalMode) {
+    await this.#client.call("configuration/sourceWrite", {
+      session_id: this.sessionId, expected_revision: revision,
+      mutation: { kind: "config", scope: "workspace", mutation: { unit: "approval", authored: mode } },
+    }, "source_settings");
+    return this.permissionSources();
+  }
+
+  async publishPermissions() {
+    await this.#client.call("configuration/reload", { target: this.#target }, "configuration_reloaded");
+    await this.resync();
+    return this.permissionSources();
+  }
+
   /** Requests cancellation of the current attempt. Acceptance, not settlement. */
   async cancelCurrentAttempt(): Promise<string> {
     const accepted = await this.#client.call(
@@ -620,6 +660,8 @@ export class AppServerSession {
     }
     this.#state = reduce(this.#state, { cursor, event });
     this.#publish();
+    // Completion/statistics are native read facts, not fields to derive from events.
+    if (event.type === "attempt_settled") this.#enqueueRepair();
   }
 
   #install(snapshot: RuntimeClientSnapshot, cursor: RuntimeClientCursor): void {

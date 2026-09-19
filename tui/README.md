@@ -177,7 +177,7 @@ bounded continuations.
 
 Before the first real transcript turn, the screen includes a compact welcome
 block with the published effective model, protocol/provider display label,
-context window, reasoning state, active Session name/node when the native
+context occupancy, reasoning state, active Session name when the native
 Session read is available, and the basic keyboard hints. Once a real turn or
 durably accepted transcript content exists, that block is reclaimed and the
 compact footer carries the durable Session metadata and live status instead.
@@ -381,11 +381,91 @@ same rule applies to Ctrl+C while an interaction is focused. Authoritative
 resync uses the same rule in reverse by closing every overlay before any new
 input is interpreted.
 
-There is deliberately **no** `!bash`, no `@file` attachment, no client-side
-file read, and no client-side Skill execution. Shell, file, and Skill
-behaviour must travel through the real rustX tool and capability path. The
+There is deliberately **no** `!bash`, no `@file` source-code feature, and no
+client-side Skill execution. `/attach` intentionally reads only the selected
+local file and transfers its bytes to native `session/upload`. Agent file and
+Skill operations still travel through the native Tool/capability path. The
 subagent detail view reads the addressed server projection; it grants no
 filesystem or capability authority.
+
+## Composer, capabilities and permissions
+
+| Editing state / key | Native intent |
+| --- | --- |
+| Idle Enter | Send through `turn/start` |
+| Running Enter | Steer through `turn/steer` |
+| Running Tab | Queue through `turn/start` (Tab completion is idle-only) |
+| Esc / Ctrl+C | Existing runtime cancellation; focused overlays retain their documented Esc behavior |
+| Ctrl+P | Open a slash-command entry surface without replacing the draft |
+| Ctrl+R, connected | Search local submitted prompts; Enter accepts, Esc preserves draft and cursor |
+| Ctrl+R, disconnected | Retry existing connection recovery |
+
+The native attempt phase chooses Send versus Steer. Neither submission nor a
+successful cancellation response invents execution state. Admission is sent
+once; unknown outcomes are never replayed. Input typed while an admission
+response is pending is retained. Local history holds the most recent 1,000
+submitted text prompts, excludes slash commands, and is not persisted as Session
+history. Search uses Pi Input, and previews never modify the editable draft until
+accepted. Accepting history intentionally replaces the draft, including receipts.
+
+The compact queue viewport reads `snapshot.inbound.pending`. `/queue` exposes
+all Human pending entries in native sequence order. Enter edits plain text;
+Ctrl+D removes the selected observed item. Both send the exact sequence,
+message ID and content revision captured on opening. A stale CAS is visible;
+the surface never refreshes and retries. Reopen to acquire another observation.
+There is no local reorder or queue. Reconnect reconstructs it from the snapshot.
+
+Welcome lists active Extensions, admitted named Agent definitions, model-visible
+Skills, every active Tool grouped by native Builtin/MCP server/Managed Python
+origin, and admitted Workflows. `/capabilities` opens the same complete native
+inventory in a scrollable surface. This is independent of historical Tool calls
+and running Subagent instances. No resource directory or configuration file is
+read to reconstruct effective capabilities.
+
+`/permissions` reads native configuration sources. Arrows select Tool policy or
+Full access; Enter writes Workspace `unit: approval` using the exact observed
+source revision, then rereads sources. Current, prospective/desired, saved
+pending publication, and running-attempt frozen policy remain distinct. Ctrl+P
+inside this surface explicitly publishes through `configuration/reload`; native
+busy constraints remain final. Writes never optimistically change Effective.
+After a rejected or uncertain mutation, close and reopen to inspect authority;
+the surface does not replay the write. On narrow terminals, PgDn pages through
+policy details and PgUp returns to the choices.
+
+To add a file while preserving prompt text, press Ctrl+P and enter
+`/attach <local-path>`. The direct slash command also works on an empty Composer.
+Paths are literal (no shell expansion or quoting). The client reads one regular
+file of at most 256 KiB and uploads a safe basename plus base64 bytes. Subsequent
+input uses only Session-owned receipts, never the local path or a server path.
+Text before the action is retained before the upload; text typed afterward stays
+after it. The compact attachment row summarizes the preceding region. Native
+fork/branch restoration retains exact receipt order; ambiguous flat edits across
+restored upload boundaries remain refused. Drafts, including receipts, are local
+to each Session/conversation and survive overlays and reconnect. An unknown upload
+outcome reports uncertainty and is never automatically retried.
+
+Pi Editor owns grapheme movement/deletion, terminal cell width, multiline editing,
+large paste markers and bracketed paste. Paste packets bypass global shortcuts;
+pasted Enter/Tab/Esc cannot send, queue or interrupt. A pasted leading slash stays
+literal on subsequent submission. Newlines and tabs follow Pi's text normalization.
+No separate text editor or timing heuristic is introduced. OS IME composition
+belongs to the terminal: Pi-TUI 0.82.1 exposes committed text, not composition
+start/update/end. Committed CJK/emoji/combining text is tested. If a terminal emits
+an IME confirmation as the same bare Enter/Esc bytes as a runtime control, this
+client cannot distinguish them. Tests do **not** claim that impossible distinction;
+IME candidate handling must remain terminal-side.
+
+Completed Assistant tails use that exact transcript entry's `completed_response`
+usage and native duration, never the current Attempt. Settlement rereads the native
+snapshot. Paging retains whole-conversation statistics rather than summing pages;
+missing reports are absent, not zero. Context occupancy uses the native last-request
+reading, and model changes do not relabel its historical capacity. Heavy generation
+diagnostics remain outside ordinary chat.
+
+Pi bounds the editor height. The queue/attachment/action context has a finite
+viewport, and popup frames preserve actionable rows at 160×50, 120×40, 80×24,
+60×20 and 40×15. Capability detail is scrollable through `/capabilities`; it does
+not take priority over HITL or the Composer.
 
 ## Native HITL
 
@@ -509,8 +589,10 @@ second line for essential facts. Compact labels preserve full identities; if an
 identity cannot physically fit, `model: /settings` explicitly defers its detail
 instead of printing a misleading prefix. At extreme widths only whole segments
 that fit are shown. No TypeScript cwd/filesystem/Git probe supplies footer facts.
-Context is the runtime/provider-published input usage divided by the published
-window of that attempt's model, never a retokenization of transcript history.
+Context uses `context.last_request_occupancy`, including the historical request's
+frozen window. Conversation usage uses `transcript.statistics.reported_usage`
+and its explicit coverage. Neither is reconstructed from the latest Attempt
+or from loaded transcript rows. Absent occupancy is labelled unreported.
 The working surface alone reports compaction, thinking, Tool execution and HITL.
 
 Tool cards share one neutral Tool surface across every lifecycle. Native glyphs

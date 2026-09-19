@@ -149,6 +149,13 @@ export function renderTranscript(
   const blocks: TranscriptBlock[] = [];
   for (const entry of state.transcript) {
     blocks.push(...renderEntryBlocks(entry, context));
+    if (entry.kind === "committed" && entry.message.role === "assistant") {
+      const response = entry.completedResponse;
+      const facts: string[] = [];
+      if (response?.usage != null) facts.push(`${response.usage.total_tokens.toLocaleString("en-US")} tok`);
+      if (response?.timing?.total_duration_ms != null) facts.push(`${(response.timing.total_duration_ms / 1000).toFixed(1)}s`);
+      if (facts.length) blocks.push({ kind: "text", key: `${entry.key}:response`, text: role.meta(facts.join(" · ")) });
+    }
     blocks.push(...renderStatusAnnotations(entry, context));
   }
   const attemptOutcome = renderAttemptOutcome(state);
