@@ -62,7 +62,8 @@ def web_commands() -> Scenario:
                       body_excludes=("Original native answer", "Regenerated native answer"))
     return Scenario("web_commands",
                     Step(expected("second-model"), Stream(Text("Original native answer"), Finish())),
-                    Step(expected("console-model"), Stream(Gate("retry-request-reached"), Text("Regenerated native answer"), Finish())))
+                    Step(expected("console-model"), Stream(Gate("retry-request-reached"), Text("Regenerated native answer"), Finish())),
+                    Step(expected("console-model"), Stream(Gate("inherited-retry-reached"), Text("Inherited replay answer"), Finish())))
 
 
 SCENARIOS["web_commands"] = web_commands

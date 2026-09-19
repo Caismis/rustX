@@ -6974,7 +6974,7 @@ resolves missing results against exact canonical Assistant blocks; synthesized
 results carry that occurrence before commit. Canonical history alone therefore
 contains every call/result relationship, without source execution events.
 
-SQLite schema **40** retains `canonical_tool_calls` only as a derived index. Its
+SQLite schema **41** retains `canonical_tool_calls` only as a derived index. Its
 primary key is `(assistant_message_id, block_index)`; Assistant/call and result
 MessageId uniqueness constraints prevent duplicate provider IDs within one
 Assistant and duplicate settlement. Tool commits validate the exact indexed

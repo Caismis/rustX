@@ -65,7 +65,7 @@ describe('one narrow browser command grammar', () => {
 /** Scripted server owner. The browser only receives generated wire DTOs. */
 function nativeFixture() {
   const original = snapshot('A');
-  original.transcript.entries = [{ cursor: '1', completed_response: { closing_message_id: 'original-assistant', attempt_id: 'original-attempt', completed_at: '2026-09-19T08:00:00Z', surface_revision: '9007199254740997', retry_message_id: 'user-cut' }, item: { type: 'message', message: { id: 'original-assistant', role: 'assistant', content: [{ type: 'text', text: 'Original assistant response' }] } } }];
+  original.transcript.entries = [{ cursor: '1', completed_response: { closing_message_id: 'original-assistant', origin: { conversation_id: 'origin-conversation', closing_message_id: 'original-assistant', attempt_id: 'original-attempt' }, completed_at: '2026-09-19T08:00:00Z', surface_revision: '9007199254740997', retry_message_id: 'user-cut' }, item: { type: 'message', message: { id: 'original-assistant', role: 'assistant', content: [{ type: 'text', text: 'Original assistant response' }] } } }];
   const originals = structuredClone(original);
   server.snapshots.set('A', original); server.nodeSnapshots.set('node-A', original);
   const content: UserInputBlock[] = [{ type: 'text', text: 'Try this' }, { type: 'upload', session_id: 'A', batch_id: 'batch', token: 'native-receipt' }];

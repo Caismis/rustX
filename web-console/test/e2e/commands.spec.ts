@@ -90,8 +90,10 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(message).toHaveValue('');
     const forkId = JSON.parse(await facts.innerText()).SessionId as string;
     expect(forkId).not.toBe(originalId);
+    const forkConversation = JSON.parse(await facts.innerText()).ConversationId as string;
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
     await expect(page.getByText(/Native restored upload batch/)).toHaveCount(0);
+    await expect(page.getByLabel('Completed response', { exact: true })).toHaveCount(1);
     // Native #319 copies uploads in the inherited post-response prefix before publishing the child.
     const root = join(fixture.workspaceA, '.agents/uploads', forkId);
     const batches = readdirSync(root);
@@ -104,6 +106,30 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     // Session/launch configuration, never a browser copy of the old live values.
     await expect(facts).toContainText('fixture/console-model');
     await expect(facts).toContainText('policy');
+    // A reopened inherited Assistant remains a valid native continuation anchor.
+    await expect(page.getByLabel('Completed response', { exact: true })).toHaveCount(1);
+    await page.getByRole('button', { name: 'Lineage', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Retry / Regenerate', exact: true })).toBeEnabled();
+    await page.getByRole('button', { name: 'Branch in this Session', exact: true }).click();
+    await page.getByRole('dialog', { name: '/branch', exact: true }).getByRole('option', { name: /Continue after this response/ }).click();
+    await expect(page.getByRole('dialog', { name: '/branch', exact: true })).toHaveCount(0);
+    await expect(message).toHaveValue('');
+    await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Completed response', { exact: true })).toHaveCount(1);
+    await expect(page.getByLabel('Conversation statistics')).toContainText('0 responses · 0 requests');
+    await page.getByRole('button', { name: 'Lineage', exact: true }).click();
+    await page.getByRole('button', { name: 'Retry / Regenerate', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Retry / Regenerate', exact: true }).getByRole('option', { name: /Replay the original input once/ }).click();
+    expect(await fixture.gate('inherited-retry-reached')).toMatchObject({ kind: 'gate_reached', requestIndex: 2 });
+    await fixture.release('inherited-retry-reached');
+    await expect(transcript.getByText('Inherited replay answer', { exact: true })).toBeVisible();
+    await settled();
+    await expect(transcript.getByText('Regenerate my uploaded note', { exact: true })).toHaveCount(1);
+    await expect(transcript.getByText('Original native answer', { exact: true })).toHaveCount(0);
+    await sessionTree(page);
+    await page.getByRole('dialog', { name: 'Session tree', exact: true }).getByRole('option').filter({ hasText: forkConversation }).click();
+    await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
+    await expect(transcript.getByText('Inherited replay answer', { exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Close Inspector' }).click();
     await page.setViewportSize({ width: 390, height: 844 });
     popup = await command('model'); await expect(popup.getByRole('option', { name: /fixture\/second-model/ })).toBeVisible();

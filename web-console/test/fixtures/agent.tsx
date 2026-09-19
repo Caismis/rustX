@@ -31,7 +31,7 @@ s.messages = [
 ];
 s.transcript.entries = s.messages.map((message, i) => ({ cursor: String(i + 1), item: { type: 'message', message } }));
 if (mode === 'settled') {
- s.transcript.entries[1].completed_response = { closing_message_id: 'answer-1', attempt_id: 'attempt-1', surface_revision: '2', retry_message_id: 'user-1', completed_at: '2026-09-18T11:59:00Z', usage: { input_tokens: 15000, output_tokens: 800, total_tokens: 15800, details: { cached_input_tokens: 12000 } } };
+ s.transcript.entries[1].completed_response = { closing_message_id: 'answer-1', origin: { conversation_id: 'origin-conversation', closing_message_id: 'answer-1', attempt_id: 'attempt-1' }, surface_revision: '2', retry_message_id: 'user-1', completed_at: '2026-09-18T11:59:00Z', usage: { input_tokens: 15000, output_tokens: 800, total_tokens: 15800, details: { cached_input_tokens: 12000 } } };
  s.transcript.statistics = { completed_responses: '1', model_requests: '2', requests_with_usage: '2', reported_usage: s.transcript.entries[1].completed_response.usage };
  s.context = { compaction_count: 0, compaction_in_progress: false, last_request_occupancy: { input_tokens: 15000, context_window_tokens: 128000, model: 'native/coder' } };
 }

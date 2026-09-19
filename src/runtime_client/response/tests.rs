@@ -63,7 +63,12 @@ fn assistant(store: &dyn ConversationStore, attempt: &str, id: &str) {
         )
         .unwrap();
 }
-fn request(store: &dyn ConversationStore, attempt: &str, retry: u32, usage: Option<ModelUsage>) {
+pub(crate) fn request(
+    store: &dyn ConversationStore,
+    attempt: &str,
+    retry: u32,
+    usage: Option<ModelUsage>,
+) {
     let snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: AttemptId::new(attempt),
@@ -237,8 +242,8 @@ fn historical_pages_reopen_and_later_attempts_preserve_identity_and_totals() {
     }
     let newest = page(&store, None, 1);
     let older = page(&store, newest.next_cursor.map(Into::into), 64);
-    assert_eq!(tails(&newest)[0].attempt_id, AttemptId::new("b"));
-    assert_eq!(tails(&older)[0].attempt_id, AttemptId::new("a"));
+    assert_eq!(tails(&newest)[0].origin.attempt_id, AttemptId::new("b"));
+    assert_eq!(tails(&older)[0].origin.attempt_id, AttemptId::new("a"));
     assert_eq!(newest.statistics, older.statistics);
     assert_eq!(
         newest
@@ -415,4 +420,40 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
             .unwrap(),
         Some(tail.surface_revision)
     );
+    let child_id = ConversationId::generate();
+    let canonical = store.load_canonical().unwrap();
+    let seed = crate::local_runtime::session::remap_seed(
+        &child_id,
+        &canonical,
+        &store
+            .load_surface_history(store.load_head().unwrap().revision)
+            .unwrap(),
+        &lineage_provenance(&store, &canonical).unwrap(),
+    )
+    .unwrap();
+    let child = SqliteConversationStore::in_memory(child_id).unwrap();
+    child.initialize_lineage(&seed).unwrap();
+    let inherited = page(&child, None, 64);
+    assert_eq!(tails(&inherited).len(), 1);
+    let inherited_tail = tails(&inherited)[0];
+    assert_eq!(inherited_tail.origin, tail.origin);
+    assert_eq!(inherited_tail.usage, tail.usage);
+    assert!(is_completed_response(&child, &inherited_tail.closing_message_id).unwrap());
+    assert_eq!(
+        inherited.statistics,
+        Some(ConversationStatistics::default())
+    );
+}
+
+mod lineage;
+
+fn is_completed_response(
+    store: &dyn ConversationStore,
+    message: &MessageId,
+) -> Result<bool, ConversationStoreError> {
+    Ok(
+        lineage_provenance(store, &store.load_messages(std::slice::from_ref(message))?)?
+            .iter()
+            .any(|response| response.closing_message_id == *message),
+    )
 }

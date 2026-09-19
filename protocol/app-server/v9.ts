@@ -5122,11 +5122,12 @@ export interface RuntimeClientTranscriptEntry {
       };
 }
 /**
- * A completed execution's exact closing canonical response. This is not history.
+ * Derived response view over local execution or inherited lineage provenance.
+ * Canonical content remains in the Message Ledger.
  */
 export interface CompletedResponseView {
   closing_message_id: MessageId;
-  attempt_id: AttemptId;
+  origin: ResponseOrigin;
   /**
    * Durable completion timestamp; never a browser receipt time.
    */
@@ -5153,6 +5154,17 @@ export interface CompletedResponseView {
    * All actual requests in the Attempt, only when every usage is known.
    */
   usage?: ModelUsage | null;
+}
+/**
+ * Original execution owner, including for inherited historical responses.
+ */
+export interface ResponseOrigin {
+  conversation_id: ConversationId;
+  attempt_id: AttemptId;
+  /**
+   * Identifies a committed canonical message block.
+   */
+  closing_message_id: string;
 }
 /**
  * The foreground tool execution read model of one logical tool call.

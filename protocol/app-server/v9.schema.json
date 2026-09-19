@@ -8387,14 +8387,15 @@
       ]
     },
     "CompletedResponseView": {
-      "description": "A completed execution's exact closing canonical response. This is not history.",
+      "description": "Derived response view over local execution or inherited lineage provenance.\nCanonical content remains in the Message Ledger.",
       "type": "object",
       "properties": {
         "closing_message_id": {
           "$ref": "#/$defs/MessageId"
         },
-        "attempt_id": {
-          "$ref": "#/$defs/AttemptId"
+        "origin": {
+          "description": "Original execution owner, including for inherited historical responses.",
+          "$ref": "#/$defs/ResponseOrigin"
         },
         "completed_at": {
           "description": "Durable completion timestamp; never a browser receipt time.",
@@ -8431,9 +8432,31 @@
       "additionalProperties": false,
       "required": [
         "closing_message_id",
-        "attempt_id",
+        "origin",
         "completed_at",
         "surface_revision"
+      ]
+    },
+    "ResponseOrigin": {
+      "description": "Original execution owner, unchanged through arbitrarily deep lineage copies.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "closing_message_id": {
+          "description": "Provenance only; never a destination content address.",
+          "$ref": "#/$defs/MessageId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "attempt_id",
+        "closing_message_id"
       ]
     },
     "ForegroundToolExecution": {

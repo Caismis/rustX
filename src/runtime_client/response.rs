@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::conversation::SurfaceRevision;
 use crate::durable::presentation::{FactQuery, FactScope};
+use crate::durable::response::{CompletedResponseProvenance, ResponseOrigin};
 use crate::durable::{ConversationStore, ConversationStoreError};
 use crate::events::types::RuntimeEvent;
 use crate::message::types::{AssistantContentBlock, InboundKind, MessageBlock};
@@ -18,12 +19,14 @@ use crate::runtime::identity::{AttemptId, MessageId, RequestId};
 
 use super::snapshot::{RuntimeClientTranscriptItem, RuntimeClientTranscriptPage};
 
-/// A completed execution's exact closing canonical response. This is not history.
+/// Derived response view over local execution or inherited lineage provenance.
+/// Canonical content remains in the Message Ledger.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CompletedResponseView {
     pub closing_message_id: MessageId,
-    pub attempt_id: AttemptId,
+    /// Original execution owner, including for inherited historical responses.
+    pub origin: ResponseOrigin,
     /// Durable completion timestamp; never a browser receipt time.
     pub completed_at: chrono::DateTime<chrono::Utc>,
     /// Immutable first Surface revision containing the closing response.
@@ -87,7 +90,6 @@ pub fn decorate(
     decorate_through(store, page, store.presentation_frontier()?)
 }
 
-#[allow(clippy::too_many_lines)] // One finite ordered fold; provider terminals and canonical acceptance remain distinct.
 pub(crate) fn decorate_through(
     store: &dyn ConversationStore,
     page: &mut RuntimeClientTranscriptPage,
@@ -107,8 +109,104 @@ pub(crate) fn decorate_through(
             _ => None,
         })
         .collect();
+    let ResponseProjection {
+        mut completed,
+        pending,
+        statistics,
+    } = project(store, &wanted, through)?;
+    for entry in &mut page.entries {
+        let RuntimeClientTranscriptItem::Message {
+            message: MessageBlock::Assistant(message),
+        } = &entry.item
+        else {
+            continue;
+        };
+        entry.response_pending = pending.contains(&message.id);
+        if message
+            .content
+            .iter()
+            .any(|block| matches!(block, AssistantContentBlock::ToolCall(_)))
+        {
+            continue;
+        }
+        if let Some(mut response) = completed.remove(&message.id) {
+            if let Some(input) = &response.retry_message_id {
+                let replayable = store.load_messages(std::slice::from_ref(input))?.iter().any(|message|
+                    matches!(message, MessageBlock::User(user) if user.kind == InboundKind::Message));
+                if !replayable {
+                    response.retry_message_id = None;
+                }
+            }
+            entry.completed_response = Some(CompletedResponseView {
+                surface_revision: store.message_append_revision(&message.id)?.ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(
+                        "Completed response has no canonical Surface append".into(),
+                    )
+                })?,
+                closing_message_id: response.closing_message_id,
+                origin: response.origin,
+                completed_at: response.completed_at,
+                retry_message_id: response.retry_message_id,
+                usage: response.usage,
+            });
+        }
+    }
+    page.statistics = Some(statistics);
+    Ok(())
+}
+
+struct ResponseProjection {
+    completed: BTreeMap<MessageId, CompletedResponseProvenance>,
+    pending: BTreeSet<MessageId>,
+    statistics: ConversationStatistics,
+}
+
+/// Derive the lineage-safe historical facts in one native evidence fold.
+/// Only canonical Assistant identities supplied by the lineage owner are selected.
+/// # Errors
+/// Propagates durable read failures rather than dropping historical facts.
+pub(crate) fn lineage_provenance(
+    store: &dyn ConversationStore,
+    canonical: &[MessageBlock],
+) -> Result<Vec<CompletedResponseProvenance>, ConversationStoreError> {
+    let wanted = canonical
+        .iter()
+        .filter_map(|message| match message {
+            MessageBlock::Assistant(assistant)
+                if !assistant
+                    .content
+                    .iter()
+                    .any(|block| matches!(block, AssistantContentBlock::ToolCall(_))) =>
+            {
+                Some(assistant.id.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let mut projection = project(store, &wanted, store.presentation_frontier()?)?;
+    Ok(canonical
+        .iter()
+        .filter_map(|message| {
+            projection
+                .completed
+                .remove(&crate::conversation::message_id_of(message))
+        })
+        .collect())
+}
+
+#[allow(clippy::too_many_lines)] // One shared finite fold; no second Journal scan for lineage provenance.
+fn project(
+    store: &dyn ConversationStore,
+    wanted: &BTreeSet<MessageId>,
+    through: u64,
+) -> Result<ResponseProjection, ConversationStoreError> {
     let mut attempts: BTreeMap<AttemptId, AttemptEvidence> = BTreeMap::new();
-    let mut completed = BTreeMap::new();
+    let mut completed: BTreeMap<_, _> = store
+        .load_inherited_responses()?
+        .into_iter()
+        .filter(|response| wanted.contains(&response.closing_message_id))
+        .map(|response| (response.closing_message_id.clone(), response))
+        .collect();
     let mut statistics = ConversationStatistics::default();
     let mut after = 0;
     loop {
@@ -168,12 +266,6 @@ pub(crate) fn decorate_through(
                     if let Some(closing) = evidence.closing.take() {
                         statistics.completed_responses += 1;
                         if wanted.contains(&closing) {
-                            let revision =
-                                store.message_append_revision(&closing)?.ok_or_else(|| {
-                                    ConversationStoreError::InvalidReference(
-                                        "Completed response has no canonical Surface append".into(),
-                                    )
-                                })?;
                             let retry_message_id = match &evidence.last_request {
                                 Some(id) => {
                                     let request = store.load_request_snapshot(id)?;
@@ -194,11 +286,14 @@ pub(crate) fn decorate_through(
                             };
                             completed.insert(
                                 closing.clone(),
-                                CompletedResponseView {
-                                    closing_message_id: closing,
-                                    attempt_id: id.clone(),
+                                CompletedResponseProvenance {
+                                    closing_message_id: closing.clone(),
+                                    origin: ResponseOrigin {
+                                        conversation_id: store.conversation_id().clone(),
+                                        attempt_id: id.clone(),
+                                        closing_message_id: closing,
+                                    },
                                     completed_at: event.timestamp,
-                                    surface_revision: revision,
                                     retry_message_id,
                                     usage: (evidence.requests > 0
                                         && evidence.requests == evidence.reports)
@@ -223,96 +318,14 @@ pub(crate) fn decorate_through(
     }
     let pending: BTreeSet<_> = attempts
         .values()
-        .filter_map(|evidence| evidence.closing.as_ref())
+        .filter_map(|evidence| evidence.closing.clone())
         .collect();
-    for entry in &mut page.entries {
-        let RuntimeClientTranscriptItem::Message {
-            message: MessageBlock::Assistant(message),
-        } = &entry.item
-        else {
-            continue;
-        };
-        entry.response_pending = pending.contains(&message.id);
-        if message
-            .content
-            .iter()
-            .any(|block| matches!(block, AssistantContentBlock::ToolCall(_)))
-        {
-            continue;
-        }
-        if let Some(mut response) = completed.remove(&message.id) {
-            if let Some(input) = &response.retry_message_id {
-                let replayable = store.load_messages(std::slice::from_ref(input))?.iter().any(|message|
-                    matches!(message, MessageBlock::User(user) if user.kind == InboundKind::Message));
-                if !replayable {
-                    response.retry_message_id = None;
-                }
-            }
-            entry.completed_response = Some(response);
-        }
-    }
-    page.statistics = Some(statistics);
-    Ok(())
-}
-
-/// Validates a post-response boundary against durable completion and acceptance,
-/// independently of whatever metadata a client supplied.
-/// # Errors
-/// Propagates durable read failures.
-pub(crate) fn is_completed_response(
-    store: &dyn ConversationStore,
-    message: &MessageId,
-) -> Result<bool, ConversationStoreError> {
-    let through = store.presentation_frontier()?;
-    let mut after = 0;
-    loop {
-        let events = store.read_presentation_events(&FactQuery {
-            scope: FactScope::All,
-            kinds: vec!["assistant_message_committed"],
-            before: None,
-            after,
-            ascending: true,
-            through,
-            limit: 128,
-        })?;
-        if events.is_empty() {
-            return Ok(false);
-        }
-        for event in events {
-            after = event.sequence;
-            if !matches!(&event.event, RuntimeEvent::AssistantMessageCommitted { message_id } if message_id == message)
-            {
-                continue;
-            }
-            let Some(attempt) = event.attempt_id else {
-                return Ok(false);
-            };
-            let end = store.read_presentation_events(&FactQuery {
-                scope: FactScope::Attempt(attempt),
-                kinds: vec![
-                    "assistant_message_committed",
-                    "attempt_completed",
-                    "attempt_cancelled",
-                    "attempt_failed",
-                    "attempt_timed_out",
-                    "attempt_limit_exceeded",
-                ],
-                before: None,
-                after,
-                ascending: true,
-                through,
-                limit: 1,
-            })?;
-            return Ok(matches!(
-                end.first().map(|event| &event.event),
-                Some(RuntimeEvent::AttemptCompleted {
-                    finish_reason: ModelFinishReason::Stop | ModelFinishReason::Refusal,
-                    ..
-                })
-            ));
-        }
-    }
+    Ok(ResponseProjection {
+        completed,
+        pending,
+        statistics,
+    })
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

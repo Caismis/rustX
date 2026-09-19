@@ -251,7 +251,8 @@ use super::inbox::{
 /// Version 39 introduced the Tool occurrence index.
 /// Version 40 makes Tool-result occurrence ownership canonical; prior shapes are refused.
 /// Version 41 adds generation evidence to persisted request terminal events.
-pub const SQLITE_SCHEMA_VERSION: i64 = 41;
+/// Version 42 retains immutable completed-response provenance in lineage bootstrap.
+pub const SQLITE_SCHEMA_VERSION: i64 = 42;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -1568,18 +1569,24 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("initialize transaction: {error}")))?;
-        let bootstrap: Option<(i64, String)> = transaction
+        let bootstrap: Option<(i64, String, String)> = transaction
             .query_row(
-                "SELECT message_count,history_digest FROM bootstrap_identity WHERE id=1",
+                "SELECT message_count,history_digest,response_provenance FROM bootstrap_identity WHERE id=1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
             .map_err(|error| storage(format!("bootstrap probe: {error}")))?;
-        if let Some((count, digest)) = bootstrap {
+        if let Some((count, digest, responses)) = bootstrap {
             let supplied_count = i64::try_from(messages.len())
                 .map_err(|_| storage("initial message count is not representable"))?;
-            if count != supplied_count || digest != initial_history_digest(messages)? {
+            if count != supplied_count
+                || digest != initial_history_digest(messages)?
+                || decode::<Vec<super::response::CompletedResponseProvenance>>(
+                    &responses,
+                    "bootstrap responses",
+                )? != seed.completed_responses()
+            {
                 return Err(ConversationStoreError::InitialHistoryMismatch);
             }
         } else {
@@ -1627,10 +1634,11 @@ impl ConversationStore for SqliteConversationStore {
             }
             transaction
                 .execute(
-                    "INSERT INTO bootstrap_identity(id,message_count,history_digest) VALUES(1,?1,?2)",
+                    "INSERT INTO bootstrap_identity(id,message_count,history_digest,response_provenance) VALUES(1,?1,?2,?3)",
                     params![
                         i64::try_from(messages.len()).map_err(|_| storage("initial message count is not representable"))?,
-                        initial_history_digest(messages)?
+                        initial_history_digest(messages)?,
+                        encode(&seed.completed_responses(), "bootstrap responses")?
                     ],
                 )
                 .map_err(|error| storage(format!("insert bootstrap identity: {error}")))?;
@@ -1638,6 +1646,23 @@ impl ConversationStore for SqliteConversationStore {
         transaction
             .commit()
             .map_err(|error| storage(format!("initialize commit: {error}")))
+    }
+
+    fn load_inherited_responses(
+        &self,
+    ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError> {
+        let json: Option<String> = self
+            .lock()?
+            .query_row(
+                "SELECT response_provenance FROM bootstrap_identity WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(format!("bootstrap responses: {error}")))?;
+        json.map(|json| decode(&json, "bootstrap responses"))
+            .transpose()
+            .map(Option::unwrap_or_default)
     }
 
     fn load_bootstrap_history(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
@@ -4952,7 +4977,8 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             CREATE TABLE IF NOT EXISTS bootstrap_identity (
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 message_count INTEGER NOT NULL,
-                history_digest TEXT NOT NULL
+                history_digest TEXT NOT NULL,
+                response_provenance TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS surface_ops (
                 revision INTEGER PRIMARY KEY,
@@ -5123,7 +5149,10 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "result_message_id",
             ],
         ),
-        ("bootstrap_identity", &["message_count", "history_digest"]),
+        (
+            "bootstrap_identity",
+            &["message_count", "history_digest", "response_provenance"],
+        ),
         (
             "surface_ops",
             &["revision", "compaction_generation", "op_json"],
@@ -13476,7 +13505,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 41);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 42);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -13545,7 +13574,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 41);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 42);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

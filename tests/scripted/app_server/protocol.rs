@@ -2911,6 +2911,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             store.append_canonical(&MessageBlock::User(UserMessageBlock { id: MessageId::new(input), source: UserSource::Human,
                 kind: InboundKind::Message, timestamp: None, content: vec![UserContentBlock::Text(TextBlock { text: input.into() })] })).unwrap();
             store.append_event(event(attempt, RuntimeEvent::AttemptStarted { attempt_id: AttemptId::new(attempt) })).unwrap();
+            crate::runtime_client::response::tests::request(&store, attempt, 0, Some(crate::model::ModelUsage { input_tokens: 100, output_tokens: 20, total_tokens: 120, details: None }));
             store.append_canonical_with_event(&MessageBlock::Assistant(AssistantMessageBlock { id: MessageId::new(output),
                 content: vec![AssistantContentBlock::Text(TextBlock { text: output.into() })] }),
                 event(attempt, RuntimeEvent::AssistantMessageCommitted { message_id: MessageId::new(output) })).unwrap();
@@ -2930,6 +2931,41 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             let copied = SqliteConversationStore::open_existing(session.active_conversation_id, &destination.database_path).unwrap();
             let messages = copied.load_canonical().unwrap(); assert_eq!(messages.len(), 4);
             assert!(matches!(&messages[3], MessageBlock::Assistant(a) if a.content == match &original[3] { MessageBlock::Assistant(a) => a.content.clone(), _ => unreachable!() }));
+            let mut projected = crate::runtime_client::snapshot::transcript_page_view(copied.load_transcript_page(None, 64).unwrap()).unwrap();
+            crate::runtime_client::response::decorate(&copied, &mut projected).unwrap();
+            let tail = projected.entries.last().unwrap().completed_response.clone().unwrap();
+            assert_eq!(tail.closing_message_id, crate::conversation::message_id_of(&messages[3]));
+            assert_eq!(tail.retry_message_id, Some(crate::conversation::message_id_of(&messages[2])));
+            assert_eq!(tail.origin.conversation_id, source.active_conversation_id);
+            assert_eq!(tail.usage.as_ref().unwrap().total_tokens, 120);
+            assert_eq!(projected.entries.iter().filter(|entry| entry.completed_response.is_some()).count(), 2);
+            assert_eq!(projected.statistics.unwrap(), crate::runtime_client::response::ConversationStatistics::default());
+            assert!(copied.read_events(None, 128).unwrap().events.is_empty());
+            let child_id = session.id.clone(); let child_node = session.active_node.clone();
+            drop(copied); drop(destination);
+            let MethodResult::Attached { target: child_target, snapshot: attached, .. } = call(&connection, 4198, Method::SessionAttach { session_id: child_id.clone(), node_id: Some(child_node.clone()) }).await else { panic!("attach inherited lineage") };
+            assert_eq!(attached.transcript.entries.last().unwrap().completed_response.as_ref(), Some(&tail));
+            call(&connection, 4199, Method::SessionDetach { target: child_target }).await;
+            // Both independent and in-Session children remain native anchors on another copy.
+            for again_fork in [false, true] {
+                let method = if again_fork { Method::SessionFork { session_id: child_id.clone(), node_id: Some(child_node.clone()), surface_revision: tail.surface_revision, boundary: Some(tail.closing_message_id.clone()), side: LineageSide::After } }
+                    else { Method::SessionBranch { session_id: child_id.clone(), node_id: child_node.clone(), surface_revision: tail.surface_revision, boundary: tail.closing_message_id.clone(), side: LineageSide::After } };
+                let MethodResult::SessionTransition { editor_content, .. } = call(&connection, 4200, method).await else { panic!("inherited continuation") };
+                assert!(editor_content.is_none_or(|content| content.is_empty()));
+            }
+            let MethodResult::SessionTransition { session: retry, editor_content: Some(input), .. } = call(&connection, 4201, Method::SessionBranch { session_id: child_id.clone(), node_id: child_node.clone(), surface_revision: tail.surface_revision, boundary: tail.retry_message_id.clone().unwrap(), side: LineageSide::Before }).await else { panic!("inherited retry") };
+            assert_eq!(input, vec![UserInputBlock::Text(TextBlock { text: "user-b".into() })]);
+            let retry_access = controller.acquire_session(&retry.id, Some(&retry.active_node)).await.unwrap();
+            let retry_store = SqliteConversationStore::open_existing(retry.active_conversation_id, &retry_access.database_path).unwrap();
+            assert_eq!(retry_store.load_canonical().unwrap().len(), 2);
+            let child = controller.acquire_session(&child_id, Some(&child_node)).await.unwrap();
+            let reopened = SqliteConversationStore::open_existing(child.node.conversation_id.clone(), &child.database_path).unwrap();
+            assert_eq!(reopened.load_canonical().unwrap(), messages);
+            let mut reopened_page = crate::runtime_client::snapshot::transcript_page_view(reopened.load_transcript_page(None, 64).unwrap()).unwrap();
+            crate::runtime_client::response::decorate(&reopened, &mut reopened_page).unwrap();
+            assert_eq!(reopened_page.entries.last().unwrap().completed_response.as_ref(), Some(&tail));
+            rejected(&connection, Method::SessionBranch { session_id: child_id, node_id: child_node, surface_revision: crate::conversation::SurfaceRevision::new(tail.surface_revision.get() + 1), boundary: tail.closing_message_id, side: LineageSide::After }).await;
+
         }
         let MethodResult::SessionTransition { session, editor_content: Some(input), .. } = call(&connection, 4010, Method::SessionBranch {
             session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: revision, boundary: MessageId::new("user-b"), side: LineageSide::Before,

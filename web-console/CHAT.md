@@ -72,9 +72,21 @@ reassign that ownership. No timeout or sleep determines layout correctness.
 
 Ordinary User rows expose Copy and their persisted timestamp when present. They
 have no primary Fork/Branch/Retry toolbar. Final Assistant content has at most one
-completed-response tail, tied to the native `closing_message_id` and `attempt_id`.
-The Runtime Client joins canonical acceptance with a successful Attempt terminal;
+completed-response tail, tied to the native destination `closing_message_id` and explicit original execution `origin`.
+For local responses, the Runtime Client joins canonical acceptance with a successful Attempt terminal;
 provider completion and intermediate tool/model requests do not create tails.
+
+Branch/Fork/Clone preserve finalized historical responses through immutable native
+bootstrap provenance. `CompletedResponseProvenance` carries the destination
+closing/Retry addresses, original execution owner, completion time, and exact
+optional usage. The same identity map remaps messages, Surface operations, and
+these addresses; a missing retained Retry input removes Retry. The origin remains
+unchanged across deeper copies and is never a destination execution identity.
+No source events, requests, recovery pointers, or live execution state are copied.
+SQLite schema 41 stores this provenance atomically in the existing bootstrap row,
+checks it on repeated initialization, and refuses obsolete stores without migration.
+The native `After` validator accepts local evidence and inherited provenance through
+one shared projection, while still requiring the exact destination append revision.
 
 The tail's lineage menu exposes Branch in this Session and Fork to new Session.
 Both use `side: after` and the immutable Surface revision that first appended the
@@ -218,6 +230,7 @@ remap the occurrence owner and retain the provider correlation ID. See the
 
 `RuntimeClientTranscriptEntry.completed_response` is a derived, client-neutral
 read model. The journal read is bounded to the native published snapshot frontier.
+Inherited bootstrap provenance joins the same projection without execution events.
 Only requested page identities retain summaries; canonical content remains in the
 Ledger. Request usage is summed across the exact Attempt only when all actual
 requests reported usage. Optional cache/reasoning buckets survive only when every
@@ -227,8 +240,9 @@ included report supplies them. Missing facts remain absent, including timing.
 from the durable journal, with explicit request/report coverage. The composer reads
 these native totals from the newest snapshot. Older page responses never replace
 newer totals. Compaction does not erase journal usage. Fork/Branch create fresh
-Conversation execution epochs, as established by native lineage; inherited content
-does not invent inherited execution usage.
+Conversation execution epochs, as established by native lineage. Inherited tails
+retain their own historical usage while destination cumulative execution totals
+start from zero; these two quantities are deliberately separate.
 
 The Context owner exposes the last provider-measured request occupancy paired with
 that exact request snapshot's model capacity. It is labeled **Last request context**,
@@ -238,8 +252,19 @@ No Web tokenization or browser-clock timing is used.
 #364 (PR #368) owns `GenerationEvidence` on provider request terminals. It is not
 on this branch's main base. This change consumes the existing normalized durable
 usage contract and adds no timing evidence or persistence. The response projection
-is the integration seat for #364's settled monotonic generation evidence when it
+is the integration point for #364's settled monotonic generation evidence when it
 lands; no guessed wall-clock duration, TTFT, or throughput is emitted meanwhile.
+PR #368 at `14f24082` is still open and undergoing CI at this revision. Main therefore
+still mandates v8; v9 will replace it, without compatibility artifacts, on the
+required post-#368 rebase. #369 is not merge-ready until that integration is done.
+
+Projection cost is currently O(J + R): indexed 128-event batches over the captured
+Journal prefix plus R inherited response summaries from bootstrap. The finite
+read cut is a correctness boundary, not an O(1) performance claim. Lineage validation
+and copying share one fold rather than scanning the Journal twice. #364 uses
+bounded indexed Trace reads and supplies no shared incremental response accumulator.
+A future native checkpoint/index can remove repeated folds; React must not cache
+execution authority to solve this cost.
 
 Presentation follows Harness `ddefc45f`: compact 28px icon actions, 8px gaps,
 hover/focus reveal for older rows, always visible actions on no-hover devices,

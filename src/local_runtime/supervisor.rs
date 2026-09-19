@@ -212,13 +212,19 @@ impl LocalSessionAttachment {
                 .historical_head_snapshot()
                 .map_err(SessionAttachmentError::Store)?,
         };
+        let canonical = runtime
+            .historical_canonical_history()
+            .map_err(SessionAttachmentError::Store)?;
         Ok(HistoricalConversationSnapshot {
+            completed_responses: crate::runtime_client::response::lineage_provenance(
+                runtime.tool_runtime().durable_store().as_ref(),
+                &canonical,
+            )
+            .map_err(SessionAttachmentError::Store)?,
             conversation_id: runtime.conversation_id().clone(),
             surface_revision,
             messages,
-            canonical: runtime
-                .historical_canonical_history()
-                .map_err(SessionAttachmentError::Store)?,
+            canonical,
             surface_history: runtime
                 .historical_surface_history(surface_revision)
                 .map_err(SessionAttachmentError::Store)?,

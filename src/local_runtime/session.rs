@@ -277,7 +277,7 @@ pub struct SessionUserMessageBoundary {
 /// `prepare_*` that uses this snapshot, from the boundary it selected, so a
 /// fact committed after the selected revision is never inherited.
 /// This is a lineage input, not a complete execution snapshot: it excludes
-/// attempt/request identities, Event Journal facts, `RequestSnapshots`,
+/// executable Attempt/request state, Event Journal facts, `RequestSnapshots`,
 /// Pending Inbound, and execution-derived Todo reminder progress or heads.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoricalConversationSnapshot {
@@ -293,6 +293,8 @@ pub struct HistoricalConversationSnapshot {
     /// The source's retained Surface operations through `surface_revision`,
     /// in revision order. Replaying them yields `messages`.
     pub surface_history: Vec<SurfaceOp>,
+    /// Finalized response meaning, including inherited origins; never execution state.
+    pub completed_responses: Vec<crate::durable::response::CompletedResponseProvenance>,
 }
 
 /// A private, already-seeded destination waiting for catalog publication.
@@ -2044,10 +2046,10 @@ fn restorable_editor_content(
 ///
 /// The cut is the whole point, and it is taken over the source's *Surface
 /// operation history*, not over its final Surface projection. `boundary` is
-/// the user message the destination stops before — `None` for a clone, which
+/// the message the destination stops before/after — `None` for a clone, which
 /// stops before nothing.
 /// The resulting seed contains only canonical conversation/domain state and
-/// Surface provenance; the destination's new `ConversationId` starts a fresh
+/// Surface and response provenance; the destination's new `ConversationId` starts a fresh
 /// execution epoch rather than inheriting source execution or reminder state.
 ///
 /// One forward replay of the source history decides two things at once:
@@ -2149,7 +2151,12 @@ fn lineage_cut(
         .filter(|message| referenced.contains(&message_id_of(message)))
         .cloned()
         .collect();
-    remap_seed(destination, &canonical, &retained)
+    remap_seed(
+        destination,
+        &canonical,
+        &retained,
+        &source.completed_responses,
+    )
 }
 
 /// The identities a `Replace` retires, in the active order it retires them
@@ -2180,8 +2187,8 @@ fn replaced_span(
 }
 
 /// Reconstructs a destination seed with destination-owned canonical message/occurrence
-/// identities. Provider correlation strings remain unchanged. Runtime lifecycle identities are not present in this input and
-/// therefore cannot leak into the destination.
+/// identities. Provider correlation strings remain unchanged. Response origins
+/// retain their original execution owner as provenance, never destination execution state.
 ///
 /// `canonical` is the destination's whole Ledger cut and `surface_history` is
 /// the operation log that projects it, so the one identity map remaps both:
@@ -2191,6 +2198,7 @@ pub(crate) fn remap_seed(
     destination: &ConversationId,
     canonical: &[MessageBlock],
     surface_history: &[SurfaceOp],
+    completed_responses: &[crate::durable::response::CompletedResponseProvenance],
 ) -> Result<LineageSeed, SessionError> {
     let messages = canonical;
     let mut message_ids = BTreeMap::new();
@@ -2235,9 +2243,24 @@ pub(crate) fn remap_seed(
             }),
         })
         .collect::<Result<Vec<_>, SessionError>>()?;
-    LineageSeed::replayed(canonical, surface_history).map_err(|error| SessionError::Seed {
-        detail: error.to_string(),
-    })
+    let responses = completed_responses
+        .iter()
+        .filter_map(|response| {
+            let closing = message_ids.get(&response.closing_message_id)?;
+            let mut response = response.clone();
+            response.closing_message_id = closing.clone();
+            response.retry_message_id = response
+                .retry_message_id
+                .as_ref()
+                .and_then(|input| message_ids.get(input).cloned());
+            Some(response)
+        })
+        .collect();
+    LineageSeed::replayed(canonical, surface_history)
+        .and_then(|seed| seed.with_completed_responses(responses))
+        .map_err(|error| SessionError::Seed {
+            detail: error.to_string(),
+        })
 }
 
 fn remap_message(
@@ -2540,7 +2563,7 @@ fn initialize_database(
         })?;
     let store = SqliteConversationStore::open(conversation_id.clone(), path)
         .map_err(SessionError::Store)?;
-    // LineageSeed contains canonical meaning and Surface provenance only.
+    // LineageSeed contains canonical meaning, Surface history and immutable response provenance.
     // Execution-recovery residue, including a pending unresolved-output
     // carryover source, belongs exclusively to the source conversation and is
     // initialized as NULL in this new destination store.
@@ -3025,6 +3048,11 @@ model = "provider/model"
         revision: SurfaceRevision,
     ) -> HistoricalConversationSnapshot {
         HistoricalConversationSnapshot {
+            completed_responses: crate::runtime_client::response::lineage_provenance(
+                store,
+                &store.load_canonical().unwrap(),
+            )
+            .unwrap(),
             conversation_id: conversation_id.clone(),
             surface_revision: revision,
             messages: store

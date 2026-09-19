@@ -289,8 +289,8 @@ pub(crate) fn inbound_adoption_event(
 /// A seed whose history is one `Append` per canonical message in Ledger
 /// order is the ordinary case ([`LineageSeed::history`]), and it is what
 /// every conversation that has never been compacted produces. The seed is
-/// intentionally limited to canonical/domain messages and Surface
-/// provenance; execution facts remain owned by the source `ConversationId`
+/// intentionally limited to canonical/domain messages, Surface history, and
+/// immutable completed-response provenance. Execution facts remain owned by the source `ConversationId`
 /// and are not copied into the destination. In particular, the pending
 /// unresolved-output carryover pointer is execution-recovery residue, not
 /// lineage meaning: it is never a seed field, and a destination starts with
@@ -300,6 +300,7 @@ pub struct LineageSeed {
     canonical: Vec<MessageBlock>,
     surface_history: Vec<SurfaceOp>,
     surface: Vec<MessageId>,
+    completed_responses: Vec<super::response::CompletedResponseProvenance>,
 }
 
 impl LineageSeed {
@@ -322,6 +323,7 @@ impl LineageSeed {
             canonical,
             surface_history,
             surface,
+            completed_responses: Vec::new(),
         }
     }
 
@@ -425,7 +427,42 @@ impl LineageSeed {
             canonical,
             surface_history,
             surface,
+            completed_responses: Vec::new(),
         })
+    }
+
+    /// Attach immutable response provenance to this seed's exact canonical identities.
+    /// # Errors
+    /// Rejects duplicate/non-final Assistant anchors or invalid preceding input.
+    pub fn with_completed_responses(
+        mut self,
+        responses: Vec<super::response::CompletedResponseProvenance>,
+    ) -> Result<Self, ConversationStoreError> {
+        let mut seen = std::collections::BTreeSet::new();
+        for response in &responses {
+            let closing = self.canonical.iter().position(|message| matches!(message,
+                MessageBlock::Assistant(assistant) if assistant.id == response.closing_message_id
+                && !assistant.content.iter().any(|block| matches!(block, crate::message::types::AssistantContentBlock::ToolCall(_)))));
+            let Some(closing) = closing.filter(|_| seen.insert(&response.closing_message_id))
+            else {
+                return Err(ConversationStoreError::InvalidReference(
+                    "invalid or duplicate inherited response anchor".into(),
+                ));
+            };
+            if let Some(input) = &response.retry_message_id
+                && !self.canonical[..closing].iter().any(|message| matches!(message,
+                    MessageBlock::User(user) if user.id == *input && user.kind == crate::message::types::InboundKind::Message)) {
+                return Err(ConversationStoreError::InvalidReference("inherited Retry input is not a retained preceding User".into()));
+            }
+        }
+        self.completed_responses = responses;
+        Ok(self)
+    }
+
+    /// Finalized historical responses; not destination execution evidence.
+    #[must_use]
+    pub fn completed_responses(&self) -> &[super::response::CompletedResponseProvenance] {
+        &self.completed_responses
     }
 
     /// The seeded Ledger cut, in canonical commit order.
@@ -1430,7 +1467,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// identity. Reopening verifies the original identity instead of
     /// inferring it from current rows. The first call atomically commits the
     /// seed and the identity; every later call must re-supply the exact
-    /// original canonical history. An explicitly empty seed is valid and
+    /// original canonical history and response provenance. An explicitly empty seed is valid and
     /// remains distinguishable from an uninitialized store. The initialization
     /// transaction deliberately initializes the execution-recovery pointer to
     /// `NULL`; pending unresolved-output carryover never crosses a lineage
@@ -1448,7 +1485,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// # Errors
     ///
     /// Returns [`ConversationStoreError::InitialHistoryMismatch`] when the
-    /// re-supplied canonical history differs, and
+    /// re-supplied canonical history or response provenance differs, and
     /// [`ConversationStoreError::Storage`] when the initialization
     /// transaction fails or a canonical Ledger exists without its bootstrap
     /// identity.
@@ -1464,19 +1501,28 @@ pub trait ConversationStore: Send + Sync + 'static {
     ///
     /// The errors of [`ConversationStore::initialize_lineage`].
     fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError> {
-        self.initialize_lineage(&LineageSeed::history(messages.to_vec()))
+        self.initialize_lineage(
+            &LineageSeed::history(messages.to_vec())
+                .with_completed_responses(self.load_inherited_responses()?)?,
+        )
     }
 
     /// Loads the immutable bootstrap history originally supplied to
     /// [`ConversationStore::initialize_lineage`] — its canonical part, which
-    /// is the half the bootstrap identity is taken over. Reopening a lineage
+    /// is the canonical portion of bootstrap identity. Reopening a lineage
     /// must validate against this prefix, not against its later canonical
     /// transcript, and not against the Surface projection the seed also
     /// carried: that projection is durable state the store already holds, so
-    /// a reopen has nothing to re-supply and nothing to contradict.
+    /// a reopen does not re-supply Surface operations. `initialize` also retains
+    /// and validates the store's immutable response provenance.
     fn load_bootstrap_history(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
         self.load_canonical()
     }
+
+    /// Read immutable lineage-bootstrap response provenance, never execution events.
+    fn load_inherited_responses(
+        &self,
+    ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError>;
 
     /// Loads the current Surface head and checkpoint metadata without
     /// materializing historical revisions.

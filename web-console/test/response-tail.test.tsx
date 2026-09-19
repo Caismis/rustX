@@ -7,7 +7,7 @@ import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protoco
 import { snapshot } from './fixture';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
-const response: CompletedResponseView = { closing_message_id: 'final-a', attempt_id: 'attempt-a', completed_at: '2026-09-19T08:00:00Z', surface_revision: '42', retry_message_id: 'input-a', usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } };
+const response: CompletedResponseView = { closing_message_id: 'final-a', origin: { conversation_id: 'origin-conversation', closing_message_id: 'final-a', attempt_id: 'attempt-a' }, completed_at: '2026-09-19T08:00:00Z', surface_revision: '42', retry_message_id: 'input-a', usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } };
 function conversation(): RuntimeClientSnapshot {
   return { ...snapshot(), transcript: { entries: [
     { cursor: '1', item: { type: 'message', message: { role: 'user', id: 'input-a', source: 'human', timestamp: '2026-09-19T07:59:00Z', content: [{ type: 'text', text: 'Question' }] } } },
