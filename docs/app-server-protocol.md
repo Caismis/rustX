@@ -691,7 +691,7 @@ Complete = terminal
 
 The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
-`Active + disarmed`. Native Runtime Client version 42 carries this vocabulary;
+`Active + disarmed`. Native Runtime Client version 43 carries this vocabulary;
 version 38 clients are rejected by strict negotiation. This remains mandatory
 App Server protocol v12, with no compatibility field and no activation mode.
 
@@ -919,7 +919,7 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
 explicit recovery action. These recovery semantics remain in App Server v12;
-native Runtime Client remains v42.
+native Runtime Client is v43.
 
 ## Rich historical Trace inspection (#364)
 
@@ -930,6 +930,18 @@ Detail is nullable when no allowlisted record exists at the captured read cut.
 List payloads never carry complete request contexts or Tool results. Inspection
 reads do not mutate runtime state or advance live cursors. See [Trace](trace.md)
 for native ownership, limits, allowlists and the historical read boundary.
+
+## Server-resolved Trace presentation relationships (#372)
+
+Runtime Client 42 -> 43 and App Server 11 -> 12. `TraceRequestSummary` gains
+mandatory `system_prompt` (a closed request-relative System Prompt state plus a
+bounded preview) and `context_additions` / `context_truncated` (the canonical
+request Context that exact request introduced, in frozen snapshot order).
+`TraceRecord` gains `originating_tool_call_id`, the exact outer `ToolCall` of a
+Background, Subagent or Workflow record. All three are resolved by native
+authority before they reach a client; no client infers them. `TraceLifecycle`
+is unchanged and never repeats them. Version 11 clients are rejected without a
+compatibility decoder or a dual Trace DTO path.
 
 ## Session archive preparation
 

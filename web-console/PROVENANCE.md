@@ -1,5 +1,31 @@
 # Harness presentation provenance — WEB-RESET-01
 
+## #372 server-resolved Trace relationships
+
+This change imports no new upstream source and repins nothing. The pinned
+`ui-trajectory/trajectory-request-header-definition.ts`,
+`ui-trajectory/trajectory-message-definitions.ts`, `ui-trajectory/layout.ts` and
+the `ui-conversation` `contract/system-prompt.ts` /
+`contract/request-inspection.ts` contracts were read again at
+`ddefc45fbc7f8e46dd73185e68295696d1297887` to understand the presentation
+semantics of a System-prompt change, a context record and Harness's `uncertain`
+answer. Harness derives all three in the browser from raw session events; rustX
+deliberately does not, so the closed `TraceSystemPromptState` /
+`TraceContextKind` vocabularies and their resolution are rustX-authored native
+Rust, not adapted upstream code.
+
+Upstream `ui-trajectory` Subtool support (`rootCallId` / `parentCallId` /
+`subCallId`, its `subtool` cell kind and `expandSubCalls`) is deliberately not
+adapted: it projects Harness's real nested `run_code` sub-dispatch pairs, and
+rustX has no native nested Tool-call execution path with parent/child call
+identities. Subagent and Workflow are not Subtool.
+
+Existing derived `TrajectoryCell.tsx`, `TrajectoryInspector.tsx`, `search.ts`
+and `Trajectory.module.css` records carry reviewed local-hash updates for the
+new native DTO bindings and the generated-protocol path rename; upstream hashes,
+import closures, MIT headers and license closure are unchanged. The provenance
+inventory gains no entry.
+
 ## WEB-12 Session convergence
 
 PR #361 repair retains these exact upstream pins and imports no new Harness code.

@@ -1,5 +1,10 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness TrajectoryTable.tsx semantic cells; see PROVENANCE.md. */
-import type { TraceArtifact, TraceKind, TraceRecord } from '../../../../protocol/app-server/v12';
+import type {
+  TraceArtifact,
+  TraceKind,
+  TraceRecord,
+  TraceSystemPromptState,
+} from '../../../../protocol/app-server/v12';
 import { IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import css from './Trajectory.module.css';
@@ -95,6 +100,48 @@ export function CellArtifacts({ artifacts }: { artifacts: readonly TraceArtifact
   );
 }
 
+/**
+ * How a row labels the server's System Prompt classification.
+ *
+ * The browser renders this relationship; it never derives it. `unchanged`
+ * and `previous_unavailable` get no row marker: a row says something when
+ * this request introduced or replaced the prompt, and stays quiet otherwise.
+ */
+const systemPromptLabel: Partial<Record<TraceSystemPromptState, string>> = {
+  initial: 'System prompt',
+  changed: 'System prompt changed',
+};
+
+/**
+ * Server-resolved relationships shown beside a request row.
+ *
+ * Every value comes from the record's own summary, so a row keeps its
+ * meaning when the related record is outside the loaded window.
+ */
+export function CellRelations({ record }: { record: TraceRecord }) {
+  const request = record.request;
+  if (!request) return null;
+  const system = systemPromptLabel[request.system_prompt.state];
+  const context = request.context_additions.length;
+  if (system === undefined && context === 0) return null;
+  return (
+    <span
+      className={css.relation}
+      data-changed={request.system_prompt.state === 'changed' || undefined}
+      title={request.system_prompt.preview?.text || undefined}
+    >
+      {system}
+      {context > 0 && (
+        <span>
+          {system === undefined ? '' : '· '}
+          {context} context fact{context === 1 ? '' : 's'}
+          {request.context_truncated ? '+' : ''}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function CellContent({ record }: { record: TraceRecord }) {
   const preview = previewOf(record);
   const result = record.tool?.detail?.text || record.tool?.outcome;
@@ -106,6 +153,7 @@ export function CellContent({ record }: { record: TraceRecord }) {
         : preview}
     </div>
     {result && <span className={css.result} data-error={record.state === 'failed' || undefined}>→ {result}</span>}
+    <CellRelations record={record} />
     <CellArtifacts artifacts={record.attachments} />
   </>;
 }

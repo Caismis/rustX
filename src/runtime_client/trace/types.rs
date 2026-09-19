@@ -179,6 +179,75 @@ pub struct TraceToolCall {
     pub name: String,
 }
 
+/// How one actual request's frozen System Prompt relates to its predecessor.
+///
+/// The relationship is request-relative and resolved from native durable
+/// authority, never from the records a client happens to have loaded. A page
+/// that begins in the middle of history therefore reports exactly what a page
+/// containing the predecessor would.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceSystemPromptState {
+    /// Native authority proves no earlier actual request exists in this
+    /// conversation. A `retry_number` of zero alone never proves this.
+    Initial,
+    /// The nearest preceding actual request froze a different prompt.
+    Changed,
+    /// The nearest preceding actual request froze the identical prompt.
+    Unchanged,
+    /// A predecessor exists, but the projection could not establish its
+    /// frozen prompt at this read cut. It is never used to hide a durable
+    /// read failure, which is propagated as an error instead.
+    PreviousUnavailable,
+}
+
+/// Bounded System Prompt presentation for one actual request.
+///
+/// The complete prompt is deliberately absent: a page of 32 requests would
+/// otherwise carry 32 complete system prompts. The exact historical value
+/// stays in [`TraceRequestDetail::effective_system_prompt`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceSystemPromptPresentation {
+    pub state: TraceSystemPromptState,
+    /// One-line preview of the prompt this request introduced. Absent for
+    /// `Unchanged`, where the preceding request's row already carries it.
+    /// A present but empty preview records an empty historical prompt.
+    pub preview: Option<TracePreview>,
+}
+
+/// The closed presentation family of one admitted model-visible context fact.
+///
+/// This is a presentation vocabulary, not the internal `ContextKind` payload:
+/// a complete `GoalSnapshot` or Agent Status generation metadata never enters
+/// a pageable summary through it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceContextKind {
+    GoalStatus,
+    RuntimeToolObservation,
+    ExtensionEnvironment,
+    AgentStatus,
+}
+
+/// One canonical request Context fact introduced by one actual request.
+///
+/// Identity and order come from the immutable `RequestSnapshot`; content
+/// comes from keyed Message Ledger reads. Neither the browser nor Trace
+/// itself decides which request introduced a Context fact: the request that
+/// committed the identity atomically with its own start did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceContextPresentation {
+    pub message_id: MessageId,
+    pub context_kind: TraceContextKind,
+    /// Provenance namespace of the canonical inbound fact.
+    pub source: String,
+    pub preview: Option<TracePreview>,
+    pub attachments: Vec<TraceArtifact>,
+    pub truncated: bool,
+}
+
 /// Bounded request facts carried by a pageable summary row.
 ///
 /// The historical request input — system prompt, reconstructed context, Tool
@@ -200,6 +269,15 @@ pub struct TraceRequestSummary {
     pub failure_kind: Option<ModelErrorKind>,
     pub usage: Option<ModelUsage>,
     pub generation: Option<TraceGeneration>,
+    /// Request-relative System Prompt presentation, resolved natively so the
+    /// browser never compares request details to discover a prompt change.
+    pub system_prompt: TraceSystemPromptPresentation,
+    /// Canonical request Context this exact request introduced, in the order
+    /// frozen by `RequestSnapshot.request_context_ids`. A retry or recovery
+    /// request reuses admitted context and therefore introduces none.
+    pub context_additions: Vec<TraceContextPresentation>,
+    /// Whether the Context list was shortened by the Trace summary bound.
+    pub context_truncated: bool,
 }
 
 /// Bounded Tool facts carried by a pageable summary row.
@@ -252,6 +330,12 @@ pub struct TraceRecord {
     pub calls: Vec<TraceToolCall>,
     /// Exact native detached execution / Subagent / Workflow / interaction ID.
     pub native_id: Option<String>,
+    /// The exact outer `ToolCall` this Tool-owned domain record belongs to,
+    /// copied from the native start fact. It is presentation and navigation
+    /// correlation only: it confers no lifecycle, ownership, settlement or
+    /// cancellation authority, and it is never resolved from a Tool name, a
+    /// timestamp, row adjacency or the loaded page.
+    pub originating_tool_call_id: Option<ToolCallId>,
     /// Canonical accepted message; publication without acceptance is absent.
     pub message_id: Option<MessageId>,
     pub attachments: Vec<TraceArtifact>,

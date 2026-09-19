@@ -284,7 +284,7 @@ headless App Server/TUI consumers. There is no compression setting or new UI scr
 PR #369 merged while these review repairs were in progress. Its main commit
 `908399021b649ab7603498f43bdc5673f94c9352` already uses App Server v10,
 SQLite 42 and catalog 12. The rebased archive PR therefore advances the complete
-mandatory App Server vocabulary to v11, without a compatibility alias. This is
+mandatory App Server vocabulary to v12, without a compatibility alias. This is
 not an archive-format change: archive v1 remains unpublished and is corrected in
 place. No SQLite/catalog schema increment is introduced by archive export.
 
