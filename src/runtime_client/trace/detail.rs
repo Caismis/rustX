@@ -6,13 +6,12 @@
 //! native state whatsoever.
 
 use super::bounds::identity_fits;
-use super::content::{assistant_blocks, tool_result_blocks, user_blocks, user_source_label};
+use super::content::{assistant_blocks, tool_result_block, user_blocks, user_source_label};
 use super::record::generation_metrics;
 use super::request::{RequestOutcome, request_detail};
 use super::tool::{historical_definition, tool_detail};
 use super::types::{
-    TraceContentBlock, TraceDetail, TraceKind, TraceMessageDetail, TraceMessageRole,
-    TraceRequestFailure,
+    TraceDetail, TraceKind, TraceMessageDetail, TraceMessageRole, TraceRequestFailure,
 };
 use super::{ADOPTED_MESSAGE_LIMIT, STEP_JOIN_LIMIT, TraceProjection};
 use crate::durable::ConversationStoreError;
@@ -45,11 +44,9 @@ impl TraceProjection<'_> {
                     FactScope::Request(request_id.to_string()),
                     &["model_request_completed", "model_request_failed"],
                 )?;
-                detail.request = Some(request_detail(
-                    self.store,
-                    &frozen,
-                    request_outcome(end.as_ref()),
-                )?);
+                detail.request =
+                    request_detail(self.store, &frozen, request_outcome(end.as_ref()))?;
+                detail.truncated = detail.request.is_none();
             }
             E::InboundTurnAdopted { message_ids } => {
                 detail.kind = TraceKind::User;
@@ -119,10 +116,8 @@ impl TraceProjection<'_> {
                 tool_id,
             } => {
                 detail.kind = TraceKind::Tool;
-                // A matching frozen definition with an oversized identity
-                // is omitted by historical_definition, not absent in history.
-                detail.truncated = !identity_fits(tool_id.as_str());
-                detail.tool = Some(self.tool_call_detail(anchor, tool_call_id, tool_id, true)?);
+                detail.tool = self.tool_call_detail(anchor, tool_call_id, tool_id, true)?;
+                detail.truncated = detail.tool.is_none();
             }
             E::AttemptStarted { .. } => detail.kind = TraceKind::Attempt,
             E::TurnStarted => detail.kind = TraceKind::Step,
@@ -142,7 +137,7 @@ impl TraceProjection<'_> {
         call_id: &ToolCallId,
         tool_id: &ToolId,
         started: bool,
-    ) -> Result<super::types::TraceToolDetail, ConversationStoreError> {
+    ) -> Result<Option<super::types::TraceToolDetail>, ConversationStoreError> {
         let proposal = self.step_tool_call(anchor, call_id, tool_id)?;
         // The historical schema belongs to the request that carried the
         // proposal, not to the current capability set. Resolving it through
@@ -329,18 +324,13 @@ fn message_detail(message: &MessageBlock) -> Option<TraceMessageDetail> {
             (TraceMessageRole::Assistant, None, blocks, truncated)
         }
         MessageBlock::Tool(tool) => {
-            let (blocks, truncated) = tool_result_blocks(&tool.result);
+            let block = tool_result_block(tool);
+            let truncated = block.is_none();
             (
                 TraceMessageRole::Tool,
                 None,
-                vec![TraceContentBlock::ToolResult {
-                    call_id: tool.tool_call_id.clone(),
-                    tool_id: tool.tool_id.clone(),
-                    outcome: super::content::tool_outcome(&tool.result.status),
-                    blocks,
-                    truncated,
-                }],
-                false,
+                block.into_iter().collect(),
+                truncated,
             )
         }
     };
@@ -351,4 +341,49 @@ fn message_detail(message: &MessageBlock) -> Option<TraceMessageDetail> {
         blocks,
         truncated,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::types::{ContentBlockIndex, ToolCallOccurrenceRef, ToolMessageBlock};
+    use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus};
+
+    #[test]
+    fn canonical_tool_message_omits_a_result_with_either_oversized_correlation_identity() {
+        let sentinel = "opaque-identity-".repeat(super::super::bounds::TRACE_IDENTITY_BYTES);
+        for oversized in [None, Some("call"), Some("tool")] {
+            let message = MessageBlock::Tool(ToolMessageBlock {
+                id: MessageId::new("result"),
+                occurrence: ToolCallOccurrenceRef::new(
+                    MessageId::new("owner"),
+                    ContentBlockIndex::new(0),
+                ),
+                tool_call_id: ToolCallId::new(if oversized == Some("call") {
+                    &sentinel
+                } else {
+                    "call"
+                }),
+                tool_id: ToolId::new(if oversized == Some("tool") {
+                    &sentinel
+                } else {
+                    "tool"
+                }),
+                result: ToolExecutionResult {
+                    status: ToolExecutionStatus::Success,
+                    content: vec![],
+                    duration_ms: 1,
+                    exit_code: None,
+                    artifacts: vec![],
+                    truncation: None,
+                    workflow: None,
+                    managed_output: None,
+                },
+            });
+            let detail = message_detail(&message).unwrap();
+            assert_eq!(detail.truncated, oversized.is_some());
+            assert_eq!(detail.blocks.len(), usize::from(oversized.is_none()));
+            assert!(!serde_json::to_string(&detail).unwrap().contains(&sentinel));
+        }
+    }
 }

@@ -4560,15 +4560,13 @@ mod tests {
                 result.managed_output
             );
         };
-        assert!(!error.contains(&advertised));
-        assert!(!diagnostic.contains(&advertised));
         assert_eq!(
             locator.to_str().expect("utf8 path"),
             advertised,
             "the partial file is the same advertised path"
         );
         assert!(
-            diagnostic.contains("managed output storage became incomplete"),
+            diagnostic.contains("background result output"),
             "the diagnostic names the output-storage failure: {diagnostic}"
         );
 
@@ -4660,10 +4658,7 @@ mod tests {
         let ToolExecutionStatus::Failed { error } = &result.status else {
             panic!("the execution settles Failed, got {:?}", result.status);
         };
-        assert!(
-            error.contains("managed output storage is unavailable"),
-            "{error}"
-        );
+        assert!(error.contains("cannot be opened"), "{error}");
         // The typed metadata retains exactly the advertised locator as
         // explicitly partial — output storage was unreliable, so the file
         // can never be claimed complete.
@@ -4677,15 +4672,13 @@ mod tests {
                 result.managed_output
             );
         };
-        assert!(!error.contains(&advertised));
-        assert!(!diagnostic.contains(&advertised));
         assert_eq!(
             locator.to_str().expect("utf8 path"),
             advertised,
             "the exact dispatch locator is retained"
         );
         assert!(
-            diagnostic.contains("managed output storage is unavailable"),
+            diagnostic.contains("cannot be opened"),
             "the diagnostic names the storage failure: {diagnostic}"
         );
         // The canonical terminal message repeats the exact locator,

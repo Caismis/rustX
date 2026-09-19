@@ -305,7 +305,7 @@ impl ForegroundOutputCapture {
         if let Some(spill) = &mut self.spill {
             return spill
                 .write_all(text)
-                .map_err(|_| "managed output storage became incomplete".to_owned());
+                .map_err(|error| format!("cannot write the foreground result spill: {error}"));
         }
         if !crosses {
             self.complete_prefix
@@ -317,7 +317,7 @@ impl ForegroundOutputCapture {
 
         let spill = store
             .open_spill()
-            .map_err(|error| error.storage_diagnostic().to_owned())?;
+            .map_err(|error| format!("cannot allocate the foreground result spill: {error}"))?;
         self.spill = Some(spill);
         #[cfg(test)]
         if let Some(watch) = &self.spill_started {
@@ -330,10 +330,10 @@ impl ForegroundOutputCapture {
         let spill = self.spill.as_mut().expect("spill retained");
         spill
             .write_all(&prefix)
-            .map_err(|_| "managed output storage became incomplete".to_owned())?;
+            .map_err(|error| format!("cannot write the foreground result spill: {error}"))?;
         spill
             .write_all(text)
-            .map_err(|_| "managed output storage became incomplete".to_owned())?;
+            .map_err(|error| format!("cannot write the foreground result spill: {error}"))?;
         Ok(())
     }
 
@@ -384,7 +384,7 @@ impl BackgroundOutputCapture {
         self.preview.push(text);
         self.sink
             .append(text)
-            .map_err(|_| "managed output storage became incomplete".to_owned())?;
+            .map_err(|error| format!("cannot write the background result output: {error}"))?;
         #[cfg(test)]
         {
             self.appended = self.appended.saturating_add(text.len() as u64);

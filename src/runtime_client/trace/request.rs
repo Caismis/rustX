@@ -72,6 +72,7 @@ pub(super) struct RequestOutcome {
 }
 
 /// Projects the exact historical request of one frozen snapshot.
+/// Returns None when a mandatory identity exceeds the Trace bound.
 ///
 /// # Errors
 ///
@@ -81,7 +82,14 @@ pub(super) fn request_detail(
     store: &dyn ConversationStore,
     snapshot: &RequestSnapshot,
     outcome: RequestOutcome,
-) -> Result<TraceRequestDetail, ConversationStoreError> {
+) -> Result<Option<TraceRequestDetail>, ConversationStoreError> {
+    if !identity_fits(snapshot.request_id.as_str())
+        || !identity_fits(snapshot.identity.attempt_id.as_str())
+        || !identity_fits(snapshot.identity.turn.as_str())
+        || !identity_fits(snapshot.provisional_message_id.as_str())
+    {
+        return Ok(None);
+    }
     // The historical Surface revision frozen by this snapshot is the only
     // conversation input. `reconstruct_model_request` hydrates that exact
     // revision and replays the snapshot's own frozen request-only items.
@@ -102,7 +110,7 @@ pub(super) fn request_detail(
         });
     }
     let (options, omitted_option_count) = request_options(&snapshot.invocation.request_params);
-    Ok(TraceRequestDetail {
+    Ok(Some(TraceRequestDetail {
         request_id: snapshot.request_id.clone(),
         attempt_id: snapshot.identity.attempt_id.clone(),
         step_id: snapshot.identity.turn.clone(),
@@ -130,7 +138,7 @@ pub(super) fn request_detail(
         usage: outcome.usage,
         failure: outcome.failure,
         generation: outcome.generation,
-    })
+    }))
 }
 
 /// Projects the reconstructed provider-neutral request context, in wire order.
@@ -169,13 +177,17 @@ fn request_message(message: &ModelInputMessage) -> TraceRequestMessage {
                 truncated: truncated || !identity_fits(assistant.id.as_str()),
             }
         }
-        ModelInputMessage::Canonical(MessageBlock::Tool(tool)) => TraceRequestMessage {
-            role: TraceMessageRole::Tool,
-            message_id: identity_fits(tool.id.as_str()).then(|| tool.id.clone()),
-            source: None,
-            blocks: vec![tool_result_block(tool)],
-            truncated: !identity_fits(tool.id.as_str()),
-        },
+        ModelInputMessage::Canonical(MessageBlock::Tool(tool)) => {
+            let block = tool_result_block(tool);
+            let truncated = block.is_none() || !identity_fits(tool.id.as_str());
+            TraceRequestMessage {
+                role: TraceMessageRole::Tool,
+                message_id: identity_fits(tool.id.as_str()).then(|| tool.id.clone()),
+                source: None,
+                blocks: block.into_iter().collect(),
+                truncated,
+            }
+        }
         ModelInputMessage::RequestOnly(context) => TraceRequestMessage {
             role: TraceMessageRole::RequestOnly,
             // A request-only item deliberately has no canonical identity;

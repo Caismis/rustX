@@ -7210,7 +7210,12 @@ fn open_mcp_output_capture(
     let sink = context
         .tool_output
         .open_background_output_sink(execution_id)
-        .map_err(|_| (locator, "managed output storage is unavailable".to_owned()))?;
+        .map_err(|error| {
+            (
+                locator,
+                format!("cannot open the background MCP result output: {error}"),
+            )
+        })?;
     Ok(ToolOutputCapture::background(sink, None))
 }
 
@@ -7404,47 +7409,50 @@ fn mcp_empty_terminal(
         };
     };
     let locator = context.tool_output.background_output_path(execution_id);
-    if let Ok(sink) = context
+    match context
         .tool_output
         .open_background_output_sink(execution_id)
     {
-        drop(sink);
-        ToolExecutionResult {
-            status,
-            content: Vec::new(),
-            duration_ms: duration_ms(started),
-            exit_code: None,
-            artifacts: Vec::new(),
-            truncation: None,
-            workflow: None,
-            managed_output: Some(ManagedOutputContinuation::Complete { locator }),
+        Ok(sink) => {
+            drop(sink);
+            ToolExecutionResult {
+                status,
+                content: Vec::new(),
+                duration_ms: duration_ms(started),
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                workflow: None,
+                managed_output: Some(ManagedOutputContinuation::Complete { locator }),
+            }
         }
-    } else {
-        let diagnostic = "managed output storage is unavailable".to_owned();
-        // An output-storage failure never rewrites execution-outcome
-        // certainty: a known failure gains the storage diagnostic, while
-        // any other status keeps its own certainty claim and reports the
-        // storage failure only through the managed-output continuation.
-        let status = match status {
-            ToolExecutionStatus::Failed { error } => ToolExecutionStatus::Failed {
-                error: bound_error(&format!(
-                    "{error}; MCP result output storage failed: {diagnostic}"
-                )),
-            },
-            status => status,
-        };
-        ToolExecutionResult {
-            status,
-            content: Vec::new(),
-            duration_ms: duration_ms(started),
-            exit_code: None,
-            artifacts: Vec::new(),
-            truncation: None,
-            workflow: None,
-            managed_output: Some(ManagedOutputContinuation::Partial {
-                locator,
-                diagnostic: bound_error(&diagnostic),
-            }),
+        Err(error) => {
+            let diagnostic = format!("cannot open the background MCP result output: {error}");
+            // An output-storage failure never rewrites execution-outcome
+            // certainty: a known failure gains the storage diagnostic, while
+            // any other status keeps its own certainty claim and reports the
+            // storage failure only through the managed-output continuation.
+            let status = match status {
+                ToolExecutionStatus::Failed { error } => ToolExecutionStatus::Failed {
+                    error: bound_error(&format!(
+                        "{error}; MCP result output storage failed: {diagnostic}"
+                    )),
+                },
+                status => status,
+            };
+            ToolExecutionResult {
+                status,
+                content: Vec::new(),
+                duration_ms: duration_ms(started),
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                workflow: None,
+                managed_output: Some(ManagedOutputContinuation::Partial {
+                    locator,
+                    diagnostic: bound_error(&diagnostic),
+                }),
+            }
         }
     }
 }
@@ -8151,7 +8159,7 @@ mod tests {
         };
         assert_eq!(*locator, advertised);
         assert!(
-            diagnostic.contains("managed output storage is unavailable"),
+            diagnostic.contains("cannot open the background MCP result output"),
             "the continuation names the storage failure: {diagnostic}"
         );
     }

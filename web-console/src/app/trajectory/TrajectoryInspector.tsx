@@ -529,13 +529,22 @@ export function TrajectoryInspector({
                   <dd>
                     {tool.result.managed_output.available
                       ? tool.result.managed_output.complete
-                        ? 'The output store holds the complete textual output'
-                        : 'The output store holds only partial output'
-                      : 'No managed output file exists'}
-                    {tool.result.managed_output.diagnostic
-                      ? ` · ${tool.result.managed_output.diagnostic.text}`
-                      : ''}
+                        ? 'Complete'
+                        : 'Partial'
+                      : 'Unavailable'}
                   </dd>
+                  {tool.result.managed_output.locator != null ? (
+                    <>
+                      <dt>Locator</dt>
+                      <dd>{tool.result.managed_output.locator}</dd>
+                    </>
+                  ) : null}
+                  {tool.result.managed_output.diagnostic ? (
+                    <>
+                      <dt>Diagnostic</dt>
+                      <dd><Text value={tool.result.managed_output.diagnostic} /></dd>
+                    </>
+                  ) : null}
                 </>
               )}
             </dl>

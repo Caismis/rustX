@@ -566,7 +566,7 @@
           "upstream_sha256": "a31b4253ba9c7c2490f942768d060c769ff1b5b4fb653ccf67ab54af1e1593b7"
         }
       ],
-      "local_sha256": "1caa811b00f7711b78f39cb2227a34591187c4307c6dd0b10ab75908dacd9c8e"
+      "local_sha256": "c63b9df4a2492c03a409c2bf8806a3037433b865f8551517eabab13ac2f37428"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -2364,7 +2364,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "0ee2ffd2f3eca93ff1157cc970b5b572eeca8581eec8fae008377ec5521cc1f8"
+      "local_sha256": "011edadae1d39999fb2fe32e3f094f36ac4d8e66943e003c89f2554506d23190"
     }
   ],
   "inspected_only": [

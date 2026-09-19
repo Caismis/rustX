@@ -133,12 +133,26 @@ fn request_with_tools(
     retry: u32,
     tools: Option<Vec<ModelToolDefinition>>,
 ) -> RequestSnapshot {
-    let mut snapshot = RequestSnapshot::new(
+    request_with_identity(
+        store,
+        retry,
+        tools,
         RequestIdentity {
             attempt_id: AttemptId::new("attempt-a"),
             turn: TurnId::new("1"),
             retry_number: retry,
         },
+    )
+}
+
+fn request_with_identity(
+    store: &dyn ConversationStore,
+    retry: u32,
+    tools: Option<Vec<ModelToolDefinition>>,
+    identity: RequestIdentity,
+) -> RequestSnapshot {
+    let mut snapshot = RequestSnapshot::new(
+        identity,
         store.load_head().unwrap().revision,
         SYSTEM_PROMPT.to_owned(),
         vec![],
@@ -599,11 +613,9 @@ fn tool_detail_joins_arguments_schema_and_result_from_exact_authorities() {
     );
     let managed = result.managed_output.as_ref().expect("managed metadata");
     assert!(managed.complete && managed.available);
-    assert!(
-        !serde_json::to_string(&detail)
-            .unwrap()
-            .contains(MANAGED_OUTPUT_LOCATOR),
-        "the managed-output locator is a host path owned by the output store"
+    assert_eq!(
+        managed.locator.as_deref(),
+        Some(std::path::Path::new(MANAGED_OUTPUT_LOCATOR))
     );
 }
 
@@ -1417,6 +1429,7 @@ fn the_inspection_allowlist_exposes_session_facts_and_withholds_infrastructure()
         "command not found",
         "exit status 2",
         "temperature",
+        MANAGED_OUTPUT_LOCATOR,
     ] {
         assert!(exposed.contains(present), "withheld {present}");
     }
@@ -1427,7 +1440,6 @@ fn the_inspection_allowlist_exposes_session_facts_and_withholds_infrastructure()
         MCP_CREDENTIAL,
         EXECUTOR_ENVIRONMENT,
         PROVIDER_CONTINUATION,
-        MANAGED_OUTPUT_LOCATOR,
         "api_key",
         "authorization",
         "executor_env",
@@ -1901,8 +1913,7 @@ fn identity_bounds_make_canonical_trace_details_explicitly_partial() {
                 input_schema: serde_json::json!({}),
             }]),
         );
-        let mut call = bash_call("bounded-call");
-        call.tool_id = ToolId::new(&identity);
+        let call = bash_call("bounded-call");
         propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 3);
         append(
             &store,
@@ -1964,9 +1975,8 @@ fn identity_bounds_make_canonical_trace_details_explicitly_partial() {
         assert_eq!(request.tools.len(), usize::from(!oversized));
         assert_eq!(request.messages[0].truncated, oversized);
         let tool_detail = detail_of(&store, &record_of(&projected, TraceKind::Tool).id);
-        assert_eq!(tool_detail.truncated, oversized);
+        assert!(!tool_detail.truncated);
         let tool = tool_detail.tool.unwrap();
-        assert_eq!(tool.definition.is_none(), oversized);
         let tool = tool.result.unwrap();
         assert_eq!(tool.blocks_truncated, oversized);
         assert_eq!(tool.blocks.len(), if oversized { 0 } else { 2 });
@@ -1986,10 +1996,10 @@ fn identity_bounds_make_canonical_trace_details_explicitly_partial() {
 }
 
 #[test]
-fn managed_storage_failure_diagnostics_never_cross_trace_with_private_paths() {
+fn managed_storage_failure_diagnostics_preserve_native_execution_facts() {
     use crate::tools::managed_output::ManagedToolOutput;
     use crate::tools::output::{ForegroundOutputCapture, continuation_for_capture};
-    let private_path = "/private/rustx-managed-output/secret/tasks/result.output";
+    let private_path = "/private/rustx-managed-output/example/tasks/result.output";
     for available in [false, true] {
         let store = store("conv_ac56fc5d-a6f5-7885-8745-ac1fad19bb38");
         let directory = tempfile::tempdir().unwrap();
@@ -2049,23 +2059,199 @@ fn managed_storage_failure_diagnostics_never_cross_trace_with_private_paths() {
         let detail = detail_of(&store, &record_of(&page(&store), TraceKind::Tool).id);
         let result = detail.tool.as_ref().unwrap().result.as_ref().unwrap();
         assert_eq!(result.outcome, TraceToolOutcome::Failed);
-        assert!(!result.detail.as_ref().unwrap().text.contains(private_path));
+        assert_eq!(result.detail.as_ref().unwrap().text, diagnostic);
         let managed = result.managed_output.as_ref().unwrap();
         assert!(!managed.complete);
         assert_eq!(managed.available, available);
         assert_eq!(managed.diagnostic.as_ref().unwrap().text, diagnostic);
-        assert!(
-            !managed
-                .diagnostic
-                .as_ref()
-                .unwrap()
-                .text
-                .contains(private_path)
+        assert_eq!(managed.locator, captured.output_locator);
+        if available {
+            assert!(diagnostic.contains("test-forced output write failure"));
+        } else {
+            assert!(diagnostic.contains(private_path));
+            assert!(
+                serde_json::to_string(&detail)
+                    .unwrap()
+                    .contains(private_path)
+            );
+        }
+    }
+}
+
+#[test]
+fn mandatory_tool_identities_bound_whole_details_and_historical_result_blocks() {
+    for oversized in [None, Some("call"), Some("tool")] {
+        let store = store("conv_ac56fc5d-a6f5-7885-8745-ac1fad19bb38");
+        start(&store);
+        let sentinel = "opaque-identity-".repeat(super::bounds::TRACE_IDENTITY_BYTES);
+        let mut call = bash_call("ordinary-call");
+        if oversized == Some("call") {
+            call.id = ToolCallId::new(&sentinel);
+        }
+        if oversized == Some("tool") {
+            call.tool_id = ToolId::new(&sentinel);
+        }
+        let frozen = request(&store, 0);
+        propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 3);
+        completion(&store, &frozen, None, None, 4);
+        append(
+            &store,
+            E::ToolExecutionStarted {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+            },
+            5,
         );
+        settle_tool_call(
+            &store,
+            frozen.provisional_message_id.as_str(),
+            "identity-result",
+            &call,
+            ToolExecutionResult {
+                status: ToolExecutionStatus::Success,
+                content: vec![],
+                duration_ms: 1,
+                exit_code: None,
+                artifacts: vec![],
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            },
+            6,
+        );
+        let next = request(&store, 1);
+        let projected = page(&store);
+        let detail = detail_of(&store, &record_of(&projected, TraceKind::Tool).id);
+        assert_eq!(detail.kind, TraceKind::Tool);
+        assert_eq!(detail.truncated, oversized.is_some());
+        assert_eq!(detail.tool.is_none(), oversized.is_some());
+        assert!(!serde_json::to_string(&detail).unwrap().contains(&sentinel));
+        let record = projected
+            .records
+            .iter()
+            .find(|r| {
+                r.request
+                    .as_ref()
+                    .is_some_and(|r| r.request_id == next.request_id)
+            })
+            .unwrap();
+        let detail = detail_of(&store, &record.id);
+        let message = detail
+            .request
+            .as_ref()
+            .unwrap()
+            .messages
+            .iter()
+            .find(|m| m.role == TraceMessageRole::Tool)
+            .unwrap();
+        assert_eq!(message.truncated, oversized.is_some());
+        assert_eq!(message.blocks.len(), usize::from(oversized.is_none()));
+        assert!(!serde_json::to_string(&detail).unwrap().contains(&sentinel));
+        if let Some(tool) = detail_of(&store, &record_of(&projected, TraceKind::Tool).id).tool {
+            assert_eq!(tool.call_id, call.id);
+            assert_eq!(tool.tool_id, call.tool_id);
+        }
+    }
+}
+
+#[test]
+fn managed_output_locators_and_diagnostics_are_exact_recorded_facts() {
+    use crate::tools::types::ManagedOutputContinuation as M;
+    let locator =
+        std::path::PathBuf::from("/private/rustx-managed-output/example/tasks/result.output");
+    let diagnostic = format!(
+        "cannot append {}: recorded storage failure",
+        locator.display()
+    );
+    for continuation in [
+        M::Complete {
+            locator: locator.clone(),
+        },
+        M::Partial {
+            locator: locator.clone(),
+            diagnostic: diagnostic.clone(),
+        },
+        M::Unavailable {
+            diagnostic: diagnostic.clone(),
+        },
+    ] {
+        let complete = matches!(continuation, M::Complete { .. });
+        let available = !matches!(continuation, M::Unavailable { .. });
+        let store = store("conv_ac56fc5d-a6f5-7885-8745-ac1fad19bb38");
+        start(&store);
+        let call = bash_call("locator-call");
+        propose_tool_call(&store, "locator-owner", &call, 2);
+        append(
+            &store,
+            E::ToolExecutionStarted {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+            },
+            3,
+        );
+        settle_tool_call(
+            &store,
+            "locator-owner",
+            "locator-result",
+            &call,
+            ToolExecutionResult {
+                status: ToolExecutionStatus::Failed {
+                    error: diagnostic.clone(),
+                },
+                content: vec![],
+                duration_ms: 1,
+                exit_code: None,
+                artifacts: vec![],
+                truncation: None,
+                workflow: None,
+                managed_output: Some(continuation),
+            },
+            4,
+        );
+        let detail = detail_of(&store, &record_of(&page(&store), TraceKind::Tool).id);
+        let result = detail.tool.as_ref().unwrap().result.as_ref().unwrap();
+        let output = result.managed_output.as_ref().unwrap();
+        assert_eq!(output.complete, complete);
+        assert_eq!(output.available, available);
+        assert_eq!(output.locator.as_ref(), available.then_some(&locator));
+        assert_eq!(
+            output.diagnostic.as_ref().map(|d| d.text.as_str()),
+            (!complete).then_some(diagnostic.as_str())
+        );
+        assert_eq!(result.detail.as_ref().unwrap().text, diagnostic);
+        let wire = serde_json::to_value(&detail).unwrap();
+        assert_eq!(
+            wire["tool"]["result"]["managed_output"]["locator"],
+            if available {
+                serde_json::json!(locator)
+            } else {
+                serde_json::Value::Null
+            }
+        );
+    }
+}
+
+#[test]
+fn mandatory_request_identities_bound_the_entire_request_detail() {
+    let bound = super::bounds::TRACE_IDENTITY_BYTES;
+    // Includes derived Request/Assistant identities that exceed the bound
+    // even though their individual Attempt and Step components fit.
+    for (attempt_len, step_len) in [(bound + 1, 1), (1, bound + 1), (bound / 2, bound / 2)] {
+        let store = store("conv_ac56fc5d-a6f5-7885-8745-ac1fad19bb38");
+        let identity = RequestIdentity {
+            attempt_id: AttemptId::new("a".repeat(attempt_len)),
+            turn: TurnId::new("s".repeat(step_len)),
+            retry_number: 0,
+        };
+        let snapshot = request_with_identity(&store, 0, None, identity);
+        let record = record_of(&page(&store), TraceKind::Request).clone();
+        let detail = detail_of(&store, &record.id);
+        assert!(detail.truncated);
+        assert!(detail.request.is_none());
         assert!(
             !serde_json::to_string(&detail)
                 .unwrap()
-                .contains(private_path)
+                .contains(snapshot.request_id.as_str())
         );
     }
 }

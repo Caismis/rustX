@@ -10,8 +10,7 @@
 //! results, and durable artifact references.
 //!
 //! What never crosses: provider continuation state (opaque provider-internal
-//! resumption data with no inspection value), managed-output locators (host
-//! filesystem paths owned by the output store), and every value that is not
+//! resumption data with no inspection value), and every value that is not
 //! reached by an explicit arm below.
 
 use super::bounds::{TRACE_DETAIL_BLOCKS, TraceJson, TracePreview, TraceText, identity_fits};
@@ -81,8 +80,8 @@ pub(super) fn user_blocks(content: &[UserContentBlock]) -> (Vec<TraceContentBloc
                 })
             }
             UserContentBlock::UploadedFile(upload) => Some(TraceContentBlock::Upload {
-                // The Session-owned upload name only; the batch's workspace
-                // location is storage detail and stays inside the runtime.
+                // This canonical block records a name, not a host path.
+                // Do not infer a historical path from current allocation.
                 name: upload.name.clone(),
             }),
             UserContentBlock::Image(_) | UserContentBlock::File(_) => {
@@ -241,15 +240,19 @@ pub(super) fn tool_result_blocks(result: &ToolExecutionResult) -> (Vec<TraceCont
 }
 
 /// Projects one canonical Tool message as a request-context item.
-pub(super) fn tool_result_block(message: &ToolMessageBlock) -> TraceContentBlock {
+/// Returns None when a mandatory correlation identity exceeds the bound.
+pub(super) fn tool_result_block(message: &ToolMessageBlock) -> Option<TraceContentBlock> {
+    if !identity_fits(message.tool_call_id.as_str()) || !identity_fits(message.tool_id.as_str()) {
+        return None;
+    }
     let (blocks, truncated) = tool_result_blocks(&message.result);
-    TraceContentBlock::ToolResult {
+    Some(TraceContentBlock::ToolResult {
         call_id: message.tool_call_id.clone(),
         tool_id: message.tool_id.clone(),
         outcome: tool_outcome(&message.result.status),
         blocks,
         truncated,
-    }
+    })
 }
 
 /// Canonical artifact references of one Tool result, first occurrence wins.

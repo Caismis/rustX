@@ -377,3 +377,28 @@ it('one adopted User batch renders every bounded canonical message', () => {
   expect(screen.getByText('First adopted message')).toBeTruthy();
   expect(screen.getByText('Second adopted message')).toBeTruthy();
 });
+
+it.each(['Complete', 'Partial', 'Unavailable'] as const)('shows %s managed output with exact plain-text locator and diagnostic', state => {
+  const locator = '/private/rustx-managed-output/example/tasks/<result>.output';
+  const diagnostic = `cannot append ${locator}: recorded I/O failure`;
+  const detail = toolDetail(0);
+  detail.tool!.result!.managed_output = {
+    complete: state === 'Complete', available: state !== 'Unavailable',
+    locator: state === 'Unavailable' ? null : locator,
+    diagnostic: state === 'Complete' ? null : { text: diagnostic, truncated: false },
+  };
+  let cache = cacheOf([traceTool(0)]);
+  cache = completeTraceDetail(selectTrace(cache, 'trace:0'), 'trace:0', cache.epoch, detail);
+  renderTrajectory(cache);
+  const inspector = within(screen.getByLabelText('Trace record inspector'));
+  fireEvent.click(inspector.getByRole('tab', { name: 'Result' }));
+  expect(inspector.getByText(state, { exact: true })).toBeDefined();
+  if (state !== 'Unavailable') {
+    const value = inspector.getByText(locator, { exact: true });
+    expect(value.tagName).toBe('DD');
+    expect(value.querySelector('a, button')).toBeNull();
+  } else {
+    expect(inspector.queryByText('Locator', { exact: true })).toBeNull();
+  }
+  if (state !== 'Complete') expect(inspector.getByText(diagnostic, { exact: true })).toBeDefined();
+});

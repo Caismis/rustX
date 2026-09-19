@@ -70,11 +70,11 @@ Tool-definition identities. Identities are omitted whole, never shortened into
 another identity. Semantics outside Trace's vocabulary, such as opaque provider
 continuation state, remain intentionally unprojected.
 
-Managed-output allocation and write diagnostics are normalized at the owning
-storage operation before becoming canonical Tool status or continuation metadata.
-They report unavailable/incomplete storage without physical locators. Ordinary
-Tool/business diagnostics remain canonical content; Trace performs no heuristic
-path scanning or global failure-text rewriting.
+Trace may expose filesystem paths and managed-output locators as recorded
+execution facts. These values are presentation only and confer no filesystem,
+execution, or recovery authority. Native storage diagnostics retain their
+underlying I/O failures and paths; presentation policy does not rewrite them.
+Credentials and opaque provider continuation internals remain excluded.
 
 ## Durable paging and live lifetime
 
@@ -177,7 +177,7 @@ remain invalidation signals; the browser never folds Journal facts.
 Canonical Tool attachments merge Image/File content and result artifact references,
 deduplicated by ArtifactId. Canonical typing, never filename or extension, selects
 the renderer. Managed-output inspection exposes completeness/availability and
-bounded diagnostics, excluding its physical continuation locator.
+bounded diagnostics, plus the exact recorded continuation locator when present.
 
 ## Durable schema contract
 
@@ -195,8 +195,8 @@ model metadata comes from its immutable snapshot, never current configuration.
 The typed inspection allowlist exposes authorized Session/model-visible content:
 system prompt, context, Tool schemas/arguments/results, canonical user/assistant
 content and reasoning. It excludes credentials, authorization headers, process
-or executor secret environment, provider continuation state, storage internals,
-physical managed-output locators, synchronization objects and arbitrary Debug
+or executor secret environment, provider continuation state, internal storage
+objects, synchronization objects and arbitrary Debug
 dumps. Request options use a closed list of sampling/decoding keys; omitted
 options are counted. This is a field contract, not heuristic secret scanning.
 

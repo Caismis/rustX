@@ -80,20 +80,6 @@ pub enum ManagedOutputError {
     ModelMutationReadOnly(String),
 }
 
-impl ManagedOutputError {
-    /// Safe semantic diagnostic at the runtime-owned storage boundary.
-    /// The detailed error retains private locators for runtime diagnostics only.
-    pub(crate) const fn storage_diagnostic(&self) -> &'static str {
-        match self {
-            Self::IdentityCollision => "managed output storage identity reservation exhausted",
-            Self::RootUnavailable(_)
-            | Self::SymlinkRoot(_)
-            | Self::OpenFailed(_)
-            | Self::ModelMutationReadOnly(_) => "managed output storage is unavailable",
-        }
-    }
-}
-
 impl core::fmt::Display for ManagedOutputError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

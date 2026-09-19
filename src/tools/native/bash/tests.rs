@@ -319,6 +319,18 @@ async fn spill_allocation_failure_fails_the_invocation_explicitly() {
         !matches!(result.status, ToolExecutionStatus::Success),
         "successful retention must never be reported while full output is lost"
     );
+    let ToolExecutionStatus::Failed { error } = &result.status else {
+        unreachable!()
+    };
+    assert!(error.contains(&results.display().to_string()));
+    assert!(error.contains("cannot allocate the foreground result spill"));
+    let Some(crate::tools::types::ManagedOutputContinuation::Unavailable { diagnostic }) =
+        &result.managed_output
+    else {
+        panic!("allocation did not succeed")
+    };
+    assert!(error.contains(diagnostic));
+    assert!(diagnostic.contains(&results.display().to_string()));
 }
 
 /// A spill WRITE failure after the spill was already allocated (the

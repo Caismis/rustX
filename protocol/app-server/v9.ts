@@ -4850,10 +4850,8 @@ export interface TraceToolTruncation {
 /**
  * Managed textual-output continuation metadata.
  *
- * Only the semantic completeness statement crosses the boundary. The
- * managed-output locator is a host filesystem path owned by the runtime's
- * output store, so Trace projects whether complete output exists rather
- * than where it is kept.
+ * The recorded locator is an inspectable execution fact. It is presentation
+ * data only and confers no filesystem, execution, or recovery authority.
  */
 export interface TraceManagedOutput {
   /**
@@ -4865,6 +4863,10 @@ export interface TraceManagedOutput {
    * Whether any managed output file exists at all.
    */
   available: boolean;
+  /**
+   * Exact native locator, when output storage owns one.
+   */
+  locator?: string | null;
   /**
    * The bounded advisory output-storage diagnostic, when one was recorded.
    */

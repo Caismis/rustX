@@ -534,10 +534,8 @@ pub struct TraceToolTruncation {
 
 /// Managed textual-output continuation metadata.
 ///
-/// Only the semantic completeness statement crosses the boundary. The
-/// managed-output locator is a host filesystem path owned by the runtime's
-/// output store, so Trace projects whether complete output exists rather
-/// than where it is kept.
+/// The recorded locator is an inspectable execution fact. It is presentation
+/// data only and confers no filesystem, execution, or recovery authority.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceManagedOutput {
@@ -546,6 +544,8 @@ pub struct TraceManagedOutput {
     pub complete: bool,
     /// Whether any managed output file exists at all.
     pub available: bool,
+    /// Exact native locator, when output storage owns one.
+    pub locator: Option<std::path::PathBuf>,
     /// The bounded advisory output-storage diagnostic, when one was recorded.
     pub diagnostic: Option<TraceText>,
 }

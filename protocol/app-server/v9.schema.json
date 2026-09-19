@@ -8138,7 +8138,7 @@
       ]
     },
     "TraceManagedOutput": {
-      "description": "Managed textual-output continuation metadata.\n\nOnly the semantic completeness statement crosses the boundary. The\nmanaged-output locator is a host filesystem path owned by the runtime's\noutput store, so Trace projects whether complete output exists rather\nthan where it is kept.",
+      "description": "Managed textual-output continuation metadata.\n\nThe recorded locator is an inspectable execution fact. It is presentation\ndata only and confers no filesystem, execution, or recovery authority.",
       "type": "object",
       "properties": {
         "complete": {
@@ -8148,6 +8148,13 @@
         "available": {
           "description": "Whether any managed output file exists at all.",
           "type": "boolean"
+        },
+        "locator": {
+          "description": "Exact native locator, when output storage owns one.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "diagnostic": {
           "description": "The bounded advisory output-storage diagnostic, when one was recorded.",

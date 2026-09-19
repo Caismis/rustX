@@ -358,17 +358,23 @@ async fn run_bash(
             .open_background_output_sink(execution_id)
         {
             Ok(sink) => Some(EstablishedBackgroundOutput { locator, sink }),
-            Err(_) => {
+            Err(error) => {
                 // The advertised live-output sink cannot even be opened:
                 // output storage is unreliable from the start. The
                 // already-advertised locator is retained structurally as
                 // explicitly PARTIAL — never complete, never forgotten,
                 // never hidden inside an error string.
                 return failed_with_continuation(
-                    "managed output storage is unavailable; the command was not started".to_owned(),
+                    format!(
+                        "the background output file {} cannot be opened for appending \
+                         ({error}); the command was not started",
+                        locator.display()
+                    ),
                     ManagedOutputContinuation::Partial {
                         locator,
-                        diagnostic: "managed output storage is unavailable".to_owned(),
+                        diagnostic: format!(
+                            "the advertised live-output sink cannot be opened: {error}"
+                        ),
                     },
                 );
             }

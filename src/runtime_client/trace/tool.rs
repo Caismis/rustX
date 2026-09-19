@@ -84,22 +84,28 @@ pub(super) fn native_source(call: &ToolCall) -> Option<TraceToolSource> {
     })
 }
 
-/// Projects the managed-output continuation's semantics without its locator.
+/// Projects recorded managed-output facts, including the native locator.
 fn managed_output(continuation: &ManagedOutputContinuation) -> TraceManagedOutput {
     match continuation {
-        ManagedOutputContinuation::Complete { .. } => TraceManagedOutput {
+        ManagedOutputContinuation::Complete { locator } => TraceManagedOutput {
             complete: true,
             available: true,
+            locator: Some(locator.clone()),
             diagnostic: None,
         },
-        ManagedOutputContinuation::Partial { diagnostic, .. } => TraceManagedOutput {
+        ManagedOutputContinuation::Partial {
+            locator,
+            diagnostic,
+        } => TraceManagedOutput {
             complete: false,
             available: true,
+            locator: Some(locator.clone()),
             diagnostic: Some(TraceText::detail(diagnostic)),
         },
         ManagedOutputContinuation::Unavailable { diagnostic } => TraceManagedOutput {
             complete: false,
             available: false,
+            locator: None,
             diagnostic: Some(TraceText::detail(diagnostic)),
         },
     }
@@ -136,6 +142,7 @@ pub(super) fn tool_result(message: &ToolMessageBlock) -> TraceToolResult {
 /// `call` is the canonical proposal, `started` is the durable start fact,
 /// and `message` is the canonical result. Each may be absent independently,
 /// and the resulting lifecycle states exactly what is proven.
+/// A mandatory identity that exceeds the bound omits the entire detail unit.
 #[must_use]
 pub(super) fn tool_detail(
     call_id: &crate::runtime::identity::ToolCallId,
@@ -144,8 +151,11 @@ pub(super) fn tool_detail(
     definition: Option<TraceToolDefinition>,
     started: bool,
     message: Option<&ToolMessageBlock>,
-) -> TraceToolDetail {
-    TraceToolDetail {
+) -> Option<TraceToolDetail> {
+    if !identity_fits(call_id.as_str()) || !identity_fits(tool_id.as_str()) {
+        return None;
+    }
+    Some(TraceToolDetail {
         call_id: call_id.clone(),
         tool_id: tool_id.clone(),
         name: call.map(|call| call.name.clone()),
@@ -160,7 +170,7 @@ pub(super) fn tool_detail(
         source: call.and_then(native_source),
         definition,
         result: message.map(tool_result),
-    }
+    })
 }
 
 /// The historical definition of one Tool inside one request's frozen catalog.
