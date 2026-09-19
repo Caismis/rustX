@@ -284,7 +284,8 @@ export const fixtures = [
       "session_id": "ses_00000000-0000-7000-8000-000000000001",
       "node_id": null,
       "surface_revision": "9007199254740993",
-      "boundary": null
+      "boundary": null,
+      "side": "before"
     }
   },
   {

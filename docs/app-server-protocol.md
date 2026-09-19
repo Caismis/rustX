@@ -237,7 +237,7 @@ explicitly rejected as an invalid request before any action occurs.
 | `initialize`, `server/info` | Connection negotiation and server capabilities |
 | `session/list`, `session/read`, `session/summary`, `session/name`, `session/tree` | Durable controller; bounded pages / exact identity reads; no runtime composition |
 | `session/create` | Durable creation from explicit Session selections |
-| `session/fork`, `session/branch` | Exact native Surface revision and optional user-message boundary; fork without a boundary clones the revision into an independent Session |
+| `session/fork`, `session/branch` | Exact native Surface revision, message boundary, and explicit `side`: `before` restores ordinary User input; `after` includes a durably completed Assistant response with an empty editor. Fork without a boundary clones the revision into an independent Session |
 | `session/deletePreview`, `session/delete`, `session/recoverDeletion` | Native revision-confirmed deletion/recovery; no client-supplied cleanup workset |
 | `session/attach`, `session/detach` | Load/reuse a runtime and acquire/release its external control attachment |
 | `session/switchNode` | Switch to a selected branch; manager owns retirement and composition |

@@ -42,6 +42,7 @@ pub(crate) mod compaction;
 pub(crate) mod compaction_metadata;
 pub mod engine;
 pub mod error;
+pub mod occupancy;
 pub mod projection;
 pub mod status;
 pub mod summarizer;

@@ -1,4 +1,4 @@
-import type { AttachmentTarget, MethodResult, SessionUserMessageBoundary, UserInputBlock } from '../../../../protocol/app-server/v9';
+import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary, UserInputBlock } from '../../../../protocol/app-server/v9';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 
@@ -11,7 +11,7 @@ export class NavigationEpoch {
 export interface HistoricalSelection {
   target: AttachmentTarget;
   nodeId: string;
-  boundary: SessionUserMessageBoundary;
+  boundary: SessionUserMessageBoundary | CompletedResponseView;
 }
 export type HistoryAction = 'fork' | 'branch' | 'retry';
 /** Shared by the sidebar and /new. Only a current gesture may open the result. */
@@ -78,11 +78,24 @@ export class CommandSession {
     this.client.rememberNode(this.target, nodeId);
     return { selections: page.boundaries.map(boundary => ({ target: this.target, nodeId: nodeId!, boundary })), nextOffset: page.next_offset };
   }
+  async responseSelection(response: CompletedResponseView): Promise<HistoricalSelection> {
+    let offset: number | null | undefined = 0;
+    while (offset != null) {
+      const page = await this.tree(offset);
+      const node = page.nodes.find(node => node.conversation_id === this.target.conversation_id);
+      if (node) return { target: this.target, nodeId: node.id, boundary: response };
+      offset = page.next_offset;
+    }
+    throw new Error('Attached Conversation is absent from the native Session tree.');
+  }
   async transition(action: HistoryAction, selection: HistoricalSelection) {
     this.requireCurrent();
     if (!sameTarget(selection.target, this.target)) throw new Error('Historical selection belongs to another attachment.');
     if (action !== 'fork' && !lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error('Wait for unresolved requests, accepted inbound and the current attempt to settle before switching lineage.');
-    const params = { session_id: this.sessionId, node_id: selection.nodeId, surface_revision: selection.boundary.surface_revision, boundary: selection.boundary.message.id };
+    const response = 'closing_message_id' in selection.boundary ? selection.boundary : undefined;
+    const boundary = response ? (action === 'retry' ? response.retry_message_id : response.closing_message_id) : ('message' in selection.boundary ? selection.boundary.message.id : undefined);
+    if (!boundary) throw new Error('No native replay input for this response.');
+    const params = { side: response && action !== 'retry' ? 'after' as const : 'before' as const, session_id: this.sessionId, node_id: selection.nodeId, surface_revision: selection.boundary.surface_revision, boundary };
     // Fork copies native settings: authorize the source before creating a child,
     // even when its existing attachment needs no new admission.
     if (action === 'fork' && !await this.client.admitAttachment(this.sessionId, this.current)) return;

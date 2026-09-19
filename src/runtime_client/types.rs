@@ -103,7 +103,9 @@ pub enum SessionNodeOriginView {
         /// Source revision selected for the seed.
         source_surface_revision: SurfaceRevision,
         /// Selected source user message.
-        source_user_message: MessageId,
+        source_message: MessageId,
+        /// Explicit retained side of the boundary.
+        side: crate::local_runtime::session::LineageSide,
     },
 }
 

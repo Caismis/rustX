@@ -205,6 +205,7 @@ pub enum Method {
         node_id: Option<SessionNodeId>,
         surface_revision: crate::conversation::SurfaceRevision,
         boundary: Option<MessageId>,
+        side: crate::local_runtime::session::LineageSide,
     },
     #[serde(rename = "session/branch")]
     SessionBranch {
@@ -212,6 +213,7 @@ pub enum Method {
         node_id: SessionNodeId,
         surface_revision: crate::conversation::SurfaceRevision,
         boundary: MessageId,
+        side: crate::local_runtime::session::LineageSide,
     },
     #[serde(rename = "session/deletePreview")]
     SessionDeletePreview { session_id: SessionId },

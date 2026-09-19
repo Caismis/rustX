@@ -304,6 +304,7 @@ impl LocalSessionAttachment {
                 &source,
                 message.as_ref(),
                 tree,
+                super::session::LineageSide::Before,
             )
             .await?)
     }
@@ -581,12 +582,14 @@ fn session_node_view(node: super::session::SessionNode) -> SessionNodeView {
                 source_session,
                 source_node,
                 source_surface_revision,
-                source_user_message,
+                source_message,
+                side,
             } => SessionNodeOriginView::Fork {
                 source_session,
                 source_node,
                 source_surface_revision,
-                source_user_message,
+                source_message,
+                side,
             },
         },
     }

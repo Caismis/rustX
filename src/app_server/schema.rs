@@ -215,6 +215,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             node_id: None,
             surface_revision: crate::conversation::surface::SurfaceRevision::new(EXACT),
             boundary: None,
+            side: crate::local_runtime::session::LineageSide::Before,
         },
         Method::InboundEdit {
             target: target.clone(),

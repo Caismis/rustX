@@ -30,6 +30,11 @@ s.messages = [
  { role: 'assistant', id: 'answer-1', content: [{ type: 'reasoning', text: 'I will inspect the runtime owner before changing its presentation.' }, { type: 'text', text: '## Native authority, clear presentation\n\nThe Agent view reads the canonical conversation and the runtime’s current projection.\n\n```rust\nlet snapshot = runtime.snapshot();\n```\n\n- History stays ordered by the native transcript.\n- Tool outcomes come from the runtime.\n- Pending interactions survive reconnect.' }] },
 ];
 s.transcript.entries = s.messages.map((message, i) => ({ cursor: String(i + 1), item: { type: 'message', message } }));
+if (mode === 'settled') {
+ s.transcript.entries[1].completed_response = { closing_message_id: 'answer-1', attempt_id: 'attempt-1', surface_revision: '2', retry_message_id: 'user-1', completed_at: '2026-09-18T11:59:00Z', usage: { input_tokens: 15000, output_tokens: 800, total_tokens: 15800, details: { cached_input_tokens: 12000 } } };
+ s.transcript.statistics = { completed_responses: '1', model_requests: '2', requests_with_usage: '2', reported_usage: s.transcript.entries[1].completed_response.usage };
+ s.context = { compaction_count: 0, compaction_in_progress: false, last_request_occupancy: { input_tokens: 15000, context_window_tokens: 128000, model: 'native/coder' } };
+}
 if (mode !== 'settled' && mode !== 'composer') s.attempt = { attempt_id: 'attempt-1', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } };
 if (mode === 'streaming') {
  s.messages.pop(); s.transcript.entries.pop();

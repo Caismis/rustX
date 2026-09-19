@@ -1,0 +1,19 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from MessageIconActions.module.css and TurnUsagePanel.module.css; see PROVENANCE.md. */
+.actions { display: flex; align-items: center; gap: 8px; min-height: 28px; flex-wrap: wrap; margin-top: 8px; }
+.action { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 6px; border: 0; border-radius: 28px; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
+.action svg { width: 15px; height: 15px; }
+.action:hover, .stat:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); }
+.action:focus-visible, .stat:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill); outline-offset: 2px; }
+.action:disabled { opacity: .4; cursor: default; }
+.stat { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 2px 6px; border: 0; border-radius: 14px; background: transparent; color: var(--dsw-alias-label-tertiary); font: inherit; font-size: 13px; cursor: pointer; }
+.metrics { display: grid; grid-template-columns: 1fr auto; gap: 12px 24px; }
+.metrics dd { margin: 0; font-variant-numeric: tabular-nums; }
+.menu { display: flex; flex-direction: column; gap: 8px; }
+.stats { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--dsw-alias-label-tertiary); font-size: 13px; padding: 4px 8px; }
+@media (hover: hover) and (pointer: fine) {
+  [data-response-reveal='hover'] .actions { opacity: 0; transition: opacity 80ms ease; }
+  [data-response-reveal='hover']:hover .actions, [data-response-reveal='hover']:focus-within .actions { opacity: 1; }
+}
+@media (max-width: 480px) { .actions { gap: 4px; } .action { width: 36px; height: 36px; } }
+
+.time { color: var(--dsw-alias-label-tertiary); font-size: 13px; white-space: nowrap; }

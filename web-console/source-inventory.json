@@ -95,7 +95,7 @@
       "treatment": "rewritten selectors with Harness Modal and typed rustX dispatch",
       "upstream_sha256": "c6a89ae2771f36ff6da26886fbc6719369f41f9eae004e52561644c788df153f",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v9",
+        "../../../../protocol/app-server/v8",
         "../../bindings/projection",
         "../../client/app-server",
         "../../presentation/primitives/Button",
@@ -113,7 +113,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "4c2bad3ba3773e71de76adf9b38f87047041702ac0d6266aa7133ee4c5e0b472"
+      "local_sha256": "072d1be0b4f0e10103ac69f5baafb132094c3ac2e2a47aae2e4f2e1286bc2a56"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -2365,6 +2365,87 @@
         }
       ],
       "local_sha256": "011edadae1d39999fb2fe32e3f094f36ac4d8e66943e003c89f2554506d23190"
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
+      "destination": "web-console/src/app/agent/ResponseTail.tsx",
+      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal.",
+      "upstream_sha256": "43d2e3e5713b6f08a33ce20a918eb8c73497f894438805413ef925f9e5437c5d",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/TurnUsagePanel.tsx",
+          "upstream_sha256": "57cbd0a8c43cfad5826c8d802c9feca7ad4b6240abe53f171def80463815f014",
+          "treatment": "Adapted compact product statistics and detail presentation only"
+        }
+      ],
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v8",
+        "../../presentation/primitives/Button",
+        "../../presentation/primitives/Modal",
+        "../../presentation/primitives/Tooltip",
+        "../../presentation/primitives/clipboard",
+        "../../presentation/primitives/icons",
+        "../commands/native",
+        "./ResponseTail.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Session/runtime/event authority",
+        "Harness token and timing projections",
+        "Cordis/plugin slots"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "08f5ebc9f19ab9fa9690020daac36536c93afb15847e0bbb94cfac0a23da32dc"
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
+      "destination": "web-console/src/app/agent/ResponseTail.module.css",
+      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal.",
+      "upstream_sha256": "ee0015510141e0a14b9a7c10a7acecede962a2d6480076f2638842bf1875ac05",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/TurnUsagePanel.module.css",
+          "upstream_sha256": "69f8658378b025c0837c83db17655cc5be07afd6811de84433106fa0af3e87cc",
+          "treatment": "Adapted compact product statistics and detail presentation only"
+        }
+      ],
+      "retained_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Session/runtime/event authority",
+        "Harness token and timing projections",
+        "Cordis/plugin slots"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "918e2df15263aa8a98e070da09fb19dfadbdc75936bebff5cd0050ce27ef4505"
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/StatsPills.tsx",
+      "destination": "web-console/src/app/agent/ConversationStats.tsx",
+      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal.",
+      "upstream_sha256": "ed5c05a63cdedb339a3dc00e67e30ef3ebed2ac6a7511becd5ea857641bc82aa",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx",
+          "upstream_sha256": "84e568164bb26fadc8cae50d82de7dbd4d14be0d957f5ae7fd9c4575a1f1568d",
+          "treatment": "Adapted compact product statistics and detail presentation only"
+        }
+      ],
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v8",
+        "../../presentation/primitives/Tooltip",
+        "./ResponseTail",
+        "./ResponseTail.module.css"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Session/runtime/event authority",
+        "Harness token and timing projections",
+        "Cordis/plugin slots"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "2e086b563e91dc191debdd5693ab1469a5dc1f18ce766ef657f503c32bb5fe1d"
     }
   ],
   "inspected_only": [
@@ -2631,6 +2712,36 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "3f01ef83124ae33dd54b8f1e057818ea6ba8b971a558209ab7c34344273ae5a3",
       "treatment": "WEB-11 comparison: editor geometry, toolbar, primary action, gesture policy and dock seats reviewed. Only explicitly inventoried material adapted; no settings, Lexical or slot runtime imported."
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/TurnTailNodeView.tsx",
+      "upstream_sha256": "c4c3884641f2d07bc424283a1f05cd24eec4d16708af5623660fe97b5284c9c6",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "Inspected for response-tail, copy, recency and context behavior; native rustX authorities retained."
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.tsx",
+      "upstream_sha256": "181844e9c1809607458dfdfbbffa50cbc16357d0696ae78a8ee13f86b5fd6354",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "Inspected for response-tail, copy, recency and context behavior; native rustX authorities retained."
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/turn-assistant.ts",
+      "upstream_sha256": "f510f118673a53b48651cae06b9f44c765192a0e5cb1187e6945096ad36fa9b3",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "Inspected for response-tail, copy, recency and context behavior; native rustX authorities retained."
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/StatsPills.module.css",
+      "upstream_sha256": "3d27f86c946054dcdafed5a79c5cd4947f7cd070e38340ab7dc99951d28f5eb7",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "Inspected for response-tail, copy, recency and context behavior; native rustX authorities retained."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/ContextMeter.module.css",
+      "upstream_sha256": "20e08d14b4efca4ead06e298c661ce94256766b14678489b450d6779e6b12ad0",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "Inspected for response-tail, copy, recency and context behavior; native rustX authorities retained."
     }
   ],
   "historical_inspection": {

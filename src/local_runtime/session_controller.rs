@@ -355,7 +355,15 @@ impl SessionController {
         node: Option<&SessionNodeId>,
         revision: crate::conversation::SurfaceRevision,
     ) -> Result<SessionTransitionResult, SessionError> {
-        self.copy_lineage(id, node, revision, None, false).await
+        self.copy_lineage(
+            id,
+            node,
+            revision,
+            None,
+            false,
+            super::session::LineageSide::Before,
+        )
+        .await
     }
     /// Branch an explicitly addressed Session graph at a user-message boundary.
     /// # Errors
@@ -367,8 +375,15 @@ impl SessionController {
         revision: crate::conversation::SurfaceRevision,
         boundary: &crate::runtime::identity::MessageId,
     ) -> Result<SessionTransitionResult, SessionError> {
-        self.copy_lineage(id, Some(node), revision, Some(boundary), true)
-            .await
+        self.copy_lineage(
+            id,
+            Some(node),
+            revision,
+            Some(boundary),
+            true,
+            super::session::LineageSide::Before,
+        )
+        .await
     }
     /// Copy an exact immutable Surface boundary while retaining source allocation
     /// access. Source deletion cannot commit before destination publication.
@@ -382,7 +397,15 @@ impl SessionController {
         revision: crate::conversation::SurfaceRevision,
         boundary: Option<&crate::runtime::identity::MessageId>,
     ) -> Result<SessionTransitionResult, SessionError> {
-        self.copy_lineage(id, node, revision, boundary, false).await
+        self.copy_lineage(
+            id,
+            node,
+            revision,
+            boundary,
+            false,
+            super::session::LineageSide::Before,
+        )
+        .await
     }
     #[allow(clippy::too_many_lines)] // One prepare/copy/publication transaction.
     pub(crate) async fn copy_lineage(
@@ -392,6 +415,7 @@ impl SessionController {
         revision: crate::conversation::SurfaceRevision,
         boundary: Option<&crate::runtime::identity::MessageId>,
         tree: bool,
+        side: super::session::LineageSide,
     ) -> Result<SessionTransitionResult, SessionError> {
         let _preparation = self.preparation.lock().await;
         let access = self.acquire_session(id, node).await?;
@@ -402,6 +426,27 @@ impl SessionController {
             &path,
         )
         .map_err(SessionError::Store)?;
+        if side == super::session::LineageSide::After {
+            let Some(message) = boundary else {
+                return Err(SessionError::Seed {
+                    detail: "A post-response cut requires a completed response".into(),
+                });
+            };
+            if store
+                .message_append_revision(message)
+                .map_err(SessionError::Store)?
+                != Some(revision)
+            {
+                return Err(SessionError::Seed { detail: "Stale or mismatched response boundary revision; choose an exact historical cut".into() });
+            }
+            if !crate::runtime_client::response::is_completed_response(&store, message)
+                .map_err(SessionError::Store)?
+            {
+                return Err(SessionError::UnknownBoundary {
+                    message_id: message.clone(),
+                });
+            }
+        }
         let source = super::session::HistoricalConversationSnapshot {
             conversation_id: access.node.conversation_id.clone(),
             surface_revision: revision,
@@ -413,13 +458,21 @@ impl SessionController {
                 .load_surface_history(revision)
                 .map_err(SessionError::Store)?,
         };
-        self.copy_admitted_lineage(id, &access.node, &access.settings, &source, boundary, tree)
-            .await
+        self.copy_admitted_lineage(
+            id,
+            &access.node,
+            &access.settings,
+            &source,
+            boundary,
+            tree,
+            side,
+        )
+        .await
     }
 
     /// Both durable and already-attached callers retain their allocation access
     /// and the preparation mutex before entering this one lifecycle owner.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // One admitted lineage publication transaction.
     pub(crate) async fn copy_admitted_lineage(
         &self,
         id: &SessionId,
@@ -428,6 +481,7 @@ impl SessionController {
         source: &super::session::HistoricalConversationSnapshot,
         boundary: Option<&crate::runtime::identity::MessageId>,
         tree: bool,
+        side: super::session::LineageSide,
     ) -> Result<SessionTransitionResult, SessionError> {
         let snapshot = self.catalog.lock().await.clone();
         let revision = source.surface_revision;
@@ -442,9 +496,9 @@ impl SessionController {
         }
         let (mut prepared, editor_content, origin) = if let Some(message) = boundary {
             let (prepared, editor) = if tree {
-                snapshot.prepare_tree_node_at_user_message(id, settings, source, message)?
+                snapshot.prepare_tree_node(id, settings, source, message, side)?
             } else {
-                snapshot.prepare_fork_session(settings, source, message)?
+                snapshot.prepare_fork_session(settings, source, message, side)?
             };
             (
                 prepared,
@@ -453,7 +507,8 @@ impl SessionController {
                     source_session: id.clone(),
                     source_node: node.id.clone(),
                     source_surface_revision: revision,
-                    source_user_message: message.clone(),
+                    source_message: message.clone(),
+                    side,
                 },
             )
         } else {

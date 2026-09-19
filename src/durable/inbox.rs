@@ -1504,6 +1504,13 @@ pub trait ConversationStore: Send + Sync + 'static {
         through: SurfaceRevision,
     ) -> Result<Vec<SurfaceOp>, ConversationStoreError>;
 
+    /// Exact immutable revision that first appended this canonical message.
+    /// Compaction and later appends do not change this historical boundary.
+    fn message_append_revision(
+        &self,
+        message_id: &MessageId,
+    ) -> Result<Option<SurfaceRevision>, ConversationStoreError>;
+
     /// Reconstructs one exact historical Surface revision from immutable
     /// Surface operations.
     fn reconstruct_surface(

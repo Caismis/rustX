@@ -1018,6 +1018,7 @@ async fn restored_editor_uploads_are_ordered_owned_and_prepared_before_publicati
                     revision,
                     Some(&MessageId::new("boundary")),
                     tree,
+                    crate::local_runtime::session::LineageSide::Before,
                 )
                 .await
         });

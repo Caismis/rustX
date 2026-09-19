@@ -1696,6 +1696,19 @@ impl ConversationStore for SqliteConversationStore {
         ids.iter().map(|id| load_message(&connection, id)).collect()
     }
 
+    fn message_append_revision(
+        &self,
+        message_id: &MessageId,
+    ) -> Result<Option<SurfaceRevision>, ConversationStoreError> {
+        let revision: Option<i64> = self.lock()?.query_row(
+            "SELECT revision FROM surface_ops WHERE json_extract(op_json, '$.op') = 'append' AND json_extract(op_json, '$.message_id') = ?1 ORDER BY revision LIMIT 1",
+            [message_id.as_str()], |row| row.get(0),
+        ).optional().map_err(|error| storage(format!("message append revision: {error}")))?;
+        revision
+            .map(|value| nonnegative(value, "message append revision").map(SurfaceRevision::new))
+            .transpose()
+    }
+
     fn load_surface_history(
         &self,
         through: SurfaceRevision,

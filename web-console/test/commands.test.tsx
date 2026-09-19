@@ -65,7 +65,7 @@ describe('one narrow browser command grammar', () => {
 /** Scripted server owner. The browser only receives generated wire DTOs. */
 function nativeFixture() {
   const original = snapshot('A');
-  original.transcript.entries = [{ cursor: '1', item: { type: 'message', message: { id: 'original-assistant', role: 'assistant', content: [{ type: 'text', text: 'Original assistant response' }] } } }];
+  original.transcript.entries = [{ cursor: '1', completed_response: { closing_message_id: 'original-assistant', attempt_id: 'original-attempt', completed_at: '2026-09-19T08:00:00Z', surface_revision: '9007199254740997', retry_message_id: 'user-cut' }, item: { type: 'message', message: { id: 'original-assistant', role: 'assistant', content: [{ type: 'text', text: 'Original assistant response' }] } } }];
   const originals = structuredClone(original);
   server.snapshots.set('A', original); server.nodeSnapshots.set('node-A', original);
   const content: UserInputBlock[] = [{ type: 'text', text: 'Try this' }, { type: 'upload', session_id: 'A', batch_id: 'batch', token: 'native-receipt' }];
@@ -85,7 +85,7 @@ function nativeFixture() {
     const id = request.method === 'session/fork' ? 'child' : 'A';
     const nodeId = request.method === 'session/fork' ? 'node-child' : 'branch-A';
     const conversation = request.method === 'session/fork' ? 'conversation-child' : 'conversation-branch-A';
-    nodes.push({ ordinal: String(nodes.length + 1), id: nodeId, parent: id === 'A' ? 'node-A' : null, conversation_id: conversation, origin: { type: 'fork', source_session: 'A', source_node: 'node-A', source_surface_revision: boundary.surface_revision, source_user_message: boundary.message.id } });
+    nodes.push({ ordinal: String(nodes.length + 1), id: nodeId, parent: id === 'A' ? 'node-A' : null, conversation_id: conversation, origin: { type: 'fork', source_session: 'A', source_node: 'node-A', source_surface_revision: boundary.surface_revision, side: "before", source_message: boundary.message.id } });
     if (id === 'child') server.snapshots.set(id, snapshot(id));
     server.nodeSnapshots.set(nodeId, { ...snapshot(), conversation_id: conversation });
     const result: Extract<MethodResult, { type: 'session_transition' }> = { type: 'session_transition', session: { id, active_node: nodeId, active_conversation_id: conversation, node_count: nodes.length, created_at: '0', updated_at: '0' }, editor_content: content.map(block => block.type === 'upload' ? { ...block, session_id: id, token: id === 'child' ? 'native-destination-receipt' : block.token } : block) };
@@ -312,11 +312,11 @@ describe('typed native operations and continuation fencing', () => {
       act(() => { work = server.client.send('A', 'Accepted task'); });
       const request = await server.waitFor('turn/start', 1);
       expect(server.client.getSnapshot().views.A.submissions ?? []).toEqual([]);
-      for (const name of ['Branch', 'Retry / Regenerate']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+      expectTailSwitching(true);
       fireEvent.click(screen.getByRole('button', { name: 'Session actions' }));
       expect(screen.getByRole('menuitem', { name: 'Session tree' })).toHaveProperty('disabled', true);
       fireEvent.keyDown(document, { key: 'Escape' });
-      expect(screen.getByRole('button', { name: 'Fork' })).toHaveProperty('disabled', false);
+      expect(screen.getByRole('button', { name: 'Lineage' })).toHaveProperty('disabled', false);
       fireEvent.change(screen.getByLabelText('Message'), { target: { value: '/branch' } });
       expect(screen.queryByRole('option', { name: /Branch within/ })).toBeNull();
       await act(async () => { server.reply(request); await work; });
@@ -327,11 +327,11 @@ describe('typed native operations and continuation fencing', () => {
     expect(activeAttempt(view().snapshot)).toBe(false);
     expect(executionIdle(view())).toBe(false);
     if (source !== 'acknowledgement') expect(view().submissions ?? []).toEqual([]);
-    for (const name of ['Branch', 'Retry / Regenerate']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+    expectTailSwitching(true);
       fireEvent.click(screen.getByRole('button', { name: 'Session actions' }));
       expect(screen.getByRole('menuitem', { name: 'Session tree' })).toHaveProperty('disabled', true);
       fireEvent.keyDown(document, { key: 'Escape' });
-    expect(screen.getByRole('button', { name: 'Fork' })).toHaveProperty('disabled', false);
+    expect(screen.getByRole('button', { name: 'Lineage' })).toHaveProperty('disabled', false);
     const input = screen.getByLabelText('Message');
     fireEvent.change(input, { target: { value: '/branch' } });
     expect(screen.queryByRole('option', { name: /Branch within/ })).toBeNull();
@@ -349,7 +349,7 @@ describe('typed native operations and continuation fencing', () => {
     expect(executionIdle(view())).toBe(false); // authority now owns the blocking fact
     await act(() => server.update('A', { ...history, messages: [{ role: 'user', ...pending.message }], inbound: {} }));
     expect(executionIdle(view())).toBe(true);
-    for (const name of ['Branch', 'Retry / Regenerate']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', false);
+    expectTailSwitching(false);
     fireEvent.click(screen.getByRole('button', { name: 'Session actions' }));
     expect(screen.getByRole('menuitem', { name: 'Session tree' })).toHaveProperty('disabled', false);
     fireEvent.keyDown(document, { key: 'Escape' });
@@ -437,7 +437,7 @@ describe('typed native operations and continuation fencing', () => {
     const { scope, selection, navigation, fixture } = await subject();
     const method = action === 'fork' ? 'session/fork' : 'session/branch'; server.held.add(method);
     const work = scope.transition(action, selection); const request = await server.waitFor(method, 1);
-    expect(request.params).toEqual({ session_id: 'A', node_id: 'node-A', surface_revision: fixture.boundary.surface_revision, boundary: 'user-cut' });
+    expect(request.params).toEqual({ side: 'before', session_id: 'A', node_id: 'node-A', surface_revision: fixture.boundary.surface_revision, boundary: 'user-cut' });
     const response = server.commit(request); expect(fixture.committed).toHaveLength(1);
     navigation.invalidate(); const count = server.requests.length;
     server.socket.deliver(response); expect(await work).toBeUndefined();
@@ -554,3 +554,10 @@ describe('typed native operations and continuation fencing', () => {
     expect(fixture.committed).toHaveLength(1);
   });
 });
+
+function expectTailSwitching(disabled: boolean) {
+  fireEvent.click(screen.getByRole('button', { name: 'Lineage' }));
+  for (const name of ['Branch in this Session', 'Retry / Regenerate']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', disabled);
+  expect(screen.getByRole('button', { name: 'Fork to new Session' })).toHaveProperty('disabled', false);
+  fireEvent.click(screen.getByRole('button', { name: 'Close lineage' }));
+}

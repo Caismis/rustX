@@ -54,8 +54,9 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Original native answer', { exact: true })).toBeVisible(); await settled();
     phase = 'selecting exact historical Retry boundary';
+    await page.getByRole('button', { name: 'Lineage', exact: true }).click();
     await page.getByRole('button', { name: 'Retry / Regenerate', exact: true }).click();
-    await page.getByRole('dialog', { name: 'Retry / Regenerate', exact: true }).getByRole('option', { name: /Regenerate my uploaded note/ }).click();
+    await page.getByRole('dialog', { name: 'Retry / Regenerate', exact: true }).getByRole('option', { name: /Replay the original input once/ }).click();
     phase = 'awaiting validated retry provider request (branch → switchNode → attach → turn/start)';
     await test.step('native retry reaches the provider with validated editor content', async () => {
       // The gate is reached only after the real provider validates model, native
@@ -82,14 +83,16 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await page.getByRole('dialog', { name: 'Session tree', exact: true }).getByRole('option').filter({ hasText: originalConversation }).click();
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
     await expect(transcript.getByText('Regenerated native answer', { exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Fork', exact: true }).click();
-    await page.getByRole('dialog', { name: '/fork', exact: true }).getByRole('option', { name: /Regenerate my uploaded note/ }).click();
-    await expect(message).toHaveValue('Regenerate my uploaded note');
+    await page.getByRole('button', { name: 'Lineage', exact: true }).click();
+    await page.getByRole('button', { name: 'Fork to new Session', exact: true }).click();
+    await page.getByRole('dialog', { name: '/fork', exact: true }).getByRole('option', { name: /Continue after this response/ }).click();
+    await expect(page.getByRole('dialog', { name: '/fork', exact: true })).toHaveCount(0);
+    await expect(message).toHaveValue('');
     const forkId = JSON.parse(await facts.innerText()).SessionId as string;
     expect(forkId).not.toBe(originalId);
-    await expect(transcript.getByText('Original native answer', { exact: true })).toHaveCount(0);
-    await expect(page.getByText(/Native restored upload batch/)).toBeVisible();
-    // Native #319 copies the editor-boundary upload before publishing the child.
+    await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
+    await expect(page.getByText(/Native restored upload batch/)).toHaveCount(0);
+    // Native #319 copies uploads in the inherited post-response prefix before publishing the child.
     const root = join(fixture.workspaceA, '.agents/uploads', forkId);
     const batches = readdirSync(root);
     expect(batches).toHaveLength(1);
@@ -103,7 +106,6 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(facts).toContainText('policy');
     await page.getByRole('button', { name: 'Close Inspector' }).click();
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByRole('button', { name: 'Remove draft upload' }).click();
     popup = await command('model'); await expect(popup.getByRole('option', { name: /fixture\/second-model/ })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: 'test-results/commands-selector-mobile.png' });

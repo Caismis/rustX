@@ -240,6 +240,9 @@ pub struct RuntimeClientSnapshot {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientTranscriptPage {
+    /// Native whole-conversation totals, independent of this page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statistics: Option<super::response::ConversationStatistics>,
     /// Items in chronological order within this page.
     #[serde(default)]
     pub entries: Vec<RuntimeClientTranscriptEntry>,
@@ -251,6 +254,13 @@ pub struct RuntimeClientTranscriptPage {
 /// One derived transcript item and its stable durable cursor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RuntimeClientTranscriptEntry {
+    /// The native Attempt has not yet settled this accepted Assistant candidate.
+    /// A client retaining this row outside a refresh must reread it, not freeze absence.
+    #[serde(default)]
+    pub response_pending: bool,
+    /// Exact completed-response evidence, never inferred by clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_response: Option<super::response::CompletedResponseView>,
     /// Canonical calls in block order with their native committed results.
     /// A missing result means no committed result, never success or cancellation.
     #[serde(default)]
@@ -449,6 +459,8 @@ pub(crate) fn transcript_page_view(
                 }
             };
             Ok(RuntimeClientTranscriptEntry {
+                completed_response: None,
+                response_pending: false,
                 cursor: entry.cursor.into(),
                 tool_calls: entry
                     .tool_calls
@@ -474,6 +486,7 @@ pub(crate) fn transcript_page_view(
         })
         .collect::<Result<Vec<_>, String>>()?;
     Ok(RuntimeClientTranscriptPage {
+        statistics: None,
         entries,
         next_cursor: page.next_cursor.map(Into::into),
     })
@@ -544,6 +557,9 @@ pub(crate) fn interaction_settled_view(
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientContextView {
+    /// Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_request_occupancy: Option<crate::context::occupancy::ContextOccupancy>,
     /// Whether the runtime currently owns a context-compaction operation.
     /// This is live operation state, not inferred from token usage.
     pub compaction_in_progress: bool,
