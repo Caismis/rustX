@@ -90,3 +90,40 @@ test("live overlap requires both exact identity and durable cursor", () => {
     assert.equal(fresh.transcriptNextCursor, "2");
   }
 });
+
+test("older-page response is discarded when live refresh replaces its requested boundary", async () => {
+  const h = await harness(snapshot({ transcript: { entries: [entry("4")], next_cursor: "4" } }));
+  const loading = h.session.loadOlderTranscript();
+  const page = await nextRequest(h, "session/transcript", 0);
+  assert.deepEqual(page.params, { target: h.target, before: "4", limit: 32 });
+  settled(h, "1");
+  const read = await nextRequest(h, "session/snapshot", 0);
+  const done = published(h);
+  h.transport.respond(read.id, { type: "snapshot", snapshot: snapshot({ transcript: { entries: [entry("8")], next_cursor: "8" } }), cursor: "1" });
+  await done;
+  h.transport.respond(page.id, { type: "transcript", page: { entries: [entry("2"), entry("3")], next_cursor: "2" } });
+  assert.equal(await loading, false);
+  assert.deepEqual(h.session.state.transcript.map(e => e.key), ["committed:8"]);
+  assert.equal(h.session.state.transcriptNextCursor, "8");
+  assert.equal(h.session.resyncCount, 0);
+  assert.equal(h.transport.transportCount("session/transcript"), 1);
+  assert.equal(h.transport.transportCount("session/subscribe"), 0);
+  h.client.close();
+});
+
+test("in-flight older page still merges after a joinable refresh preserves its boundary", async () => {
+  const h = await harness(snapshot({ transcript: { entries: [entry("4")], next_cursor: "4" } }));
+  const loading = h.session.loadOlderTranscript();
+  const page = await nextRequest(h, "session/transcript", 0);
+  settled(h, "1");
+  const read = await nextRequest(h, "session/snapshot", 0);
+  const done = published(h);
+  h.transport.respond(read.id, { type: "snapshot", snapshot: snapshot({ transcript: { entries: [entry("4"), entry("5")], next_cursor: "4" } }), cursor: "1" });
+  await done;
+  h.transport.respond(page.id, { type: "transcript", page: { entries: [entry("2"), entry("3")], next_cursor: "2" } });
+  assert.equal(await loading, true);
+  assert.deepEqual(h.session.state.transcript.map(e => e.key), ["committed:2", "committed:3", "committed:4", "committed:5"]);
+  assert.equal(h.session.state.transcriptNextCursor, "2");
+  assert.equal(h.transport.transportCount("session/transcript"), 1);
+  h.client.close();
+});

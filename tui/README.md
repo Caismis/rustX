@@ -447,7 +447,10 @@ outcome reports uncertainty and is never automatically retried.
 Pi Editor owns grapheme movement/deletion, terminal cell width, multiline editing,
 large paste markers and bracketed paste. Paste packets bypass global shortcuts;
 pasted Enter/Tab/Esc cannot send, queue or interrupt. A pasted leading slash stays
-literal on subsequent submission. Newlines and tabs follow Pi's text normalization.
+literal on subsequent submission. An explicitly typed command token followed by
+a pasted argument (such as `/attach ` plus a path) remains a command; pasting
+into the leading token makes it literal until the draft is cleared or replaced.
+Newlines and tabs follow Pi's text normalization.
 No separate text editor or timing heuristic is introduced. OS IME composition
 belongs to the terminal: Pi-TUI 0.82.1 exposes committed text, not composition
 start/update/end. Committed CJK/emoji/combining text is tested. If a terminal emits
@@ -484,7 +487,9 @@ usage and native duration, never the current Attempt. Settlement rereads the nat
 snapshot through a live refresh: fresh overlapping entries win, immutable older
 pages and their cursor survive, and overlays stay open. Unjoinable or unresolved
 older windows fall back to the current native window without resetting overlays.
-Only real resync replaces attachment presentation ownership and re-subscribes.
+An older-page read is accepted only while its exact requested next-page boundary
+still matches; a replaced boundary discards the response without retry. Only real
+resync replaces attachment presentation ownership and re-subscribes.
 Paging retains whole-conversation statistics rather than summing pages;
 missing reports are absent, not zero. Context occupancy uses the native last-request
 reading, and model changes do not relabel its historical capacity. Heavy generation

@@ -271,3 +271,24 @@ test("queue editor propagates popup focus to Pi IME cursor markers", async () =>
   assert.ok(!view.editor.render(80).join("\n").includes(CURSOR_MARKER));
   h.client.close();
 });
+
+test("queued edit submits exact pre-submit whitespace and trailing newlines with observed CAS", async () => {
+  for (const text of ["  hello  ", "  first\nsecond  \n", "first\n\n"]) {
+    const item = pending("9007199254740994", "9007199254740995", text);
+    const h = await harness(snapshot({ inbound: { pending: [item] } }));
+    let applied!: () => void;
+    const view = new PendingInputView(terminal(), h.session, () => {}, () => applied?.());
+    view.handleInput("\r"); // open the captured observation
+    assert.equal(view.editor.getExpandedText(), text);
+    const completion = new Promise<void>(resolve => { applied = resolve; });
+    view.handleInput("\r"); // save without changing a byte
+    const request = await nextRequest(h, "inbound/edit", 0);
+    assert.deepEqual(request.params, { target: h.target, expected: { sequence: item.sequence, message_id: item.message.id, revision: item.revision }, text });
+    h.transport.respond(request.id, { type: "inbound_mutation", outcome: { status: "conflict" } });
+    await completion;
+    view.handleInput("\r");
+    assert.equal(h.transport.transportCount("inbound/edit"), 1);
+    assert.equal(h.transport.transportCount("session/snapshot"), 0);
+    h.client.close();
+  }
+});

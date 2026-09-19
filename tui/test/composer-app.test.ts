@@ -132,3 +132,52 @@ test("settlement keeps the actual history overlay; resyncRequired invalidates it
   assert.equal(h.focus, h.editor); assert.equal(h.session.resyncCount, 1);
   assert.equal(h.editor.getExpandedText(), "unsubmitted 中文");
 });
+
+test("pasted leading command tokens dispatch as Agent input, including typed suffixes", async t => {
+  const h = await appHarness(t);
+  for (const [pasted, typed] of [["/permissions", ""], ["/attach /tmp/a", ""], ["/attach ", "foo.txt"], ["ordinary pasted content", ""]] as const) {
+    h.input(`\x1b[200~${pasted}\x1b[201~`); if (typed) h.input(typed);
+    const count = h.transport.transportCount("turn/start");
+    h.input("\r");
+    const request = await nextRequest(h, "turn/start", count);
+    assert.deepEqual(request.params, { target: h.target, content: [{ type: "text", text: pasted + typed }] });
+    h.transport.respond(request.id, { type: "inbound_accepted", message_id: `m-${count}`, inbound_sequence: String(count + 1) });
+    await continuation();
+  }
+  assert.equal(h.transport.transportCount("session/upload"), 0);
+  assert.equal(h.transport.transportCount("configuration/sourcesRead"), 0);
+});
+
+test("typed attach token with pasted path arguments executes upload, including spaces", async t => {
+  const temp = TempFixture.create("rustx-tui-paste-arguments-"); t.after(() => temp.cleanup());
+  const h = await appHarness(t);
+  for (const name of ["a.txt", "my file.txt"]) {
+    const path = temp.path(name); writeFileSync(path, name);
+    h.input("/attach ");
+    h.input("\x1b[200~"); h.input(path); h.input("\x1b[201~");
+    const count = h.transport.transportCount("session/upload");
+    h.input("\r");
+    const upload = await nextRequest(h, "session/upload", count);
+    assert.deepEqual(upload.params, { target: h.target, files: [{ name, data: Buffer.from(name).toString("base64") }] });
+    h.transport.respond(upload.id, { type: "session_uploaded", files: [{ receipt: { session_id: h.session.sessionId, batch_id: `batch-${count}`, token: "receipt" }, file: { batch_id: `batch-${count}`, name }, path: "/server/native/path" }] });
+    await continuation();
+  }
+  assert.equal(h.transport.transportCount("turn/start"), 0);
+});
+
+test("typed permissions remains a command and clearing or replacing resets paste provenance", async t => {
+  const h = await appHarness(t);
+  for (const reset of ["none", "clear", "replace"]) {
+    if (reset !== "none") h.input("\x1b[200~/attach /tmp/a\x1b[201~");
+    if (reset === "clear") h.editor.setText("");
+    if (reset === "replace") h.editor.setText("/permissions");
+    else h.input("/permissions");
+    const count = h.transport.transportCount("configuration/sourcesRead");
+    h.input("\r");
+    const request = await nextRequest(h, "configuration/sourcesRead", count);
+    h.transport.respondError(request.id, { code: -32603, message: "scripted read failure" });
+    await continuation();
+  }
+  assert.equal(h.transport.transportCount("configuration/sourcesRead"), 3);
+  assert.equal(h.transport.transportCount("turn/start"), 0);
+});

@@ -15,7 +15,7 @@ export class ComposerEditor extends Editor {
   onPrompt?: (text: string, commands: boolean) => void;
   running: () => boolean = () => false;
   readonly #paste = new PasteGuard();
-  #literal = false;
+  #pastedLeadingToken = false;
   constructor(tui: TUI) {
     super(tui, editorTheme, { paddingX: 1 });
     this.onSubmit = () => {};
@@ -23,7 +23,16 @@ export class ComposerEditor extends Editor {
   override handleInput(data: string): void {
     const content = this.#paste.content(data);
     if (content) {
-      this.#literal = true;
+      if (data.includes("\x1b[200~")) {
+        // Pasting arguments after an explicitly authored command token keeps
+        // command intent. Pasting into/before that token makes it literal.
+        // Cursor offsets refer to Pi's own text representation, not cell width.
+        const lines = this.getLines();
+        const cursor = this.getCursor();
+        const offset = lines.slice(0, cursor.line).reduce((n, line) => n + line.length + 1, 0) + cursor.col;
+        const prefix = /^\s*\/\S+\s/.exec(lines.join("\n"));
+        if (!prefix || offset < prefix[0].length) this.#pastedLeadingToken = true;
+      }
       super.handleInput(data);
       return;
     }
@@ -32,13 +41,15 @@ export class ComposerEditor extends Editor {
       return;
     }
     const before = this.getExpandedText();
-    const commands = !this.#literal;
+    const commands = !this.#pastedLeadingToken;
     this.onSubmit = () => this.onPrompt?.(before, commands);
     super.handleInput(data);
-    if (!this.getExpandedText()) this.#literal = false;
+    if (!this.getExpandedText()) this.#pastedLeadingToken = false;
   }
   override setText(text: string): void {
+    // Explicit replacement starts a new provenance boundary; restoring the
+    // same text (for example after a busy submission) retains its provenance.
+    if (!text || text !== this.getExpandedText()) this.#pastedLeadingToken = false;
     super.setText(text);
-    if (!text) this.#literal = false;
   }
 }

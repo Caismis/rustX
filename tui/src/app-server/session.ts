@@ -379,10 +379,10 @@ export class AppServerSession {
     }
     const epoch = this.#epoch;
     const page = await this.transcriptPage(beforeCursor, limit);
-    if (epoch !== this.#epoch) {
-      // The projection was authoritatively replaced while this page was in
-      // flight. Merging it now would splice history into a state it does not
-      // describe.
+    if (epoch !== this.#epoch || this.#state.transcriptNextCursor !== beforeCursor) {
+      // A page belongs to the exact boundary requested. A live refresh can
+      // replace that window without replacing attachment ownership. Neither
+      // that stale page nor its next cursor may be spliced into the new window.
       return false;
     }
     this.#state = mergeTranscriptPage(this.#state, page);

@@ -30,7 +30,7 @@ export class PendingInputView implements PopupContent {
     this.session = session; this.close = close; this.changed = changed;
     this.items = structuredClone((session.state.inbound.pending ?? []).filter(item => item.message.source === "human"));
     this.editor = new Editor(tui, editorTheme);
-    this.editor.onSubmit = text => { void this.mutate(text); };
+    this.editor.onSubmit = () => {};
   }
   popupTitle(): string { return "Queued input"; }
   popupFooter(): string[] { return [this.#editing ? "Enter save · Esc back" : "↑↓ select · Enter edit text · Ctrl+D remove · Esc close"]; }
@@ -43,7 +43,14 @@ export class PendingInputView implements PopupContent {
     }
     if (matchesKey(data, "escape")) { if (this.#editing) this.#editing = false; else this.close(); return; }
     if (this.#busy || this.#done) return;
-    if (this.#editing) { this.editor.handleInput(data); return; }
+    if (this.#editing) {
+      // Pi trims its submit callback value and clears the editor first. Capture
+      // the exact expanded draft before dispatch, including trailing newlines.
+      const text = this.editor.getExpandedText();
+      this.editor.onSubmit = () => { void this.mutate(text); };
+      this.editor.handleInput(data);
+      return;
+    }
     if (matchesKey(data, "up")) this.#selected = Math.max(0, this.#selected - 1);
     else if (matchesKey(data, "down")) this.#selected = Math.min(this.items.length - 1, this.#selected + 1);
     else if (matchesKey(data, "ctrl+d")) void this.mutate();
