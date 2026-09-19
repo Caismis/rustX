@@ -2794,7 +2794,7 @@ impl SessionError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::BTreeSet;
     use std::fs;
 
@@ -2992,7 +2992,7 @@ model = "provider/model"
             .clone()
     }
 
-    fn open_catalog() -> (TempDir, SessionCatalog, CurrentRuntimeConfig) {
+    pub(crate) fn open_catalog() -> (TempDir, SessionCatalog, CurrentRuntimeConfig) {
         let directory = tempfile::tempdir().expect("temp directory");
         let config = config();
         let catalog = SessionCatalog::create(directory.path(), &state()).expect("catalog");

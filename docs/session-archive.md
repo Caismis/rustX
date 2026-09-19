@@ -49,6 +49,24 @@ when both competing allocations contain readable bytes. Required unreadable
 history fails closed. No agents are loaded, resumed, attached or synthesized.
 The ownership freeze remains held throughout validation and cut capture.
 
+Live Subagent membership linearizes at the durable `SubagentOwnershipCommitted`
+event, not at allocation or the Ready handshake. `SubagentRegistry` acquires
+`ProductRoot::ownership_commit_admission()` before its registry/durability/lifecycle
+commit mutexes. The uncontended shared admission is immediate; contention with
+an ownership snapshot waits in Tokio's blocking pool, never on a Tokio worker
+and never under those runtime mutexes. The admission spans the ownership event
+and Running-record publication, then releases before capacity waiting, rollback
+or driver handoff. The mailbox ownership-commit capability requires that guard.
+Cancellation, capacity, runtime drain and durability are rechecked after admission.
+
+Thus the ownership commit either precedes the snapshot (claim and child both
+included), or follows cut capture/release (claim and child both excluded). A
+transient read-only freeze delays a valid staged commit instead of returning a
+start failure. Holding or slowly consuming the prepared ZIP holds no product
+ownership admission or snapshot. Deletion preview also releases its snapshot
+before managed writer retirement; neither snapshot reader waits on registry
+commit locks.
+
 For this finite membership, capture opens each database read-only, establishes a
 rollback-journal SQLite SHARED barrier and reads its immutable append frontiers.
 Previously acquired barriers remain held until all members have been captured.
@@ -261,3 +279,12 @@ Chromium. `git diff --check` must also pass.
 Existing decoded archive safety, typed preflight, live-write cut, large artifact,
 deduplication, cancellation, bounded backpressure and corruption tests remain.
 No protocol, archive or durable schema changes accompany these internal repairs.
+
+The actual registry `prepare`/`commit` seam has deterministic regressions in
+`src/runtime/subagent/registry/tests/archive_ownership.rs`: archive-first and
+commit-first orderings decode the ZIP and relate every included parent ownership
+claim to exactly one manifest child with the matching parent. A capture hook and
+single explicit future poll establish contention without sleeps. The child is
+staged using the existing real-process/control test seam; ownership events are
+never forged. Additional cases change cancellation, capacity, drain and durability
+while admission is waiting and prove rejection/rollback without publication.

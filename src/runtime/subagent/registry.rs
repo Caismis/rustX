@@ -2364,6 +2364,25 @@ impl SubagentRegistry {
         let mut capacity_changes = self.state_version.subscribe();
         let decision = loop {
             capacity_changes.borrow_and_update();
+            // Product ownership admission precedes every registry, durability
+            // and lifecycle commit mutex. A read-only snapshot delays this
+            // transition without making the staged child fail. The existing
+            // arbitration below rechecks cancellation, capacity, drain and
+            // durability after admission, before any ownership publication.
+            let ownership_admission = match self
+                .config
+                .spawn
+                .product_root
+                .ownership_commit_admission()
+                .await
+            {
+                Ok(admission) => admission,
+                Err(error) => {
+                    break Decision::Failed(SubagentStartError::Durability {
+                        detail: error.to_string(),
+                    });
+                }
+            };
             let decision = {
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 let mailbox = self.config.mailbox.clone();
@@ -2445,24 +2464,27 @@ impl SubagentRegistry {
                             return Decision::RolledBack;
                         }
                         let started_at = clock.now();
-                        let committed = match mailbox.commit_subagent_ownership(ownership_event(
-                            &config.conversation_id,
-                            &subagent_id,
-                            &child_agent_id,
-                            &child_conversation_id,
-                            &tool_call_id,
-                            &agent,
-                            &definition_digest,
-                            &profile_digest,
-                            match &terminal {
-                                SubagentTerminalMode::Normal => SubagentOwnershipKind::Normal,
-                                SubagentTerminalMode::WorkflowOutput { .. } => {
-                                    SubagentOwnershipKind::Workflow
-                                }
-                            },
-                            &workspace,
-                            started_at,
-                        )) {
+                        let committed = match mailbox.commit_subagent_ownership(
+                            &ownership_admission,
+                            ownership_event(
+                                &config.conversation_id,
+                                &subagent_id,
+                                &child_agent_id,
+                                &child_conversation_id,
+                                &tool_call_id,
+                                &agent,
+                                &definition_digest,
+                                &profile_digest,
+                                match &terminal {
+                                    SubagentTerminalMode::Normal => SubagentOwnershipKind::Normal,
+                                    SubagentTerminalMode::WorkflowOutput { .. } => {
+                                        SubagentOwnershipKind::Workflow
+                                    }
+                                },
+                                &workspace,
+                                started_at,
+                            ),
+                        ) {
                             Ok(committed) => committed,
                             Err(error) => {
                                 return Decision::Failed(SubagentStartError::Durability {
@@ -2535,6 +2557,10 @@ impl SubagentRegistry {
                     decision
                 }
             };
+            // The durable event and Running record are now one published fact.
+            // Never retain this guard during capacity waits, rollback or driver
+            // handoff. Archive may capture before or after this whole transition.
+            drop(ownership_admission);
             if wait_for_capacity
                 && self
                     .state
@@ -5365,6 +5391,7 @@ impl SteerAcknowledgementHook {
 
 #[cfg(test)]
 mod tests {
+    mod archive_ownership;
     mod capacity_wait;
     use std::sync::Arc;
 

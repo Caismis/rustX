@@ -47,6 +47,27 @@ impl ProductRoot {
             _lock: lock(directory(&self.root)?, FlockArg::LockSharedNonblock)?,
         })
     }
+    /// Admit a runtime ownership commit behind a transient management snapshot.
+    /// The uncontended path stays synchronous (including native capacity ordering).
+    /// Only OS lock contention moves to the blocking pool; callers must acquire
+    /// this before registry/lifecycle/durable commit mutexes, and release it before
+    /// waiting for capacity, physical settlement or driver handoff.
+    pub(crate) async fn ownership_commit_admission(&self) -> io::Result<OwnershipMutation> {
+        match self.ownership_mutation() {
+            Ok(admission) => return Ok(admission),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) => return Err(error),
+        }
+        let root = self.clone();
+        tokio::task::spawn_blocking(move || {
+            Ok(OwnershipMutation {
+                _lock: lock(directory(&root.root)?, FlockArg::LockShared)?,
+            })
+        })
+        .await
+        .map_err(io::Error::other)?
+    }
+
     /// Serialize Conversation identity reservations across every Session and
     /// child allocator in this runtime root. This lock protects allocation,
     /// not semantic execution order or ordinary Conversation activity.

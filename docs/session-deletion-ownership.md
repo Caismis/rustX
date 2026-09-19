@@ -81,7 +81,12 @@ derives its workspace allocation from the composed Conversation access.
   guards. Explicit Workflow disposal retains its guard across physical cleanup
   and durable settlement, rather than just individual event commits. Ordinary
   user/model/assistant/tool execution facts
-  do not take this root lock. Target `ConversationExclusion` guards provide the
+  do not take this root lock. The runtime's durable Subagent ownership commit
+  uses waitable `ownership_commit_admission()` before registry/durability/lifecycle
+  commit mutexes; a transient inspection freeze delays it without rejecting a
+  valid staged child. Blocking OS admission runs only in the blocking pool. Its
+  shared guard covers both the ownership Journal event and registry publication,
+  and releases before capacity waits or driver handoff. Target `ConversationExclusion` guards provide the
   separate exclusive private-resource access authority.
 
 ### Ordering and linearization
