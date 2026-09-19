@@ -603,3 +603,14 @@ uses Human adoption and proves no Goal authority is invented for its recovery.
 Both gate further admission until shutdown so a valid newer Active Goal cannot
 obscure the exact cancellation assertion. These complement, rather than replace,
 the accepted-but-still-pending Goal-round recovery test.
+
+`goal350_disabled_recovery_interrupt_stays_paused_after_reenable` adds a current
+composition change to that same process-death boundary. Admission happens with
+Goal enabled; the killed conversation reopens with Goal disabled. Recovery still
+carries the exact admitted Goal reference, and interrupt must durably pause it.
+The model watch establishes recovered execution and the attempt-exit gate proves
+settlement before repeated admission checks. After shutdown, Goal is enabled
+again on the same durable conversation: repeated actual idle admission produces
+no request or new round, and the Paused snapshot remains exactly unchanged.
+Current composition gates future automation, not interrupt authority over
+already-admitted work. No sleep establishes any of these orderings.

@@ -255,8 +255,9 @@ second arm operation to perform, and the obsolete "recovers Active but
 disarmed" contract from #84 is gone. rustX adds no background daemon scanning
 unopened Sessions, no Scheduler and no timers; a dormant Session is never loaded
 merely because a durable Goal is Active. A Goal-disabled runtime composition
-likewise never executes stored Goal state: existing extension-composition
-semantics remain authoritative.
+likewise admits no new autonomous Goal rounds and exposes no Goal model tools
+or context. Already-admitted work can still recover under the ordinary durable
+answer-obligation contract; that does not enable future Goal automation.
 
 A previously accepted ordinary continuation follows the existing inbound/attempt
 recovery evidence exactly once; its round remains consumed. Disabling and
@@ -309,16 +310,30 @@ AttemptProvenance::Inbound               ordinary adopted inbound (Human and
 AttemptProvenance::GoalContinuation(ref) the adopted batch carries the durable
                                          Goal continuation admitted at the
                                          Goal-round frontier
-AttemptProvenance::RecoveredContinuation recovery over already-canonical history
+AttemptProvenance::RecoveredContinuation ordinary recovered answer obligation
+AttemptProvenance::RecoveredGoalContinuation(ref)
+                                         recovered adopted Goal round carrying
+                                         its exact post-accounting GoalRef
 ```
 
-This is derived from the durable inbound the coordinator actually adopted — the
-only place that knows it. It is runtime-owned admission provenance, never Goal
-lifecycle state: it is not persisted, never appears in `GoalView`, never appears
+This is derived from the durable inbound the coordinator actually adopted, or
+from recovery's exact durable Goal-round/adoption correlation. It is runtime-owned
+admission provenance, never Goal lifecycle state: it is not persisted, never appears in `GoalView`, never appears
 in a Runtime Client snapshot or event, is not user-visible, and disappears with
 the attempt it describes. It exists so the runtime can distinguish an autonomous
 Goal attempt from an ordinary Human attempt, from a Human attempt during which
-`create_goal` happened, and from recovery continuation.
+`create_goal` happened, and from ordinary recovery continuation.
+
+Current Goal composition controls future Goal capability and autonomous
+admission: tools, context and the idle GoalRoundDriver remain composition-gated.
+Exact attempt provenance controls interrupt semantics of already-admitted Goal
+work. For a proven fresh or recovered Goal attempt, cancellation uses the existing
+conversation-owned GoalDomain directly and applies `pause_if_current(expected)`
+even if Goal composition is currently disabled. Matching Active authority must
+become durably Paused before cancellation; stale authority leaves newer Goal
+state unchanged. This neither re-enables the extension nor accepts another round.
+Later re-enabling Goal still observes the durable Paused intent. Provenance is
+runtime execution ownership, never another Goal lifecycle state.
 
 ### Interrupt ordering
 
@@ -614,3 +629,4 @@ compatibility mode is required by these residual fixes.
 | `goal350_process_death_after_adoption_interrupt_pauses_without_refund` | SIGKILL at `after:adopt_pending_batch`, before request start; reopen, model watch, interrupt and post-settlement gate. Paused is durable, the committed round remains consumed, and repeated actual admission calls accept nothing. |
 | `goal350_recovered_stale_goal_ref_cannot_pause_newer_authority` | Same real death cut; after the recovered model parks, edit the Goal before interrupt. Exact snapshot and revision remain unchanged through cancellation and settlement; no stale retry/substitution occurs. |
 | `goal350_recovered_human_interrupt_does_not_pause_unrelated_goal` | Human adoption at the same death cut; create an unrelated Active Goal while the recovered Human attempt parks. Interrupt succeeds and preserves that Goal structurally unchanged. |
+| `goal350_disabled_recovery_interrupt_stays_paused_after_reenable` | Admit with Goal enabled; SIGKILL after adoption, disable Goal before reopen, then use the recovered model watch and settlement gate to prove interrupt commits Paused without refund or another round. Re-enable the same conversation and exercise ordinary admission: no requests or new round, and the exact Paused snapshot remains durable. |

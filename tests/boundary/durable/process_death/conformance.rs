@@ -3282,20 +3282,29 @@ fn approval_settlement_and_the_tool_start_boundary_compose() {
 /// This differs from the existing accepted-but-still-pending recovery case.
 #[test]
 fn goal350_process_death_after_adoption_interrupt_pauses_without_refund() {
-    recovered_adopted_interrupt(child::GOAL_ROUND, child::GOAL_RECOVER_INTERRUPT);
+    recovered_adopted_interrupt(child::GOAL_ROUND, child::GOAL_RECOVER_INTERRUPT, false);
 }
 
 #[test]
 fn goal350_recovered_stale_goal_ref_cannot_pause_newer_authority() {
-    recovered_adopted_interrupt(child::GOAL_ROUND, child::GOAL_RECOVER_STALE_INTERRUPT);
+    recovered_adopted_interrupt(
+        child::GOAL_ROUND,
+        child::GOAL_RECOVER_STALE_INTERRUPT,
+        false,
+    );
 }
 
 #[test]
 fn goal350_recovered_human_interrupt_does_not_pause_unrelated_goal() {
-    recovered_adopted_interrupt(child::TEXT_TURN, child::HUMAN_RECOVER_INTERRUPT);
+    recovered_adopted_interrupt(child::TEXT_TURN, child::HUMAN_RECOVER_INTERRUPT, false);
 }
 
-fn recovered_adopted_interrupt(initial: &str, resumed: &str) {
+#[test]
+fn goal350_disabled_recovery_interrupt_stays_paused_after_reenable() {
+    recovered_adopted_interrupt(child::GOAL_ROUND, child::GOAL_RECOVER_INTERRUPT, true);
+}
+
+fn recovered_adopted_interrupt(initial: &str, resumed: &str, disable_on_reopen: bool) {
     use crate::goal::GoalPhase;
     let lab = Lab::new();
     super::harness::write_runtime_config_with_goal(lab.root());
@@ -3325,6 +3334,11 @@ fn recovered_adopted_interrupt(initial: &str, resumed: &str) {
         );
         goal
     };
+    if disable_on_reopen {
+        // The ordinary configuration composes no Goal extension. Durable
+        // history still proves that this already-adopted turn is Goal work.
+        lab.write_runtime_config("never");
+    }
     let mut process = lab.spawn(resumed, None);
     process.wait_note("recovered-interrupt-proved");
     process.sigkill();
@@ -3369,5 +3383,27 @@ fn recovered_adopted_interrupt(initial: &str, resumed: &str) {
         assert_eq!(rounds, 0);
         assert_eq!(after.phase, GoalPhase::Active);
         assert_eq!(after.reference.revision, 1);
+    }
+    if disable_on_reopen {
+        // The interrupted child already completed ordinary runtime shutdown.
+        // Re-enable on the very same conversation: Paused must remain the
+        // reason no new work is admitted, rather than disabled composition.
+        drop(durable);
+        super::harness::write_runtime_config_with_goal(lab.root());
+        let mut process = lab.spawn(child::GOAL_REOPEN_PAUSED, None);
+        process.wait_note("reenabled-paused-proved");
+        process.sigkill();
+        let durable = lab.durable();
+        assert_eq!(durable.store().load_goal().unwrap(), Some(after));
+        assert!(durable.store().load_pending().unwrap().is_empty());
+        assert_eq!(
+            durable.count_events(|event| matches!(
+                event,
+                RuntimeEvent::Goal {
+                    fact: crate::goal::GoalFact::RoundAdmitted { .. }
+                }
+            )),
+            1
+        );
     }
 }

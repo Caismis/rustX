@@ -54,6 +54,7 @@ use super::harness::{CONVERSATION, MODEL};
 /// One inbound message answered by one plain streaming text turn.
 pub(crate) const TEXT_TURN: &str = "text_turn";
 pub(crate) const GOAL_ROUND: &str = "goal_round";
+pub(crate) const GOAL_REOPEN_PAUSED: &str = "goal_reopen_paused";
 pub(crate) const GOAL_RECOVER_INTERRUPT: &str = "goal_recover_interrupt";
 pub(crate) const GOAL_RECOVER_STALE_INTERRUPT: &str = "goal_recover_stale_interrupt";
 pub(crate) const HUMAN_RECOVER_INTERRUPT: &str = "human_recover_interrupt";
@@ -806,6 +807,29 @@ pub(crate) fn run(scenario: &str) -> ! {
 #[allow(clippy::too_many_lines)] // one linear script per scenario, by design
 async fn scenario_body(root: &Path, scenario: &str) {
     match scenario {
+        GOAL_REOPEN_PAUSED => {
+            let child = Child::require(root, vec![], false, true).await;
+            let runtime = child.runtime();
+            assert_eq!(
+                runtime.recovery().resume(),
+                crate::runtime::recovery::ResumeDisposition::PendingInboundOnly
+            );
+            let before = runtime.goal_view().unwrap().unwrap().current.unwrap();
+            assert_eq!(before.phase, crate::goal::GoalPhase::Paused);
+            assert_eq!(before.autonomous_rounds_consumed, 1);
+            // Synchronously exercise the actual idle owner after explicit
+            // reopen. No duration is used to infer absence of automation.
+            for _ in 0..8 {
+                runtime.admit_now_for_test();
+            }
+            assert!(!runtime.has_current_attempt());
+            assert!(child.model.requests().is_empty());
+            runtime.shutdown().await.unwrap();
+            assert_eq!(runtime.goal_view().unwrap().unwrap().current, Some(before));
+            assert!(child.model.requests().is_empty());
+            note("reenabled-paused-proved");
+            park_owning(child).await;
+        }
         GOAL_ROUND => {
             let child =
                 Child::require(root, vec![vec![FakeStep::ParkUntilCancelled]], false, true).await;

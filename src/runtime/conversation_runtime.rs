@@ -4999,7 +4999,10 @@ impl ConversationRuntime {
         let pause = match &current.provenance {
             AttemptProvenance::GoalContinuation(expected)
             | AttemptProvenance::RecoveredGoalContinuation(expected) => {
-                self.inner.composed_goal(&state).map(|domain| {
+                // Composition gates future automation, not interrupt intent
+                // for already-admitted work. Recovery can retain exact Goal
+                // authority even when the reopened profile disables Goal.
+                self.inner.tool_runtime.goal().map(|domain| {
                     self.inner
                         .mailbox
                         .with_running_commit(|| domain.pause_if_current(expected))
