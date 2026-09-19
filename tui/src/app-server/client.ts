@@ -138,6 +138,10 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/switchNode": "side_effecting",
   "session/transcript": "read",
   "session/trace": "read",
+  // Inspection detail is a pure historical read: it advances no cursor,
+  // consumes no pending work, and settles nothing, so a lost response is
+  // safely retryable.
+  "session/traceDetail": "read",
   "artifact/read": "read",
   "session/upload": "side_effecting",
   "configuration/sourcesRead": "read",

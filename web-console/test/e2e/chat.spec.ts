@@ -34,7 +34,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
       }).toBe(true);
     }
     const traceBeforeBrowser = (await remote.client.call('session/trace', { target: attached.target, limit: 32 }, 'trace')).page;
-    expect(traceBeforeBrowser.entries).toHaveLength(32);
+    expect(traceBeforeBrowser.records).toHaveLength(32);
     await remote.client.call('session/detach', { target: attached.target }, 'detached');
     await remote.shutdown();
     await routeWorkspaceHost(page, fixture);
@@ -58,21 +58,27 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(ledger).toHaveAttribute('aria-rowcount', '32');
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
     await ledger.evaluate(el => { el.scrollTop = 200; el.dispatchEvent(new Event('scroll')); });
-    const traceAnchor = trajectory.locator('[data-trace-id]').filter({ has: page.locator('button') }).nth(8);
+    const traceAnchor = trajectory.locator('[data-trace-id]').nth(8);
     const traceAnchorId = await traceAnchor.getAttribute('data-trace-id');
     const traceAnchorTop = await traceAnchor.evaluate(el => el.getBoundingClientRect().top);
-    await trajectory.getByRole('button', { name: 'Load older Trace', exact: true }).click();
+    await trajectory.getByRole('button', { name: 'Load earlier records', exact: true }).click();
     await expect(ledger).toHaveAttribute('aria-rowcount', '64');
     expect(await trajectory.locator('[data-trace-id]').count()).toBeLessThan(64);
     await expect.poll(async () => Math.abs(await trajectory.locator(`[data-trace-id="${traceAnchorId}"]`).evaluate(el => el.getBoundingClientRect().top) - traceAnchorTop)).toBeLessThan(2);
-    const requestRecord = traceBeforeBrowser.entries.find(entry => entry.request)!;
-    await trajectory.getByLabel('Search loaded Trace').fill(requestRecord.request!.request_id);
-    await trajectory.locator(`[data-trace-id="${requestRecord.id}"] button`).click();
+    const requestRecord = traceBeforeBrowser.records.find(record => record.request)!;
+    await trajectory.getByLabel('Search loaded Trace').fill(requestRecord.request!.model);
+    await trajectory.locator(`[data-trace-id="${requestRecord.id}"]`).click();
     const inspector = trajectory.getByLabel('Trace record inspector');
     await expect(inspector).toContainText(requestRecord.request!.request_id);
     await expect(inspector).toContainText('Logical Step');
+    // Historical request input is now inspectable rather than withheld, and
+    // it is fetched on demand for the selected record only.
     await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
-    await expect(inspector).toContainText('Redacted');
+    await expect(inspector).toContainText('Effective system prompt');
+    await expect(inspector).toContainText('Reconstructed request context');
+    await inspector.getByRole('tab', { name: 'Options', exact: true }).click();
+    await expect(inspector).toContainText(requestRecord.request!.model);
+    // Infrastructure authority still does not cross the boundary.
     expect(await inspector.innerText()).not.toContain(fixture.workspaceA);
     await trajectory.getByLabel('Search loaded Trace').fill('');
     await inspector.getByRole('button', { name: 'Close record' }).click();

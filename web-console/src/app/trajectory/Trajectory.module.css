@@ -1,0 +1,482 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.module.css; see PROVENANCE.md. */
+
+.root {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--dsw-alias-bg-layer-1);
+  container-type: inline-size;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  flex-wrap: wrap;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.toolbar input {
+  flex: 1;
+  min-width: 140px;
+}
+
+.count {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.error {
+  margin: 0;
+  padding: 6px 12px;
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+}
+
+.note {
+  margin: 0;
+  padding: 6px 12px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.split {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------- ledger */
+
+.ledger {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+}
+
+.loadRow {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+/* The dense two-region row: event affordances, then content, then the
+   machine-data columns. Rows are a fixed height so a prepended page keeps
+   the reader's visible anchor. */
+.record {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr) 84px 76px;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 0 10px 0 0;
+  gap: 6px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l1);
+  cursor: default;
+}
+
+.record[data-collapsed-summary] {
+  cursor: pointer;
+}
+
+.record:hover:not([data-selected='true']) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.record[data-selected='true'] {
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #5794c8) 12%, transparent);
+}
+
+.record[data-timeline-focus='outside'] {
+  opacity: 0.4;
+}
+
+/* A section boundary is a restrained hairline, not a card gap. */
+.record[data-section-start='true'] {
+  border-top: 2px solid var(--dsw-alias-border-l1);
+}
+
+.record[data-group-start='true'] .kindTag {
+  font-weight: 700;
+}
+
+.event {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 100%;
+  padding-left: 30px;
+  overflow: visible;
+}
+
+/* The Attempt rail: a restrained vertical hierarchy marker, not a card border. */
+.rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 10px;
+  width: 2px;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #5794c8) 22%, transparent);
+  pointer-events: none;
+}
+
+.record[data-section-end='true'] .rail {
+  bottom: 50%;
+}
+
+.record[data-section-start='true'] .rail {
+  top: 50%;
+}
+
+.selectionRail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: var(--dsw-alias-state-business-primary, #5794c8);
+  pointer-events: none;
+}
+
+.sectionLabel {
+  position: absolute;
+  z-index: 3;
+  top: -1px;
+  left: 0;
+  padding: 1px 4px;
+  border-radius: 0 0 2px;
+  color: var(--dsw-alias-label-tertiary);
+  background: var(--dsw-alias-bg-module-platform, var(--dsw-alias-bg-layer-2));
+  font: 8px/10px var(--ds-font-family-code, Menlo, Consolas, monospace);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.sectionLabel[data-active] {
+  color: var(--dsw-alias-state-business-primary, #5794c8);
+}
+
+/* The request boundary marker: one dot per actual provider request. */
+.requestMarker {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-caption, var(--dsw-alias-label-tertiary));
+}
+
+.requestMarker[data-status='failed'],
+.requestMarker[data-status='timed_out'] {
+  background: var(--dsw-alias-state-error-primary);
+}
+
+.requestMarker[data-status='running'] {
+  background: var(--dsw-alias-state-business-primary, #5794c8);
+}
+
+.foldToggle {
+  flex: none;
+  width: 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+}
+
+.foldToggle:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.kindTag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  box-sizing: border-box;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 4px;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-module-platform, var(--dsw-alias-bg-layer-2));
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.035em;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.kindTag[data-kind='user'] {
+  color: var(--dsw-alias-state-business-primary, #5794c8);
+  background: var(--dsw-alias-state-business-tertiary, color-mix(in srgb, #5794c8 14%, transparent));
+}
+
+.kindTag[data-kind='assistant'],
+.kindTag[data-kind='request'] {
+  color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #5794c8) 70%, var(--dsw-alias-label-secondary));
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #5794c8) 10%, transparent);
+}
+
+.kindTag[data-kind='tool'],
+.kindTag[data-kind='background'] {
+  color: var(--dsw-alias-state-warn-label, #9a6b00);
+  background: var(--dsw-alias-state-warn-tertiary, color-mix(in srgb, #d79b00 16%, transparent));
+}
+
+.kindTag[data-kind='subagent'],
+.kindTag[data-kind='workflow'] {
+  color: color-mix(in srgb, var(--dsw-alias-state-success-primary, #3f9142) 70%, var(--dsw-alias-label-secondary));
+  background: var(--dsw-alias-state-success-tertiary, color-mix(in srgb, #3f9142 14%, transparent));
+}
+
+.content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.record[data-kind='tool'] .preview,
+.record[data-kind='request'] .preview {
+  font-family: var(--ds-font-family-code, Menlo, Consolas, monospace);
+}
+
+.result {
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--ds-font-family-code, Menlo, Consolas, monospace);
+}
+
+.result[data-error] {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.collapsed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state,
+.duration {
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--ds-font-family-code, Menlo, Consolas, monospace);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.duration {
+  text-align: right;
+}
+
+.record[data-state='failed'] .state,
+.record[data-state='timed_out'] .state,
+.record[data-state='denied'] .state {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* ------------------------------------------------------------- inspector */
+
+.inspector {
+  width: 420px;
+  max-width: 50%;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--dsw-alias-border-l2);
+  overflow: hidden;
+}
+
+.inspector > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.inspector > header strong {
+  overflow-wrap: anywhere;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 12px 8px;
+}
+
+.tabs [aria-selected='true'] {
+  font-weight: 700;
+}
+
+.inspectorBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 12px 16px;
+}
+
+.facts {
+  display: block;
+  margin: 0;
+}
+
+.facts dt {
+  margin-top: 10px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.facts dd {
+  margin: 2px 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.option {
+  display: contents;
+}
+
+/* Machine data — identities, token counts, timings — uses code typography. */
+.machine {
+  font-family: var(--ds-font-family-code, Menlo, Consolas, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.unavailable {
+  color: var(--dsw-alias-label-tertiary);
+  font-style: italic;
+}
+
+.truncated {
+  margin: 6px 0 0;
+  color: var(--dsw-alias-state-warn-label, var(--dsw-alias-label-secondary));
+  font-size: 11px;
+}
+
+.sectionLabelHeading,
+.sectionLabel:where(h3) {
+  font-size: 12px;
+}
+
+.inspectorBody h3.sectionLabel,
+.inspectorBody .sectionLabel:is(h3) {
+  margin: 14px 0 4px;
+}
+
+.blockLabel {
+  margin: 12px 0 4px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.blockGroup {
+  margin: 8px 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--dsw-alias-border-l2);
+}
+
+.requestMessage {
+  margin: 10px 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--dsw-alias-border-l2);
+}
+
+.payload {
+  margin: 4px 0;
+  max-height: 340px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.markdown {
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.jsonTree {
+  margin: 4px 0;
+  max-height: 340px;
+  overflow: auto;
+}
+
+.reasoning summary {
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+/* -------------------------------------------------------------- narrow */
+
+@container (max-width: 760px) {
+  .record {
+    grid-template-columns: 110px minmax(0, 1fr) 70px;
+  }
+
+  .record > :last-child {
+    display: none;
+  }
+
+  .event {
+    padding-left: 24px;
+  }
+}
+
+@media (max-width: 760px) {
+  .split {
+    flex-direction: column;
+  }
+
+  .inspector {
+    width: auto;
+    max-width: none;
+    max-height: 48%;
+    border-left: 0;
+    border-top: 1px solid var(--dsw-alias-border-l2);
+  }
+}

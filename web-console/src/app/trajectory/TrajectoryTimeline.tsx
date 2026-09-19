@@ -1,0 +1,289 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTimeline.tsx; see PROVENANCE.md. */
+/**
+ * The fixed timing overview above the ledger.
+ *
+ * Adapted from the Harness overview: lanes projected left to right, drag to
+ * focus an interval, wheel to zoom the time domain, a right-button click to
+ * clear the interval and a right-button drag to pan a zoomed viewport. An
+ * Assistant request's span shows the recorded split between waiting for the
+ * first output and decoding, so the division is evidence rather than decoration.
+ *
+ * A record with one timestamp renders as a start marker, never as a span.
+ */
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
+import type { TraceRecord } from '../../../../protocol/app-server/v9';
+import {
+  TRAJECTORY_LANES,
+  formatDuration,
+  formatInstant,
+  trajectoryTimeline,
+  type TrajectoryTimeRange,
+  type TrajectoryTimelineMode,
+} from './timeline';
+import css from './TrajectoryTimeline.module.css';
+
+/** Pointer travel below which a drag is treated as a click. */
+const MINIMUM_DRAG_PX = 3;
+/** Smallest zoomed domain, in projected units, so a viewport stays usable. */
+const MINIMUM_ZOOM_SPAN = 4;
+
+interface Drag {
+  pointerId: number;
+  anchor: number;
+  current: number;
+  moved: boolean;
+}
+
+interface Pan {
+  pointerId: number;
+  clientX: number;
+  start: number;
+  moved: boolean;
+}
+
+/** Props for the Trajectory timing overview. */
+export interface TrajectoryTimelineProps {
+  records: readonly TraceRecord[];
+  mode: TrajectoryTimelineMode;
+  range: TrajectoryTimeRange | null;
+  selectedId: string | null;
+  /** Record identities matching the active search, or null without a query. */
+  searchMatches: ReadonlySet<string> | null;
+  onRangeChange: (range: TrajectoryTimeRange | null) => void;
+  onSelect: (id: string) => void;
+  /** Section boundary label for a record that opens one, else undefined. */
+  boundaryLabel: (record: TraceRecord, index: number) => string | undefined;
+}
+
+/**
+ * Render the timing overview.
+ * @param props - loaded records, projection mode, and selection callbacks.
+ * @returns the overview element, or an explicit empty state.
+ */
+export function TrajectoryTimeline({
+  records,
+  mode,
+  range,
+  selectedId,
+  searchMatches,
+  onRangeChange,
+  onSelect,
+  boundaryLabel,
+}: TrajectoryTimelineProps) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<Drag | null>(null);
+  const panRef = useRef<Pan | null>(null);
+  const [draft, setDraft] = useState<TrajectoryTimeRange | null>(null);
+  const [viewport, setViewport] = useState<TrajectoryTimeRange | null>(null);
+  const [hover, setHover] = useState<string | null>(null);
+  const model = useMemo(
+    () => trajectoryTimeline(records, mode, boundaryLabel),
+    [records, mode, boundaryLabel],
+  );
+
+  // A rebuilt domain invalidates a viewport expressed in the old one.
+  const domainKey = model === null ? '' : `${model.start}:${model.end}`;
+  useEffect(() => { setViewport(null); }, [domainKey, mode]);
+
+  const domain = viewport ?? (model === null ? null : { start: model.start, end: model.end });
+  const span = domain === null ? 0 : Math.max(1e-6, domain.end - domain.start);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (root === null || model === null) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = root.getBoundingClientRect();
+      const current = viewport ?? { start: model.start, end: model.end };
+      const width = Math.max(1e-6, current.end - current.start);
+      const at = current.start + ((event.clientX - rect.left) / Math.max(1, rect.width)) * width;
+      const factor = event.deltaY > 0 ? 1.25 : 0.8;
+      const next = Math.min(model.end - model.start, Math.max(MINIMUM_ZOOM_SPAN, width * factor));
+      if (next >= model.end - model.start) { setViewport(null); return; }
+      const ratio = (at - current.start) / width;
+      const start = Math.max(model.start, Math.min(model.end - next, at - ratio * next));
+      setViewport({ start, end: start + next });
+    };
+    root.addEventListener('wheel', onWheel, { passive: false });
+    return () => { root.removeEventListener('wheel', onWheel); };
+  }, [model, viewport]);
+
+  if (model === null || domain === null) {
+    return (
+      <section className={css.root} aria-label="Timing overview">
+        <p className={css.empty}>No recorded timing in the loaded window</p>
+      </section>
+    );
+  }
+
+  const pointAt = (clientX: number) => {
+    const rect = rootRef.current?.getBoundingClientRect();
+    if (rect === undefined) return domain.start;
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)));
+    return domain.start + ratio * span;
+  };
+  const percent = (value: number) => ((value - domain.start) / span) * 100;
+
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button === 2) {
+      panRef.current = { pointerId: event.pointerId, clientX: event.clientX, start: domain.start, moved: false };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      return;
+    }
+    if (event.button !== 0) return;
+    const at = pointAt(event.clientX);
+    dragRef.current = { pointerId: event.pointerId, anchor: at, current: at, moved: false };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const pan = panRef.current;
+    if (pan !== null && pan.pointerId === event.pointerId) {
+      if (Math.abs(event.clientX - pan.clientX) >= MINIMUM_DRAG_PX) pan.moved = true;
+      if (viewport === null) return;
+      const rect = rootRef.current?.getBoundingClientRect();
+      const delta = ((event.clientX - pan.clientX) / Math.max(1, rect?.width ?? 1)) * span;
+      const start = Math.max(model.start, Math.min(model.end - span, pan.start - delta));
+      setViewport({ start, end: start + span });
+      return;
+    }
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    drag.current = pointAt(event.clientX);
+    if (Math.abs(drag.current - drag.anchor) > 0) drag.moved = true;
+    setDraft({ start: Math.min(drag.anchor, drag.current), end: Math.max(drag.anchor, drag.current) });
+  };
+
+  const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    const pan = panRef.current;
+    if (pan !== null && pan.pointerId === event.pointerId) {
+      // A right-button click with no travel clears the focus interval; a
+      // right-button drag pans instead and must not also clear it.
+      if (!pan.moved) onRangeChange(null);
+      panRef.current = null;
+      return;
+    }
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    setDraft(null);
+    if (!drag.moved) {
+      const at = drag.anchor;
+      const hit = model.spans.find(candidate => candidate.start <= at && candidate.end >= at);
+      if (hit !== undefined) onSelect(hit.id);
+      return;
+    }
+    onRangeChange({ start: Math.min(drag.anchor, drag.current), end: Math.max(drag.anchor, drag.current) });
+  };
+
+  const focus = draft ?? range;
+
+  return (
+    <section className={css.root} aria-label="Timing overview">
+      <div className={css.legend}>
+        <span>Overview</span>
+        <small>
+          Recorded timing · loaded window · drag to focus, wheel to zoom, right-click to clear
+        </small>
+      </div>
+      <div
+        ref={rootRef}
+        className={css.canvas}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={() => { dragRef.current = null; panRef.current = null; setDraft(null); }}
+        onContextMenu={event => event.preventDefault()}
+      >
+        {focus !== null && (
+          <div
+            className={css.focus}
+            aria-hidden="true"
+            style={
+              {
+                left: `${percent(focus.start)}%`,
+                width: `${Math.max(0.2, percent(focus.end) - percent(focus.start))}%`,
+              } as CSSProperties
+            }
+          />
+        )}
+        {model.boundaries.map(boundary => (
+          <div
+            key={`${boundary.label}:${boundary.at}`}
+            className={css.boundary}
+            aria-hidden="true"
+            style={{ left: `${percent(boundary.at)}%` } as CSSProperties}
+          >
+            <span>{boundary.label}</span>
+          </div>
+        ))}
+        {TRAJECTORY_LANES.map((lane, index) => (
+          <div className={css.lane} key={lane}>
+            <span className={css.laneLabel}>{lane}</span>
+            <div className={css.laneTrack}>
+              {model.spans
+                .filter(candidate => candidate.lane === index)
+                .map(candidate => {
+                  const left = percent(candidate.start);
+                  const width = percent(candidate.end) - left;
+                  const detail = [
+                    candidate.label,
+                    `Started ${formatInstant(
+                      candidate.startedAt === undefined ? undefined : new Date(candidate.startedAt).toISOString(),
+                    )}`,
+                    candidate.durationMs === undefined
+                      ? 'Duration unavailable'
+                      : `Duration ${formatDuration(candidate.durationMs)}`,
+                    candidate.ttftMs === undefined || candidate.generationMs === undefined
+                      ? undefined
+                      : `TTFT ${formatDuration(candidate.ttftMs)} · decode ${formatDuration(candidate.generationMs)}`,
+                  ]
+                    .filter(value => value !== undefined)
+                    .join('\n');
+                  return (
+                    <button
+                      key={candidate.id}
+                      type="button"
+                      className={css.span}
+                      data-kind={candidate.kind}
+                      data-error={candidate.error || undefined}
+                      data-selected={candidate.id === selectedId || undefined}
+                      data-marker={candidate.durationMs === undefined || undefined}
+                      data-dimmed={
+                        searchMatches !== null && !searchMatches.has(candidate.id) ? '' : undefined
+                      }
+                      aria-label={`Inspect ${candidate.label}`}
+                      title={detail}
+                      onPointerEnter={() => setHover(candidate.id)}
+                      onPointerLeave={() => setHover(current => (current === candidate.id ? null : current))}
+                      onClick={event => { event.stopPropagation(); onSelect(candidate.id); }}
+                      style={
+                        {
+                          left: `${left}%`,
+                          width: candidate.durationMs === undefined ? undefined : `${Math.max(0.3, width)}%`,
+                          '--trajectory-ttft': candidate.ttftFraction === undefined
+                            ? undefined
+                            : `${candidate.ttftFraction * 100}%`,
+                        } as CSSProperties
+                      }
+                    />
+                  );
+                })}
+            </div>
+          </div>
+        ))}
+      </div>
+      {/* A pointer hint, not an announcement: it changes on every hover, so
+          giving it a live region would make the ledger unusable with a
+          screen reader. Exact timing lives in the span's own accessible
+          label and in the inspector's Timing section. */}
+      <p className={css.hoverDetail} aria-hidden="true">
+        {hover === null
+          ? viewport === null
+            ? ''
+            : 'Zoomed · wheel out or right-drag to pan'
+          : model.spans.find(candidate => candidate.id === hover)?.label ?? ''}
+      </p>
+    </section>
+  );
+}

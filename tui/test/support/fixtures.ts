@@ -270,7 +270,7 @@ export function snapshot(
       })),
     };
   return {
-    trace_updates: [], trace: { entries: [] },
+    trace_updates: [], trace: { records: [] },
     goal: null,
     // Plugins are absent unless explicitly authored.
     effective_plugins: { goal: null, agent_status: null, todo: null },

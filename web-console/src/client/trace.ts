@@ -1,58 +1,179 @@
-import type { TraceEntry, TracePage, TraceLifecycle } from '../../../protocol/app-server/v9';
+import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle } from '../../../protocol/app-server/v9';
 
+/** Most summary records the browser retains for one Trace interval. */
 export const TRACE_LIMIT = 512;
+/** Estimated encoded UTF-16 ceiling of the retained summary window. */
 export const TRACE_MAX_BYTES = 4 * 1024 * 1024;
+/** Records requested per older page. */
 export const TRACE_PAGE_SIZE = 32;
-/** Independent replaceable read domain. No events or execution decisions. */
-export interface TraceCache { page: TracePage; epoch: number; selection?: TraceEntry; loading?: boolean; error?: string }
-export function replaceTrace(page: TracePage, previous?: TraceCache): TraceCache {
-  return { page, epoch: (previous?.epoch ?? 0) + 1 };
+/** Most record details retained at once; selection is one, neighbours warm. */
+export const TRACE_DETAIL_LIMIT = 8;
+
+/**
+ * One fetched detail, fenced by the identity and epoch it was read for.
+ *
+ * Fencing is the whole point of the wrapper: a detail read is asynchronous,
+ * so a reply can arrive after the reader selected another record, after the
+ * window rebased onto a new interval, or after the browser reattached to a
+ * different Session. Recording what the reply was asked for lets every one of
+ * those cases be rejected instead of attaching the wrong detail to a record.
+ */
+export interface TraceDetailEntry {
+  readonly epoch: number;
+  readonly detail?: TraceDetail;
+  readonly loading?: boolean;
+  readonly error?: string;
 }
-function merge(older: TraceEntry[], newer: TraceEntry[]) {
-  const oldPositions = new Map(older.map((entry, index) => [entry.id, index]));
-  const merged: TraceEntry[] = [];
-  let pending: TraceEntry[] = [];
+
+/**
+ * The browser's replaceable Trace read domain.
+ *
+ * It holds a finite window of server-ordered summary records describing one
+ * contiguous server-proven interval, the details fetched for inspected
+ * records, and the current selection. It folds no events, derives no
+ * execution semantics, and is discarded wholesale whenever the server says
+ * the interval it described no longer applies.
+ */
+export interface TraceCache {
+  page: TracePage;
+  epoch: number;
+  /** Retained separately so a rebase cannot close the open inspector. */
+  selection?: TraceRecord;
+  details: Readonly<Record<string, TraceDetailEntry>>;
+  loading?: boolean;
+  error?: string;
+}
+
+export function replaceTrace(page: TracePage, previous?: TraceCache): TraceCache {
+  return { page, epoch: (previous?.epoch ?? 0) + 1, details: {} };
+}
+
+function merge(older: TraceRecord[], newer: TraceRecord[]) {
+  const oldPositions = new Map(older.map((record, index) => [record.id, index]));
+  const merged: TraceRecord[] = [];
+  let pending: TraceRecord[] = [];
   let offset = 0;
   // Shared stable identities anchor the two server-ordered inputs. A fresh
-  // page can reveal a prefix before the already-loaded tail (e.g. byte limits
-  // changed); appending every unfamiliar row would put that prefix out of order.
-  // No opaque cursor, Turn ID or Journal sequence is interpreted here.
-  for (const entry of newer) {
-    const anchor = oldPositions.get(entry.id);
-    if (anchor === undefined) { pending.push(entry); continue; }
-    merged.push(...older.slice(offset, anchor), ...pending, entry);
+  // page can reveal a prefix before the already-loaded tail (byte limits can
+  // shrink a page), so appending every unfamiliar row would put that prefix
+  // out of order. No opaque cursor, Turn ID or Journal sequence is read here.
+  for (const record of newer) {
+    const anchor = oldPositions.get(record.id);
+    if (anchor === undefined) { pending.push(record); continue; }
+    merged.push(...older.slice(offset, anchor), ...pending, record);
     pending = [];
     offset = anchor + 1;
   }
   return [...merged, ...older.slice(offset), ...pending];
 }
-function bounded(entries: TraceEntry[]) { return entries.length <= TRACE_LIMIT && JSON.stringify(entries).length * 2 <= TRACE_MAX_BYTES; }
+
+function bounded(records: TraceRecord[]) {
+  return records.length <= TRACE_LIMIT && JSON.stringify(records).length * 2 <= TRACE_MAX_BYTES;
+}
+
+/** Loaded identities the server should refresh at the next snapshot cut. */
 export function traceInterests(cache?: TraceCache) {
-  const entries = cache ? [...(cache.selection ? [cache.selection] : []), ...cache.page.entries] : [];
-  return [...new Map(entries.map(entry => [entry.id, entry.position])).values()].slice(0, TRACE_LIMIT);
+  const records = cache ? [...(cache.selection ? [cache.selection] : []), ...cache.page.records] : [];
+  return [...new Map(records.map(record => [record.id, record.position])).values()].slice(0, TRACE_LIMIT);
 }
+
+/**
+ * Retains at most {@link TRACE_DETAIL_LIMIT} details, keeping the selected
+ * one. Detail is heavy, so the browser caches a working set rather than the
+ * whole window; the selected record is never the entry that gets evicted.
+ */
+function boundDetails(
+  details: Readonly<Record<string, TraceDetailEntry>>,
+  ...keep: (string | undefined)[]
+): Readonly<Record<string, TraceDetailEntry>> {
+  const ids = Object.keys(details);
+  if (ids.length <= TRACE_DETAIL_LIMIT) return details;
+  const protectedIds = keep.filter((id): id is string => id !== undefined && details[id] !== undefined);
+  const retained = [
+    ...new Set([...protectedIds, ...ids.filter(id => !protectedIds.includes(id))]),
+  ].slice(0, TRACE_DETAIL_LIMIT);
+  return Object.fromEntries(retained.map(id => [id, details[id]!]));
+}
+
 export function selectTrace(cache: TraceCache, id?: string): TraceCache {
-  return { ...cache, selection: cache.page.entries.find(entry => entry.id === id) ?? (cache.selection?.id === id ? cache.selection : undefined) };
+  const selection = cache.page.records.find(record => record.id === id)
+    ?? (cache.selection?.id === id ? cache.selection : undefined);
+  return { ...cache, selection, details: boundDetails(cache.details, id) };
 }
+
+/** Records a detail request so a late or superseded reply can be rejected. */
+export function beginTraceDetail(cache: TraceCache, id: string): TraceCache {
+  return {
+    ...cache,
+    details: boundDetails(
+      { ...cache.details, [id]: { epoch: cache.epoch, loading: true } },
+      cache.selection?.id,
+      id,
+    ),
+  };
+}
+
+/**
+ * Applies a detail reply only when it still belongs to this cache epoch.
+ *
+ * A reply whose epoch no longer matches describes a Trace interval the
+ * browser has already replaced, so it is dropped rather than attached to a
+ * record that happens to share an identity.
+ */
+export function completeTraceDetail(
+  cache: TraceCache,
+  id: string,
+  epoch: number,
+  detail?: TraceDetail,
+  error?: string,
+): TraceCache {
+  if (cache.epoch !== epoch) return cache;
+  return {
+    ...cache,
+    details: boundDetails(
+      { ...cache.details, [id]: { epoch, ...(detail ? { detail } : {}), ...(error ? { error } : {}) } },
+      cache.selection?.id,
+      id,
+    ),
+  };
+}
+
 export function refreshTrace(previous: TraceCache | undefined, page: TracePage, updates: TraceLifecycle[] = []): TraceCache {
   if (!previous) return replaceTrace(page);
   const repairs = new Map(updates.map(update => [update.id, update]));
-  const repair = (entry: TraceEntry) => {
-    const update = repairs.get(entry.id);
-    return update ? { ...entry, ...update, request: entry.request && update.request ? { ...entry.request, ...update.request } : entry.request } : entry;
+  const repair = (record: TraceRecord): TraceRecord => {
+    const update = repairs.get(record.id);
+    if (!update) return record;
+    return {
+      ...record,
+      state: update.state,
+      timing: update.timing,
+      message_id: update.message_id,
+      attachments: update.attachments,
+      truncated: update.truncated,
+      request: record.request && update.request ? { ...record.request, ...update.request } : record.request,
+      tool: record.tool && update.tool ? { ...record.tool, ...update.tool } : record.tool,
+    };
   };
-  const selection = previous.selection ? repair(page.entries.find(entry => entry.id === previous.selection!.id) ?? previous.selection) : undefined;
-  if (previous.page.entries.length === 0) return { ...previous, page, selection };
-  const overlap = new Set(previous.page.entries.map(entry => entry.id));
-  // A flat ledger describes one server-proven interval. No shared anchor
-  // means unknown intervening history, never permission to concatenate.
-  if (!page.entries.some(entry => overlap.has(entry.id))) return { ...replaceTrace(page, previous), selection };
-  const entries = merge(previous.page.entries.map(repair), page.entries);
-  if (!bounded(entries)) return { ...replaceTrace(page, previous), selection, error: 'Trace window reached its bound; showing latest.' };
-  return { ...previous, selection, page: { entries, next_cursor: previous.page.next_cursor } };
+  const selection = previous.selection
+    ? repair(page.records.find(record => record.id === previous.selection!.id) ?? previous.selection)
+    : undefined;
+  if (previous.page.records.length === 0) return { ...previous, page, selection };
+  const overlap = new Set(previous.page.records.map(record => record.id));
+  // A flat ledger describes one server-proven interval. No shared anchor means
+  // unknown intervening history, never permission to concatenate two ranges.
+  if (!page.records.some(record => overlap.has(record.id))) {
+    return { ...replaceTrace(page, previous), selection };
+  }
+  const records = merge(previous.page.records.map(repair), page.records);
+  if (!bounded(records)) {
+    return { ...replaceTrace(page, previous), selection, error: 'Trace window reached its bound; showing latest.' };
+  }
+  return { ...previous, selection, page: { records, next_cursor: previous.page.next_cursor } };
 }
+
 export function prependTrace(previous: TraceCache, page: TracePage): TraceCache {
-  const entries = merge(page.entries, previous.page.entries);
-  if (!bounded(entries)) throw new Error('Trace window is full. Return to latest first.');
-  return { ...previous, loading: false, error: undefined, page: { entries, next_cursor: page.next_cursor } };
+  const records = merge(page.records, previous.page.records);
+  if (!bounded(records)) throw new Error('Trace window is full. Return to latest first.');
+  return { ...previous, loading: false, error: undefined, page: { records, next_cursor: page.next_cursor } };
 }
