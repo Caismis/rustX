@@ -507,12 +507,10 @@ home in the inspector's native disclosure, under `Retry / recovery ordinal`.
 Deciding retry against recovery would need an explicit native request cause,
 which the pinned contract does not carry.
 
-The timing overview also became the containing block for its own earlier-history
-marker. Upstream renders that marker inside the positioned canvas, which does not
-exist when no loaded record carries a usable start and the duration projection has
-nothing to place. The marker is absolutely positioned, so in that branch it
-resolved against whatever outer ancestor happened to be positioned. `.root` is now
-`position: relative`, which leaves the normal geometry untouched — `.canvas` is
-still the nearer positioned ancestor for every span, lane and boundary — and gives
-the empty state the same single paging props, the same cursor and the same load
-call as the normal one.
+Earlier-history presentation stays on the model-backed timeline path. Native
+`TraceTiming.started_at` is mandatory and `TraceProjection::page` only sets
+`next_cursor` when it retained an anchor, so a loaded window that projects no
+span is also a window with no earlier cursor. The marker therefore lives where
+upstream puts it, inside the positioned `.canvas`, and the empty overview is a
+plain message. Malformed or incomplete DTO states are not modelled as product
+modes.

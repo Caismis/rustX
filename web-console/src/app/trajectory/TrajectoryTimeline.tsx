@@ -177,17 +177,15 @@ export function TrajectoryTimeline({
     return () => { root.removeEventListener('wheel', onWheel); };
   }, [model, viewport]);
 
+  // Native `TraceTiming.started_at` is mandatory, so every projected record
+  // places a span and this branch means the loaded window holds no record at
+  // all. A page with no records carries no cursor either, so there is no
+  // earlier history to offer here: that affordance lives on the model-backed
+  // path below, inside the positioned canvas.
   if (model === null || domain === null) {
     return (
       <section className={css.root} aria-label="Timing overview">
         <p className={css.empty}>No recorded timing in the loaded window</p>
-        {hasEarlierRecords && (
-          <EarlierHistoryBoundary
-            loading={loadingEarlier}
-            enabled={canLoadEarlier}
-            onLoad={onLoadEarlier}
-          />
-        )}
       </section>
     );
   }

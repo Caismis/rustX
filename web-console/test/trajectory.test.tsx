@@ -573,32 +573,16 @@ it('the overview offers earlier history only while an older page may be loaded',
   ).toBeNull();
 });
 
-// Records can load with no usable start, and the duration projection omits
-// each of them rather than invent a point — leaving no model to draw. The earlier-history affordance is the
-// same one — same props, same single paging authority — and it has to stay
-// inside the overview it belongs to. The geometry of that is a browser
-// contract (see test/e2e/trajectory.spec.ts); here we pin the ownership.
-it('the overview keeps its earlier-history boundary when no record has recorded timing', () => {
+// Native start timestamps are mandatory and a page only carries a cursor when
+// it retained an anchor, so the only empty overview is an empty loaded window —
+// which by the same contract has no earlier history to offer.
+it('an empty loaded window shows a plain overview with no earlier history', () => {
   const older = vi.fn();
-  const untimed = [
-    traceRecord(0, { timing: { started_at: '' } }),
-    traceRecord(1, { timing: { started_at: '' } }),
-  ];
-  renderTrajectory(cacheOf(untimed, 'older'), noop, older);
-  fireEvent.click(screen.getByRole('button', { name: 'Duration' }));
+  renderTrajectory(cacheOf([], null), noop, older);
   const overview = screen.getByLabelText('Timing overview');
   expect(within(overview).getByText('No recorded timing in the loaded window')).toBeDefined();
-  const boundary = within(overview).getByLabelText('Load earlier records into the overview');
-  // It is a child of the overview, not a sibling that floats over the ledger.
-  expect(overview.contains(boundary)).toBe(true);
-  boundary.focus();
-  expect(document.activeElement).toBe(boundary);
-  fireEvent.click(boundary);
-  expect(older).toHaveBeenCalledTimes(1);
-  // The ledger still lists every loaded record: the empty state is the
-  // overview's alone.
-  expect(within(screen.getByRole('table', { name: 'Trace ledger' })).getAllByRole('row').length)
-    .toBeGreaterThanOrEqual(untimed.length);
+  expect(within(overview).queryByLabelText(/earlier records/i)).toBeNull();
+  expect(older).not.toHaveBeenCalled();
 });
 
 it('a pending or limit-reached load cannot be requested again from the overview', () => {

@@ -589,7 +589,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "bfa543ec361c400d7f59707e50c3032a10a3321f8d0341ff18284d3343be94c5"
+      "local_sha256": "f34a35e460bb258d0efd6bd4dfca190feb475581e3b44e5e970e3e7e9d71f03e"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx",
@@ -614,7 +614,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "59806089d9d29725e365ab39a440a663c7d497988e90fb98684e87d5673801cd"
+      "local_sha256": "17dc1de0c2c8e9c14f2b8bed9aca65bb526ab9501afcf260dda5c1f697f6ce98"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -2370,7 +2370,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "e31e7d93e6daf1175e284bc92c364a5d1e971c3b87c9bfdaab5827a415b9f647"
+      "local_sha256": "e474412fd450cad8e809683b1c20fb77ce35522b48882ae10a055349984a0928"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",

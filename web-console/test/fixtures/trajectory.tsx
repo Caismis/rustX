@@ -30,25 +30,14 @@ const records = [
   traceRecord(13, { kind: 'workflow', request: null, location: {}, preview: text('Release checklist run') }),
   traceRecord(14, { kind: 'interaction', request: null, location: {}, preview: text('Approval requested for write access') }),
 ];
-const params = new URLSearchParams(location.search);
-const long = params.has('long');
-// A loaded window in which no record carries a usable start. The duration
-// projection omits such a record rather than invent a point for it, so with
-// none left the overview falls to its empty state — while an older page is
-// still on offer. That is exactly the branch where the earlier-history
-// boundary must position itself against the overview rather than escape to
-// an outer ancestor.
-const untimed = params.has('untimed');
-const untimedRecords = (from: number, count: number, label: string) =>
-  Array.from({ length: count }, (_, n) =>
-    traceRecord(from + n, { timing: { started_at: '' }, preview: text(`${label} ${n}`) }));
+const long = new URLSearchParams(location.search).has('long');
 function Fixture() {
-  const [cache, setCache] = useState(() => replaceTrace({ records: untimed ? untimedRecords(200, 6, 'untimed record') : long ? Array.from({ length: 160 }, (_, n) => traceRecord(n + 100)) : records, next_cursor: 'older' }));
+  const [cache, setCache] = useState(() => replaceTrace({ records: long ? Array.from({ length: 160 }, (_, n) => traceRecord(n + 100)) : records, next_cursor: 'older' }));
   return <main style={{ height: '100dvh', display: 'flex', flexDirection: 'column' }}>
     <header style={{ padding: '10px 16px', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--dsw-alias-border-l2)' }}><strong>rustX / Workspace review</strong><button onClick={() => setCache(current => refreshTrace(current, { records: [...current.page.records, traceRecord(Number(current.page.records.at(-1)!.id.split(':')[1]) + 1)], next_cursor: current.page.next_cursor }))}>Append record</button></header>
     <Trajectory cache={cache} onSelect={id => setCache(current => selectTrace(current, id))}
       latest={() => setCache(replaceTrace({ records, next_cursor: null }))}
-      loadEarlier={() => setCache(current => prependTrace(current, { records: untimed ? untimedRecords(180, 4, 'earlier untimed') : Array.from({ length: 32 }, (_, n) => traceRecord(n + 50)), next_cursor: null }))}
+      loadEarlier={() => setCache(current => prependTrace(current, { records: Array.from({ length: 32 }, (_, n) => traceRecord(n + 50)), next_cursor: null }))}
       onLoadDetail={id => setCache(current => {
         const n = Number(id.split(':')[1]);
         const record = current.page.records.find(record => record.id === id)!;
