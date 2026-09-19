@@ -1,8 +1,9 @@
 # App Server protocol v12
 
 App Server v12 identifies one complete mandatory vocabulary, including exact
-`session/summary` and bounded historical Trace detail. v10 and all earlier initialization and WebSocket admission
-versions are rejected; there is no downgrade or compatibility path.
+`session/summary`, bounded historical Trace detail, and read-only Subagent
+transcripts. v11 and all earlier initialization and WebSocket admission versions
+are rejected; there is no downgrade or compatibility path.
 
 The App Server protocol is rustX's public client boundary for the TUI,
 Developer Web Console, future Web UI, and SDKs. Rust DTOs in
@@ -251,6 +252,7 @@ explicitly rejected as an invalid request before any action occurs.
 | `configuration/effective`, `configuration/reload` | Published generation/provenance and the one explicit full-generation reload |
 | `context/compact`, `goal/control` | Existing maintenance and Goal owners |
 | `background/status`, `background/cancel` | Existing background execution registry |
+| `subagent/transcript` | Parent `AttachmentTarget` → current parent Runtime Client authority → exact parent `SubagentRegistry` ownership resolution of caller-supplied `SubagentId` (never arbitrary child `ConversationId`) → exact owned child Conversation, which remains history authority → bounded read-only durable transcript projection; grants no execution, control, or HITL authority |
 | `subagent/status`, `subagent/cancel`, `subagent/disposeWorkspace` | Existing child/resource owner; no caller-supplied filesystem cleanup paths |
 
 `turn/start` and `turn/steer` both submit native inbound content. The runtime
@@ -883,11 +885,11 @@ independent Root metadata scalars through the same revision/CAS, validation,
 serialization and Save-versus-Reload boundary as `instructions`. `null` removes
 the authored unit in that scope. Clients never write whole config documents.
 
-## Breaking v12 Session lifecycle transition
+## Current Session lifecycle contract
 
 Initialization requires exactly v12 and WebSocket requires `rustx.app-server.v12`.
-The previous version is rejected without fallback. Rust DTOs generate `v12.ts`,
-`v12.schema.json`, and the serialized fixtures; only the current version is kept.
+v11 and all earlier versions are rejected without fallback. Rust DTOs generate
+`v12.ts`, `v12.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -916,18 +918,20 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
-explicit recovery action. App Server v12 and native Runtime Client v42 are unchanged.
+explicit recovery action. These recovery semantics remain in App Server v12;
+native Runtime Client remains v42.
 
 ## Rich historical Trace inspection (#364)
 
-Protocol v12 replaces TraceEntry with bounded TraceRecord summaries and adds
+The current protocol retains bounded TraceRecord summaries in place of TraceEntry
+and provides
 `session/traceDetail { target, record_id } -> { type: "trace_detail", detail }`.
 Detail is nullable when no allowlisted record exists at the captured read cut.
 List payloads never carry complete request contexts or Tool results. Inspection
 reads do not mutate runtime state or advance live cursors. See [Trace](trace.md)
 for native ownership, limits, allowlists and the historical read boundary.
 
-## Session archive preparation (v12)
+## Session archive preparation
 
 `session/exportPrepare { session_id }` returns a `session_archive` result with a
 short-lived, single-use native download descriptor. All clients consume the same
@@ -936,7 +940,7 @@ HTTP(S) downloads share the App Server listener; owned stdio children advertise 
 loopback stream port. See [Session archive](session-archive.md) for cut semantics,
 authentication, resource bounds and cancellation. Durable SQLite remains v41.
 
-Archive v12 preparation failures preserve a closed safe reason through
+Archive preparation failures preserve a closed safe reason through
 `archive_preparation_failed`, plus the fixed native diagnostic in `message`.
 Unknown Session/capacity use their existing failures. No raw storage/provider
 error is projected. See [Session archive safety and errors](session-archive.md).
@@ -964,8 +968,10 @@ and durable history remain retained. Workspace retention/disposal is independent
 of conversation history. Lifecycle status never supplies transcript settlement.
 
 Pages use the same native limit validation (1–256) and exclusive `before` cursor
-as root reads; clients default to 32 entries. A newest read omits `before`, and
-`next_cursor` is the explicit older continuation. Viewing does not admit a child
+as root reads; clients default to 32 entries. Limits outside 1–256 yield
+`invalid_params` before child ownership lookup or durable-history access, regardless
+of whether the child is unknown or its history is unavailable. A newest read omits
+`before`, and `next_cursor` is the explicit older continuation. Viewing does not admit a child
 Session, acquire a child controller, activate a runtime, or grant execution,
 Composer, steer, cancellation, permission, model, Goal or lifecycle authority.
 Live child HITL still reaches the root queue and is answered only through its

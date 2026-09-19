@@ -741,6 +741,16 @@ for (const carrier of ["stdio", "websocket"] as const) it(`native child transcri
     assert.ok(running); assert.ok(JSON.stringify(running).includes("Inspect canonical child history"));
     assert.equal(host.attached.length, 1);
     await assert.rejects(session.subagentTranscriptPage(child.child_conversation_id), error => error instanceof Error && "kind" in error && error.kind === "unknown_subagent");
+    const assertInvalidTranscriptLimits = async (subagentId: string) => {
+      for (const limit of [0, 257]) {
+        await assert.rejects(
+          host.client.call("subagent/transcript", { target: session.target, subagent_id: subagentId, before: null, limit }, "transcript"),
+          error => error instanceof Error && "kind" in error && error.kind === "invalid_params",
+        );
+      }
+    };
+    await assertInvalidTranscriptLimits(child.subagent_id);
+    await assertInvalidTranscriptLimits("unknown-child");
     const unrelated = await openSession(host, server.settings("unrelated"));
     await assert.rejects(unrelated.subagentTranscriptPage(child.subagent_id), error => error instanceof Error && "kind" in error && error.kind === "unknown_subagent");
     await unrelated.detach();
@@ -795,6 +805,8 @@ for (const carrier of ["stdio", "websocket"] as const) it(`native child transcri
     const database = join(server.runtimeRoot, "sessions", session.sessionId, "conversations", child.child_conversation_id, "conversation.sqlite");
     renameSync(database, `${database}.held`);
     try {
+      await assertInvalidTranscriptLimits(child.subagent_id);
+      await assertInvalidTranscriptLimits("unknown-child");
       await assert.rejects(session.subagentTranscriptPage(child.subagent_id), error => error instanceof Error && "kind" in error && error.kind === "subagent_history_unavailable");
       assert.equal(existsSync(database), false, "inspection never creates an empty history");
     } finally { renameSync(`${database}.held`, database); }

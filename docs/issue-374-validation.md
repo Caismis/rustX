@@ -100,7 +100,7 @@ Native existing HITL regressions include
 `child_approval_deny_routes_to_child_and_never_starts_executor`, and
 `child_questionnaire_fails_closed_without_root_provider`.
 
-## Validation
+## Original implementation validation
 
 Validation was run in the isolated worktree. Earlier iterations caught old
 protocol-version expectations, a test's token-number type, and a parent Composer
@@ -168,3 +168,88 @@ failed because this repository does not install `tsx`; the corrected native
 Node command above passed. The complete TUI suite also passed after the final
 code changes. Local raw logs are retained under ignored
 `target/issue-374-validation/` in the task worktree.
+
+## PR #378 review fixes
+
+Reviewed HEAD: `257a76404e19c489330fde782e234fbc28e812f4`.
+The existing Issue #374 worktree was clean before editing. Fresh remote fetches
+still report base `d9453ce878f098dd717e1cd8663ca1135d7f147b`; no rebase was needed.
+
+The protocol introduction now rejects v11 and every earlier initialization and
+WebSocket admission version, with no downgrade or compatibility path. The methods
+inventory explicitly lists `subagent/transcript` and its parent attachment →
+current Runtime Client → exact registry-owned Subagent → owned child Conversation
+→ bounded read-only durable projection chain. Historical lifecycle/Trace/archive
+wording no longer misattributes existing semantics to the v12 transition.
+
+`validate_transcript_page_limit` in `src/runtime_client/host.rs` is the common
+root/child parameter authority and uses `TRANSCRIPT_PAGE_LIMIT_MAX`. Previously,
+child ownership and existing storage were resolved before the shared projection
+validated the limit. Now validation precedes child ownership/storage resolution;
+projection, registry ownership, SQLite read-only access, error redaction and TUI
+authority are unchanged.
+
+### Deterministic ordering proof
+
+- `runtime_client::host::tests::child_transcript_invalid_limits_precede_unknown_subagent_resolution`:
+  zero and max+1 return native InvalidRequest for root/child reads; valid 1/max
+  retain UnknownSubagent for an unknown child.
+- `runtime::conversation_runtime::tests::child_transcript_invalid_limits_precede_unavailable_history_access`:
+  real registry prepare/commit establishes an owned child whose staged process
+  never creates history. Zero and max+1 return InvalidRequest for both that child
+  and an unknown child. A `cfg(test)`-only resolver-entry counter remains **zero**
+  after all four invalid requests. Valid 1/max produce the existing unknown and
+  unavailable errors and advance the counter to **four**. The counter has no
+  production field or execution cost. No sleep establishes ordering.
+- `native child transcript stdio: exact ownership, running/waiting/terminal, tools, metadata and reconnect`
+  and the identically named `websocket` case now check zero/257 → `invalid_params`
+  for available owned history, unknown identity, and temporarily removed owned
+  history. Existing valid-limit `unknown_subagent` and
+  `subagent_history_unavailable` assertions, no-database-recreation assertion,
+  and root-routed exact HITL assertions remain intact.
+
+The original acceptance mapping above remains applicable; no existing regression
+was removed or weakened. Review-run logs are in the ignored worktree directory
+`target/issue-374-validation/review/`.
+
+### Review validation results
+
+| Command | Review result |
+| --- | --- |
+| `cargo fmt --all` | Pass; formatting applied |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Pass on final source |
+| `cargo check --all-targets --all-features` | Pass |
+| `cargo build --bins` | Pass; fresh binaries used by real transport tests |
+| `cargo test --lib --all-features child_transcript` | 4 passed |
+| `cargo test --lib --all-features transcript` | Final run: 13 passed |
+| `cargo test --lib --all-features failed_and_cancelled_retained_children_keep_exact_transcript_authority` | 1 passed |
+| `cargo test --lib --all-features app_server::` | 13 passed, including serialization/schema fixtures |
+| `pnpm --dir protocol/app-server generate` | Pass; generated artifacts unchanged |
+| `pnpm --dir protocol/app-server check` | Pass; regeneration clean |
+| `pnpm --dir protocol/app-server typecheck` | Pass |
+| `pnpm --dir tui typecheck` | Pass |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | 854 passed; zero failed/skipped |
+| `node --test tui/test/subagent-transcript.test.ts tui/test/composer-app.test.ts` | 20 passed |
+| `pnpm --dir web-console typecheck` | Pass |
+| `pnpm --dir web-console test` | 522 passed across 36 files |
+| `pnpm --dir web-console check:provenance` | Pass |
+| `uv run --project test-support/fake-provider pytest test-support/fake-provider/tests` | 51 passed |
+| `cargo test --all-targets --all-features` | Pass: library 3191, catalog 30, managed output 5, conformance 23, contracts 27, durable 130, process 53, provider 166, Subagent 53, tools 130; 1 existing library ignore and 5 existing provider ignores |
+| `cargo test --all-features --test cfg3_catalog --test cfg3_managed_output --test conformance --test contracts --test durable --test process --test provider --test subagent --test tools` | Pass: catalog 30, managed output 5, conformance 23, contracts 27, durable 130, process 53, provider 166 (5 existing ignored), Subagent 53, tools 130 |
+| `git diff --check` and `git diff --cached --check` | Pass |
+
+Intermediate test-authoring checks caught an import below statements, an attempted
+counter field that required updating existing explicit probe initializers, and an
+unqualified test atomic Ordering import. Those checks failed (exit 101), were
+corrected, and were rerun. The final counter is independently `cfg(test)`-only;
+existing probe initializers and production behavior are unchanged. An intermediate
+`cargo test --lib --all-features transcript` also failed compilation during that
+probe-field iteration; its final rerun passed all 13 tests. Initial focused runs
+before the second native test was added passed 3 child-transcript / 12 transcript
+tests; the final coverage counts are recorded above.
+
+The prior managed-Python/network preparation failures remain documented in the
+original validation section. They did **not** recur in this review's complete
+Rust run; no dependency-dependent tests were disabled or weakened. Existing root
+Questionnaire and Approval allow/deny routing regressions all passed.

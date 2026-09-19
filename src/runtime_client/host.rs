@@ -1184,6 +1184,7 @@ impl ClientInner {
         before: Option<RuntimeClientTranscriptCursor>,
         limit: usize,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        validate_transcript_page_limit(limit)?;
         self.ensure_session_runtime_live()?;
         let page = read_transcript_page(self.store.as_ref(), before, limit, || {
             let (_, _, through) = self.lock_snapshot_state()?.projection.snapshot_cut()?;
@@ -1199,6 +1200,7 @@ impl ClientInner {
         before: Option<RuntimeClientTranscriptCursor>,
         limit: usize,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        validate_transcript_page_limit(limit)?;
         self.ensure_session_runtime_live()?;
         let runtime = self
             .runtime
@@ -2727,13 +2729,8 @@ impl EventSubscription {
     }
 }
 
-/// Shared durable transcript projection for root and exact owned children.
-fn read_transcript_page(
-    store: &dyn crate::durable::ConversationStore,
-    before: Option<RuntimeClientTranscriptCursor>,
-    limit: usize,
-    frontier: impl FnOnce() -> Result<u64, RuntimeClientError>,
-) -> Result<RuntimeClientTranscriptPage, RuntimeClientError> {
+/// Shared parameter authority, checked before resolving child ownership or storage.
+fn validate_transcript_page_limit(limit: usize) -> Result<(), RuntimeClientError> {
     if limit == 0 || limit > TRANSCRIPT_PAGE_LIMIT_MAX {
         return Err(RuntimeClientError::InvalidRequest {
             message: format!(
@@ -2741,6 +2738,16 @@ fn read_transcript_page(
             ),
         });
     }
+    Ok(())
+}
+
+/// Shared durable transcript projection for root and exact owned children.
+fn read_transcript_page(
+    store: &dyn crate::durable::ConversationStore,
+    before: Option<RuntimeClientTranscriptCursor>,
+    limit: usize,
+    frontier: impl FnOnce() -> Result<u64, RuntimeClientError>,
+) -> Result<RuntimeClientTranscriptPage, RuntimeClientError> {
     let page = store
         .load_transcript_page(before.map(Into::into), limit)
         .map_err(|error| RuntimeClientError::RuntimeFailure {
@@ -3121,6 +3128,31 @@ mod tests {
         host: RuntimeClientHost,
         runtime: ConversationRuntime,
         coordinator: crate::capabilities::CapabilityCoordinator,
+    }
+
+    #[tokio::test]
+    async fn child_transcript_invalid_limits_precede_unknown_subagent_resolution() {
+        let (_, fixture) = host_fixture(vec![], ToolRegistry::new(), status_engine()).await;
+        let id = crate::runtime::identity::SubagentId::new("unknown-child");
+        for limit in [0, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX + 1] {
+            assert!(matches!(
+                fixture
+                    .host
+                    .inner
+                    .subagent_transcript_page(&id, None, limit),
+                Err(RuntimeClientError::InvalidRequest { .. })
+            ));
+            assert!(matches!(
+                fixture.host.inner.transcript_page(None, limit),
+                Err(RuntimeClientError::InvalidRequest { .. })
+            ));
+        }
+        for limit in [1, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX] {
+            assert!(matches!(
+                fixture.host.inner.subagent_transcript_page(&id, None, limit),
+                Err(RuntimeClientError::UnknownSubagent { subagent_id }) if subagent_id == id
+            ));
+        }
     }
 
     /// Builds the conversation runtime + host over one conversation with

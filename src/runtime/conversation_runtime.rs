@@ -1380,6 +1380,8 @@ pub(crate) struct RuntimeInner {
     /// Test-only coordinator synchronization hooks.
     #[cfg(test)]
     probe: Mutex<Option<CoordinatorProbe>>,
+    #[cfg(test)]
+    subagent_transcript_store_reads: std::sync::atomic::AtomicUsize,
     /// Test-only one-shot pre-tool policy injection for a runtime-created
     /// attempt. Production constructs the required policy from the admitted
     /// effective `ApprovalMode`; this hook never changes the production
@@ -3666,6 +3668,8 @@ impl ConversationRuntime {
             #[cfg(test)]
             probe: Mutex::new(None),
             #[cfg(test)]
+            subagent_transcript_store_reads: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
             test_pre_tool_policy: Mutex::new(None),
         });
         // Recovery has already durably terminalized every orphaned child.
@@ -5580,6 +5584,10 @@ impl ConversationRuntime {
         crate::durable::SqliteConversationStore,
         crate::runtime::subagent::SubagentTranscriptError,
     > {
+        #[cfg(test)]
+        self.inner
+            .subagent_transcript_store_reads
+            .fetch_add(1, Ordering::Relaxed);
         self.inner
             .subagents
             .as_ref()
@@ -13784,6 +13792,114 @@ mod tests {
             crate::durable::inbox::PendingMutationOutcome::Applied
         );
         assert_eq!(subagents.snapshot(child_id).unwrap(), before);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn child_transcript_invalid_limits_precede_unavailable_history_access() {
+        use crate::runtime_client::RuntimeClientError;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv_c26a9aad-2921-7350-8d5a-8668bfbc4ee9",
+            ))
+            .expect("in-memory store"),
+        );
+        let (runtime, _model, subagents) = headless_runtime_over_store_with_subagents(
+            &dir,
+            "conv_c26a9aad-2921-7350-8d5a-8668bfbc4ee9",
+            store.clone(),
+            None,
+        )
+        .await;
+        let host = crate::runtime_client::RuntimeClientHost::new(
+            crate::runtime_client::RuntimeClientHostConfig {
+                runtime: runtime.clone(),
+                replay_limit: None,
+            },
+        )
+        .expect("host");
+        let (attachment, _) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .expect("attach");
+        runtime.activate();
+
+        // Ownership commits first, while the runtime is healthy.
+        let (staged, mut peer) = stage_runtime_test_child(&dir.path().join("owned-child"));
+        subagents.push_staged_override(staged);
+        let accepted = match subagents
+            .commit(
+                subagents
+                    .prepare(
+                        &crate::runtime::subagent::SubagentStartSpec {
+                            resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
+                            task: "owned".to_owned(),
+                            context: None,
+                            tool_call_id: ToolCallId::new("call-owned"),
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                        },
+                        &crate::runtime::cancellation::CancellationSignal::new(),
+                    )
+                    .await
+                    .expect("prepare"),
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
+            .expect("commit")
+        {
+            crate::runtime::subagent::SubagentStartOutcome::Accepted(accepted) => accepted,
+            crate::runtime::subagent::SubagentStartOutcome::RolledBack => panic!("accepted"),
+        };
+        assert!(matches!(
+            crate::runtime::subagent::ipc::read_parent_frame(&mut peer)
+                .await
+                .expect("delegate frame"),
+            Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
+        ));
+
+        // The staged child commits real ownership but never creates a child
+        // database. Its existing history is therefore deterministically unavailable.
+        let resolver_reads = || {
+            runtime
+                .inner
+                .subagent_transcript_store_reads
+                .load(std::sync::atomic::Ordering::Relaxed)
+        };
+        let unknown = crate::runtime::identity::SubagentId::new("unknown-child");
+        for id in [&accepted.subagent_id, &unknown] {
+            for limit in [0, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX + 1] {
+                assert!(matches!(
+                    attachment.subagent_transcript_page(id, None, limit),
+                    Err(RuntimeClientError::InvalidRequest { .. })
+                ));
+            }
+        }
+        assert_eq!(
+            resolver_reads(),
+            0,
+            "invalid limits must not enter ownership/storage resolution"
+        );
+        for limit in [1, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX] {
+            assert!(matches!(
+                attachment.subagent_transcript_page(&unknown, None, limit),
+                Err(RuntimeClientError::UnknownSubagent { subagent_id }) if subagent_id == unknown
+            ));
+            assert!(matches!(
+                attachment.subagent_transcript_page(&accepted.subagent_id, None, limit),
+                Err(RuntimeClientError::RuntimeFailure { message })
+                    if message.starts_with("subagent history unavailable:")
+            ));
+        }
+        assert_eq!(
+            resolver_reads(),
+            4,
+            "valid limits must reach the real resolver"
+        );
+        let _ = subagents.cancel(&accepted.subagent_id, CancellationReason::UserRequested);
+        subagents
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
     }
 
     /// Ownership-first for subagents (Issue #60): a child whose ownership
