@@ -133,7 +133,7 @@ response without its final chunk, so a truncated transfer cannot report success.
 
 ## Transport and clients
 
-App Server v11 adds authenticated `session/exportPrepare { session_id }`, returning
+App Server v11 added authenticated `session/exportPrepare { session_id }`, returning
 `session_archive { download }`. No destination path exists in the request type.
 The descriptor contains a deterministic filename, a 60-second lifetime and a
 256-bit single-use capability at `/session-archive/<capability>`. It authorizes
@@ -247,7 +247,7 @@ are absent, while authored secret-looking text and temperature remain present.
 
 `SessionArchivePrepareError` contains only closed semantic reasons, never raw
 OS/provider strings or implementation paths. Missing/unreadable descendants and
-required unavailable/unsettled artifacts become v11
+required unavailable/unsettled artifacts become v12
 `archive_preparation_failed { reason: descendant_unavailable | artifact_unavailable }`.
 Other reasons distinguish unavailable Conversation history, corrupt authority,
 storage/cut failure and cancellation. Unknown Session and capacity conditions use

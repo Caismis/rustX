@@ -453,6 +453,53 @@
           ]
         },
         {
+          "description": "Bounded canonical history of an exact child owned by the addressed parent.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "subagent/transcript"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "subagent_id": {
+                  "$ref": "#/$defs/SubagentId"
+                },
+                "before": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "subagent_id",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "method": {
@@ -17158,6 +17205,40 @@
           "required": [
             "kind",
             "diagnostic"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "subagent_id": {
+              "$ref": "#/$defs/SubagentId"
+            },
+            "kind": {
+              "type": "string",
+              "const": "unknown_subagent"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "subagent_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "subagent_id": {
+              "$ref": "#/$defs/SubagentId"
+            },
+            "kind": {
+              "type": "string",
+              "const": "subagent_history_unavailable"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "subagent_id"
           ]
         },
         {

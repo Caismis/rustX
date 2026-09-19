@@ -136,7 +136,7 @@ describe("subagent activity section", () => {
       }),
     ], "conv_7563d0be-1638-75d5-8d79-6768bd57808c");
     assert.match(rendered, /▸ .*worker · failed · conv_7563d0be-1638-75d5-8d79-6768bd57808c/);
-    assert.doesNotMatch(rendered, /detail/);
+    assert.match(rendered, /Enter conversation · i details · Esc Main/);
   });
 
   it("derives elapsed time from started_at at render time", () => {

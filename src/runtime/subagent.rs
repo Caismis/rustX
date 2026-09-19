@@ -80,6 +80,13 @@
 //! report body itself stays byte-for-byte child-authored (Issue #192).
 //! Child-process IPC only transports bounded envelopes and control.
 
+/// Exact child ownership and existing-history read failures.
+#[derive(Debug)]
+pub(crate) enum SubagentTranscriptError {
+    Unknown(SubagentId),
+    Unavailable(String),
+}
+
 pub mod activity;
 pub mod catalog;
 pub mod invocation;

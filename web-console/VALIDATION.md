@@ -1333,7 +1333,7 @@ and lack of OS sandbox/remote authentication remain its explicit boundaries.
 
 ## SESSION-01 supersedes historical residency workflows
 
-App Server v11 removes public manual unload and list residency. Earlier recorded
+The current App Server removes public manual unload and list residency. Earlier recorded
 runs mentioning those operations describe superseded behavior, not current UX.
 Current flows: open/resume implicitly ensures residency; Close view detaches;
 branch switching owns replacement; confirmed deletion owns manager retirement.

@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness TrajectoryTable.tsx semantic cells; see PROVENANCE.md. */
-import type { TraceArtifact, TraceKind, TraceRecord } from '../../../../protocol/app-server/v11';
+import type { TraceArtifact, TraceKind, TraceRecord } from '../../../../protocol/app-server/v12';
 import { IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import css from './Trajectory.module.css';

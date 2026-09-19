@@ -292,7 +292,25 @@ def app_server_lifecycle() -> Scenario:
     ) for _ in range(3)))
 
 
+def tui_subagent_inspection() -> Scenario:
+    # Parent continuation and child admission may arrive in either order.
+    # Identical read-only question proposals park both native owners. The test
+    # answers the exact child-routed InteractionRef first, then the parent.
+    question = json.dumps({"questions": [{"question": "Inspection checkpoint?", "header": "Inspect", "options": [{"label": "Continue", "description": "Continue inspection"}, {"label": "Stop", "description": "Stop inspection"}]}]})
+    return Scenario("tui_subagent_inspection",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL, tools_include=("subagent",)),
+             Stream(ToolCall("spawn-child", "subagent", '{"agent":"researcher","task":"Inspect canonical child history"}'), Finish("tool_calls"))),
+        *(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL, tools_include=("ask_user",)),
+               Stream(Gate(f"inspection-request-{index}"), ToolCall(f"inspection-question-{index}", "ask_user", question), Finish("tool_calls"), Usage(10, 2))) for index in range(2)),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL, tools_include=("ask_user",)),
+             Stream(Gate("child-completion"), Text("Canonical child answer"), Finish("stop"), Usage(100, 20))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL, tools_include=("subagent",)),
+             Stream(Text("Parent inspected child"), Finish("stop"))),
+    )
+
+
 SCENARIOS = {
+    "tui_subagent_inspection": tui_subagent_inspection,
     "app_server_lifecycle": app_server_lifecycle,
     "tui_integration": tui_integration,
     "tui_multi_session": tui_multi_session,

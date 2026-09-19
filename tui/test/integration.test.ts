@@ -27,7 +27,7 @@
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -711,4 +711,113 @@ describe("bounded product lifecycle", { skip: SKIP }, () => {
       }
     }
   });
+});
+
+for (const carrier of ["stdio", "websocket"] as const) it(`native child transcript ${carrier}: exact ownership, running/waiting/terminal, tools, metadata and reconnect`, { skip: SKIP, timeout: 120_000 }, async t => {
+  const provider = await ProviderEmulator.start("tui_subagent_inspection");
+  const server = ServerFixture.create("rustx-child-transcript-", provider.url());
+  const workspace = server.workspace("parent");
+  writeFileSync(join(workspace, "rustx.toml"), '[agent]\nagents = ["researcher"]\n[agent.tools]\nbuiltin = ["ask_user", "execution"]\n');
+  mkdirSync(join(workspace, ".agents/agents"), { recursive: true });
+  writeFileSync(join(workspace, ".agents/agents/researcher.toml"), 'description = "Research history"\ninstructions = "Inspect canonical child history"\n[tools]\nbuiltin = ["ask_user"]\n');
+  const external = carrier === "websocket" ? await ExternalAppServer.start(server) : undefined;
+  let host = external ? await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN }) : await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: server.runtimeRoot }, env: server.env });
+  const sent: string[] = [];
+  const call = host.client.call.bind(host.client);
+  t.mock.method(host.client, "call", (...args: Parameters<typeof call>) => { sent.push(args[0]); return call(...args); });
+  try {
+    let session = await openSession(host, { cwd: workspace });
+    const stop = host.client.onNotification(message => session.applyNotification(message));
+    const stateWhen = (predicate: () => boolean) => new Promise<void>(resolve => {
+      if (predicate()) { resolve(); return; }
+      const unsubscribe = session.onState(() => { if (predicate()) { unsubscribe(); resolve(); } });
+    });
+    await session.submitInbound([{ type: "text", text: "Delegate a canonical history inspection" }]);
+    await Promise.all([provider.awaitGate("inspection-request-0"), provider.awaitGate("inspection-request-1")]);
+    await session.resync();
+    const child = session.state.subagents[0]!;
+    assert.ok(child); assert.equal(child.state, "running");
+    const running = await session.subagentTranscriptPage(child.subagent_id);
+    assert.ok(running); assert.ok(JSON.stringify(running).includes("Inspect canonical child history"));
+    assert.equal(host.attached.length, 1);
+    await assert.rejects(session.subagentTranscriptPage(child.child_conversation_id), error => error instanceof Error && "kind" in error && error.kind === "unknown_subagent");
+    const assertInvalidTranscriptLimits = async (subagentId: string) => {
+      for (const limit of [0, 257]) {
+        await assert.rejects(
+          host.client.call("subagent/transcript", { target: session.target, subagent_id: subagentId, before: null, limit }, "transcript"),
+          error => error instanceof Error && "kind" in error && error.kind === "invalid_params",
+        );
+      }
+    };
+    await assertInvalidTranscriptLimits(child.subagent_id);
+    await assertInvalidTranscriptLimits("unknown-child");
+    const unrelated = await openSession(host, server.settings("unrelated"));
+    await assert.rejects(unrelated.subagentTranscriptPage(child.subagent_id), error => error instanceof Error && "kind" in error && error.kind === "unknown_subagent");
+    await unrelated.detach();
+    await provider.releaseGate("inspection-request-0"); await provider.releaseGate("inspection-request-1");
+    await stateWhen(() => session.state.pendingInteractions.length === 2);
+    const routed = session.state.pendingInteractions.find(item => item.interaction.conversation_id === child.child_conversation_id)!;
+    const primary = session.state.pendingInteractions.find(item => item.interaction.conversation_id === session.target.conversation_id)!;
+    assert.ok(routed); assert.ok(primary); assert.equal(routed.source.type, "subagent");
+    const waiting = await session.subagentTranscriptPage(child.subagent_id);
+    assert.ok(waiting); assert.equal(session.state.pendingInteractions.length, 2, "reading creates no second waiter or answer");
+    const answer = { type: "questionnaire", response: { type: "submitted", value: { answers: [{ question_index: 0, answer: { type: "option", value: { option_index: 0 } } }] } } } as const;
+    // Only the root attachment answers the exact child-routed InteractionRef.
+    await session.respondInteraction(routed.interaction, { ...answer, response: { type: "submitted", value: { answers: [...answer.response.value.answers] } } });
+    await provider.awaitGate("child-completion");
+    const withTool = await session.subagentTranscriptPage(child.subagent_id);
+    assert.ok(withTool);
+    const messages = withTool.entries!.flatMap(entry => entry.item.type === "message" ? [entry.item.message] : []);
+    const result = messages.find(message => message.role === "tool");
+    assert.ok(result && result.role === "tool");
+    const proposal = messages.find(message => message.role === "assistant" && message.id === result.occurrence.assistant_message_id);
+    assert.ok(proposal && proposal.role === "assistant");
+    const block = proposal.content[result.occurrence.block_index];
+    assert.ok(block?.type === "tool_call"); assert.equal(block.id, result.tool_call_id);
+    assert.equal(withTool.entries!.filter(entry => entry.completed_response).length, 0);
+    await provider.releaseGate("child-completion");
+    await stateWhen(() => session.state.subagents[0]?.state === "succeeded");
+    const terminal = await session.subagentTranscriptPage(child.subagent_id);
+    assert.ok(terminal);
+    const closing = terminal.entries!.find(entry => entry.completed_response !== undefined)!;
+    assert.ok(closing); assert.equal(closing.completed_response!.origin.conversation_id, child.child_conversation_id);
+    assert.equal(closing.item.type, "message");
+    if (closing.item.type === "message") assert.equal(closing.completed_response!.closing_message_id, closing.item.message.id);
+    assert.equal(closing.completed_response!.usage?.total_tokens, 132);
+    // Explicit one-entry paging proves exact child cursor order over the transport.
+    const newest = await host.client.call("subagent/transcript", { target: session.target, subagent_id: child.subagent_id, before: null, limit: 1 }, "transcript");
+    assert.equal(newest.page.entries!.length, 1); assert.ok(newest.page.next_cursor);
+    const older = await host.client.call("subagent/transcript", { target: session.target, subagent_id: child.subagent_id, before: newest.page.next_cursor!, limit: 1 }, "transcript");
+    assert.ok(BigInt(older.page.entries![0]!.cursor) < BigInt(newest.page.entries![0]!.cursor));
+    await session.respondInteraction(primary.interaction, { ...answer, response: { type: "submitted", value: { answers: [...answer.response.value.answers] } } });
+    await stateWhen(() => session.state.attempt?.phase.type === "settled");
+    const id = session.sessionId; const node = session.nodeId;
+    await session.detach();
+    if (external) {
+      await host.shutdown();
+      host = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+      const replacementCall = host.client.call.bind(host.client);
+      t.mock.method(host.client, "call", (...args: Parameters<typeof replacementCall>) => { sent.push(args[0]); return replacementCall(...args); });
+    }
+    session = await host.attach(id, node);
+    const restored = await session.subagentTranscriptPage(child.subagent_id);
+    assert.deepEqual(restored, terminal, "reattach reconstructs from native child authority");
+    const database = join(server.runtimeRoot, "sessions", session.sessionId, "conversations", child.child_conversation_id, "conversation.sqlite");
+    renameSync(database, `${database}.held`);
+    try {
+      await assertInvalidTranscriptLimits(child.subagent_id);
+      await assertInvalidTranscriptLimits("unknown-child");
+      await assert.rejects(session.subagentTranscriptPage(child.subagent_id), error => error instanceof Error && "kind" in error && error.kind === "subagent_history_unavailable");
+      assert.equal(existsSync(database), false, "inspection never creates an empty history");
+    } finally { renameSync(`${database}.held`, database); }
+    assert.equal(sent.filter(method => method === "turn/start").length, 1);
+    assert.equal(sent.filter(method => method === "interaction/respond").length, 2);
+    for (const method of ["turn/steer", "subagent/cancel", "subagent/disposeWorkspace"]) assert.equal(sent.includes(method), false);
+    stop();
+  } catch (error) {
+    t.diagnostic(error instanceof Error ? error.stack! : String(error));
+    throw error;
+  } finally {
+    await host.shutdown(); await external?.stop(); server.cleanup(); await provider.finish();
+  }
 });

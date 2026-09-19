@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted model request controls; see PROVENANCE.md. */
 import { useState } from 'react';
-import type { Model, RuntimeLayer, SourceScope, ProviderWrite, ProviderView } from '../../../../protocol/app-server/v11';
+import type { Model, RuntimeLayer, SourceScope, ProviderWrite, ProviderView } from '../../../../protocol/app-server/v12';
 import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';
 import { RequestPolicy } from './RequestPolicy';
 import { UnitForm, TextField, type SaveSource } from './controls';

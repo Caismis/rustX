@@ -369,6 +369,27 @@ export class AppServerSession {
     return page.page;
   }
 
+  /** A read is valid only in the exact parent attachment/presentation epoch. */
+  async subagentTranscriptPage(
+    subagentId: SubagentId,
+    before?: RuntimeClientTranscriptCursor,
+  ): Promise<RuntimeClientTranscriptPage | undefined> {
+    if (this.#released || this.#serverClosed) return undefined;
+    const epoch = this.#epoch;
+    const target = this.#target;
+    try {
+      const result = await this.#client.call("subagent/transcript", {
+        target, subagent_id: subagentId, before: before ?? null,
+        limit: TRANSCRIPT_PROJECTION_PAGE_LIMIT,
+      }, "transcript");
+      if (epoch !== this.#epoch || !sameTarget(target, this.#target)) return undefined;
+      return result.page;
+    } catch (error) {
+      if (epoch !== this.#epoch || !sameTarget(target, this.#target)) return undefined;
+      throw error;
+    }
+  }
+
   /** Loads the next older page without changing the live event cursor. */
   async loadOlderTranscript(
     limit = TRANSCRIPT_PROJECTION_PAGE_LIMIT,

@@ -234,6 +234,14 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 revision: EXACT,
             },
         },
+        Method::SubagentTranscript {
+            target: target.clone(),
+            subagent_id: crate::runtime::identity::SubagentId::new("subagent-fixture"),
+            before: Some(
+                crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(EXACT),
+            ),
+            limit: 32,
+        },
         Method::Goal {
             target: target.clone(),
             control: crate::goal::GoalControl::Mutate {
@@ -328,6 +336,12 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         },
     }));
     for data in [
+        super::protocol::ErrorData::UnknownSubagent {
+            subagent_id: crate::runtime::identity::SubagentId::new("subagent-fixture"),
+        },
+        super::protocol::ErrorData::SubagentHistoryUnavailable {
+            subagent_id: crate::runtime::identity::SubagentId::new("subagent-fixture"),
+        },
         super::protocol::ErrorData::ResidencyCapacity,
         super::protocol::ErrorData::AttachmentCapacity,
         super::protocol::ErrorData::RequestCapacity,
@@ -400,6 +414,41 @@ mod tests {
         assert_eq!(parsed.is_ok(), expected, "serde: {text:?}");
         if let Ok(parsed) = parsed {
             assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+        }
+    }
+
+    #[test]
+    fn child_transcript_has_only_exact_parent_subagent_read_authority() {
+        let request = fixtures()
+            .into_iter()
+            .find_map(|fixture| match fixture {
+                super::ProtocolMessage::Request(request)
+                    if matches!(request.call, super::Method::SubagentTranscript { .. }) =>
+                {
+                    Some(*request)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let value = serde_json::to_value(&request).unwrap();
+        let validator = jsonschema::validator_for(&protocol_schema()).unwrap();
+        assert!(validator.is_valid(&value));
+        let mut arbitrary = value.clone();
+        arbitrary["params"]["conversation_id"] =
+            serde_json::json!("conv_00000000-0000-7000-8000-000000000002");
+        assert!(serde_json::from_value::<super::Request>(arbitrary.clone()).is_err());
+        assert!(!validator.is_valid(&arbitrary));
+        for method in [
+            "subagent/attach",
+            "subagent/turnStart",
+            "subagent/steer",
+            "subagent/interactionRespond",
+            "subagent/setModel",
+        ] {
+            let mut write = value.clone();
+            write["method"] = serde_json::json!(method);
+            assert!(serde_json::from_value::<super::Request>(write.clone()).is_err());
+            assert!(!validator.is_valid(&write));
         }
     }
 
@@ -545,9 +594,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v11.schema.json", "v11.ts"]);
+        assert_eq!(generations, ["v12.schema.json", "v12.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v11.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v12.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()
