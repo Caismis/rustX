@@ -720,7 +720,7 @@ const withContext = (n: number, truncated = false) =>
         {
           message_id: 'ctx-goal',
           context_kind: 'goal_status',
-          source: 'runtime',
+          source: { type: 'runtime' },
           preview: { text: 'Goal: active', truncated: false },
           attachments: [],
           truncated: false,
@@ -728,7 +728,7 @@ const withContext = (n: number, truncated = false) =>
         {
           message_id: 'ctx-observation',
           context_kind: 'runtime_tool_observation',
-          source: 'runtime',
+          source: { type: 'runtime' },
           preview: { text: 'The tool batch settled.', truncated: false },
           attachments: [],
           truncated: false,
@@ -772,11 +772,50 @@ it('renders introduced Context in the server’s frozen order, from the summary 
   fireEvent.click(within(inspector).getByRole('tab', { name: 'Context' }));
   const sections = within(inspector).getAllByRole('heading', { level: 4 });
   expect(sections.map(heading => heading.textContent)).toEqual([
-    'Goal status · runtime ctx-goal',
-    'Runtime tool observation · runtime ctx-observation',
+    'Goal status · Runtime ctx-goal',
+    'Runtime tool observation · Runtime ctx-observation',
   ]);
   expect(within(inspector).getByText(/Further context facts omitted/)).toBeDefined();
   expect(within(inspector).getByText(/reuses admitted context/)).toBeDefined();
+});
+
+it('renders each certified extension’s exact contributor, never the family alone', () => {
+  // Both facts are ExtensionEnvironment, so the family cannot tell them
+  // apart. The browser derives nothing: it renders the provenance the server
+  // resolved from each canonical message's own UserSource.
+  const record = traceRecord(0, {
+    request: {
+      ...traceRecord(0).request!,
+      context_additions: [
+        {
+          message_id: 'ctx-extension-a',
+          context_kind: 'extension_environment',
+          source: { type: 'certified_extension', contributor: 'vendor-a.environment' },
+          preview: { text: 'Facts from A.', truncated: false },
+          attachments: [],
+          truncated: false,
+        },
+        {
+          message_id: 'ctx-extension-b',
+          context_kind: 'extension_environment',
+          source: { type: 'certified_extension', contributor: 'vendor-b.environment' },
+          preview: { text: 'Facts from B.', truncated: false },
+          attachments: [],
+          truncated: false,
+        },
+      ],
+      context_truncated: false,
+    },
+  });
+  renderTrajectory(cacheOf([record]));
+  fireEvent.click(screen.getByText('historical-model-0'));
+  const inspector = screen.getByLabelText('Trace record inspector');
+  fireEvent.click(within(inspector).getByRole('tab', { name: 'Context' }));
+  const sections = within(inspector).getAllByRole('heading', { level: 4 });
+  expect(sections.map(heading => heading.textContent)).toEqual([
+    'Extension environment · Extension vendor-a.environment ctx-extension-a',
+    'Extension environment · Extension vendor-b.environment ctx-extension-b',
+  ]);
 });
 
 it('a request that introduced no Context says so rather than showing nothing', () => {

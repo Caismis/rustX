@@ -23,7 +23,8 @@ use super::bounds::{TraceJson, TracePreview, TraceText};
 use crate::model::error::ModelErrorKind;
 use crate::model::types::ModelUsage;
 use crate::runtime::identity::{
-    ArtifactId, AttemptId, MessageId, RequestId, ToolCallId, ToolId, TurnId,
+    ArtifactId, AttemptId, CertifiedExtensionIdentity, MessageId, RequestId, ToolCallId, ToolId,
+    TurnId,
 };
 
 /// Opaque Trace-only exclusive boundary, valid only in its conversation.
@@ -230,6 +231,31 @@ pub enum TraceContextKind {
     AgentStatus,
 }
 
+/// The exact native producer of one admitted request Context fact.
+///
+/// Request-scoped canonical Context has exactly one admission path — Context
+/// Assembly — and that path derives exactly two provenances, so this
+/// vocabulary is closed at two cases. The remaining `UserSource`
+/// namespaces belong to other core-owned inbound paths and cannot reach
+/// request Context; a snapshot identity that claimed one would be an
+/// invariant violation, reported as such rather than widening this type.
+///
+/// A certified extension keeps its **exact** logical identity. A coarse
+/// namespace would make two different extensions contributing the same
+/// context family indistinguishable in Trace, which is precisely the
+/// question a reader asks about extension-owned context. The identity is
+/// assigned by rustX during admission; a contributor never supplies it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TraceContextSource {
+    /// rustX itself: native runtime observation, Goal and Agent Status.
+    Runtime,
+    /// One certified extension, named by its exact logical identity.
+    CertifiedExtension {
+        contributor: CertifiedExtensionIdentity,
+    },
+}
+
 /// One canonical request Context fact introduced by one actual request.
 ///
 /// Identity and order come from the immutable `RequestSnapshot`; content
@@ -241,8 +267,11 @@ pub enum TraceContextKind {
 pub struct TraceContextPresentation {
     pub message_id: MessageId,
     pub context_kind: TraceContextKind,
-    /// Provenance namespace of the canonical inbound fact.
-    pub source: String,
+    /// The exact native producer, copied from the canonical message's own
+    /// `UserSource`. It is never inferred from the context family, the
+    /// contributor list, the assembly generation, message order, text, or
+    /// the current extension registry.
+    pub source: TraceContextSource,
     pub preview: Option<TracePreview>,
     pub attachments: Vec<TraceArtifact>,
     pub truncated: bool,

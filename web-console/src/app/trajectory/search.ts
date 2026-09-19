@@ -42,7 +42,10 @@ function sourcesOf(row: TrajectoryRow): readonly string[] {
     // never becomes the authority for any of these relations.
     record.request?.system_prompt.state ?? '',
     ...(record.request?.context_additions ?? []).map(
-      addition => `${addition.context_kind} ${addition.source} ${addition.message_id}`,
+      addition =>
+        `${addition.context_kind} ${addition.source.type} ${
+          addition.source.type === 'certified_extension' ? addition.source.contributor : ''
+        } ${addition.message_id}`,
     ),
     ...record.calls.map(call => `${call.name} ${call.tool_id} ${call.call_id}`),
   ];

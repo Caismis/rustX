@@ -15,21 +15,27 @@
 //! System Prompt   nearest preceding actual request, by durable start order
 //! Context         RequestSnapshot.request_context_ids + keyed Ledger reads
 //! ```
+//!
+//! Both are *immutable* historical facts, so both belong to the summary
+//! projection alone. A lifecycle refresh carries neither and never calls
+//! into this module; the counters under `#[cfg(test)]` below exist so a
+//! regression can prove that as an implementation property rather than
+//! infer it from timing.
 
 use super::TraceProjection;
 use super::bounds::{
     TRACE_SUMMARY_CONTEXT, TRACE_SUMMARY_CONTEXT_ARTIFACTS, TRACE_SUMMARY_CONTEXT_BYTES,
     TracePreview, encoded_len, identity_fits,
 };
-use super::content::{message_preview, user_artifacts, user_source_label};
+use super::content::{message_preview, user_artifacts};
 use super::types::{
-    TraceContextKind, TraceContextPresentation, TraceSystemPromptPresentation,
+    TraceContextKind, TraceContextPresentation, TraceContextSource, TraceSystemPromptPresentation,
     TraceSystemPromptState,
 };
 use crate::durable::ConversationStoreError;
 use crate::durable::presentation::{FactQuery, FactScope};
 use crate::events::types::RuntimeEvent as E;
-use crate::message::types::{ContextKind, InboundKind, MessageBlock};
+use crate::message::types::{ContextKind, InboundKind, MessageBlock, UserSource};
 use crate::model::snapshot::RequestSnapshot;
 
 impl TraceProjection<'_> {
@@ -73,6 +79,8 @@ impl TraceProjection<'_> {
         &self,
         anchor_sequence: u64,
     ) -> Result<PreviousPrompt, ConversationStoreError> {
+        #[cfg(test)]
+        probe::record(&probe::SYSTEM_PREDECESSOR);
         let Some(previous) = self
             .store
             .read_presentation_events(&FactQuery {
@@ -125,6 +133,8 @@ impl TraceProjection<'_> {
         let mut truncated = ids.len() > TRACE_SUMMARY_CONTEXT;
         let kept = &ids[..ids.len().min(TRACE_SUMMARY_CONTEXT)];
         let mut additions: Vec<TraceContextPresentation> = Vec::new();
+        #[cfg(test)]
+        probe::record(&probe::CONTEXT_LEDGER_JOIN);
         for (id, message) in kept.iter().zip(self.store.load_messages(kept)?) {
             let MessageBlock::User(user) = &message else {
                 return Err(context_invariant(frozen, id));
@@ -140,10 +150,13 @@ impl TraceProjection<'_> {
             }
             let (attachments, attachments_truncated) =
                 user_artifacts(&user.content, TRACE_SUMMARY_CONTEXT_ARTIFACTS);
+            let Some(source) = context_source(&user.source) else {
+                return Err(context_invariant(frozen, id));
+            };
             additions.push(TraceContextPresentation {
                 message_id: id.clone(),
                 context_kind: context_family(kind),
-                source: user_source_label(&user.source).to_owned(),
+                source,
                 preview: message_preview(&message),
                 attachments,
                 truncated: attachments_truncated,
@@ -167,6 +180,31 @@ impl TraceProjection<'_> {
             truncated = true;
         }
         Ok((additions, truncated))
+    }
+}
+
+/// The exact native producer of one admitted Context fact.
+///
+/// The canonical message's own `UserSource` is the provenance authority, and
+/// it is the *only* one consulted: the assembly generation, the contributor
+/// list, the context family, message order and the current extension
+/// registry are all incapable of naming the owner of a historical fact.
+///
+/// `None` is a provenance request Context cannot have. Context Assembly
+/// derives only `Runtime` and `Extension`, and the durable start transition
+/// admits nothing else, so a snapshot identity carrying another namespace is
+/// a contract violation — reported through the invariant error model rather
+/// than broadened into the wire vocabulary.
+fn context_source(source: &UserSource) -> Option<TraceContextSource> {
+    match source {
+        UserSource::Runtime => Some(TraceContextSource::Runtime),
+        UserSource::Extension { contributor } => Some(TraceContextSource::CertifiedExtension {
+            contributor: contributor.clone(),
+        }),
+        UserSource::Human
+        | UserSource::Agent { .. }
+        | UserSource::Fleet
+        | UserSource::ExternalSystem => None,
     }
 }
 
@@ -228,6 +266,47 @@ const fn context_family(kind: &ContextKind) -> TraceContextKind {
         ContextKind::RuntimeToolObservation => TraceContextKind::RuntimeToolObservation,
         ContextKind::ExtensionEnvironment => TraceContextKind::ExtensionEnvironment,
         ContextKind::AgentStatus(_) => TraceContextKind::AgentStatus,
+    }
+}
+
+/// Deterministic counters proving which read paths a projection took.
+///
+/// A regression that asserts a lifecycle refresh is cheap by timing it is
+/// not a regression. These counters make the ownership rule an observable
+/// implementation property instead: the immutable relationship paths
+/// increment them, and a refresh must leave them at zero.
+#[cfg(test)]
+pub(super) mod probe {
+    use std::cell::Cell;
+
+    thread_local! {
+        /// Resolutions of the System Prompt predecessor presentation.
+        pub(in crate::runtime_client::trace) static SYSTEM_PREDECESSOR: Cell<u32> =
+            const { Cell::new(0) };
+        /// Canonical Context presentation joins against the Message Ledger.
+        pub(in crate::runtime_client::trace) static CONTEXT_LEDGER_JOIN: Cell<u32> =
+            const { Cell::new(0) };
+    }
+
+    pub(in crate::runtime_client::trace) fn record(
+        counter: &'static std::thread::LocalKey<Cell<u32>>,
+    ) {
+        counter.with(|count| count.set(count.get().saturating_add(1)));
+    }
+
+    /// Both counters, as (System predecessor, Context Ledger join).
+    #[must_use]
+    pub(in crate::runtime_client::trace) fn counts() -> (u32, u32) {
+        (
+            SYSTEM_PREDECESSOR.with(Cell::get),
+            CONTEXT_LEDGER_JOIN.with(Cell::get),
+        )
+    }
+
+    /// Zeroes both counters so the next call is measured on its own.
+    pub(in crate::runtime_client::trace) fn reset() {
+        SYSTEM_PREDECESSOR.with(|count| count.set(0));
+        CONTEXT_LEDGER_JOIN.with(|count| count.set(0));
     }
 }
 

@@ -29,8 +29,8 @@ use crate::model::{
     ModelCapabilities, ModelCompat, ModelProtocol, RequestIdentity, RequestSnapshot,
 };
 use crate::runtime::identity::{
-    ArtifactId, AttemptId, CapabilityRevision, ConversationId, EventId, MessageId, RequestId,
-    ToolCallId, ToolId, TurnId,
+    ArtifactId, AttemptId, CapabilityRevision, CertifiedExtensionIdentity, ConversationId, EventId,
+    MessageId, RequestId, ToolCallId, ToolId, TurnId,
 };
 use crate::tools::types::{
     ModelToolDefinition, ToolCall, ToolExecutionResult, ToolExecutionStatus, ToolResultContent,
@@ -2331,15 +2331,47 @@ fn mandatory_request_identities_bound_the_entire_request_detail() {
 // what a client could have inferred from the rows it happened to load.
 // ---------------------------------------------------------------------------
 
-/// Builds one canonical admitted Context fact, as Context Assembly commits it.
-fn context_message(id: &str, kind: ContextKind, text: &str) -> MessageBlock {
+/// Builds one canonical admitted Context fact, as Context Assembly commits
+/// it: the provenance is stated explicitly, because provenance is exactly
+/// what the Context presentation contract is about. A fixture that stamped
+/// every fact `Runtime` could not tell a native fact apart from an
+/// extension's, which is the distinction Trace has to preserve.
+fn context_message(id: &str, source: UserSource, kind: ContextKind, text: &str) -> MessageBlock {
     MessageBlock::User(UserMessageBlock {
         id: MessageId::new(id),
         content: vec![UserContentBlock::Text(TextBlock { text: text.into() })],
-        source: UserSource::Runtime,
+        source,
         kind: InboundKind::Context(kind),
         timestamp: None,
     })
+}
+
+/// One native runtime-owned Context fact. Context Assembly assigns
+/// `UserSource::Runtime` to every native contributor lane.
+fn runtime_context(id: &str, kind: ContextKind, text: &str) -> MessageBlock {
+    context_message(id, UserSource::Runtime, kind, text)
+}
+
+/// One certified extension's Context fact, with the exact contributor
+/// identity rustX assigns at admission. The extension lane always produces
+/// `ContextKind::ExtensionEnvironment`, so the family alone can never
+/// identify which extension produced the fact.
+fn extension_context(id: &str, extension: &str, text: &str) -> MessageBlock {
+    context_message(
+        id,
+        UserSource::Extension {
+            contributor: CertifiedExtensionIdentity::new(extension).expect("extension identity"),
+        },
+        ContextKind::ExtensionEnvironment,
+        text,
+    )
+}
+
+/// The exact certified-extension provenance of one projected Context fact.
+fn extension_source(extension: &str) -> TraceContextSource {
+    TraceContextSource::CertifiedExtension {
+        contributor: CertifiedExtensionIdentity::new(extension).expect("extension identity"),
+    }
 }
 
 fn goal_status(objective: &str) -> ContextKind {
@@ -2545,15 +2577,15 @@ fn canonical_context_is_projected_from_the_frozen_request_identities() {
     let store = store("conv_2d90c1af-6b34-7a05-8e77-9f1c4b6a2e50");
     start(&store);
     let context = [
-        context_message("ctx-goal", goal_status("ship the release"), "Goal: active"),
-        context_message(
+        runtime_context("ctx-goal", goal_status("ship the release"), "Goal: active"),
+        runtime_context(
             "ctx-observation",
             ContextKind::RuntimeToolObservation,
             "The tool batch settled.",
         ),
-        context_message(
+        extension_context(
             "ctx-environment",
-            ContextKind::ExtensionEnvironment,
+            "vendor.observability",
             "Environment facts.",
         ),
     ];
@@ -2580,8 +2612,19 @@ fn canonical_context_is_projected_from_the_frozen_request_identities() {
             TraceContextKind::ExtensionEnvironment,
         ]
     );
+    assert_eq!(
+        additions
+            .iter()
+            .map(|addition| addition.source.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            TraceContextSource::Runtime,
+            TraceContextSource::Runtime,
+            extension_source("vendor.observability"),
+        ],
+        "provenance is the canonical message's own UserSource, not the family"
+    );
     for addition in &additions {
-        assert_eq!(addition.source, "runtime");
         assert!(!addition.truncated);
         assert!(addition.attachments.is_empty());
     }
@@ -2601,7 +2644,7 @@ fn canonical_context_is_projected_from_the_frozen_request_identities() {
 fn retry_and_recovery_requests_introduce_no_duplicate_context() {
     let store = store("conv_4e77b013-8c2a-7f39-9d54-3b6a1c8e70df");
     start(&store);
-    let introduced = [context_message(
+    let introduced = [runtime_context(
         "ctx-observation",
         ContextKind::RuntimeToolObservation,
         "The tool batch settled.",
@@ -2639,9 +2682,9 @@ fn compaction_and_request_only_input_never_become_context_facts() {
     };
     let store = store("conv_8a15d3e9-70cb-7c62-8b90-5e24f7c1a063");
     start(&store);
-    let introduced = [context_message(
+    let introduced = [extension_context(
         "ctx-environment",
-        ContextKind::ExtensionEnvironment,
+        "vendor.observability",
         "Environment facts.",
     )];
     let first = request_with(&store, "1", 0, "prompt-A", &introduced);
@@ -2721,9 +2764,9 @@ fn context_presentation_is_reproducible_and_bounded() {
     start(&store);
     let context: Vec<MessageBlock> = (0..(TRACE_SUMMARY_CONTEXT + 8))
         .map(|index| {
-            context_message(
+            extension_context(
                 &format!("ctx-{index:03}"),
-                ContextKind::ExtensionEnvironment,
+                "vendor.observability",
                 &"E".repeat(8_000),
             )
         })
@@ -2762,8 +2805,8 @@ fn an_oversized_context_identity_is_omitted_whole() {
     start(&store);
     let oversized = "x".repeat(super::bounds::TRACE_IDENTITY_BYTES + 1);
     let context = [
-        context_message(&oversized, ContextKind::ExtensionEnvironment, "Oversized."),
-        context_message("ctx-kept", ContextKind::ExtensionEnvironment, "Kept."),
+        extension_context(&oversized, "vendor.observability", "Oversized."),
+        extension_context("ctx-kept", "vendor.observability", "Kept."),
     ];
     let frozen = request_with(&store, "1", 0, "prompt-A", &context);
     completion(&store, &frozen, None, None, 8);
@@ -2922,9 +2965,9 @@ fn tool_correlation_survives_paging_and_lifecycle_refresh() {
         "1",
         0,
         "prompt-A",
-        &[context_message(
+        &[extension_context(
             "ctx-environment",
-            ContextKind::ExtensionEnvironment,
+            "vendor.observability",
             "Environment facts.",
         )],
     );
@@ -3003,5 +3046,352 @@ fn tool_correlation_survives_paging_and_lifecycle_refresh() {
             .map(|id| id.as_str().to_owned()),
         Some("call-parent".to_owned()),
         "a refresh changes no immutable relation"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Read-responsibility ownership (#372 revision)
+//
+// Immutable historical presentation and mutable lifecycle repair are separate
+// responsibilities. The regressions below prove that as an implementation
+// property — deterministic counters around the two immutable relationship
+// paths — rather than inferring it from how long a refresh took.
+// ---------------------------------------------------------------------------
+
+/// A current-runtime snapshot with no running attempt, so live repair is
+/// exercised without refining any durable state.
+fn quiet_snapshot(
+    store: &dyn ConversationStore,
+) -> crate::runtime_client::snapshot::RuntimeClientSnapshot {
+    use crate::runtime_client::projection::RuntimeClientProjection;
+    use crate::runtime_client::snapshot::CapabilityView;
+    RuntimeClientProjection::new(
+        store.conversation_id().clone(),
+        vec![],
+        CapabilityView {
+            revision: CapabilityRevision::new(1),
+            tools: vec![],
+            available_tools: vec![],
+            skills: vec![],
+            sources: vec![],
+        },
+        None,
+        16,
+    )
+    .snapshot()
+    .unwrap()
+    .0
+}
+
+/// Commits one actual request that owns both immutable relationships: a
+/// System Prompt to classify against its predecessor, and canonical Context
+/// of its own.
+fn related_request(store: &dyn ConversationStore, retry: u32, prompt: &str) -> RequestSnapshot {
+    let context = [
+        runtime_context(
+            &format!("ctx-{retry}-observation"),
+            ContextKind::RuntimeToolObservation,
+            "The tool batch settled.",
+        ),
+        extension_context(
+            &format!("ctx-{retry}-environment"),
+            "vendor.observability",
+            "Environment facts.",
+        ),
+    ];
+    let frozen = request_with(store, "1", retry, prompt, &context);
+    completion(store, &frozen, None, None, 3 + i64::from(retry) * 2);
+    frozen
+}
+
+/// A lifecycle refresh resolves no immutable relationship.
+///
+/// Building a summary page runs both relationship paths; refreshing the same
+/// record runs neither. This is not a performance note: a refresh may cover
+/// `TRACE_RECORD_LIMIT` records, and an error reached only while resolving a
+/// request's Context presentation must not be able to make that record's
+/// lifecycle repair unavailable. A path that is never entered cannot fail.
+#[test]
+fn a_lifecycle_refresh_resolves_no_immutable_presentation_relationship() {
+    use super::summary::probe;
+    let store = store("conv_7c1a0b52-3d68-7e41-9a07-2f5b8d6e04c3");
+    start(&store);
+    related_request(&store, 0, "prompt-A");
+    let frozen = related_request(&store, 1, "prompt-B");
+    let projection = TraceProjection::new(&store).unwrap();
+
+    // 1. A summary page resolves both relationships, exactly as it must.
+    probe::reset();
+    let page = projection.page(None, TRACE_PAGE_LIMIT).unwrap();
+    let (system, context) = probe::counts();
+    assert_eq!(system, 2, "each request row classifies its own predecessor");
+    assert_eq!(context, 2, "each request row joins its own frozen Context");
+    let record = page
+        .records
+        .iter()
+        .filter(|record| record.kind == TraceKind::Request)
+        .nth(1)
+        .expect("the second request row");
+    let summary = record.request.as_ref().expect("a request summary");
+    assert_eq!(summary.system_prompt.state, TraceSystemPromptState::Changed);
+    assert_eq!(summary.context_additions.len(), 2);
+
+    // 2. The same record's lifecycle resolves neither.
+    probe::reset();
+    let updates = projection
+        .refresh(
+            std::slice::from_ref(&record.position),
+            Some(&quiet_snapshot(&store)),
+        )
+        .unwrap();
+    assert_eq!(
+        probe::counts(),
+        (0, 0),
+        "lifecycle refresh entered an immutable presentation path"
+    );
+
+    // 3. And the lifecycle it produced is still correct.
+    assert_eq!(updates.len(), 1);
+    let update = &updates[0];
+    assert_eq!(update.id, record.id);
+    assert_eq!(update.state, TraceState::Completed);
+    assert_eq!(update.timing, record.timing);
+    assert!(
+        update
+            .request
+            .as_ref()
+            .expect("a request outcome")
+            .failure_kind
+            .is_none()
+    );
+    let wire = serde_json::to_string(update).unwrap();
+    for immutable in [
+        "system_prompt",
+        "context_additions",
+        "certified_extension",
+        frozen.effective_system_prompt.as_str(),
+    ] {
+        assert!(!wire.contains(immutable), "lifecycle carried {immutable}");
+    }
+}
+
+/// The relationship paths stay unentered for every retained cursor, so a
+/// larger interest set cannot reintroduce O(N) immutable reconstruction.
+#[test]
+fn refreshing_many_request_cursors_reconstructs_no_immutable_presentation() {
+    use super::summary::probe;
+    let store = store("conv_3b8e46d1-5f70-7c29-8d63-4a1e9c70b528");
+    start(&store);
+    for retry in 0..12 {
+        related_request(&store, retry, &format!("prompt-{retry}"));
+    }
+    let projection = TraceProjection::new(&store).unwrap();
+    let cursors: Vec<TraceCursor> = projection
+        .page(None, TRACE_PAGE_LIMIT)
+        .unwrap()
+        .records
+        .iter()
+        .filter(|record| record.kind == TraceKind::Request)
+        .map(|record| record.position.clone())
+        .collect();
+    assert_eq!(cursors.len(), 12);
+
+    probe::reset();
+    let updates = projection
+        .refresh(&cursors, Some(&quiet_snapshot(&store)))
+        .unwrap();
+    assert_eq!(updates.len(), 12);
+    assert_eq!(
+        probe::counts(),
+        (0, 0),
+        "a wider interest set reintroduced immutable reconstruction"
+    );
+    // The 512-record interest bound still governs the refreshed set.
+    assert!(
+        projection
+            .refresh(
+                &vec![cursors[0].clone(); TRACE_RECORD_LIMIT + 1],
+                Some(&quiet_snapshot(&store))
+            )
+            .is_err()
+    );
+}
+
+/// A lifecycle update states exactly the mutable facts of the summary row it
+/// refreshes — no more, and nothing different.
+#[test]
+fn a_lifecycle_update_restates_its_summary_rows_mutable_facts_exactly() {
+    let store = store("conv_9d47f0ba-1c35-7b84-8e20-6f3a5d1c9e74");
+    start(&store);
+    let frozen = related_request(&store, 0, "prompt-A");
+    let call = bash_call("call-lifecycle");
+    propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 5);
+    append(
+        &store,
+        E::ToolExecutionStarted {
+            tool_call_id: call.id.clone(),
+            tool_id: call.tool_id.clone(),
+        },
+        6,
+    );
+    settle_tool_call(
+        &store,
+        frozen.provisional_message_id.as_str(),
+        "lifecycle-result",
+        &call,
+        ToolExecutionResult {
+            status: ToolExecutionStatus::Success,
+            content: vec![ToolResultContent::Text(TextBlock {
+                text: "done".into(),
+            })],
+            duration_ms: 12,
+            exit_code: Some(0),
+            artifacts: vec![],
+            truncation: None,
+            workflow: None,
+            managed_output: None,
+        },
+        7,
+    );
+
+    let projection = TraceProjection::new(&store).unwrap();
+    let page = projection.page(None, TRACE_PAGE_LIMIT).unwrap();
+    let cursors: Vec<TraceCursor> = page
+        .records
+        .iter()
+        .map(|record| record.position.clone())
+        .collect();
+    let updates = projection
+        .refresh(&cursors, Some(&quiet_snapshot(&store)))
+        .unwrap();
+
+    assert_eq!(updates.len(), page.records.len());
+    for (record, update) in page.records.iter().zip(&updates) {
+        assert_eq!(update.id, record.id);
+        assert_eq!(update.state, record.state);
+        assert_eq!(update.timing, record.timing);
+        assert_eq!(update.message_id, record.message_id);
+        assert_eq!(update.attachments, record.attachments);
+        assert_eq!(update.truncated, record.truncated);
+        assert_eq!(
+            update.request.as_ref().map(|outcome| (
+                outcome.failure_kind.clone(),
+                outcome.usage.clone(),
+                outcome.generation
+            )),
+            record.request.as_ref().map(|summary| (
+                summary.failure_kind.clone(),
+                summary.usage.clone(),
+                summary.generation
+            ))
+        );
+        assert_eq!(
+            update.tool.as_ref().map(|outcome| (
+                outcome.started,
+                outcome.outcome,
+                outcome.detail.clone()
+            )),
+            record.tool.as_ref().map(|summary| (
+                summary.started,
+                summary.outcome,
+                summary.detail.clone()
+            ))
+        );
+    }
+    assert!(
+        updates
+            .iter()
+            .any(|update| update.tool.is_some() && update.request.is_none()),
+        "the Tool row's own outcome still travels"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Exact canonical Context provenance (#372 revision)
+// ---------------------------------------------------------------------------
+
+/// Provenance is the canonical message's own `UserSource`, kept exact.
+///
+/// Two certified extensions contribute the same context family in the same
+/// request. The family, the assembly generation, the contributor list and the
+/// message order are all identical between them, so nothing but the frozen
+/// `UserSource` can tell them apart — and Trace must.
+#[test]
+fn two_certified_extensions_stay_distinguishable_by_exact_contributor_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("conversation.sqlite");
+    let id = ConversationId::new("conv_5a2c7e93-4b16-7d80-9f35-8e07b2c4d169");
+    let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    store.initialize(&[]).unwrap();
+    start(&store);
+    let context = [
+        runtime_context(
+            "ctx-observation",
+            ContextKind::RuntimeToolObservation,
+            "The tool batch settled.",
+        ),
+        extension_context("ctx-extension-a", "vendor-a.environment", "Facts from A."),
+        extension_context("ctx-extension-b", "vendor-b.environment", "Facts from B."),
+    ];
+    let frozen = request_with(&store, "1", 0, "prompt-A", &context);
+    completion(&store, &frozen, None, None, 8);
+
+    let additions = context_of(&page(&store), 0);
+    assert_eq!(
+        additions
+            .iter()
+            .map(|addition| addition.message_id.as_str().to_owned())
+            .collect::<Vec<_>>(),
+        vec!["ctx-observation", "ctx-extension-a", "ctx-extension-b"],
+        "native order is exactly request_context_ids"
+    );
+    assert_eq!(
+        additions
+            .iter()
+            .map(|addition| addition.context_kind)
+            .collect::<Vec<_>>(),
+        vec![
+            TraceContextKind::RuntimeToolObservation,
+            TraceContextKind::ExtensionEnvironment,
+            TraceContextKind::ExtensionEnvironment,
+        ]
+    );
+    assert_eq!(additions[0].source, TraceContextSource::Runtime);
+    assert_eq!(
+        additions[1].source,
+        extension_source("vendor-a.environment")
+    );
+    assert_eq!(
+        additions[2].source,
+        extension_source("vendor-b.environment")
+    );
+    assert_ne!(
+        additions[1].source, additions[2].source,
+        "two extensions of one family must not collapse to one provenance"
+    );
+    // The exact identity is on the wire, not a coarse namespace standing in
+    // for it, and the internal Context payload still never crosses.
+    let wire = serde_json::to_string(&page(&store)).unwrap();
+    assert!(wire.contains("vendor-a.environment"));
+    assert!(wire.contains("vendor-b.environment"));
+    assert!(!wire.contains("agent_status_metadata"));
+    // Exact extension identity is bounded by its own contract, well inside
+    // the Trace identity and summary byte bounds.
+    let projected = page(&store);
+    let record = record_of(&projected, TraceKind::Request);
+    assert!(
+        serde_json::to_vec(&record.request.as_ref().unwrap().context_additions)
+            .unwrap()
+            .len()
+            <= TRACE_SUMMARY_CONTEXT_BYTES
+    );
+    assert!(serde_json::to_vec(record).unwrap().len() <= TRACE_RECORD_BYTES);
+
+    drop(store);
+    let reopened = SqliteConversationStore::open(id, &path).unwrap();
+    assert_eq!(
+        context_of(&page(&reopened), 0),
+        additions,
+        "reopening the durable store reproduces the same typed provenance"
     );
 }

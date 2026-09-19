@@ -42,6 +42,12 @@ pub const TRACE_PAGE_BYTES: usize = 128 * 1024;
 pub const TRACE_DETAIL_BYTES: usize = 512 * 1024;
 /// Longest native identity retained; a longer one is omitted, never shortened.
 pub const TRACE_IDENTITY_BYTES: usize = 512;
+// A certified extension identity is bounded by its own contract, strictly
+// below the Trace identity bound, so exact extension provenance always fits
+// a summary row whole. Trace reuses that proof instead of adding a second
+// bound that could truncate one identity into a different one.
+const _: () =
+    assert!(crate::runtime::identity::CertifiedExtensionIdentity::MAX_BYTES < TRACE_IDENTITY_BYTES);
 /// Most canonical request Context facts carried by one request summary.
 pub const TRACE_SUMMARY_CONTEXT: usize = 16;
 /// Most artifact references retained beside one summarized Context fact.

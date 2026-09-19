@@ -104,6 +104,25 @@ such a pairing, so the case is unreachable through real transitions.
 internal `ContextKind` payload does not cross: a complete `GoalSnapshot` or
 Agent Status generation metadata never enters a summary.
 
+`TraceContextPresentation.source` is a closed typed provenance —
+`runtime`, or `certified_extension` carrying the **exact**
+`CertifiedExtensionIdentity` the canonical message froze. The family alone
+cannot name a producer: every certified extension publishes
+`extension_environment`, so two extensions would otherwise collapse into one
+indistinguishable provenance. Provenance is copied from the canonical
+message's own `UserSource` and from nothing else — not the assembly
+generation, the contributor list, the context family, message order, text or
+the current extension registry.
+
+Request-scoped Context is admitted only through Context Assembly, which
+derives exactly those two provenances, so the wire vocabulary is closed at
+two cases. A snapshot identity whose canonical message carried any other
+`UserSource` namespace is a contract violation reported through the same
+invariant error model as a non-Context identity, never a reason to widen the
+DTO. The extension identity is bounded by its own contract (128 bytes),
+strictly below the Trace identity bound, so exact provenance always fits a
+summary row whole and is never shortened into a different identity.
+
 Order is exactly the frozen `request_context_ids` order. Nothing reorders by
 timestamp, family, contributor, display name or client preference.
 
@@ -141,6 +160,26 @@ generic Subtool framework. Subagent and Workflow are not Subtool.
 `TraceLifecycle` carries mutable lifecycle facts only. It never repeats or
 mutates the immutable System Prompt or Context presentation payloads, and it
 never carries `originating_tool_call_id`: these cannot have changed.
+
+The projection owns that separation, not just the wire shape. Trace has two
+read responsibilities, and neither is allowed to depend on the other:
+
+```text
+anchor      native identity, own grouping, own durable terminal    shared
+  summary     + bounded preview + the relationships above          session/trace
+  lifecycle   + current runtime evidence                           refresh
+```
+
+A lifecycle refresh resolves only the facts a `TraceLifecycle` transmits. It
+performs no System Prompt predecessor lookup, reads no predecessor
+`RequestSnapshot`, joins no canonical Context out of the Message Ledger, and
+resolves no recorded Tool name. A refresh may cover up to 512 records, so
+this is a correctness rule and not only a cost one: an error reached solely
+while resolving a request's immutable Context presentation must not be able
+to make that record's lifecycle repair unavailable, and a path that is never
+entered cannot fail. Deterministic regressions assert this as an
+implementation property — counters around both relationship paths, zero after
+a refresh — rather than inferring it from timing.
 
 Web renders these relationships and owns none of them. It must not compare
 request details to decide whether the System Prompt changed, must not diff

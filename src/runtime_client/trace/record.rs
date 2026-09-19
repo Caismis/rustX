@@ -1,355 +1,145 @@
-//! Bounded summary-record construction, one anchor at a time.
+//! Bounded summary-record projection: one anchor, one pageable row.
 //!
-//! Each anchor resolves its own native grouping, its own terminal boundary,
-//! and a one-line preview of its content. A record never borrows a fact from
-//! a neighbouring anchor: a Tool's outcome comes from that Tool's own
-//! terminal, a request's usage from that request's own terminal fact, and a
-//! step's end from that step's own completion.
+//! A summary row is the *immutable historical presentation* of one record.
+//! It starts from the facts the anchor owns by itself ([`super::anchor`])
+//! and adds the two things only a reader of history needs:
+//!
+//! ```text
+//! bounded preview / detail summary   content this row stands for
+//! immutable relationships           System Prompt state, Context, Tool name
+//! ```
+//!
+//! Those additions are historical joins. They are performed here, when a
+//! page is built, and nowhere else: a lifecycle refresh projects
+//! [`super::TraceLifecycle`], which carries none of them, so it must not pay
+//! for them or fail because of them.
+//!
+//! A record never borrows a fact from a neighbouring anchor: a Tool's
+//! outcome comes from that Tool's own terminal, a request's usage from that
+//! request's own terminal fact, and a step's end from that step's own
+//! completion.
 
+use super::anchor::AnchorFacts;
 use super::bounds::{TRACE_RECORD_BYTES, TracePreview, encoded_len, identity_fits};
-use super::content::{message_preview, tool_outcome, tool_status_detail};
+use super::content::message_preview;
 use super::types::{
-    TraceArtifact, TraceCursor, TraceGeneration, TraceGenerationTimeline, TraceKind, TraceLocation,
-    TraceRecord, TraceRequestSummary, TraceState, TraceTiming, TraceToolCall, TraceToolSummary,
+    TraceGeneration, TraceGenerationTimeline, TraceRecord, TraceRequestSummary, TraceState,
 };
 use super::{ADOPTED_MESSAGE_LIMIT, TraceProjection};
 use crate::durable::ConversationStoreError;
 use crate::durable::presentation::FactScope;
 use crate::events::types::{RuntimeEvent as E, RuntimeEventEnvelope};
-use crate::message::types::{AssistantContentBlock, MessageBlock};
 use crate::model::generation_evidence::GenerationEvidence;
 use crate::model::types::ModelUsage;
 use crate::tools::types::ToolExecutionStatus;
 
 impl TraceProjection<'_> {
     /// Projects one anchor into its bounded summary record.
-    #[allow(clippy::too_many_lines)] // One closed anchor vocabulary, one place.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the failed durable read of any authority this row joins.
     pub(super) fn record(
         &self,
         anchor: &RuntimeEventEnvelope,
     ) -> Result<TraceRecord, ConversationStoreError> {
-        let mut record = TraceRecord {
-            id: format!("trace:{}", anchor.sequence),
-            position: TraceCursor::at(anchor.sequence),
-            location: TraceLocation {
-                attempt_id: anchor.attempt_id.clone(),
-                step_id: anchor.turn_id.clone(),
-            },
-            kind: TraceKind::Step,
-            state: TraceState::Incomplete,
-            timing: TraceTiming {
-                started_at: anchor.timestamp,
-                ended_at: None,
-                duration_ms: None,
-            },
-            preview: None,
-            request: None,
-            tool: None,
-            calls: vec![],
-            native_id: None,
-            originating_tool_call_id: None,
-            message_id: None,
-            attachments: vec![],
-            has_detail: false,
-            truncated: false,
-        };
-        let ending = match &anchor.event {
-            E::AttemptStarted { attempt_id } => {
-                record.kind = TraceKind::Attempt;
-                self.ending(
-                    FactScope::Attempt(attempt_id.clone()),
-                    &[
-                        "attempt_completed",
-                        "attempt_failed",
-                        "attempt_cancelled",
-                        "attempt_timed_out",
-                        "attempt_limit_exceeded",
-                    ],
-                )?
-            }
-            E::TurnStarted => {
-                if let (Some(attempt), Some(turn)) = (&anchor.attempt_id, &anchor.turn_id) {
-                    self.ending(
-                        FactScope::Step(attempt.clone(), turn.clone()),
-                        &["turn_completed"],
-                    )?
-                } else {
-                    None
-                }
-            }
+        let facts = self.anchor_facts(anchor)?;
+        let AnchorFacts {
+            id,
+            position,
+            location,
+            kind,
+            state,
+            timing,
+            mut preview,
+            calls,
+            native_id,
+            originating_tool_call_id,
+            message_id,
+            attachments,
+            mut tool,
+            request,
+            has_detail,
+            truncated,
+        } = facts;
+        // Everything below is presentation-only: a preview that needs its own
+        // Ledger read, the recorded Tool name, and the two request-relative
+        // relationships. None of it reaches a lifecycle update.
+        let mut summary = None;
+        match &anchor.event {
             E::InboundTurnAdopted { message_ids } => {
-                // Adoption is the canonical linearization point at which
-                // inbound became a turn this conversation owes an answer
-                // for. It is instantaneous: it has no terminal boundary and
-                // therefore no duration.
-                record.kind = TraceKind::User;
-                record.state = TraceState::Completed;
-                record.has_detail = !message_ids.is_empty();
-                record.message_id = message_ids.first().cloned();
                 for message in self
                     .store
                     .load_messages(&message_ids[..message_ids.len().min(ADOPTED_MESSAGE_LIMIT)])?
                 {
-                    if record.preview.is_none() {
-                        record.preview = message_preview(&message);
+                    if preview.is_none() {
+                        preview = message_preview(&message);
                     }
                 }
-                record.truncated = message_ids.len() > ADOPTED_MESSAGE_LIMIT;
-                None
+            }
+            E::CompactionStarted => {
+                if let Some(id) = message_id.as_ref() {
+                    for message in self.store.load_messages(std::slice::from_ref(id))? {
+                        preview = message_preview(&message);
+                    }
+                }
             }
             E::ModelRequestStarted { request_id, .. } => {
-                record.kind = TraceKind::Request;
-                record.has_detail = true;
-                let frozen = self.store.load_request_snapshot(request_id)?;
-                // The frozen snapshot owns this request's grouping. The
-                // anchor's own correlation columns agree, but the snapshot is
-                // the authority the ordinal is read from.
-                record.location = TraceLocation {
-                    attempt_id: Some(frozen.identity.attempt_id.clone()),
-                    step_id: Some(frozen.identity.turn.clone()),
-                };
-                let end = self.ending(
-                    FactScope::Request(request_id.to_string()),
-                    &["model_request_completed", "model_request_failed"],
-                )?;
-                let (failure_kind, usage, generation) = request_terminal(end.as_ref());
-                record.preview = Some(TracePreview::of(&frozen.invocation.model));
+                let request = request.as_ref().expect("a request anchor froze a snapshot");
+                let frozen = &request.frozen;
                 // Both relationships below are resolved here, from native
                 // authority, so no client has to compare request details or
                 // diff messages to discover them.
-                let system_prompt = self.system_prompt_presentation(anchor.sequence, &frozen)?;
-                let (context_additions, context_truncated) = self.context_presentation(&frozen)?;
-                record.request = Some(TraceRequestSummary {
-                    previous_failure_kind: self.previous_request_failure(&frozen)?,
+                let system_prompt = self.system_prompt_presentation(anchor.sequence, frozen)?;
+                let (context_additions, context_truncated) = self.context_presentation(frozen)?;
+                summary = Some(TraceRequestSummary {
+                    previous_failure_kind: self.previous_request_failure(frozen)?,
                     assistant_message_id: frozen.provisional_message_id.clone(),
                     request_id: request_id.clone(),
                     retry_number: frozen.identity.retry_number,
                     model: frozen.invocation.model.clone(),
-                    failure_kind,
-                    usage: usage.clone(),
-                    generation: generation
-                        .map(|evidence| generation_metrics(evidence, usage.as_ref())),
+                    failure_kind: request.failure_kind.clone(),
+                    usage: request.usage.clone(),
+                    generation: request.generation,
                     system_prompt,
                     context_additions,
                     context_truncated,
                 });
-                end
-            }
-            E::AssistantMessageCommitted { message_id } => {
-                record.kind = TraceKind::Assistant;
-                // Acceptance is the canonical commit itself; the record is
-                // complete at the instant it exists.
-                record.state = TraceState::Completed;
-                record.has_detail = true;
-                record.message_id = Some(message_id.clone());
-                for message in self.store.load_messages(std::slice::from_ref(message_id))? {
-                    record.preview = message_preview(&message);
-                    if let MessageBlock::Assistant(assistant) = message {
-                        for block in &assistant.content {
-                            match block {
-                                AssistantContentBlock::ToolCall(call)
-                                    if identity_fits(call.id.as_str())
-                                        && identity_fits(call.tool_id.as_str()) =>
-                                {
-                                    record.calls.push(TraceToolCall {
-                                        call_id: call.id.clone(),
-                                        tool_id: call.tool_id.clone(),
-                                        name: call.name.clone(),
-                                    });
-                                }
-                                AssistantContentBlock::Image(image)
-                                    if identity_fits(image.artifact_id.as_str()) =>
-                                {
-                                    record.attachments.push(TraceArtifact {
-                                        artifact_id: image.artifact_id.clone(),
-                                        image: true,
-                                        name: None,
-                                        mime_type: None,
-                                    });
-                                }
-                                AssistantContentBlock::ToolCall(_)
-                                | AssistantContentBlock::Image(_) => {
-                                    record.truncated = true;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                None
             }
             E::ToolExecutionStarted {
                 tool_call_id,
                 tool_id,
             } => {
-                record.kind = TraceKind::Tool;
-                record.has_detail = true;
-                let scope = || FactScope::ToolCall {
-                    call_id: tool_call_id.to_string(),
-                    attempt: anchor.attempt_id.clone(),
-                    turn: anchor.turn_id.clone(),
-                };
-                let end = self
-                    .ending(
-                        scope(),
-                        &["tool_execution_completed", "tool_execution_failed"],
-                    )?
-                    // Both the call and the Tool identity must match. Names
-                    // and positions never pair an outcome to a call.
-                    .filter(|event| match &event.event {
-                        E::ToolExecutionCompleted { tool_id: id, .. }
-                        | E::ToolExecutionFailed { tool_id: id, .. } => id == tool_id,
-                        _ => false,
-                    });
-                let mut summary = TraceToolSummary {
-                    call_id: tool_call_id.clone(),
-                    tool_id: tool_id.clone(),
-                    name: None,
-                    // This anchor *is* the durable start fact, so execution
-                    // is proven for this record by construction.
-                    started: true,
-                    outcome: None,
-                    detail: None,
-                };
-                if let Some(commit) = self.ending(scope(), &["tool_message_committed"])?
-                    && let E::ToolMessageCommitted { message_id, .. } = commit.event
-                {
-                    for message in self
-                        .store
-                        .load_messages(std::slice::from_ref(&message_id))?
+                if let Some(tool) = tool.as_mut() {
+                    tool.name
+                        .clone_from(&self.tool_call_name(anchor, tool_call_id, tool_id)?);
+                    if preview.is_none()
+                        && let Some(name) = tool.name.as_deref()
                     {
-                        if let MessageBlock::Tool(tool) = &message
-                            && tool.tool_call_id == *tool_call_id
-                            && tool.tool_id == *tool_id
-                        {
-                            record.message_id = Some(message_id.clone());
-                            summary.outcome = Some(tool_outcome(&tool.result.status));
-                            summary.detail = tool_status_detail(&tool.result.status)
-                                .as_deref()
-                                .map(TracePreview::of);
-                            record.preview = message_preview(&message);
-                            let (attachments, truncated) =
-                                super::content::tool_result_artifacts(&tool.result);
-                            record.attachments = attachments;
-                            record.truncated |= truncated;
-                        }
+                        preview = Some(TracePreview::of(name));
                     }
                 }
-                summary
-                    .name
-                    .clone_from(&self.tool_call_name(anchor, tool_call_id, tool_id)?);
-                if record.preview.is_none()
-                    && let Some(name) = summary.name.as_deref()
-                {
-                    record.preview = Some(TracePreview::of(name));
-                }
-                record.tool = Some(summary);
-                end
             }
-            E::CompactionStarted => {
-                record.kind = TraceKind::Compaction;
-                // Compaction has no native operation identity. Its boundary
-                // is the next compaction start or terminal in durable order.
-                let end = self
-                    .store
-                    .read_presentation_events(&crate::durable::presentation::FactQuery {
-                        scope: FactScope::All,
-                        kinds: vec![
-                            "compaction_started",
-                            "compaction_completed",
-                            "compaction_failed",
-                        ],
-                        before: None,
-                        after: anchor.sequence,
-                        ascending: true,
-                        through: self.through,
-                        limit: 1,
-                    })?
-                    .pop()
-                    .filter(|event| !matches!(event.event, E::CompactionStarted));
-                if let Some(event) = end.as_ref()
-                    && let E::CompactionCompleted {
-                        summary_message_id, ..
-                    } = &event.event
-                {
-                    record.has_detail = true;
-                    record.message_id = Some(summary_message_id.clone());
-                    for message in self
-                        .store
-                        .load_messages(std::slice::from_ref(summary_message_id))?
-                    {
-                        record.preview = message_preview(&message);
-                    }
-                }
-                end
-            }
-            E::BackgroundExecutionCommitted {
-                execution_id,
-                tool_call_id,
-                ..
-            } => {
-                record.kind = TraceKind::Background;
-                record.native_id = Some(execution_id.to_string());
-                record.originating_tool_call_id = Some(tool_call_id.clone());
-                self.ending(
-                    FactScope::Execution(execution_id.to_string()),
-                    &["background_terminal_published"],
-                )?
-            }
-            E::SubagentOwnershipCommitted {
-                subagent_id,
-                agent,
-                tool_call_id,
-                ..
-            } => {
-                record.kind = TraceKind::Subagent;
-                record.native_id = Some(subagent_id.to_string());
-                record.originating_tool_call_id = Some(tool_call_id.clone());
-                record.preview = Some(TracePreview::of(agent.as_str()));
-                self.ending(
-                    FactScope::Subagent(subagent_id.to_string()),
-                    &["subagent_terminal_published", "subagent_terminal_settled"],
-                )?
-            }
-            E::WorkflowStarted {
-                run_id,
-                tool_call_id,
-                ..
-            } => {
-                record.kind = TraceKind::Workflow;
-                record.originating_tool_call_id = Some(tool_call_id.clone());
-                let id = serde_json::to_string(run_id).map_err(|_| {
-                    ConversationStoreError::InvalidReference("invalid Workflow identity".into())
-                })?;
-                record.native_id = Some(id.clone());
-                self.ending(
-                    FactScope::Workflow(id),
-                    &[
-                        "workflow_completed",
-                        "workflow_failed",
-                        "workflow_cancelled",
-                    ],
-                )?
-            }
-            E::InteractionRequested { interaction_id, .. } => {
-                record.kind = TraceKind::Interaction;
-                record.native_id = Some(interaction_id.to_string());
-                self.ending(
-                    FactScope::Interaction(interaction_id.to_string()),
-                    &["interaction_settled"],
-                )?
-            }
-            _ => unreachable!("allowlisted anchors only"),
-        };
-        if let Some(end) = ending.filter(|end| end.sequence > anchor.sequence) {
-            record.state = terminal(&end.event);
-            record.timing.ended_at = Some(end.timestamp);
-            // Both endpoints exist, so the duration is measured rather than
-            // assumed. A record with one endpoint keeps none.
-            record.timing.duration_ms =
-                u64::try_from((end.timestamp - anchor.timestamp).num_milliseconds()).ok();
+            _ => {}
         }
-        Ok(record)
+        Ok(TraceRecord {
+            id,
+            position,
+            location,
+            kind,
+            state,
+            timing,
+            preview,
+            request: summary,
+            tool,
+            calls,
+            native_id,
+            originating_tool_call_id,
+            message_id,
+            attachments,
+            has_detail,
+            truncated,
+        })
     }
 
     /// The exact preceding actual request's failure class, when recorded.
@@ -391,28 +181,6 @@ impl TraceProjection<'_> {
         Ok(self
             .step_tool_call(anchor, call_id, tool_id)?
             .map(|(_, call)| call.name))
-    }
-}
-
-/// The terminal outcome facts of one request, from its own terminal event.
-fn request_terminal(
-    end: Option<&RuntimeEventEnvelope>,
-) -> (
-    Option<crate::model::error::ModelErrorKind>,
-    Option<ModelUsage>,
-    Option<GenerationEvidence>,
-) {
-    match end.map(|event| &event.event) {
-        Some(E::ModelRequestCompleted {
-            usage, generation, ..
-        }) => (None, usage.clone(), *generation),
-        Some(E::ModelRequestFailed {
-            error,
-            usage,
-            generation,
-            ..
-        }) => (Some(error.kind.clone()), usage.clone(), *generation),
-        _ => (None, None, None),
     }
 }
 

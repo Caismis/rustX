@@ -1193,6 +1193,14 @@ export type TraceSystemPromptState = 'initial' | 'changed' | 'unchanged' | 'prev
 export type TraceContextKind =
   'goal_status' | 'runtime_tool_observation' | 'extension_environment' | 'agent_status';
 /**
+ * The stable logical key of one certified extension.
+ *
+ * Package/content attestation is intentionally not part of this type.  A
+ * package may be upgraded while preserving its logical ordering identity;
+ * the assembly generation records the attestation separately.
+ */
+export type CertifiedExtensionIdentity = string;
+/**
  * Provider/model-issued opaque correlation string, scoped to a request/publication.
  * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
  */
@@ -4753,9 +4761,19 @@ export interface TraceContextPresentation {
   message_id: MessageId;
   context_kind: TraceContextKind;
   /**
-   * Provenance namespace of the canonical inbound fact.
+   * The exact native producer, copied from the canonical message's own
+   * `UserSource`. It is never inferred from the context family, the
+   * contributor list, the assembly generation, message order, text, or
+   * the current extension registry.
    */
-  source: string;
+  source:
+    | {
+        type: 'runtime';
+      }
+    | {
+        contributor: CertifiedExtensionIdentity;
+        type: 'certified_extension';
+      };
   preview?: TracePreview | null;
   attachments: TraceArtifact[];
   truncated: boolean;
@@ -5577,7 +5595,11 @@ export interface UserMessageBlock {
     | {
         extension: {
           /**
-           * The rustX-derived logical extension identity.
+           * The stable logical key of one certified extension.
+           *
+           * Package/content attestation is intentionally not part of this type.  A
+           * package may be upgraded while preserving its logical ordering identity;
+           * the assembly generation records the attestation separately.
            */
           contributor: string;
         };
@@ -6822,7 +6844,11 @@ export interface UserMessageBlock1 {
     | {
         extension: {
           /**
-           * The rustX-derived logical extension identity.
+           * The stable logical key of one certified extension.
+           *
+           * Package/content attestation is intentionally not part of this type.  A
+           * package may be upgraded while preserving its logical ordering identity;
+           * the assembly generation records the attestation separately.
            */
           contributor: string;
         };
@@ -7688,7 +7714,11 @@ export interface UserMessageBlock2 {
     | {
         extension: {
           /**
-           * The rustX-derived logical extension identity.
+           * The stable logical key of one certified extension.
+           *
+           * Package/content attestation is intentionally not part of this type.  A
+           * package may be upgraded while preserving its logical ordering identity;
+           * the assembly generation records the attestation separately.
            */
           contributor: string;
         };
@@ -9233,7 +9263,11 @@ export interface UserMessageBlock3 {
     | {
         extension: {
           /**
-           * The rustX-derived logical extension identity.
+           * The stable logical key of one certified extension.
+           *
+           * Package/content attestation is intentionally not part of this type.  A
+           * package may be upgraded while preserving its logical ordering identity;
+           * the assembly generation records the attestation separately.
            */
           contributor: string;
         };

@@ -42,10 +42,28 @@
 //! Context introduction RequestSnapshot.request_context_ids + Ledger reads
 //! Tool-owned domains   the outer ToolCallId frozen in the native start fact
 //! ```
+//!
+//! ## The two read responsibilities
+//!
+//! Immutable historical presentation and mutable lifecycle repair are
+//! separate responsibilities, and neither depends on the other:
+//!
+//! ```text
+//! anchor    native identity, grouping, own durable terminal   shared
+//!   record    + bounded preview and the relationships above   page()
+//!   lifecycle + current runtime evidence                      refresh()
+//! ```
+//!
+//! A refresh therefore resolves no relationship a `TraceLifecycle` does not
+//! carry. That is a correctness rule, not a performance note: an error
+//! reached only while resolving a request's Context presentation must not
+//! make that record's lifecycle repair unavailable.
 
+mod anchor;
 mod bounds;
 mod content;
 mod detail;
+mod lifecycle;
 mod live;
 mod record;
 mod request;
@@ -58,14 +76,15 @@ pub use bounds::{
     TRACE_SUMMARY_CONTEXT_BYTES, TraceJson, TracePreview, TraceText,
 };
 pub use types::{
-    TraceArtifact, TraceContentBlock, TraceContextKind, TraceContextPresentation, TraceCursor,
-    TraceDetail, TraceGeneration, TraceGenerationTimeline, TraceKind, TraceLifecycle,
-    TraceLocation, TraceManagedOutput, TraceMessageDetail, TraceMessageRole, TracePage,
-    TraceRecord, TraceRequestDetail, TraceRequestFailure, TraceRequestMessage, TraceRequestOption,
-    TraceRequestOutcome, TraceRequestSummary, TraceState, TraceSystemPromptPresentation,
-    TraceSystemPromptState, TraceTiming, TraceToolCall, TraceToolDefinition, TraceToolDetail,
-    TraceToolLifecycle, TraceToolOutcome, TraceToolOutcomeUpdate, TraceToolResult, TraceToolSource,
-    TraceToolSummary, TraceToolTruncation,
+    TraceArtifact, TraceContentBlock, TraceContextKind, TraceContextPresentation,
+    TraceContextSource, TraceCursor, TraceDetail, TraceGeneration, TraceGenerationTimeline,
+    TraceKind, TraceLifecycle, TraceLocation, TraceManagedOutput, TraceMessageDetail,
+    TraceMessageRole, TracePage, TraceRecord, TraceRequestDetail, TraceRequestFailure,
+    TraceRequestMessage, TraceRequestOption, TraceRequestOutcome, TraceRequestSummary, TraceState,
+    TraceSystemPromptPresentation, TraceSystemPromptState, TraceTiming, TraceToolCall,
+    TraceToolDefinition, TraceToolDetail, TraceToolLifecycle, TraceToolOutcome,
+    TraceToolOutcomeUpdate, TraceToolResult, TraceToolSource, TraceToolSummary,
+    TraceToolTruncation,
 };
 
 use record::bound_record;
@@ -270,6 +289,17 @@ impl<'a> TraceProjection<'a> {
     }
 
     /// Refreshes loaded records' mutable lifecycle at this cut.
+    ///
+    /// Only the facts a [`TraceLifecycle`] transmits are resolved. The
+    /// immutable historical relationships a summary row carries — the System
+    /// Prompt predecessor, the canonical Context introduction and the
+    /// recorded Tool name — are not projected, not read, and therefore
+    /// cannot make lifecycle repair slow or unavailable.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an interest set larger than [`TRACE_RECORD_LIMIT`], rejects
+    /// an unparseable cursor, and propagates failed lifecycle reads.
     pub(crate) fn refresh(
         &self,
         records: &[TraceCursor],
@@ -286,38 +316,11 @@ impl<'a> TraceProjection<'a> {
                 let Some(anchor) = self.anchor_at(cursor)? else {
                     return Ok(None);
                 };
-                let mut record = self.record(&anchor)?;
+                let mut facts = self.anchor_facts(&anchor)?;
                 if let Some(snapshot) = snapshot {
-                    repair_records(std::slice::from_mut(&mut record), snapshot);
+                    live::repair_anchor(&mut facts, snapshot);
                 }
-                bound_record(&mut record);
-                let mut update = TraceLifecycle {
-                    id: record.id,
-                    state: record.state,
-                    timing: record.timing,
-                    request: record.request.map(|request| TraceRequestOutcome {
-                        failure_kind: request.failure_kind,
-                        usage: request.usage,
-                        generation: request.generation,
-                    }),
-                    tool: record.tool.map(|tool| TraceToolOutcomeUpdate {
-                        started: tool.started,
-                        outcome: tool.outcome,
-                        detail: tool.detail,
-                    }),
-                    message_id: record.message_id,
-                    attachments: record.attachments,
-                    truncated: record.truncated,
-                };
-                // Leave room for the ordinary snapshot in the shared frame.
-                // Oversized optional references become visibly partial; they
-                // never justify omitting a loaded active record's lifecycle.
-                if bounds::encoded_len(&update) > 1024 {
-                    update.attachments.clear();
-                    update.message_id = None;
-                    update.truncated = true;
-                }
-                Ok(Some(update))
+                Ok(Some(facts.lifecycle()))
             })
             .collect::<Result<Vec<_>, _>>()
             .map(|updates| updates.into_iter().flatten().collect())

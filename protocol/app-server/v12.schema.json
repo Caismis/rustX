@@ -7548,8 +7548,8 @@
           "$ref": "#/$defs/TraceContextKind"
         },
         "source": {
-          "description": "Provenance namespace of the canonical inbound fact.",
-          "type": "string"
+          "description": "The exact native producer, copied from the canonical message's own\n`UserSource`. It is never inferred from the context family, the\ncontributor list, the assembly generation, message order, text, or\nthe current extension registry.",
+          "$ref": "#/$defs/TraceContextSource"
         },
         "preview": {
           "anyOf": [
@@ -7589,6 +7589,47 @@
         "extension_environment",
         "agent_status"
       ]
+    },
+    "TraceContextSource": {
+      "description": "The exact native producer of one admitted request Context fact.\n\nRequest-scoped canonical Context has exactly one admission path — Context\nAssembly — and that path derives exactly two provenances, so this\nvocabulary is closed at two cases. The remaining `UserSource`\nnamespaces belong to other core-owned inbound paths and cannot reach\nrequest Context; a snapshot identity that claimed one would be an\ninvariant violation, reported as such rather than widening this type.\n\nA certified extension keeps its **exact** logical identity. A coarse\nnamespace would make two different extensions contributing the same\ncontext family indistinguishable in Trace, which is precisely the\nquestion a reader asks about extension-owned context. The identity is\nassigned by rustX during admission; a contributor never supplies it.",
+      "oneOf": [
+        {
+          "description": "rustX itself: native runtime observation, Goal and Agent Status.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "runtime"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "One certified extension, named by its exact logical identity.",
+          "type": "object",
+          "properties": {
+            "contributor": {
+              "$ref": "#/$defs/CertifiedExtensionIdentity"
+            },
+            "type": {
+              "type": "string",
+              "const": "certified_extension"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "contributor"
+          ]
+        }
+      ]
+    },
+    "CertifiedExtensionIdentity": {
+      "description": "The stable logical key of one certified extension.\n\nPackage/content attestation is intentionally not part of this type.  A\npackage may be upgraded while preserving its logical ordering identity;\nthe assembly generation records the attestation separately.",
+      "type": "string"
     },
     "TraceArtifact": {
       "description": "Safe reference to the existing native artifact carrier, never a path.",
@@ -9754,10 +9795,6 @@
           "additionalProperties": false
         }
       ]
-    },
-    "CertifiedExtensionIdentity": {
-      "description": "The stable logical key of one certified extension.\n\nPackage/content attestation is intentionally not part of this type.  A\npackage may be upgraded while preserving its logical ordering identity;\nthe assembly generation records the attestation separately.",
-      "type": "string"
     },
     "InboundKind": {
       "description": "Typed kind of inbound information.",

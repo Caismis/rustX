@@ -261,6 +261,18 @@ const CONTEXT_KIND: Record<TraceContextKind, string> = {
 };
 
 /**
+ * The exact native producer the server copied from the canonical message.
+ *
+ * Two certified extensions publish the same Context family, so the family
+ * cannot name the producer and this renders the contributor identity the
+ * server sent. No name is derived from the Context kind, and no extension
+ * catalog is consulted: this is display of a resolved fact, not inference.
+ */
+function contextSource(source: TraceContextPresentation['source']): string {
+  return source.type === 'runtime' ? 'Runtime' : `Extension ${source.contributor}`;
+}
+
+/**
  * The System Prompt relationship the server resolved for this request.
  *
  * Nothing here compares request details. The classification, and the page
@@ -312,7 +324,7 @@ function ContextAdditions({
       {additions.map(addition => (
         <section key={addition.message_id} className={css.requestMessage}>
           <h4 className={css.blockLabel}>
-            {CONTEXT_KIND[addition.context_kind]} · {addition.source}
+            {CONTEXT_KIND[addition.context_kind]} · {contextSource(addition.source)}
             <span className={css.machine}> {addition.message_id}</span>
           </h4>
           {addition.preview && <p className={css.preview}>{addition.preview.text}</p>}
