@@ -96,6 +96,40 @@ pub(super) fn journal(envelope: &crate::events::types::RuntimeEventEnvelope) -> 
         "attempt_id": envelope.attempt_id, "turn_id": envelope.turn_id,
         "timestamp": envelope.timestamp, "event": event(&envelope.event)})
 }
+/// Archive Journal status is outcome evidence, not executor diagnostic prose.
+/// Exhaustive by design: a new status must receive an explicit v1 decision.
+fn tool_execution_status(status: &crate::tools::types::ToolExecutionStatus) -> Value {
+    use crate::tools::types::ToolExecutionStatus;
+    match status {
+        ToolExecutionStatus::Success => json!({"type":"success"}),
+        ToolExecutionStatus::Failed { .. } => {
+            json!({"type":"failed", "diagnostic_unavailable":"executor diagnostic excluded"})
+        }
+        ToolExecutionStatus::Denied { .. } => {
+            json!({"type":"denied", "diagnostic_unavailable":"executor diagnostic excluded"})
+        }
+        ToolExecutionStatus::Cancelled { reason, phase } => {
+            json!({"type":"cancelled", "reason":reason, "phase":phase})
+        }
+        ToolExecutionStatus::TimedOut => json!({"type":"timed_out"}),
+        ToolExecutionStatus::OutcomeUnknown { .. } => {
+            json!({"type":"outcome_unknown", "diagnostic_unavailable":"executor diagnostic excluded"})
+        }
+    }
+}
+
+/// Tool-owned content and structured execution facts remain intact. Only the
+/// Journal's status copy crosses the restricted diagnostic boundary; canonical
+/// Tool messages use `message()` and retain the original result exactly.
+fn tool_execution_result(result: &crate::tools::types::ToolExecutionResult) -> Value {
+    json!({
+        "status":tool_execution_status(&result.status), "content":result.content,
+        "duration_ms":result.duration_ms, "exit_code":result.exit_code,
+        "artifacts":result.artifacts, "truncation":result.truncation,
+        "workflow":result.workflow, "managed_output":result.managed_output,
+    })
+}
+
 fn finish_reason(reason: &crate::model::ModelFinishReason) -> Value {
     use crate::model::ModelFinishReason;
     match reason {
@@ -229,13 +263,28 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         } => {
             json!({"type":"tool_execution_settlement_control_failed","tool_call_id":tool_call_id,"tool_id":tool_id,"diagnostic_unavailable":"executor diagnostic excluded"})
         }
+        RuntimeEvent::ToolExecutionCompleted {
+            tool_call_id,
+            tool_id,
+            result,
+        } => {
+            json!({"type":"tool_execution_completed", "tool_call_id":tool_call_id, "tool_id":tool_id, "result":tool_execution_result(result)})
+        }
+        RuntimeEvent::WorkflowCandidateInvocation {
+            node,
+            input,
+            result,
+            candidate_unchanged,
+        } => {
+            json!({"type":"workflow_candidate_invocation", "node":node, "input":input, "result":tool_execution_status(result), "candidate_unchanged":candidate_unchanged})
+        }
         RuntimeEvent::WorkflowFailed {
             workflow_id,
             run_id,
             status,
             ..
         } => {
-            json!({"type":"workflow_failed","workflow_id":workflow_id,"run_id":run_id,"status":status,"diagnostic_unavailable":"runtime diagnostic excluded"})
+            json!({"type":"workflow_failed","workflow_id":workflow_id,"run_id":run_id,"status":tool_execution_status(status),"diagnostic_unavailable":"runtime diagnostic excluded"})
         }
         RuntimeEvent::SubagentTerminalPublished {
             subagent_id,
@@ -274,11 +323,18 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
                 } => {
                     json!({"type":"lifecycle","fact":{"type":"settlement_control_failed","diagnostic_unavailable":"executor diagnostic excluded"}})
                 }
+                NativeInvocationFact::Completed { status } => {
+                    json!({"type":"completed", "status":tool_execution_status(status)})
+                }
                 NativeInvocationFact::Prepared { .. }
                 | NativeInvocationFact::Started
                 | NativeInvocationFact::Progress { .. }
-                | NativeInvocationFact::Completed { .. }
-                | NativeInvocationFact::Lifecycle { .. } => json!(fact),
+                | NativeInvocationFact::Lifecycle {
+                    fact:
+                        InvocationFact::Deadline { .. }
+                        | InvocationFact::CancellationRequested { .. }
+                        | InvocationFact::SettlementObserved { .. },
+                } => json!(fact),
             };
             json!({"type":"native_tool_invocation","invocation_id":invocation_id,"tool_id":tool_id,"fact":fact})
         }
@@ -301,7 +357,6 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         | RuntimeEvent::ToolExecutionDeadlineFired { .. }
         | RuntimeEvent::ToolExecutionCancellationRequested { .. }
         | RuntimeEvent::ToolExecutionSettlementObserved { .. }
-        | RuntimeEvent::ToolExecutionCompleted { .. }
         | RuntimeEvent::ToolMessageCommitted { .. }
         | RuntimeEvent::CompactionStarted
         | RuntimeEvent::CompactionCompleted { .. }
@@ -311,7 +366,6 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
         | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
         | RuntimeEvent::WorkflowWorkspaceOwned { .. }
-        | RuntimeEvent::WorkflowCandidateInvocation { .. }
         | RuntimeEvent::WorkflowWorkspaceDisposalStarted { .. }
         | RuntimeEvent::WorkflowStarted { .. }
         | RuntimeEvent::WorkflowBlockStarted { .. }
@@ -336,6 +390,59 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn archive_tool_status_preserves_only_closed_execution_semantics() {
+        use crate::runtime::types::CancellationReason;
+        use crate::tools::types::{ToolCancellationPhase, ToolExecutionStatus as Status};
+        for (status, expected) in [
+            (Status::Success, json!({"type":"success"})),
+            (
+                Status::Failed {
+                    error: "ARCHIVE_NATIVE_FAILED_DIAGNOSTIC".into(),
+                },
+                json!({"type":"failed","diagnostic_unavailable":"executor diagnostic excluded"}),
+            ),
+            (
+                Status::Denied {
+                    reason: "ARCHIVE_NATIVE_DENIED_DIAGNOSTIC".into(),
+                },
+                json!({"type":"denied","diagnostic_unavailable":"executor diagnostic excluded"}),
+            ),
+            (
+                Status::OutcomeUnknown {
+                    detail: "ARCHIVE_NATIVE_UNKNOWN_DIAGNOSTIC".into(),
+                },
+                json!({"type":"outcome_unknown","diagnostic_unavailable":"executor diagnostic excluded"}),
+            ),
+            (Status::TimedOut, json!({"type":"timed_out"})),
+        ] {
+            assert_eq!(tool_execution_status(&status), expected);
+            let native = crate::events::types::RuntimeEvent::NativeToolInvocation {
+                invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: crate::runtime::identity::ToolCallId::new("call"),
+                },
+                tool_id: crate::runtime::identity::ToolId::new("tool"),
+                fact: crate::tools::invocation::NativeInvocationFact::Completed { status },
+            };
+            assert_eq!(
+                event(&native)["fact"],
+                json!({"type":"completed","status":expected})
+            );
+        }
+        for (phase, encoded) in [
+            (ToolCancellationPhase::BeforeStart, "before_start"),
+            (ToolCancellationPhase::DuringExecution, "during_execution"),
+        ] {
+            assert_eq!(
+                tool_execution_status(&Status::Cancelled {
+                    reason: CancellationReason::ParentCancelled,
+                    phase,
+                }),
+                json!({"type":"cancelled","reason":"parent_cancelled","phase":encoded})
+            );
+        }
+    }
+
     #[test]
     fn archive_runtime_diagnostics_are_not_authored_history() {
         let private = "ARCHIVE_INTERNAL_DIAGNOSTIC_SECRET";

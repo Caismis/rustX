@@ -187,7 +187,7 @@ configuration and process-local runtime_resource_revision are deliberately absen
 
 | Authority | v1 boundary and ownership rationale |
 | --- | --- |
-| Journal | Explicit envelope and exhaustive event classification. Pure identity/measurement/control facts and model-visible Tool results use native encoding. Mixed events project typed model failure/retry/timing evidence and runtime failure classes, excluding raw ModelError message/provider_code, unnormalized provider finish codes, runtime/executor diagnostic prose, workspace cleanup diagnostics and recovery comparison guards. New event variants require an explicit classification. |
+| Journal | Explicit envelope and exhaustive event classification. Pure identity/measurement/control facts use native encoding. Tool execution results explicitly retain Tool-owned content and structured facts while projecting their status. Mixed events project typed model failure/retry/timing evidence and runtime failure classes, excluding raw ModelError message/provider_code, unnormalized provider finish codes, runtime/executor diagnostic prose, workspace cleanup diagnostics and recovery comparison guards. New event variants require an explicit classification. |
 | Ledger | User and Tool native values are accepted model-visible historical content, including authored JSON and Tool failure feedback. Assistant projection names identity/content and reasoning text; provider_state is never serialized. Other Assistant blocks contain authored text, Tool calls or artifact references. |
 | Surface | Direct native encoding: only structural operations over canonical message identities. |
 | Requests | Explicit v1 DTO and shared closed option allowlist described above. No durable snapshot or invocation flattening. |
@@ -196,6 +196,25 @@ configuration and process-local runtime_resource_revision are deliberately absen
 | Inherited responses | Direct native CompletedResponseProvenance: lineage identities, timestamp, normalized token counts and timing measurements only; no provider binding or destination execution claim. |
 | Manifest/lineage | Explicit manifest fields and archive metadata structs; native SessionSnapshot/SessionNode contain public identity, topology, authored name and timestamps only. No Session configuration is read. |
 | Artifact metadata/bytes | Native File/Image/Tool artifact descriptors contain artifact identity and authored display metadata; bytes are Session-owned tool content. Paths never become identity. |
+
+Journal `ToolExecutionStatus` values all cross one exhaustive v1 projection:
+`success` and `timed_out` retain their kinds; `cancelled` retains its typed
+`reason` and `phase`; `failed`, `denied` and `outcome_unknown` retain their distinct
+kinds with `diagnostic_unavailable: "executor diagnostic excluded"`. Their native
+`error`, `reason` and `detail` prose is absent. The helper covers native invocation
+completion, Workflow candidate invocation, Workflow failure status, and the
+nested status in ordinary `ToolExecutionCompleted.result`. Workflow failure's
+outer diagnostic and native settlement-control diagnostics remain excluded.
+Native Prepared/Started/Progress and closed lifecycle facts retain their existing
+historical fields; both status and lifecycle matches require new variants to
+receive an archive decision.
+
+This restriction belongs to the Journal, not canonical Tool history. A canonical
+Tool message retains its exact result, including model-visible failure feedback,
+authored text/JSON and legitimate paths. Tool-owned Journal result content also
+remains intact. No string, credential-pattern or path scanner is used. The decoded
+ZIP regression exercises all three diagnostic-bearing statuses in all four event
+families, and compares the canonical Tool message against its original value.
 
 These safe direct native contracts remain subject to this ownership rule when
 extended; an infrastructure/private field requires an archive projection before

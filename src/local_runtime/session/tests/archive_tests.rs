@@ -577,3 +577,186 @@ fn archive_global_ownership_rejects_two_parents_and_cycles_before_cut() {
     claim_child(&store_for(&catalog, &session, &child), &conversation);
     assert_ownership_rejected_before_archive_capture(root.path(), &session);
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Real durable events across every Journal status carrier.
+async fn archive_tool_status_diagnostics_are_excluded_but_canonical_tool_history_is_exact() {
+    use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
+    use crate::runtime::identity::EventId;
+    use crate::tools::invocation::NativeInvocationFact;
+    use crate::tools::types::{ToolInvocationId, ToolResultContent};
+    let authored = "AUTHORED_TOOL_TEXT_SECRET /tmp/user-visible/example /home/user/project Authorization: Bearer AUTHORED_VALUE";
+    let mut history = source_history();
+    let MessageBlock::Tool(tool) = &mut history[2] else {
+        panic!("Tool fixture")
+    };
+    tool.result.status = ToolExecutionStatus::Failed {
+        error: authored.into(),
+    };
+    tool.result.content = vec![ToolResultContent::Text(TextBlock {
+        text: authored.into(),
+    })];
+    let canonical_tool = serde_json::to_value(&history[2]).unwrap();
+    let (directory, catalog, _) = open_catalog();
+    let (conversation, session, _) = append_history(&catalog, &history);
+    let store = store_for(&catalog, &session, &conversation);
+    let mut node = crate::runtime::workflow::test_instance("archive-test", "candidate");
+    node.block.run.conversation_id = conversation.clone();
+    let input = crate::runtime::workspace::CandidateReference {
+        run: node.block.run.clone(),
+        version: 1,
+        content: "c".repeat(64),
+    };
+    // Candidate events require an existing durable run-owned workspace fact.
+    let workspace = crate::runtime::workspace::WorkspaceSnapshot {
+        borrowed_from: None,
+        logical_workspace: directory.path().join("workspaces/candidate"),
+        isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
+            crate::runtime::workspace::GitWorktreeSnapshot {
+                source_repository_root: directory.path().join("project"),
+                repository_relative_workspace: std::path::PathBuf::new(),
+                physical_worktree_root: directory.path().join("workspaces/candidate"),
+                base_commit: "a".repeat(40),
+                branch: "rustx/candidate".into(),
+                parent_had_uncommitted_changes: false,
+            },
+        ),
+    };
+    store
+        .append_event(RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: crate::runtime::workspace::workflow_resource_event_id(
+                &node.block.run,
+                "owned",
+            ),
+            sequence: 0,
+            conversation_id: conversation.clone(),
+            attempt_id: None,
+            turn_id: None,
+            timestamp: Utc::now(),
+            event: RuntimeEvent::WorkflowWorkspaceOwned {
+                run_id: node.block.run.clone(),
+                workspace,
+            },
+        })
+        .unwrap();
+    let mut markers = vec!["ARCHIVE_WORKFLOW_OUTER_DIAGNOSTIC".to_owned()];
+    for family in ["NATIVE", "CANDIDATE", "WORKFLOW_FAILED", "TOOL_COMPLETED"] {
+        for kind in ["FAILED", "DENIED", "UNKNOWN"] {
+            let marker = format!("ARCHIVE_{family}_{kind}_DIAGNOSTIC");
+            let status = match kind {
+                "FAILED" => ToolExecutionStatus::Failed {
+                    error: marker.clone(),
+                },
+                "DENIED" => ToolExecutionStatus::Denied {
+                    reason: marker.clone(),
+                },
+                "UNKNOWN" => ToolExecutionStatus::OutcomeUnknown {
+                    detail: marker.clone(),
+                },
+                _ => unreachable!(),
+            };
+            markers.push(marker);
+            let event = match family {
+                "NATIVE" => RuntimeEvent::NativeToolInvocation {
+                    invocation_id: ToolInvocationId::Workflow {
+                        node: Box::new(node.clone()),
+                    },
+                    tool_id: ToolId::new("tool-test"),
+                    fact: NativeInvocationFact::Completed { status },
+                },
+                "CANDIDATE" => RuntimeEvent::WorkflowCandidateInvocation {
+                    node: node.clone(),
+                    input: input.clone(),
+                    result: status,
+                    candidate_unchanged: true,
+                },
+                "WORKFLOW_FAILED" => RuntimeEvent::WorkflowFailed {
+                    workflow_id: node.block.definition.workflow_id.clone(),
+                    run_id: node.block.run.clone(),
+                    diagnostic: "ARCHIVE_WORKFLOW_OUTER_DIAGNOSTIC".into(),
+                    status,
+                },
+                "TOOL_COMPLETED" => RuntimeEvent::ToolExecutionCompleted {
+                    tool_call_id: ToolCallId::new("source-call"),
+                    tool_id: ToolId::new("tool-test"),
+                    result: ToolExecutionResult {
+                        status,
+                        content: vec![ToolResultContent::Text(TextBlock {
+                            text: authored.into(),
+                        })],
+                        duration_ms: 42,
+                        exit_code: Some(7),
+                        artifacts: Vec::new(),
+                        truncation: None,
+                        workflow: None,
+                        managed_output: None,
+                    },
+                },
+                _ => unreachable!(),
+            };
+            store
+                .append_event(RuntimeEventEnvelope {
+                    schema_version: EVENT_SCHEMA_VERSION,
+                    event_id: EventId::new(format!("{family}-{kind}")),
+                    sequence: 0,
+                    conversation_id: conversation.clone(),
+                    attempt_id: None,
+                    turn_id: None,
+                    timestamp: Utc::now(),
+                    event,
+                })
+                .unwrap();
+        }
+    }
+    let files = decode(
+        SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
+            .unwrap(),
+    )
+    .await;
+    for bytes in files.values() {
+        let text = String::from_utf8_lossy(bytes);
+        for marker in &markers {
+            assert!(!text.contains(marker), "leaked {marker}");
+        }
+    }
+    let messages = records(&files, &conversation, "messages");
+    assert_eq!(
+        messages[2], canonical_tool,
+        "canonical content and failure feedback remain exact"
+    );
+    assert_eq!(messages[2]["result"]["content"][0]["text"], authored);
+    let mut statuses = Vec::new();
+    for envelope in records(&files, &conversation, "journal") {
+        let event = &envelope["event"];
+        let status = match event["type"].as_str().unwrap() {
+            "native_tool_invocation" => &event["fact"]["status"],
+            "workflow_candidate_invocation" => {
+                assert_eq!(event["node"], serde_json::json!(node));
+                assert_eq!(event["input"], serde_json::json!(input));
+                assert_eq!(event["candidate_unchanged"], true);
+                &event["result"]
+            }
+            "workflow_failed" => {
+                assert_eq!(event["run_id"], serde_json::json!(node.block.run));
+                assert!(event.get("diagnostic").is_none());
+                &event["status"]
+            }
+            "tool_execution_completed" => {
+                assert_eq!(event["result"]["content"][0]["text"], authored);
+                assert_eq!(event["result"]["duration_ms"], 42);
+                assert_eq!(event["result"]["exit_code"], 7);
+                &event["result"]["status"]
+            }
+            _ => continue,
+        };
+        assert_eq!(
+            status["diagnostic_unavailable"],
+            "executor diagnostic excluded"
+        );
+        statuses.push(status["type"].as_str().unwrap().to_owned());
+    }
+    for kind in ["failed", "denied", "outcome_unknown"] {
+        assert_eq!(statuses.iter().filter(|s| s.as_str() == kind).count(), 4);
+    }
+}
