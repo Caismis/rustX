@@ -250,7 +250,8 @@ use super::inbox::{
 /// Version 37 adds native compare-and-set revisions to Pending Inbound.
 /// Version 39 introduced the Tool occurrence index.
 /// Version 40 makes Tool-result occurrence ownership canonical; prior shapes are refused.
-pub const SQLITE_SCHEMA_VERSION: i64 = 40;
+/// Version 41 adds generation evidence to persisted request terminal events.
+pub const SQLITE_SCHEMA_VERSION: i64 = 41;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -13462,7 +13463,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 40);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 41);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -13531,7 +13532,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 40);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 41);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -13711,6 +13712,34 @@ mod tests {
                 stored: 34,
                 expected: SQLITE_SCHEMA_VERSION
             })
+        ));
+    }
+
+    #[test]
+    fn preceding_schema_is_rejected_before_event_deserialization() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("preceding.sqlite");
+        let id = ConversationId::new("conv_497e1eed-f051-7f55-8d8c-4775b598e15c");
+        {
+            let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+            let connection = store.conn.lock().unwrap();
+            // Valid JSON but deliberately not a decodable RuntimeEventEnvelope.
+            // The version gate must win before any payload reader can run.
+            connection.execute(
+                "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json) VALUES(1,'incompatible',?1,?2,NULL,NULL,'{}')",
+                params![i64::from(EVENT_SCHEMA_VERSION), id.as_str()],
+            ).unwrap();
+            connection
+                .execute(
+                    "UPDATE rustx_store SET schema_version=?1, next_event_sequence=1 WHERE id=1",
+                    params![SQLITE_SCHEMA_VERSION - 1],
+                )
+                .unwrap();
+        }
+        assert!(matches!(
+            SqliteConversationStore::open(id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch { stored, expected })
+                if stored == SQLITE_SCHEMA_VERSION - 1 && expected == SQLITE_SCHEMA_VERSION
         ));
     }
 

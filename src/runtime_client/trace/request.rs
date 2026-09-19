@@ -87,19 +87,20 @@ pub(super) fn request_detail(
     // revision and replays the snapshot's own frozen request-only items.
     let reconstructed = store.reconstruct_model_request(&snapshot.request_id)?;
     let (messages, messages_truncated) = request_messages(&reconstructed);
-    let tools_truncated = reconstructed.tools.len() > TRACE_DETAIL_TOOLS;
-    let tools = reconstructed
-        .tools
-        .iter()
-        .take(TRACE_DETAIL_TOOLS)
-        .filter(|definition| identity_fits(definition.id.as_str()))
-        .map(|definition| TraceToolDefinition {
+    let mut tools_truncated = reconstructed.tools.len() > TRACE_DETAIL_TOOLS;
+    let mut tools = Vec::new();
+    for definition in reconstructed.tools.iter().take(TRACE_DETAIL_TOOLS) {
+        if !identity_fits(definition.id.as_str()) {
+            tools_truncated = true;
+            continue;
+        }
+        tools.push(TraceToolDefinition {
             tool_id: definition.id.clone(),
             name: definition.name.clone(),
             description: TraceText::detail(&definition.description),
             input_schema: TraceJson::bounded(&definition.input_schema),
-        })
-        .collect();
+        });
+    }
     let (options, omitted_option_count) = request_options(&snapshot.invocation.request_params);
     Ok(TraceRequestDetail {
         request_id: snapshot.request_id.clone(),
@@ -155,7 +156,7 @@ fn request_message(message: &ModelInputMessage) -> TraceRequestMessage {
                 message_id: identity_fits(user.id.as_str()).then(|| user.id.clone()),
                 source: Some(user_source_label(&user.source).to_owned()),
                 blocks,
-                truncated,
+                truncated: truncated || !identity_fits(user.id.as_str()),
             }
         }
         ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) => {
@@ -165,7 +166,7 @@ fn request_message(message: &ModelInputMessage) -> TraceRequestMessage {
                 message_id: identity_fits(assistant.id.as_str()).then(|| assistant.id.clone()),
                 source: None,
                 blocks,
-                truncated,
+                truncated: truncated || !identity_fits(assistant.id.as_str()),
             }
         }
         ModelInputMessage::Canonical(MessageBlock::Tool(tool)) => TraceRequestMessage {
@@ -173,7 +174,7 @@ fn request_message(message: &ModelInputMessage) -> TraceRequestMessage {
             message_id: identity_fits(tool.id.as_str()).then(|| tool.id.clone()),
             source: None,
             blocks: vec![tool_result_block(tool)],
-            truncated: false,
+            truncated: !identity_fits(tool.id.as_str()),
         },
         ModelInputMessage::RequestOnly(context) => TraceRequestMessage {
             role: TraceMessageRole::RequestOnly,

@@ -84,10 +84,7 @@ impl TraceProjection<'_> {
                 record.kind = TraceKind::User;
                 record.state = TraceState::Completed;
                 record.has_detail = !message_ids.is_empty();
-                record.message_id = message_ids
-                    .first()
-                    .filter(|id| identity_fits(id.as_str()))
-                    .cloned();
+                record.message_id = message_ids.first().cloned();
                 for message in self
                     .store
                     .load_messages(&message_ids[..message_ids.len().min(ADOPTED_MESSAGE_LIMIT)])?
@@ -160,6 +157,10 @@ impl TraceProjection<'_> {
                                         name: None,
                                         mime_type: None,
                                     });
+                                }
+                                AssistantContentBlock::ToolCall(_)
+                                | AssistantContentBlock::Image(_) => {
+                                    record.truncated = true;
                                 }
                                 _ => {}
                             }

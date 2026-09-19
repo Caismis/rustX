@@ -62,11 +62,10 @@ fn file_artifact(file: &FileReference) -> TraceArtifact {
 
 /// Projects canonical User content blocks.
 pub(super) fn user_blocks(content: &[UserContentBlock]) -> (Vec<TraceContentBlock>, bool) {
-    let truncated = content.len() > TRACE_DETAIL_BLOCKS;
-    let blocks = content
-        .iter()
-        .take(TRACE_DETAIL_BLOCKS)
-        .filter_map(|block| match block {
+    let mut truncated = content.len() > TRACE_DETAIL_BLOCKS;
+    let mut blocks = Vec::new();
+    for block in content.iter().take(TRACE_DETAIL_BLOCKS) {
+        let projected = match block {
             UserContentBlock::Text(text) => Some(TraceContentBlock::Text {
                 text: TraceText::detail(&text.text),
             }),
@@ -86,9 +85,15 @@ pub(super) fn user_blocks(content: &[UserContentBlock]) -> (Vec<TraceContentBloc
                 // location is storage detail and stays inside the runtime.
                 name: upload.name.clone(),
             }),
-            UserContentBlock::Image(_) | UserContentBlock::File(_) => None,
-        })
-        .collect();
+            UserContentBlock::Image(_) | UserContentBlock::File(_) => {
+                truncated = true;
+                None
+            }
+        };
+        if let Some(block) = projected {
+            blocks.push(block);
+        }
+    }
     (blocks, truncated)
 }
 
@@ -96,11 +101,10 @@ pub(super) fn user_blocks(content: &[UserContentBlock]) -> (Vec<TraceContentBloc
 pub(super) fn assistant_blocks(
     content: &[AssistantContentBlock],
 ) -> (Vec<TraceContentBlock>, bool) {
-    let truncated = content.len() > TRACE_DETAIL_BLOCKS;
-    let blocks = content
-        .iter()
-        .take(TRACE_DETAIL_BLOCKS)
-        .filter_map(|block| match block {
+    let mut truncated = content.len() > TRACE_DETAIL_BLOCKS;
+    let mut blocks = Vec::new();
+    for block in content.iter().take(TRACE_DETAIL_BLOCKS) {
+        let projected = match block {
             AssistantContentBlock::Text(text) => Some(TraceContentBlock::Text {
                 text: TraceText::detail(&text.text),
             }),
@@ -134,9 +138,15 @@ pub(super) fn assistant_blocks(
                     alt: image.alt.clone(),
                 })
             }
-            AssistantContentBlock::ToolCall(_) | AssistantContentBlock::Image(_) => None,
-        })
-        .collect();
+            AssistantContentBlock::ToolCall(_) | AssistantContentBlock::Image(_) => {
+                truncated = true;
+                None
+            }
+        };
+        if let Some(block) = projected {
+            blocks.push(block);
+        }
+    }
     (blocks, truncated)
 }
 
@@ -195,12 +205,10 @@ const fn cancellation_phase_label(
 
 /// Projects canonical Tool result content blocks.
 pub(super) fn tool_result_blocks(result: &ToolExecutionResult) -> (Vec<TraceContentBlock>, bool) {
-    let truncated = result.content.len() > TRACE_DETAIL_BLOCKS;
-    let blocks = result
-        .content
-        .iter()
-        .take(TRACE_DETAIL_BLOCKS)
-        .filter_map(|content| match content {
+    let mut truncated = result.content.len() > TRACE_DETAIL_BLOCKS;
+    let mut blocks = Vec::new();
+    for content in result.content.iter().take(TRACE_DETAIL_BLOCKS) {
+        let projected = match content {
             ToolResultContent::Text(text) => Some(TraceContentBlock::Text {
                 text: TraceText::detail(&text.text),
             }),
@@ -220,9 +228,15 @@ pub(super) fn tool_result_blocks(result: &ToolExecutionResult) -> (Vec<TraceCont
                     artifact: file_artifact(file),
                 })
             }
-            ToolResultContent::Image(_) | ToolResultContent::File(_) => None,
-        })
-        .collect();
+            ToolResultContent::Image(_) | ToolResultContent::File(_) => {
+                truncated = true;
+                None
+            }
+        };
+        if let Some(block) = projected {
+            blocks.push(block);
+        }
+    }
     (blocks, truncated)
 }
 
@@ -323,4 +337,63 @@ pub(super) fn message_preview(message: &MessageBlock) -> Option<TracePreview> {
     }?;
     let preview = TracePreview::of(&text);
     (!preview.is_empty()).then_some(preview)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::identity::{ArtifactId, ToolCallId, ToolId};
+
+    #[test]
+    fn each_identity_bound_omission_independently_marks_partial() {
+        let oversized = "x".repeat(super::super::bounds::TRACE_IDENTITY_BYTES + 1);
+        let image = ImageReference {
+            artifact_id: ArtifactId::new(&oversized),
+            alt: None,
+        };
+        let file = FileReference {
+            artifact_id: ArtifactId::new(&oversized),
+            name: None,
+            mime_type: None,
+            description: None,
+        };
+        for block in [
+            UserContentBlock::Image(image.clone()),
+            UserContentBlock::File(file.clone()),
+        ] {
+            assert_eq!(user_blocks(&[block]), (vec![], true));
+        }
+        for (call_id, tool_id) in [(&oversized[..], "tool"), ("call", &oversized[..])] {
+            let call = crate::tools::types::ToolCall {
+                id: ToolCallId::new(call_id),
+                tool_id: ToolId::new(tool_id),
+                name: "tool".into(),
+                arguments: serde_json::json!({}),
+            };
+            assert_eq!(
+                assistant_blocks(&[AssistantContentBlock::ToolCall(call)]),
+                (vec![], true)
+            );
+        }
+        assert_eq!(
+            assistant_blocks(&[AssistantContentBlock::Image(image.clone())]),
+            (vec![], true)
+        );
+        for block in [
+            ToolResultContent::Image(image),
+            ToolResultContent::File(file),
+        ] {
+            let result = ToolExecutionResult {
+                status: ToolExecutionStatus::Success,
+                content: vec![block],
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: vec![],
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            };
+            assert_eq!(tool_result_blocks(&result), (vec![], true));
+        }
+    }
 }

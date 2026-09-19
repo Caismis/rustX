@@ -74,7 +74,11 @@ impl TraceProjection<'_> {
                     .load_messages(std::slice::from_ref(message_id))?
                     .first()
                 {
-                    detail.messages.extend(message_detail(message));
+                    if let Some(message) = message_detail(message) {
+                        detail.messages.push(message);
+                    } else {
+                        detail.truncated = true;
+                    }
                 }
             }
             E::CompactionStarted => {
@@ -103,7 +107,11 @@ impl TraceProjection<'_> {
                         .load_messages(std::slice::from_ref(summary_message_id))?
                         .first()
                 {
-                    detail.messages.extend(message_detail(message));
+                    if let Some(message) = message_detail(message) {
+                        detail.messages.push(message);
+                    } else {
+                        detail.truncated = true;
+                    }
                 }
             }
             E::ToolExecutionStarted {
@@ -111,6 +119,9 @@ impl TraceProjection<'_> {
                 tool_id,
             } => {
                 detail.kind = TraceKind::Tool;
+                // A matching frozen definition with an oversized identity
+                // is omitted by historical_definition, not absent in history.
+                detail.truncated = !identity_fits(tool_id.as_str());
                 detail.tool = Some(self.tool_call_detail(anchor, tool_call_id, tool_id, true)?);
             }
             E::AttemptStarted { .. } => detail.kind = TraceKind::Attempt,

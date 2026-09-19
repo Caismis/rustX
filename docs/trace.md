@@ -37,8 +37,9 @@ ToolCall ID and Tool ID; parallel physical completion never changes start order.
 Detached executions, Subagents and Workflows retain their own native identities.
 
 Native Runtime Client version 41 and App Server version 9 carry this mandatory
-summary/detail vocabulary. SQLite schema 40 remains the store layout; generation
-evidence is request terminal event data, not a new Trace store.
+summary/detail vocabulary. SQLite schema 41 gates the persisted request terminal vocabulary including
+generation evidence. The Event Journal envelope framing is unchanged; this is
+request terminal event data, not a new Trace store.
 
 ## Summary and detail
 
@@ -62,6 +63,18 @@ fact, the owning request's frozen Tool schema, and the canonical ToolMessage.
 Proposal assembly is not execution. Provider completion is not Assistant
 acceptance. Result JSON/text, status, exit code, measured duration and artifacts
 remain owned by their canonical result; Trace only projects them.
+
+Every bound-driven omission of inspectable content marks its containing
+projection partial, including oversized artifact, ToolCall, message, and frozen
+Tool-definition identities. Identities are omitted whole, never shortened into
+another identity. Semantics outside Trace's vocabulary, such as opaque provider
+continuation state, remain intentionally unprojected.
+
+Managed-output allocation and write diagnostics are normalized at the owning
+storage operation before becoming canonical Tool status or continuation metadata.
+They report unavailable/incomplete storage without physical locators. Ordinary
+Tool/business diagnostics remain canonical content; Trace performs no heuristic
+path scanning or global failure-text rewriting.
 
 ## Durable paging and live lifetime
 

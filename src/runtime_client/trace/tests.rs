@@ -125,6 +125,14 @@ fn start(store: &dyn ConversationStore) {
 /// Commits one actual request whose frozen snapshot carries both legitimate
 /// Session-owned input and every infrastructure secret Trace must withhold.
 fn request(store: &dyn ConversationStore, retry: u32) -> RequestSnapshot {
+    request_with_tools(store, retry, None)
+}
+
+fn request_with_tools(
+    store: &dyn ConversationStore,
+    retry: u32,
+    tools: Option<Vec<ModelToolDefinition>>,
+) -> RequestSnapshot {
     let mut snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: AttemptId::new("attempt-a"),
@@ -180,6 +188,9 @@ fn request(store: &dyn ConversationStore, retry: u32) -> RequestSnapshot {
         ),
         vec![],
     );
+    if let Some(tools) = tools {
+        snapshot.tool_definitions = tools;
+    }
     snapshot.continuation = Some(
         crate::runtime::continuation::ProviderContinuationState::Anthropic(
             crate::runtime::continuation::AnthropicContinuation {
@@ -1835,5 +1846,226 @@ fn canonical_tool_artifacts_merge_by_identity_with_first_occurrence_typing() {
             "canonical block type owns image typing, not the filename"
         );
         assert!(!record.attachments[1].image);
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One durable scenario checks all bounded canonical categories.
+fn identity_bounds_make_canonical_trace_details_explicitly_partial() {
+    use crate::message::content::{FileReference, ImageReference};
+    for oversized in [false, true] {
+        let store = store("conv_ac56fc5d-a6f5-7885-8745-ac1fad19bb38");
+        let identity = if oversized {
+            "x".repeat(super::bounds::TRACE_IDENTITY_BYTES + 1)
+        } else {
+            "valid-identity".to_owned()
+        };
+        let image = ImageReference {
+            artifact_id: ArtifactId::new(&identity),
+            alt: None,
+        };
+        let file = FileReference {
+            artifact_id: ArtifactId::new(&identity),
+            name: None,
+            mime_type: None,
+            description: None,
+        };
+        store
+            .accept_inbound(crate::durable::InboundDraft {
+                message_id: Some(MessageId::new("bounded-user")),
+                source: crate::message::types::UserSource::Human,
+                kind: crate::message::types::InboundKind::Message,
+                content: vec![
+                    UserContentBlock::Text(TextBlock {
+                        text: "retained".into(),
+                    }),
+                    UserContentBlock::Image(image.clone()),
+                    UserContentBlock::File(file.clone()),
+                ],
+                timestamp: timestamp(0),
+                correlation: None,
+            })
+            .unwrap();
+        let batch = store.select_pending_batch().unwrap().unwrap();
+        store
+            .adopt_pending_batch(batch.watermark, Some(AttemptId::new("attempt-a")))
+            .unwrap();
+        append(&store, E::TurnStarted, 1);
+        let frozen = request_with_tools(
+            &store,
+            0,
+            Some(vec![ModelToolDefinition {
+                id: ToolId::new(&identity),
+                name: "historical".into(),
+                description: "frozen".into(),
+                input_schema: serde_json::json!({}),
+            }]),
+        );
+        let mut call = bash_call("bounded-call");
+        call.tool_id = ToolId::new(&identity);
+        propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 3);
+        append(
+            &store,
+            E::ToolExecutionStarted {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+            },
+            4,
+        );
+        settle_tool_call(
+            &store,
+            frozen.provisional_message_id.as_str(),
+            "bounded-result",
+            &call,
+            ToolExecutionResult {
+                status: ToolExecutionStatus::Success,
+                content: vec![
+                    ToolResultContent::Image(image.clone()),
+                    ToolResultContent::File(file),
+                ],
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: vec![],
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            },
+            5,
+        );
+        let assistant_id = MessageId::new("bounded-assistant");
+        let mut bounded_call = bash_call(&identity);
+        bounded_call.tool_id = ToolId::new(&identity);
+        store
+            .append_canonical_with_event(
+                &MessageBlock::Assistant(AssistantMessageBlock {
+                    id: assistant_id.clone(),
+                    content: vec![
+                        AssistantContentBlock::ToolCall(bounded_call),
+                        AssistantContentBlock::Image(image),
+                    ],
+                }),
+                event(
+                    &store,
+                    E::AssistantMessageCommitted {
+                        message_id: assistant_id.clone(),
+                    },
+                    6,
+                ),
+            )
+            .unwrap();
+        let projected = page(&store);
+        let user = detail_of(&store, &record_of(&projected, TraceKind::User).id);
+        assert_eq!(user.messages[0].truncated, oversized);
+        assert_eq!(user.messages[0].blocks.len(), if oversized { 1 } else { 3 });
+        let request = detail_of(&store, &record_of(&projected, TraceKind::Request).id)
+            .request
+            .unwrap();
+        assert_eq!(request.tools_truncated, oversized);
+        assert_eq!(request.tools.len(), usize::from(!oversized));
+        assert_eq!(request.messages[0].truncated, oversized);
+        let tool_detail = detail_of(&store, &record_of(&projected, TraceKind::Tool).id);
+        assert_eq!(tool_detail.truncated, oversized);
+        let tool = tool_detail.tool.unwrap();
+        assert_eq!(tool.definition.is_none(), oversized);
+        let tool = tool.result.unwrap();
+        assert_eq!(tool.blocks_truncated, oversized);
+        assert_eq!(tool.blocks.len(), if oversized { 0 } else { 2 });
+        let record = projected
+            .records
+            .iter()
+            .find(|record| record.message_id.as_ref() == Some(&assistant_id))
+            .unwrap();
+        assert_eq!(record.truncated, oversized);
+        let assistant = detail_of(&store, &record.id);
+        assert_eq!(assistant.messages[0].truncated, oversized);
+        assert_eq!(
+            assistant.messages[0].blocks.len(),
+            if oversized { 0 } else { 2 }
+        );
+    }
+}
+
+#[test]
+fn managed_storage_failure_diagnostics_never_cross_trace_with_private_paths() {
+    use crate::tools::managed_output::ManagedToolOutput;
+    use crate::tools::output::{ForegroundOutputCapture, continuation_for_capture};
+    let private_path = "/private/rustx-managed-output/secret/tasks/result.output";
+    for available in [false, true] {
+        let store = store("conv_ac56fc5d-a6f5-7885-8745-ac1fad19bb38");
+        let directory = tempfile::tempdir().unwrap();
+        let output = ManagedToolOutput::new(
+            store.conversation_id().clone(),
+            directory.path().join(private_path.trim_start_matches('/')),
+        )
+        .unwrap();
+        if available {
+            output.fail_writes_after(0);
+        } else {
+            // A real allocation error includes the private results directory.
+            let results = output.root().join("results");
+            std::fs::remove_dir(&results).unwrap();
+            std::fs::write(&results, "not a directory").unwrap();
+            assert!(
+                output
+                    .open_spill()
+                    .unwrap_err()
+                    .to_string()
+                    .contains(private_path)
+            );
+        }
+        let mut capture = ForegroundOutputCapture::with_limit(1);
+        let diagnostic = capture.push("retained output", &output).unwrap_err();
+        let captured = capture.finish(false);
+        start(&store);
+        let call = bash_call("storage-failure");
+        propose_tool_call(&store, "storage-owner", &call, 2);
+        append(
+            &store,
+            E::ToolExecutionStarted {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+            },
+            3,
+        );
+        settle_tool_call(
+            &store,
+            "storage-owner",
+            "storage-result",
+            &call,
+            ToolExecutionResult {
+                status: ToolExecutionStatus::Failed {
+                    error: diagnostic.clone(),
+                },
+                content: vec![],
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: vec![],
+                truncation: None,
+                workflow: None,
+                managed_output: continuation_for_capture(&captured, available, Some(&diagnostic)),
+            },
+            4,
+        );
+        let detail = detail_of(&store, &record_of(&page(&store), TraceKind::Tool).id);
+        let result = detail.tool.as_ref().unwrap().result.as_ref().unwrap();
+        assert_eq!(result.outcome, TraceToolOutcome::Failed);
+        assert!(!result.detail.as_ref().unwrap().text.contains(private_path));
+        let managed = result.managed_output.as_ref().unwrap();
+        assert!(!managed.complete);
+        assert_eq!(managed.available, available);
+        assert_eq!(managed.diagnostic.as_ref().unwrap().text, diagnostic);
+        assert!(
+            !managed
+                .diagnostic
+                .as_ref()
+                .unwrap()
+                .text
+                .contains(private_path)
+        );
+        assert!(
+            !serde_json::to_string(&detail)
+                .unwrap()
+                .contains(private_path)
+        );
     }
 }
