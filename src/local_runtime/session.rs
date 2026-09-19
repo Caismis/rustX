@@ -1644,13 +1644,15 @@ impl SessionCatalog {
     /// Session. The directory is the reservation: no second identity index
     /// or probabilistic uniqueness assumption is needed. Retired identities
     /// remain governed by the catalog even after their files are deleted.
-    pub(crate) fn reserve_conversation_directory(
+    /// The single identity reservation algorithm, under an already-admitted
+    /// management mutation or runtime transition. Do not reacquire ownership.
+    pub(crate) fn reserve_conversation_directory_under(
         product: &crate::runtime::local_storage::ProductRoot,
+        _ownership: &crate::runtime::local_storage::OwnershipMutation,
         allocation: &Path,
         conversation: &ConversationId,
     ) -> std::io::Result<()> {
         product.confined(allocation)?;
-        let _ownership = product.ownership_mutation()?;
         let _allocation = product.conversation_allocation()?;
         Self::check_allocation_live(product, allocation)?;
         for entry in fs::read_dir(product.root().join("sessions"))? {
@@ -2544,18 +2546,22 @@ fn initialize_database(
         path: path.to_path_buf(),
         detail: "conversation database has no parent".to_owned(),
     })?;
-    let _mutation = product
+    let ownership = product
         .ownership_mutation()
         .map_err(|error| SessionError::Io {
             path: parent.to_path_buf(),
             detail: error.to_string(),
         })?;
-    SessionCatalog::reserve_conversation_directory(product, parent, conversation_id).map_err(
-        |error| SessionError::Io {
-            path: parent.to_path_buf(),
-            detail: error.to_string(),
-        },
-    )?;
+    SessionCatalog::reserve_conversation_directory_under(
+        product,
+        &ownership,
+        parent,
+        conversation_id,
+    )
+    .map_err(|error| SessionError::Io {
+        path: parent.to_path_buf(),
+        detail: error.to_string(),
+    })?;
     let access = crate::runtime::local_storage::ConversationAccess::existing(product, parent)
         .map_err(|error| SessionError::Io {
             path: parent.to_path_buf(),

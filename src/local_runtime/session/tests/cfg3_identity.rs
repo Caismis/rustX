@@ -102,8 +102,9 @@ fn same_conversation_uuid_in_different_sessions_has_exactly_one_reservation_winn
                     barrier.wait();
                     (
                         allocation.clone(),
-                        SessionCatalog::reserve_conversation_directory(
+                        SessionCatalog::reserve_conversation_directory_under(
                             product,
+                            &product.ownership_mutation().unwrap(),
                             &allocation,
                             conversation,
                         ),
@@ -131,8 +132,13 @@ fn same_conversation_uuid_in_different_sessions_has_exactly_one_reservation_winn
     let marker = winner.0.join("retained-output");
     fs::write(&marker, "retained").unwrap();
     assert!(
-        SessionCatalog::reserve_conversation_directory(&controller, &loser.0, &conversation)
-            .is_err()
+        SessionCatalog::reserve_conversation_directory_under(
+            &controller,
+            &controller.ownership_mutation().unwrap(),
+            &loser.0,
+            &conversation
+        )
+        .is_err()
     );
     assert_eq!(fs::read_to_string(marker).unwrap(), "retained");
 }

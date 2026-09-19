@@ -1099,7 +1099,8 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
     let subagent_id =
         rustx::runtime::identity::SubagentId::new("conv_95489284-1901-7da7-8093-8754fbb0517e");
     let physical_root = plan
-        .allocate_child_runtime_root(&ConversationId::generate())
+        .allocate_child_runtime_root(&ConversationId::generate(), &CancellationSignal::new())
+        .await
         .expect("physical child root");
     let workspace_path = dir.path().join("parent-workspace");
     std::fs::create_dir_all(&workspace_path).expect("parent workspace");

@@ -508,6 +508,18 @@ struct RegistryState {
     /// spawning the real child binary.
     #[cfg(test)]
     staged_overrides: std::collections::VecDeque<StagedChild>,
+    /// Signals the production allocation attempt; substitutes only process
+    /// staging AFTER the real identity/incarnation reservation has completed.
+    #[cfg(test)]
+    allocation_test_hook: Option<AllocationTestHook>,
+}
+
+#[cfg(test)]
+struct AllocationTestHook {
+    entered: tokio::sync::oneshot::Sender<()>,
+    stage: Box<
+        dyn FnOnce(super::process::PhysicalChildRuntimeRoot, WorkspaceUse) -> StagedChild + Send,
+    >,
 }
 
 /// The public lifecycle vocabulary of one subagent snapshot.
@@ -1449,6 +1461,8 @@ impl SubagentRegistry {
                 deadline_completion: HashMap::new(),
                 #[cfg(test)]
                 staged_overrides: std::collections::VecDeque::new(),
+                #[cfg(test)]
+                allocation_test_hook: None,
             })),
             state_version: tokio::sync::watch::Sender::new(0),
             #[cfg(test)]
@@ -2096,10 +2110,22 @@ impl SubagentRegistry {
                     });
                 }
             }
+            #[cfg(test)]
+            let allocation_stage = self
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .allocation_test_hook
+                .take()
+                .map(|hook| {
+                    hook.entered.send(()).unwrap();
+                    hook.stage
+                });
             let runtime_root = match self
                 .config
                 .spawn
-                .allocate_child_runtime_root(&child_conversation_id)
+                .allocate_child_runtime_root(&child_conversation_id, preparation_cancellation)
+                .await
             {
                 Ok(runtime_root) => runtime_root,
                 Err(super::process::SpawnError::ConversationIdentityInUse { .. }) => {
@@ -2117,12 +2143,33 @@ impl SubagentRegistry {
                     continue;
                 }
                 Err(error) => {
-                    let start_error = SubagentStartError::Spawn {
-                        detail: error.to_string(),
+                    let start_error = match error {
+                        super::process::SpawnError::Cancelled => SubagentStartError::Cancelled,
+                        error => SubagentStartError::Spawn {
+                            detail: error.to_string(),
+                        },
                     };
                     return Err(settle_staged_workspace(workspace_lease, start_error).await);
                 }
             };
+            #[cfg(test)]
+            if let Some(stage) = allocation_stage {
+                return Ok(PreparedSubagent {
+                    subagent_id,
+                    child_agent_id,
+                    child_conversation_id,
+                    tool_call_id: spec.tool_call_id.clone(),
+                    agent: spec.resolved.agent.clone(),
+                    definition_digest: spec.resolved.definition_digest.clone(),
+                    profile_digest: spec.resolved.profile_digest(),
+                    terminal: spec.terminal.clone(),
+                    task: spec.task.clone(),
+                    context: spec.context.clone(),
+                    execution_deadline: spec.resolved.execution_deadline,
+                    profile,
+                    staged: stage(runtime_root, workspace_lease),
+                });
+            }
             break (
                 subagent_id,
                 child_conversation_id,
@@ -2373,7 +2420,7 @@ impl SubagentRegistry {
                 .config
                 .spawn
                 .product_root
-                .ownership_commit_admission()
+                .runtime_ownership_admission()
                 .await
             {
                 Ok(admission) => admission,

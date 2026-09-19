@@ -297,3 +297,144 @@ async fn ownership_admission_rechecks_capacity_drain_and_durability() {
         let _released = product.freeze_ownership().unwrap();
     }
 }
+
+/// Unlike `stage_exit0`, this seam cannot bypass the production allocator.
+/// It substitutes a controlled process only after identity/incarnation creation.
+fn production_allocation_peer(
+    fixture: &ArchivePlane,
+) -> (
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Receiver<ScriptedChild>,
+) {
+    let (entered, reached) = tokio::sync::oneshot::channel();
+    let (created, child) = tokio::sync::oneshot::channel();
+    let product = fixture.plane.registry.config.spawn.product_root.clone();
+    fixture
+        .plane
+        .registry
+        .state
+        .lock()
+        .unwrap()
+        .allocation_test_hook = Some(AllocationTestHook {
+        entered,
+        stage: Box::new(move |runtime_root, workspace| {
+            // The production allocator, not this peer, created both directories.
+            // No ownership admission survives into process staging/Ready.
+            let snapshot = product.freeze_ownership().unwrap();
+            drop(snapshot);
+            let (control, peer) = tokio::net::UnixStream::pair().unwrap();
+            let (observation, _observation_peer) = tokio::net::UnixStream::pair().unwrap();
+            let process = tokio::process::Command::new("sh")
+                .args(["-c", "true"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .process_group(0)
+                .spawn()
+                .unwrap();
+            let pid = process.id().unwrap();
+            assert!(created.send(ScriptedChild { peer, pid }).is_ok());
+            StagedChild::for_allocated_test(process, control, observation, runtime_root, workspace)
+        }),
+    });
+    (reached, child)
+}
+
+#[tokio::test]
+async fn archive_wins_before_production_child_reservation() {
+    let fixture = ArchivePlane::new();
+    let (allocation_reached, child) = production_allocation_peer(&fixture);
+    assert!(
+        fixture
+            .plane
+            .registry
+            .state
+            .lock()
+            .unwrap()
+            .staged_overrides
+            .is_empty()
+    );
+    let (frozen, reached) = tokio::sync::oneshot::channel();
+    let (release, proceed) = std::sync::mpsc::channel();
+    let root = fixture.root.path().to_path_buf();
+    let session = fixture.session.clone();
+    let capture = tokio::task::spawn_blocking(move || {
+        SessionArchiveProducer::prepare_inner(&root, &session, &CancellationToken::new(), || {
+            frozen.send(()).unwrap();
+            proceed.recv().unwrap();
+        })
+        .unwrap()
+    });
+    reached.await.unwrap();
+    let spec = start_spec("production reservation behind archive");
+    let cancellation = CancellationSignal::new();
+    let mut preparing = Box::pin(fixture.plane.registry.prepare(&spec, &cancellation));
+    // Poll reaches the real allocator's contested admission, not a staged override.
+    assert_waiting(preparing.as_mut()).await;
+    allocation_reached.await.unwrap();
+    assert_waiting(preparing.as_mut()).await;
+    assert!(fixture.plane.registry.all_snapshots().is_empty());
+    release.send(()).unwrap();
+    let cut = capture.await.unwrap();
+    let prepared = preparing
+        .await
+        .expect("inspection cannot fail runtime reservation");
+    let child_id = prepared.child_conversation_id.clone();
+    let path = fixture.catalog.database_path(&fixture.session, &child_id);
+    assert!(path.parent().unwrap().is_dir());
+    assert!(
+        !path.exists(),
+        "reservation does not fabricate child history"
+    );
+    assert!(!events(&fixture.plane).iter().any(|event| matches!(
+        event,
+        crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { .. }
+    )));
+    assert_archive_membership(cut, &child_id, false).await;
+    let SubagentStartOutcome::Accepted(accepted) = fixture
+        .plane
+        .registry
+        .commit(prepared, &cancellation)
+        .await
+        .unwrap()
+    else {
+        panic!("accepted")
+    };
+    assert!(events(&fixture.plane).iter().any(|event| matches!(event,
+        crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { child_conversation_id, .. }
+        if child_conversation_id == &child_id)));
+    fixture.finish(&accepted, child.await.unwrap()).await;
+}
+
+#[tokio::test]
+async fn cancelled_production_reservation_wait_creates_no_child_allocation() {
+    let fixture = ArchivePlane::new();
+    let (reached, child) = production_allocation_peer(&fixture);
+    let product = &fixture.plane.registry.config.spawn.product_root;
+    let conversations = product
+        .root()
+        .join("sessions")
+        .join(fixture.session.as_str())
+        .join("conversations");
+    let before = std::fs::read_dir(&conversations).unwrap().count();
+    let snapshot = product.freeze_ownership().unwrap();
+    let spec = start_spec("cancel pending allocation");
+    let cancellation = CancellationSignal::new();
+    let mut preparing = Box::pin(fixture.plane.registry.prepare(&spec, &cancellation));
+    assert_waiting(preparing.as_mut()).await;
+    reached.await.unwrap();
+    cancellation.cancel();
+    drop(snapshot);
+    assert!(matches!(
+        preparing.await,
+        Err(SubagentStartError::Cancelled)
+    ));
+    assert!(child.await.is_err(), "no process was staged");
+    assert_eq!(std::fs::read_dir(conversations).unwrap().count(), before);
+    assert!(fixture.plane.registry.all_snapshots().is_empty());
+    assert!(!events(&fixture.plane).iter().any(|event| matches!(
+        event,
+        crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { .. }
+    )));
+    let _released = product.freeze_ownership().unwrap();
+}

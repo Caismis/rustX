@@ -49,9 +49,19 @@ when both competing allocations contain readable bytes. Required unreadable
 history fails closed. No agents are loaded, resumed, attached or synthesized.
 The ownership freeze remains held throughout validation and cut capture.
 
+Normal Subagent preparation first reserves its child identity using the same
+waitable `ProductRoot::runtime_ownership_admission()`. The lock order is product
+admission, Conversation allocation serialization, global uniqueness check, then
+exclusive reservation-directory creation and physical incarnation allocation.
+The allocator rechecks cancellation after waiting and releases admission on
+return, before process spawn, composition or Ready. Reservation is private staging,
+not Session membership. There is one reservation algorithm accepting an existing
+ownership guard; it never reacquires the product lock. Management initialization
+uses that algorithm under its existing fail-fast mutation guard.
+
 Live Subagent membership linearizes at the durable `SubagentOwnershipCommitted`
 event, not at allocation or the Ready handshake. `SubagentRegistry` acquires
-`ProductRoot::ownership_commit_admission()` before its registry/durability/lifecycle
+`ProductRoot::runtime_ownership_admission()` before its registry/durability/lifecycle
 commit mutexes. The uncontended shared admission is immediate; contention with
 an ownership snapshot waits in Tokio's blocking pool, never on a Tokio worker
 and never under those runtime mutexes. The admission spans the ownership event
@@ -288,3 +298,23 @@ single explicit future poll establish contention without sleeps. The child is
 staged using the existing real-process/control test seam; ownership events are
 never forged. Additional cases change cancellation, capacity, drain and durability
 while admission is waiting and prove rejection/rollback without publication.
+
+`archive_wins_before_production_child_reservation` additionally crosses the real
+`prepare -> allocate_child_runtime_root -> PhysicalChildRuntimeRoot::allocate ->
+reserve_conversation_directory_under` path. The archive is parked after ownership
+inspection; prepare reaches allocation and stays pending until capture releases
+its snapshot. Only then does a controlled process peer substitute for child
+staging. No directory, SQLite history or ownership event is fabricated by the
+test. It proves reservation succeeds without publishing membership, admission is
+released before staging, and ordinary commit/start/settlement still succeed.
+`cancelled_production_reservation_wait_creates_no_child_allocation` proves a
+cancellation received during that wait creates neither a reservation nor a process.
+
+Ownership API audit: `runtime_ownership_admission` serves the two Subagent
+transitions above. Fail-fast `ownership_mutation` remains for catalog publication,
+management database initialization, explicit Conversation startup and explicit
+retained-workspace disposal. SQLite's typed ownership-event guard also remains
+fail-fast: Subagent membership publication is now protected by the outer runtime
+admission; other terminal/workflow settlement events retain their existing policy.
+That latter runtime use is a separate potential contention boundary, not changed
+by this reservation repair. No blanket conversion of management mutations was made.

@@ -47,12 +47,12 @@ impl ProductRoot {
             _lock: lock(directory(&self.root)?, FlockArg::LockSharedNonblock)?,
         })
     }
-    /// Admit a runtime ownership commit behind a transient management snapshot.
+    /// Admit a runtime identity reservation or ownership commit behind a snapshot.
     /// The uncontended path stays synchronous (including native capacity ordering).
     /// Only OS lock contention moves to the blocking pool; callers must acquire
-    /// this before registry/lifecycle/durable commit mutexes, and release it before
-    /// waiting for capacity, physical settlement or driver handoff.
-    pub(crate) async fn ownership_commit_admission(&self) -> io::Result<OwnershipMutation> {
+    /// this before allocation/registry/lifecycle/durable commit mutexes, and release it before
+    /// child staging, capacity waiting, physical settlement or driver handoff.
+    pub(crate) async fn runtime_ownership_admission(&self) -> io::Result<OwnershipMutation> {
         match self.ownership_mutation() {
             Ok(admission) => return Ok(admission),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}

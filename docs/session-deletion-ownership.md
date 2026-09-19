@@ -81,8 +81,12 @@ derives its workspace allocation from the composed Conversation access.
   guards. Explicit Workflow disposal retains its guard across physical cleanup
   and durable settlement, rather than just individual event commits. Ordinary
   user/model/assistant/tool execution facts
-  do not take this root lock. The runtime's durable Subagent ownership commit
-  uses waitable `ownership_commit_admission()` before registry/durability/lifecycle
+  do not take this root lock. Runtime child identity reservation takes waitable
+  `runtime_ownership_admission()` before Conversation allocation serialization;
+  it releases after reservation/incarnation creation, before process staging.
+  Cancellation is rechecked after waiting, before reservation. The later,
+  separate durable Subagent ownership commit
+  uses waitable `runtime_ownership_admission()` before registry/durability/lifecycle
   commit mutexes; a transient inspection freeze delays it without rejecting a
   valid staged child. Blocking OS admission runs only in the blocking pool. Its
   shared guard covers both the ownership Journal event and registry publication,
