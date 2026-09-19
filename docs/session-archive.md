@@ -133,7 +133,7 @@ response without its final chunk, so a truncated transfer cannot report success.
 
 ## Transport and clients
 
-App Server v11 adds authenticated `session/exportPrepare { session_id }`, returning
+App Server v12 adds authenticated `session/exportPrepare { session_id }`, returning
 `session_archive { download }`. No destination path exists in the request type.
 The descriptor contains a deterministic filename, a 60-second lifetime and a
 256-bit single-use capability at `/session-archive/<capability>`. It authorizes
@@ -247,7 +247,7 @@ are absent, while authored secret-looking text and temperature remain present.
 
 `SessionArchivePrepareError` contains only closed semantic reasons, never raw
 OS/provider strings or implementation paths. Missing/unreadable descendants and
-required unavailable/unsettled artifacts become v11
+required unavailable/unsettled artifacts become v12
 `archive_preparation_failed { reason: descendant_unavailable | artifact_unavailable }`.
 Other reasons distinguish unavailable Conversation history, corrupt authority,
 storage/cut failure and cancellation. Unknown Session and capacity conditions use
@@ -284,7 +284,7 @@ headless App Server/TUI consumers. There is no compression setting or new UI scr
 PR #369 merged while these review repairs were in progress. Its main commit
 `908399021b649ab7603498f43bdc5673f94c9352` already uses App Server v10,
 SQLite 42 and catalog 12. The rebased archive PR therefore advances the complete
-mandatory App Server vocabulary to v11, without a compatibility alias. This is
+mandatory App Server vocabulary to v12, without a compatibility alias. This is
 not an archive-format change: archive v1 remains unpublished and is corrected in
 place. No SQLite/catalog schema increment is introduced by archive export.
 

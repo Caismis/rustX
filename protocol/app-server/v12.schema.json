@@ -6960,6 +6960,17 @@
             "null"
           ]
         },
+        "originating_tool_call_id": {
+          "description": "The exact outer `ToolCall` this Tool-owned domain record belongs to,\ncopied from the native start fact. It is presentation and navigation\ncorrelation only: it confers no lifecycle, ownership, settlement or\ncancellation authority, and it is never resolved from a Tool name, a\ntimestamp, row adjacency or the loaded page.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolCallId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "message_id": {
           "description": "Canonical accepted message; publication without acceptance is absent.",
           "anyOf": [
@@ -7181,6 +7192,21 @@
               "type": "null"
             }
           ]
+        },
+        "system_prompt": {
+          "description": "Request-relative System Prompt presentation, resolved natively so the\nbrowser never compares request details to discover a prompt change.",
+          "$ref": "#/$defs/TraceSystemPromptPresentation"
+        },
+        "context_additions": {
+          "description": "Canonical request Context this exact request introduced, in the order\nfrozen by `RequestSnapshot.request_context_ids`. A retry or recovery\nrequest reuses admitted context and therefore introduces none.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceContextPresentation"
+          }
+        },
+        "context_truncated": {
+          "description": "Whether the Context list was shortened by the Trace summary bound.",
+          "type": "boolean"
         }
       },
       "additionalProperties": false,
@@ -7188,7 +7214,10 @@
         "request_id",
         "retry_number",
         "assistant_message_id",
-        "model"
+        "model",
+        "system_prompt",
+        "context_additions",
+        "context_truncated"
       ]
     },
     "RequestId2": {
@@ -7412,6 +7441,137 @@
         "terminal_ms"
       ]
     },
+    "TraceSystemPromptPresentation": {
+      "description": "Bounded System Prompt presentation for one actual request.\n\nThe complete prompt is deliberately absent: a page of 32 requests would\notherwise carry 32 complete system prompts. The exact historical value\nstays in [`TraceRequestDetail::effective_system_prompt`].",
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/TraceSystemPromptState"
+        },
+        "preview": {
+          "description": "One-line preview of the prompt this request introduced. Absent for\n`Unchanged`, where the preceding request's row already carries it.\nA present but empty preview records an empty historical prompt.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TracePreview"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ]
+    },
+    "TraceSystemPromptState": {
+      "description": "How one actual request's frozen System Prompt relates to its predecessor.\n\nThe relationship is request-relative and resolved from native durable\nauthority, never from the records a client happens to have loaded. A page\nthat begins in the middle of history therefore reports exactly what a page\ncontaining the predecessor would.",
+      "oneOf": [
+        {
+          "description": "Native authority proves no earlier actual request exists in this\nconversation. A `retry_number` of zero alone never proves this.",
+          "type": "string",
+          "const": "initial"
+        },
+        {
+          "description": "The nearest preceding actual request froze a different prompt.",
+          "type": "string",
+          "const": "changed"
+        },
+        {
+          "description": "The nearest preceding actual request froze the identical prompt.",
+          "type": "string",
+          "const": "unchanged"
+        },
+        {
+          "description": "A predecessor exists, but the projection could not establish its\nfrozen prompt at this read cut. It is never used to hide a durable\nread failure, which is propagated as an error instead.",
+          "type": "string",
+          "const": "previous_unavailable"
+        }
+      ]
+    },
+    "TraceContextPresentation": {
+      "description": "One canonical request Context fact introduced by one actual request.\n\nIdentity and order come from the immutable `RequestSnapshot`; content\ncomes from keyed Message Ledger reads. Neither the browser nor Trace\nitself decides which request introduced a Context fact: the request that\ncommitted the identity atomically with its own start did.",
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "$ref": "#/$defs/MessageId"
+        },
+        "context_kind": {
+          "$ref": "#/$defs/TraceContextKind"
+        },
+        "source": {
+          "description": "Provenance namespace of the canonical inbound fact.",
+          "type": "string"
+        },
+        "preview": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TracePreview"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceArtifact"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "message_id",
+        "context_kind",
+        "source",
+        "attachments",
+        "truncated"
+      ]
+    },
+    "TraceContextKind": {
+      "description": "The closed presentation family of one admitted model-visible context fact.\n\nThis is a presentation vocabulary, not the internal `ContextKind` payload:\na complete `GoalSnapshot` or Agent Status generation metadata never enters\na pageable summary through it.",
+      "type": "string",
+      "enum": [
+        "goal_status",
+        "runtime_tool_observation",
+        "extension_environment",
+        "agent_status"
+      ]
+    },
+    "TraceArtifact": {
+      "description": "Safe reference to the existing native artifact carrier, never a path.",
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/ArtifactId"
+        },
+        "image": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mime_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "image"
+      ]
+    },
     "TraceToolSummary": {
       "description": "Bounded Tool facts carried by a pageable summary row.",
       "type": "object",
@@ -7498,35 +7658,6 @@
         "call_id",
         "tool_id",
         "name"
-      ]
-    },
-    "TraceArtifact": {
-      "description": "Safe reference to the existing native artifact carrier, never a path.",
-      "type": "object",
-      "properties": {
-        "artifact_id": {
-          "$ref": "#/$defs/ArtifactId"
-        },
-        "image": {
-          "type": "boolean"
-        },
-        "name": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "mime_type": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "artifact_id",
-        "image"
       ]
     },
     "TraceDetail": {

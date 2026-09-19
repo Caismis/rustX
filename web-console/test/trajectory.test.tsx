@@ -692,3 +692,143 @@ it('rustX domain kinds carry a visible discriminator that is not the preview tex
     expect(row.getAttribute('data-kind')).toBe(kinds[n]);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Server-resolved presentation relationships (#372)
+//
+// The browser renders these relationships. It never derives them: no request
+// detail is compared, no request messages are diffed, and no name, timestamp
+// or row adjacency correlates a domain record with a Tool call.
+// ---------------------------------------------------------------------------
+
+const withSystem = (n: number, state: 'initial' | 'changed' | 'unchanged', preview?: string) =>
+  traceRecord(n, {
+    request: {
+      ...traceRecord(n).request!,
+      system_prompt: {
+        state,
+        preview: preview === undefined ? null : { text: preview, truncated: false },
+      },
+    },
+  });
+
+const withContext = (n: number, truncated = false) =>
+  traceRecord(n, {
+    request: {
+      ...traceRecord(n).request!,
+      context_additions: [
+        {
+          message_id: 'ctx-goal',
+          context_kind: 'goal_status',
+          source: 'runtime',
+          preview: { text: 'Goal: active', truncated: false },
+          attachments: [],
+          truncated: false,
+        },
+        {
+          message_id: 'ctx-observation',
+          context_kind: 'runtime_tool_observation',
+          source: 'runtime',
+          preview: { text: 'The tool batch settled.', truncated: false },
+          attachments: [],
+          truncated: false,
+        },
+      ],
+      context_truncated: truncated,
+    },
+  });
+
+it('renders the server-resolved System Prompt relationship without comparing requests', () => {
+  const loadDetail = vi.fn();
+  // Only the changed request is loaded: its classification stands on its own,
+  // so a window without the predecessor renders exactly the same answer.
+  renderTrajectory(cacheOf([withSystem(1, 'changed', 'You are the historical agent.')]), loadDetail);
+  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
+  expect(within(ledger).getByText('System prompt changed')).toBeDefined();
+
+  fireEvent.click(screen.getByText('historical-model-1'));
+  const inspector = screen.getByLabelText('Trace record inspector');
+  expect(within(inspector).getByText('Changed')).toBeDefined();
+  expect(within(inspector).getByText(/nearest preceding actual request/)).toBeDefined();
+  expect(within(inspector).getByText('You are the historical agent.')).toBeDefined();
+  // No detail was needed to answer it, and no second request was consulted.
+  expect(loadDetail).not.toHaveBeenCalledWith(expect.stringMatching(/trace:0/));
+});
+
+it('an unchanged prompt makes no ledger claim and repeats no preview', () => {
+  renderTrajectory(cacheOf([withSystem(0, 'unchanged')]));
+  expect(screen.queryByText(/System prompt/)).toBeNull();
+  fireEvent.click(screen.getByText('historical-model-0'));
+  const inspector = screen.getByLabelText('Trace record inspector');
+  expect(within(inspector).getByText('Unchanged')).toBeDefined();
+  expect(within(inspector).getByText(/froze the identical prompt/)).toBeDefined();
+});
+
+it('renders introduced Context in the server’s frozen order, from the summary alone', () => {
+  renderTrajectory(cacheOf([withContext(0, true)]));
+  expect(screen.getByText(/2 context facts\+/)).toBeDefined();
+  fireEvent.click(screen.getByText('historical-model-0'));
+  const inspector = screen.getByLabelText('Trace record inspector');
+  fireEvent.click(within(inspector).getByRole('tab', { name: 'Context' }));
+  const sections = within(inspector).getAllByRole('heading', { level: 4 });
+  expect(sections.map(heading => heading.textContent)).toEqual([
+    'Goal status · runtime ctx-goal',
+    'Runtime tool observation · runtime ctx-observation',
+  ]);
+  expect(within(inspector).getByText(/Further context facts omitted/)).toBeDefined();
+  expect(within(inspector).getByText(/reuses admitted context/)).toBeDefined();
+});
+
+it('a request that introduced no Context says so rather than showing nothing', () => {
+  renderTrajectory(cacheOf([traceRecord(0)]));
+  fireEvent.click(screen.getByText('historical-model-0'));
+  const inspector = screen.getByLabelText('Trace record inspector');
+  fireEvent.click(within(inspector).getByRole('tab', { name: 'Context' }));
+  expect(within(inspector).getByText('This request introduced no canonical context')).toBeDefined();
+});
+
+it('a domain record keeps its originating ToolCall when the parent row is not loaded', () => {
+  const background = traceRecord(0, {
+    kind: 'background',
+    request: null,
+    native_id: 'exec_1',
+    originating_tool_call_id: 'call-parent',
+    preview: { text: 'detached execution', truncated: false },
+  });
+  // The loaded window holds no Tool row at all, and the only other row shares
+  // the domain record's names. Neither can supply or forge the correlation.
+  renderTrajectory(cacheOf([background, traceRecord(1)]));
+  fireEvent.click(screen.getByText('detached execution'));
+  const inspector = screen.getByLabelText('Trace record inspector');
+  expect(within(inspector).getByText('call-parent')).toBeDefined();
+  expect(within(inspector).getByText(/confers no lifecycle/)).toBeDefined();
+});
+
+it('a lifecycle refresh leaves the immutable relationships exactly as projected', () => {
+  const record = { ...withContext(0), ...{} };
+  record.request!.system_prompt = { state: 'changed', preview: { text: 'prompt-B', truncated: false } };
+  const newest = traceRecord(1);
+  const cache = cacheOf([record, newest]);
+  // The refreshed tail overlaps the loaded interval by stable identity, so
+  // the window is repaired in place rather than rebased. The repaired record
+  // is the one the tail no longer covers: exactly the case where a patch,
+  // not a fresh projection, has to carry it.
+  const refreshed = refreshTrace(cache, { records: [newest], next_cursor: null }, [
+    {
+      id: record.id,
+      state: 'failed',
+      timing: { started_at: '2026-09-15T00:00:00Z', ended_at: '2026-09-15T00:00:02Z', duration_ms: '2000' },
+      request: { failure_kind: 'transport', usage: null, generation: null },
+      tool: null,
+      message_id: null,
+      attachments: [],
+      truncated: false,
+    },
+  ]);
+  const repaired = refreshed.page.records[0]!;
+  expect(repaired.state).toBe('failed');
+  expect(repaired.request!.failure_kind).toBe('transport');
+  expect(repaired.request!.system_prompt).toEqual(record.request!.system_prompt);
+  expect(repaired.request!.context_additions).toEqual(record.request!.context_additions);
+  expect(repaired.originating_tool_call_id).toEqual(record.originating_tool_call_id);
+});

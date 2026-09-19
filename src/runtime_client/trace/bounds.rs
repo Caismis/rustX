@@ -42,6 +42,17 @@ pub const TRACE_PAGE_BYTES: usize = 128 * 1024;
 pub const TRACE_DETAIL_BYTES: usize = 512 * 1024;
 /// Longest native identity retained; a longer one is omitted, never shortened.
 pub const TRACE_IDENTITY_BYTES: usize = 512;
+/// Most canonical request Context facts carried by one request summary.
+pub const TRACE_SUMMARY_CONTEXT: usize = 16;
+/// Most artifact references retained beside one summarized Context fact.
+pub const TRACE_SUMMARY_CONTEXT_ARTIFACTS: usize = 4;
+/// Encoded-byte ceiling of one summary's complete Context presentation list.
+///
+/// Trace owns this bound. An upstream Context Assembly limit constrains how
+/// much context a request may carry; it says nothing about how many encoded
+/// bytes that context becomes once identities, previews and artifact
+/// references are projected, so it cannot stand in for this ceiling.
+pub const TRACE_SUMMARY_CONTEXT_BYTES: usize = 4 * 1024;
 
 /// Bounded text with an explicit completeness statement.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

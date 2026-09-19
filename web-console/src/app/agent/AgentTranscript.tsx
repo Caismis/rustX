@@ -1,4 +1,4 @@
-import type { RuntimeClientSnapshot, CompletedResponseView } from '../../../../protocol/app-server/v11';
+import type { RuntimeClientSnapshot, CompletedResponseView } from '../../../../protocol/app-server/v12';
 import { conversation, json } from '../../bindings/projection';
 import { Button } from '../../presentation/primitives/Button';
 import { AssistantMessage } from '../../presentation/agent/Message';
