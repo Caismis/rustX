@@ -27,6 +27,10 @@ invalidates it. The UI explicitly calls it “Last request context”.
 At validation, #364 is still open as PR #368, head
 `b1dfc36f4babb1112cc2a606a2e73342a3895895`; its generation evidence has not landed
 on main. Its request-owned monotonic timing contract was inspected read-only.
+The final read-only worktree check also found a newer local #364 commit,
+`bc832d4f`, adding optional `dispatch_after_start_ms` to bridge the durable start
+origin to dispatch. That revision is not on main or the PR head yet. This confirms
+that the timing contract is still evolving; no copy of either revision is included.
 This change consumes existing normalized usage and does not copy the in-flight
 implementation, invent a timing schema, or infer durations from wall-clock events.
 Consequently no runtime/TTFT/throughput control appears yet. When #364 lands,
