@@ -271,7 +271,7 @@ describe("RustxTuiApp lifecycle", () => {
     // reserved for the editor unless that focus is active.
     process.stdin.emit("data", "\x1b[1;5B");
     await waitForApplicationContinuation();
-    process.stdin.emit("data", "\r");
+    process.stdin.emit("data", "i");
     await waitForApplicationContinuation();
 
     // The child is read through `subagent/status`. No second conversation
@@ -2137,3 +2137,55 @@ for (const status of ["committed_cleanup_pending", "committed_durability_uncerta
     }
   });
 }
+
+it("remote recovery reconstructs selected child from replacement authority without replay", async () => {
+  let close!: (error: TransportClosedError) => void;
+  const child = subagent("researcher", "sha256:child");
+  const old = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), subagents: [child] });
+  const next = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), subagents: [child] });
+  const late = deferred<{ entries: [] }>();
+  const reads: string[] = [];
+  Object.assign(old, { subagentTranscriptPage: (id: string) => { reads.push(`old:${id}`); return late.promise; } });
+  Object.assign(next, { subagentTranscriptPage: async (id: string) => { reads.push(`new:${id}`); return { entries: [] }; } });
+  let attachments = 0;
+  const first = fakeHost({ ownership: "external", onClose: listener => { close = listener; } });
+  const second = fakeHost({ ownership: "external", attach: async id => { assert.equal(id, old.sessionId); attachments++; return next; } });
+  const app = new RustxTuiApp({ host: first, session: old, sessionSettings: SESSION_SETTINGS, reconnect: async () => second });
+  const running = app.run();
+  try {
+    process.stdin.emit("data", "\x1b[1;5B"); await waitForApplicationContinuation();
+    process.stdin.emit("data", "\r"); await waitForApplicationContinuation();
+    assert.deepEqual(reads, [`old:${child.subagent_id}`]);
+    const error = new TransportClosedError("input_eof", "lost connection");
+    Object.defineProperty(first.client, "closed", { value: error }); close(error);
+    await waitForApplicationContinuation();
+    assert.deepEqual(reads, [`old:${child.subagent_id}`, `new:${child.subagent_id}`]);
+    assert.equal(attachments, 1);
+    late.resolve({ entries: [] }); await waitForApplicationContinuation();
+    assert.equal(next.state.subagents[0], child);
+  } finally { await app.quit(); await running; }
+});
+
+it("switching parent Session fences a child page while the old parent remains attached", async () => {
+  const child = subagent("researcher", "sha256:child");
+  const old = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), subagents: [child] });
+  const next = fakeSession(emptyPresentationState(sessionModel("beta/model-b")), "ses_e8de016f-bd70-782f-ad23-25e81df82550");
+  const late = deferred<{ entries: [] }>();
+  const read = deferred<void>(); const attached = deferred<void>();
+  let detached = 0;
+  Object.assign(old, { subagentTranscriptPage: () => { read.resolve(); return late.promise; }, detach: async () => { detached++; } });
+  const app = appOver(old, fakeHost({
+    attach: async () => { attached.resolve(); return next; },
+    catalog: { createSession: async () => ({ session: sessionView({ id: next.sessionId }) }) },
+  }));
+  const renders = countTuiRenderRequests(); const running = app.run();
+  try {
+    process.stdin.emit("data", "\x1b[1;5B"); await waitForApplicationContinuation();
+    process.stdin.emit("data", "\r"); await read.promise;
+    process.stdin.emit("data", "\x1b[27u"); await waitForApplicationContinuation();
+    process.stdin.emit("data", "/new\r"); await attached.promise; await waitForApplicationContinuation();
+    renders.start(); late.resolve({ entries: [] }); await waitForApplicationContinuation();
+    assert.equal(renders.count(), 0, "the old child cannot repaint the new parent");
+    assert.equal(detached, 0, "focus switching does not need to detach the old runtime to fence reads");
+  } finally { renders.restore(); await app.quit(); await running; }
+});

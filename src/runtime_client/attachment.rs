@@ -79,6 +79,7 @@ impl RuntimeAttachment {
     native_control!(transcript_page, false, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
     native_control!(background_status, false, id: &crate::runtime::identity::ToolExecutionId);
     native_control!(background_cancel, true, id: &crate::runtime::identity::ToolExecutionId);
+    native_control!(subagent_transcript_page, false, id: &crate::runtime::identity::SubagentId, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
     native_control!(subagent_status, false, id: &crate::runtime::identity::SubagentId);
     native_control!(subagent_cancel, true, id: &crate::runtime::identity::SubagentId);
 

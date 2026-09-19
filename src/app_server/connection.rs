@@ -806,6 +806,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::Goal { target, .. }
         | Method::BackgroundStatus { target, .. }
         | Method::BackgroundCancel { target, .. }
+        | Method::SubagentTranscript { target, .. }
         | Method::SubagentStatus { target, .. }
         | Method::SubagentCancel { target, .. }
         | Method::SubagentDispose { target, .. }
@@ -914,6 +915,22 @@ async fn dispatch_runtime(
             target: _,
             execution_id,
         } => native_result(authority.background_cancel(&execution_id)),
+        Method::SubagentTranscript {
+            target: _,
+            subagent_id,
+            before,
+            limit,
+        } => match authority.subagent_transcript_page(&subagent_id, before, limit) {
+            Err(RuntimeClientError::UnknownSubagent { .. }) => {
+                Err(domain(ErrorData::UnknownSubagent { subagent_id }))
+            }
+            Err(RuntimeClientError::RuntimeFailure { .. }) => {
+                Err(domain(ErrorData::SubagentHistoryUnavailable {
+                    subagent_id,
+                }))
+            }
+            result => native_result(result),
+        },
         Method::SubagentStatus {
             target: _,
             subagent_id,

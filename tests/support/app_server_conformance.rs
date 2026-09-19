@@ -136,6 +136,30 @@ pub async fn representative_scenario(
     assert_eq!(snapshot_a.effective_approval_mode, ApprovalMode::Policy);
     assert_eq!(snapshot_b.effective_approval_mode, ApprovalMode::Policy);
 
+    // Every carrier validates exact parent authority before native child lookup.
+    let child_id = rustx::runtime::identity::SubagentId::new(a.conversation_id.as_str());
+    let response = driver
+        .request(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(374),
+            call: Method::SubagentTranscript {
+                target: a.clone(),
+                subagent_id: child_id.clone(),
+                before: None,
+                limit: 32,
+            },
+        })
+        .await;
+    let Response::Failure(failure) = response else {
+        panic!("a Conversation id is not a Subagent authority")
+    };
+    assert_eq!(
+        failure.error.data,
+        Some(ErrorData::UnknownSubagent {
+            subagent_id: child_id
+        })
+    );
+
     let (changed_a, unchanged_b) = tokio::join!(
         call(driver, 3, Method::ConfigurationReload { target: a.clone() }),
         call(

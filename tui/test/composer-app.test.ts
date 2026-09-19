@@ -7,7 +7,7 @@ import { ComposerDraft } from "../src/ui/composer-draft.ts";
 import { PopupFrame } from "../src/ui/components/popup-frame.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
 import { harness, nextRequest } from "./support/app-server-harness.ts";
-import { snapshot, sessionView, attemptView } from "./support/fixtures.ts";
+import { snapshot, sessionView, attemptView, subagent, userMessage } from "./support/fixtures.ts";
 import { TempFixture } from "./support/temp-fixture.ts";
 import type { RuntimeClientSnapshot, UserInputBlock } from "../src/protocol/app-server.ts";
 
@@ -210,4 +210,47 @@ test("pasted token extensions and a pasted leading slash remain literal Agent in
     await continuation();
   }
   assert.equal(h.transport.transportCount("session/upload"), 0);
+});
+
+
+test("child inspection preserves exact parent draft and cursor; Esc sends no request", async t => {
+  const child = subagent("researcher", "sha256:child");
+  const h = await appHarness(t, snapshot({ subagents: [child] }));
+  h.editor.setText("draft中👩‍💻e\u0301"); h.input("\x1b[D");
+  const parent = h.session.state;
+  h.input("\x1b[1;5B"); h.input("\r");
+  const read = await nextRequest(h, "subagent/transcript", 0);
+  h.transport.respond(read.id, { type: "transcript", page: { entries: [] } }); await continuation();
+  assert.ok(h.focus instanceof PopupFrame);
+  assert.match(h.focus.render(100).join("\n"), /read only/);
+  assert.equal(h.editor.getExpandedText(), "draft中👩‍💻e\u0301");
+  const requests = [...h.transport.log.requests];
+  h.input("\x1b");
+  assert.deepEqual(h.transport.log.requests, requests, "Esc is presentation-only");
+  assert.equal(h.session.state, parent);
+  h.input("\x7f"); assert.equal(h.editor.getExpandedText(), "draft中e\u0301");
+  assert.equal(h.transport.transportCount("session/attach"), 1);
+  for (const method of ["turn/start", "turn/steer", "subagent/cancel", "interaction/respond"]) assert.equal(h.transport.transportCount(method), 0);
+});
+
+
+test("actual child A to B navigation rejects late A without Session or control requests", async t => {
+  const children = [subagent("researcher", "sha256:a", "running", { subagent_id: "A" }), subagent("planner", "sha256:b", "succeeded", { subagent_id: "B" })];
+  const h = await appHarness(t, snapshot({ subagents: children }));
+  h.input("\x1b[1;5B"); h.input("\r");
+  const a = await nextRequest(h, "subagent/transcript", 0);
+  const previousView = h.focus;
+  h.input("\x1b"); h.input("\x1b[1;5B"); h.input("\r");
+  const b = await nextRequest(h, "subagent/transcript", 1);
+  assert.equal((a.params as { subagent_id: string }).subagent_id, "A");
+  assert.equal((b.params as { subagent_id: string }).subagent_id, "B");
+  h.transport.respond(b.id, { type: "transcript", page: { entries: [{ cursor: "1", item: { type: "message", message: userMessage("b", "ONLY-B") } }] } });
+  await continuation();
+  h.transport.respond(a.id, { type: "transcript", page: { entries: [{ cursor: "1", item: { type: "message", message: userMessage("a", "STALE-A") } }] } });
+  await continuation();
+  previousView?.handleInput?.("\x1b"); // A stale view callback cannot close B.
+  assert.ok(h.focus instanceof PopupFrame);
+  const rendered = h.focus.render(100).join("\n");
+  assert.match(rendered, /ONLY-B/); assert.doesNotMatch(rendered, /STALE-A/);
+  assert.deepEqual(h.transport.log.requests.map(request => request.method), ["initialize", "session/attach", "subagent/transcript", "subagent/transcript"]);
 });

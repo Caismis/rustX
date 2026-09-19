@@ -2,7 +2,7 @@
 //! The staged child uses the registry's existing real-process/control seam.
 use super::*;
 use crate::local_runtime::session::SessionCatalog;
-use crate::runtime::identity::SessionId;
+use crate::runtime::identity::{MessageId, SessionId};
 use crate::session_archive::{SessionArchiveCut, SessionArchiveProducer};
 use std::io::Read;
 use tokio_util::sync::CancellationToken;
@@ -46,14 +46,16 @@ impl ArchivePlane {
     }
 
     async fn prepare(&self) -> (PreparedSubagent, ScriptedChild) {
+        self.prepare_spec(&start_spec("archive ownership ordering"))
+            .await
+    }
+
+    async fn prepare_spec(&self, spec: &SubagentStartSpec) -> (PreparedSubagent, ScriptedChild) {
         let child = stage_exit0(&self.plane);
         let prepared = self
             .plane
             .registry
-            .prepare(
-                &start_spec("archive ownership ordering"),
-                &CancellationSignal::new(),
-            )
+            .prepare(spec, &CancellationSignal::new())
             .await
             .unwrap();
         // The scripted staged process stands in for Ready; materialize the
@@ -437,4 +439,206 @@ async fn cancelled_production_reservation_wait_creates_no_child_allocation() {
         crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { .. }
     )));
     let _released = product.freeze_ownership().unwrap();
+}
+
+/// The real registry commit is the only authority to resolve history. The
+/// physical child is held at its control channel while reads run.
+#[tokio::test]
+async fn child_transcript_requires_exact_committed_parent_ownership_and_survives_terminal() {
+    use crate::message::TextBlock;
+    use crate::message::types::{
+        InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    };
+    use crate::runtime::subagent::SubagentTranscriptError;
+    let fixture = ArchivePlane::new();
+    let (prepared, child) = fixture.prepare().await;
+    let id = prepared.subagent_id.clone();
+    let conversation = prepared.child_conversation_id.clone();
+    let path = fixture
+        .catalog
+        .database_path(&fixture.session, &conversation);
+    let store = crate::durable::SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+    for index in 0..5 {
+        store
+            .append_canonical(&MessageBlock::User(UserMessageBlock {
+                id: MessageId::new(format!("child-input-{index}")),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: format!("delegation {index}"),
+                })],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            }))
+            .unwrap();
+    }
+    let expected = store.load_transcript_page(None, 2).unwrap();
+    assert!(matches!(
+        fixture.plane.registry.transcript_store(&id),
+        Err(SubagentTranscriptError::Unknown(_))
+    ));
+    let SubagentStartOutcome::Accepted(accepted) = fixture
+        .plane
+        .registry
+        .commit(prepared, &CancellationSignal::new())
+        .await
+        .unwrap()
+    else {
+        panic!("accepted")
+    };
+    let unrelated = plane(1);
+    assert!(matches!(
+        unrelated.registry.transcript_store(&id),
+        Err(SubagentTranscriptError::Unknown(_))
+    ));
+    // A real valid Conversation identity cannot substitute for the native SubagentId.
+    assert!(matches!(
+        fixture
+            .plane
+            .registry
+            .transcript_store(&SubagentId::new(conversation.as_str())),
+        Err(SubagentTranscriptError::Unknown(_))
+    ));
+    let reader = fixture.plane.registry.transcript_store(&id).unwrap();
+    assert_eq!(reader.conversation_id(), &conversation);
+    assert_eq!(reader.load_transcript_page(None, 2).unwrap(), expected);
+    let older = reader
+        .load_transcript_page(expected.next_cursor, 2)
+        .unwrap();
+    assert_eq!(older.entries.len(), 2);
+    assert!(older.entries.last().unwrap().cursor < expected.entries.first().unwrap().cursor);
+    assert!(
+        reader
+            .append_canonical(&MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("forbidden-write"),
+                content: vec![],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            }))
+            .is_err(),
+        "the resolved SQLite handle is physically read-only"
+    );
+    drop(reader);
+    fixture.finish(&accepted, child).await;
+    let terminal = fixture.plane.registry.transcript_store(&id).unwrap();
+    assert_eq!(
+        terminal.load_transcript_page(None, 2).unwrap(),
+        expected,
+        "lifecycle settlement cannot manufacture child history"
+    );
+    assert_eq!(
+        fixture
+            .catalog
+            .list_page(None, 0, 32)
+            .unwrap()
+            .sessions
+            .len(),
+        1
+    );
+    drop(terminal);
+    drop(store);
+    std::fs::remove_file(&path).unwrap();
+    assert!(matches!(
+        fixture.plane.registry.transcript_store(&id),
+        Err(SubagentTranscriptError::Unavailable(_))
+    ));
+    assert!(
+        !path.exists(),
+        "a failed inspection never creates an empty database"
+    );
+}
+
+#[tokio::test]
+async fn failed_and_cancelled_retained_children_keep_exact_transcript_authority() {
+    use crate::message::{
+        TextBlock,
+        types::{InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource},
+    };
+    for cancelled in [false, true] {
+        let fixture = ArchivePlane::new();
+        make_clean_git_workspace(&fixture.plane);
+        let mut spec = start_spec("retained history");
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
+        let (prepared, child) = fixture.prepare_spec(&spec).await;
+        let id = prepared.subagent_id.clone();
+        let path = fixture
+            .catalog
+            .database_path(&fixture.session, &prepared.child_conversation_id);
+        let store = crate::durable::SqliteConversationStore::open(
+            prepared.child_conversation_id.clone(),
+            &path,
+        )
+        .unwrap();
+        store
+            .append_canonical(&MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("retained-input"),
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "Retained canonical history".into(),
+                })],
+            }))
+            .unwrap();
+        let before = store.load_transcript_page(None, 32).unwrap();
+        let SubagentStartOutcome::Accepted(_) = fixture
+            .plane
+            .registry
+            .commit(prepared, &CancellationSignal::new())
+            .await
+            .unwrap()
+        else {
+            panic!("accepted")
+        };
+        let workspace = fixture
+            .plane
+            .registry
+            .snapshot(&id)
+            .unwrap()
+            .workspace
+            .logical_workspace;
+        std::fs::write(workspace.join("keep.txt"), "retained work").unwrap();
+        if cancelled {
+            fixture
+                .plane
+                .registry
+                .cancel(&id, CancellationReason::UserRequested)
+                .unwrap();
+            child
+                .cancelled_after_delegation(ChildResultStatus::Cancelled, None)
+                .await;
+        } else {
+            child.complete(ChildResultStatus::Failed, None).await;
+        }
+        let terminal = fixture
+            .plane
+            .registry
+            .wait_until_settled(&id)
+            .await
+            .unwrap();
+        assert_eq!(
+            terminal.state,
+            if cancelled {
+                SubagentState::Cancelled
+            } else {
+                SubagentState::Failed
+            }
+        );
+        assert!(
+            terminal.handoff.is_some(),
+            "dirty child workspace is retained"
+        );
+        assert_eq!(
+            fixture
+                .plane
+                .registry
+                .transcript_store(&id)
+                .unwrap()
+                .load_transcript_page(None, 32)
+                .unwrap(),
+            before
+        );
+    }
 }

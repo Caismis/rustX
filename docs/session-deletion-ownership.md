@@ -364,7 +364,7 @@ execute reacquires them. Conversation admission checks catalog deletion authorit
 after acquiring its allocation lock. Cleanup begins only after file/parent-directory
 durability and runs outside the root freeze and supervisor catalog mutex.
 See [session-deletion-lifecycle.md](session-deletion-lifecycle.md) for commit points,
-uncertainty, recovery, allocator monotonicity, catalog generations, bounded App Server protocol v11 and test mapping.
+uncertainty, recovery, allocator monotonicity, catalog generations, bounded App Server protocol v12 and test mapping.
 
 Preview never retains `ConversationExclusion` while awaiting user confirmation.
 Final inspection remains under the ownership snapshot through exclusion acquisition,

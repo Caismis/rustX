@@ -5572,6 +5572,21 @@ impl ConversationRuntime {
             .and_then(|subagents| subagents.snapshot(subagent_id))
     }
 
+    /// Resolve an exact owned child's read-only canonical store.
+    pub(crate) fn subagent_transcript_store(
+        &self,
+        id: &crate::runtime::identity::SubagentId,
+    ) -> Result<
+        crate::durable::SqliteConversationStore,
+        crate::runtime::subagent::SubagentTranscriptError,
+    > {
+        self.inner
+            .subagents
+            .as_ref()
+            .ok_or_else(|| crate::runtime::subagent::SubagentTranscriptError::Unknown(id.clone()))?
+            .transcript_store(id)
+    }
+
     /// Requests cancellation of one subagent child through the
     /// authoritative registry. Acceptance and eventual settlement remain
     /// distinct; the snapshot is the state after the intent commit.

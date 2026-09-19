@@ -1185,29 +1185,46 @@ impl ClientInner {
         limit: usize,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_session_runtime_live()?;
-        if limit == 0 || limit > TRANSCRIPT_PAGE_LIMIT_MAX {
-            return Err(RuntimeClientError::InvalidRequest {
-                message: format!(
-                    "transcript page limit must be between 1 and {TRANSCRIPT_PAGE_LIMIT_MAX}"
-                ),
-            });
-        }
-        let page = self
-            .store
-            .load_transcript_page(before.map(Into::into), limit)
-            .map_err(|error| RuntimeClientError::RuntimeFailure {
-                message: format!("durable transcript page failed: {error}"),
+        let page = read_transcript_page(self.store.as_ref(), before, limit, || {
+            let (_, _, through) = self.lock_snapshot_state()?.projection.snapshot_cut()?;
+            Ok(through)
+        })?;
+        Ok(RuntimeClientResult::TranscriptPage { page })
+    }
+
+    /// Read-only child history, addressed exclusively through this parent's registry.
+    pub(crate) fn subagent_transcript_page(
+        &self,
+        id: &crate::runtime::identity::SubagentId,
+        before: Option<RuntimeClientTranscriptCursor>,
+        limit: usize,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| RuntimeClientError::UnknownSubagent {
+                subagent_id: id.clone(),
             })?;
-        let mut page =
-            transcript_page_view(page).map_err(|message| RuntimeClientError::RuntimeFailure {
-                message: format!("durable transcript page is invalid: {message}"),
+        let store = runtime
+            .subagent_transcript_store(id)
+            .map_err(|error| match error {
+                crate::runtime::subagent::SubagentTranscriptError::Unknown(subagent_id) => {
+                    RuntimeClientError::UnknownSubagent { subagent_id }
+                }
+                crate::runtime::subagent::SubagentTranscriptError::Unavailable(message) => {
+                    RuntimeClientError::RuntimeFailure {
+                        message: format!("subagent history unavailable: {message}"),
+                    }
+                }
             })?;
-        let (_, _, through) = self.lock_snapshot_state()?.projection.snapshot_cut()?;
-        super::response::decorate_through(self.store.as_ref(), &mut page, through).map_err(
-            |error| RuntimeClientError::RuntimeFailure {
-                message: error.to_string(),
-            },
-        )?;
+        let page = read_transcript_page(&store, before, limit, || {
+            store
+                .presentation_frontier()
+                .map_err(|error| RuntimeClientError::RuntimeFailure {
+                    message: error.to_string(),
+                })
+        })?;
         Ok(RuntimeClientResult::TranscriptPage { page })
     }
 
@@ -2708,6 +2725,38 @@ impl EventSubscription {
     pub fn try_next(&self) -> EventDelivery {
         self.poll()
     }
+}
+
+/// Shared durable transcript projection for root and exact owned children.
+fn read_transcript_page(
+    store: &dyn crate::durable::ConversationStore,
+    before: Option<RuntimeClientTranscriptCursor>,
+    limit: usize,
+    frontier: impl FnOnce() -> Result<u64, RuntimeClientError>,
+) -> Result<RuntimeClientTranscriptPage, RuntimeClientError> {
+    if limit == 0 || limit > TRANSCRIPT_PAGE_LIMIT_MAX {
+        return Err(RuntimeClientError::InvalidRequest {
+            message: format!(
+                "transcript page limit must be between 1 and {TRANSCRIPT_PAGE_LIMIT_MAX}"
+            ),
+        });
+    }
+    let page = store
+        .load_transcript_page(before.map(Into::into), limit)
+        .map_err(|error| RuntimeClientError::RuntimeFailure {
+            message: format!("durable transcript page failed: {error}"),
+        })?;
+    let mut page =
+        transcript_page_view(page).map_err(|message| RuntimeClientError::RuntimeFailure {
+            message: format!("durable transcript page is invalid: {message}"),
+        })?;
+    let through = frontier()?;
+    super::response::decorate_through(store, &mut page, through).map_err(|error| {
+        RuntimeClientError::RuntimeFailure {
+            message: error.to_string(),
+        }
+    })?;
+    Ok(page)
 }
 
 #[cfg(test)]

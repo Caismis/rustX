@@ -49,10 +49,8 @@ import { PendingInputView } from "./components/pending-input.ts";
 import { isAttemptActive } from "../presentation/state.ts";
 import type { SessionCatalogPage } from "../startup.ts";
 import {
-  Box,
   Container,
   Loader,
-  Markdown,
   ProcessTerminal,
   Spacer,
   Text,
@@ -137,8 +135,10 @@ import {
   withToggledInteraction,
   withToggledToolCall,
 } from "./preferences.ts";
-import { background, markdownTheme, style } from "./theme.ts";
-import type { TranscriptBlock } from "./components/transcript.ts";
+import { style } from "./theme.ts";
+import { banded } from "./components/transcript-block.ts";
+import { SubagentTranscript } from "../app-server/subagent-transcript.ts";
+import { SubagentTranscriptView } from "./components/subagent-transcript-view.ts";
 import { HumanInteractionOverlay } from "./components/hitl.ts";
 import type { InteractionResponse } from "../protocol/app-server.ts";
 
@@ -244,6 +244,8 @@ export class RustxTuiApp {
   /** True only while a focus change is installing a different Session. */
   #switching = false;
   #subagentListFocused = false;
+  #childInspection: { reader: SubagentTranscript; timer: ReturnType<typeof setInterval> } | undefined;
+  #reconnectChild: string | undefined;
   #selectedSubagentId: string | undefined;
   #presentationEpoch = 0;
   #deletion!: SessionDeletionWorkflow;
@@ -302,6 +304,7 @@ export class RustxTuiApp {
       if (this.#host !== host || this.#quitting || this.#finished) return;
       this.#deletion?.terminate();
       this.#initialResumePage = undefined;
+      this.#reconnectChild = this.#childInspection?.reader.selected;
       this.#invalidatePresentation();
       this.#editor.disableSubmit = true;
       if (host.ownership === "external" && this.#reconnect !== undefined) {
@@ -347,6 +350,8 @@ export class RustxTuiApp {
       this.#dispatcher.setHost(replacement);
       this.#bindSession(session);
       this.#watchConnection();
+      if (session !== undefined && this.#reconnectChild !== undefined) this.#openChildTranscript(this.#reconnectChild);
+      this.#reconnectChild = undefined;
       if (session !== undefined) this.#renderState(session.state);
       else if (this.#started) await this.#openResumeSelector();
       // Rebinding creates a new connection-local workflow. Transfer only the
@@ -420,7 +425,9 @@ export class RustxTuiApp {
       // invalidates local inspection, picker, and transient ownership, while
       // the subsequent state publication still renders the new projection.
       if (this.#session !== session || this.#finished) return;
+      const child = this.#childInspection?.reader.selected;
       this.#invalidatePresentation();
+      if (child !== undefined) this.#openChildTranscript(child);
     });
     this.#removeStateListener = session.onState((state) => {
       // Runtime state rendering follows attachment identity, not the
@@ -621,6 +628,10 @@ export class RustxTuiApp {
             return { consume: true };
           }
           if (matchesKey(data, "enter") && this.#subagentListFocused && this.#selectedSubagentId !== undefined) {
+            this.#openChildTranscript(this.#selectedSubagentId);
+            return { consume: true };
+          }
+          if (matchesKey(data, "i") && this.#subagentListFocused) {
             void this.#inspectSelectedSubagent();
             return { consume: true };
           }
@@ -831,14 +842,29 @@ export class RustxTuiApp {
     this.#renderState(state);
   }
 
-  /**
-   * Opens an authoritative detail view of the selected subagent.
-   *
-   * The App Server projects a child's identity, state, activity, execution
-   * profile and workspace; it exposes no method for attaching to a child
-   * conversation, so this reads `subagent/status` rather than composing a
-   * second conversation client of its own.
-   */
+  /** Inspect history through the current parent, never a child Session. */
+  #openChildTranscript(id: string): void {
+    const lease = this.#presentationLease();
+    const session = lease.session;
+    if (session === undefined || !this.#isCurrentPresentationLease(lease)) return;
+    const reader = new SubagentTranscript(session, id);
+    const current = () => this.#childInspection?.reader === reader && this.#isCurrentPresentationLease(lease);
+    const view = new SubagentTranscriptView(reader,
+      () => session.state.subagents.find(child => child.subagent_id === id),
+      this.#preferences,
+      () => { if (current()) this.#closeOverlay(); },
+      () => { if (current()) this.#tui.requestRender(); });
+    this.#showPopup(view, { width: "90%", heightPercent: 80 });
+    reader.onChange = () => { if (current()) this.#tui.requestRender(); };
+    // Poll transcript authority, including terminal children: status is not a
+    // transcript revision and cannot establish the final history boundary.
+    const timer = setInterval(() => { void reader.refresh(); }, 1500);
+    timer.unref();
+    this.#childInspection = { reader, timer };
+    void reader.newest();
+  }
+
+  /** Existing lifecycle/resource details remain a separate surface (i). */
   async #inspectSelectedSubagent(): Promise<void> {
     if (
       !this.#subagentListFocused ||
@@ -1429,6 +1455,12 @@ export class RustxTuiApp {
   }
 
   #closeOverlay(replacing = false): void {
+    if (this.#childInspection) {
+      clearInterval(this.#childInspection.timer);
+      this.#childInspection.reader.dispose();
+      this.#childInspection = undefined;
+      this.#subagentListFocused = false;
+    }
     const handle = this.#overlay;
     if (handle === undefined) return;
     if (this.#resumePresentation) this.#resumeQuery = this.#resumePresentation.reconciliationContext().query;
@@ -1917,37 +1949,4 @@ function compactDiagnostic(error: unknown): string {
 
 function nextTick(): Promise<void> {
   return new Promise((resolve) => process.nextTick(resolve));
-}
-
-/**
- * Lays one transcript block out, on its background band when it has one.
- *
- * The band is the app's job because the app is the only layer that knows how
- * wide the terminal is: a background has to be filled to the edge of the
- * line, and a component that composed one into its own string would paint a
- * ragged block whose colour stopped at its longest line. Pi's `Box` does the
- * filling; everything above only names the band.
- *
- * A banded block owns its horizontal padding through the box, so its inner
- * component takes none — otherwise the padding would be applied twice and the
- * band would sit one column further in than the content it frames.
- */
-function banded(block: TranscriptBlock): Container | Box | Text | Markdown {
-  const pad = block.background === undefined ? 1 : 0;
-  const content =
-    block.kind === "markdown"
-      ? new Markdown(
-          block.markdown,
-          pad,
-          0,
-          markdownTheme,
-          block.defaultTextStyle,
-        )
-      : new Text(block.text, pad, 0);
-  if (block.background === undefined) {
-    return content;
-  }
-  const box = new Box(1, 1, background[block.background]);
-  box.addChild(content);
-  return box;
 }

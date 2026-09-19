@@ -114,6 +114,15 @@ export type Request1 =
       };
     }
   | {
+      method: 'subagent/transcript';
+      params: {
+        target: AttachmentTarget;
+        subagent_id: SubagentId;
+        before?: RuntimeClientTranscriptCursor | null;
+        limit: number;
+      };
+    }
+  | {
       method: 'subagent/status';
       params: {
         target: AttachmentTarget;
@@ -2295,6 +2304,14 @@ export type ErrorData =
   | {
       diagnostic: string;
       kind: 'configuration_failed';
+    }
+  | {
+      subagent_id: SubagentId;
+      kind: 'unknown_subagent';
+    }
+  | {
+      subagent_id: SubagentId;
+      kind: 'subagent_history_unavailable';
     }
   | {
       kind: 'request_capacity';

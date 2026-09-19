@@ -7516,3 +7516,16 @@ production. Session-authored content is preserved; infrastructure credentials an
 provider-private continuation are excluded by typed ownership. TUI destinations
 remain client-local and never appear in export RPC parameters. See
 [Session archive export](session-archive.md) for the tested contract.
+
+
+## Exact read-only Subagent history
+
+Parent AttachmentTarget → addressed live parent runtime → native SubagentRegistry
+→ exact SubagentId → owned child Conversation is the only child transcript
+lookup chain exposed by App Server. Conversation IDs alone confer no authority.
+Existing-only read access cannot create a child Session or recover/start a child.
+Canonical content and completed-response facts come from the child's durable
+store through the shared transcript reader, never parent status/activity.
+Selection and page generations plus attachment epochs fence all TUI child reads;
+reconnect rereads authority and Esc mutates only presentation. Root-routed HITL
+and existing lifecycle/control surfaces remain the sole control owners.

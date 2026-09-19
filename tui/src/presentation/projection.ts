@@ -67,7 +67,7 @@ import type {
 
 /** The initial state of a client that has not attached yet. */
 export function emptyPresentationState(
-  sessionModel: SessionModelView,
+  sessionModel: SessionModelView | null,
 ): PresentationState {
   return {
     conversationId: "",

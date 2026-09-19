@@ -30,7 +30,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v11. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v12. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -159,7 +159,7 @@ saves alone leave the loaded generation unchanged.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v11)
+  -> initialize (App Server protocol v12)
   -> session/create or choose a durable Session
   -> session/attach (authoritative snapshot, cursor, subscription)
   -> interactive
@@ -184,11 +184,28 @@ compact footer carries the durable Session metadata and live status instead.
 
 ### Subagent inspection
 
-Ctrl+Up/Ctrl+Down selects a subagent row; Enter reads `subagent/status` for that
-exact identity. The detail view uses server-published state and offers the
-existing explicit cancellation/workspace controls. The App Server does not
-expose non-Session child transcript attachments; the old process inspector is
-removed. No child process is spawned for inspection.
+Ctrl+Up/Ctrl+Down selects a native Subagent row; Enter opens that child's
+read-only conversation over the current Main Session. The title shows the native
+name and status; the existing row carries its exact identity. `i` retains the
+separate status/detail surface and `D` retains the existing workspace operation.
+
+The conversation popup has no Composer or controls. Esc returns to Main without
+a request, preserving the parent's draft, cursor and presentation. It shares the
+normal transcript renderer, including canonical Tool occurrence correlation and
+completed-response metadata. It holds one bounded page (32 entries): PageUp
+replaces it with the explicit older page, Home reads newest again. Newest polling
+runs every 1.5 seconds and reads transcript authority even after termination;
+older browsing pauses polling. Missing/unreadable child history displays an
+explicit error, never an empty successful conversation.
+
+Selection/read generations and parent attachment epochs reject stale responses.
+Resync and reconnect keep only the selected native SubagentId and reread it
+through the current parent's authority. Parent switching closes the view.
+No child Session, control attachment, process, model setting or interaction owner
+is created. Routed child HITL remains on the existing root human-facing surface.
+The selection helpers in `ui/subagent-navigation.ts` continue to own only row
+selection; `app-server/subagent-transcript.ts` owns the disposable single-page
+read projection, never canonical history.
 
 ## Owners
 
