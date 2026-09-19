@@ -688,9 +688,11 @@ enum AttemptProvenance {
     /// continuation. The reference is the post-accounting authority, captured
     /// from the accepted inbound rather than a later current-Goal read.
     GoalContinuation(crate::goal::GoalRef),
-    /// Recovery continuation over already-canonical history: no fresh inbound
-    /// was adopted, so no Goal round was consumed for it.
+    /// Ordinary recovery answer obligation with no autonomous Goal authority.
     RecoveredContinuation,
+    /// Already-adopted Goal work: recovery retained the exact post-accounting
+    /// reference from durable history. Admission consumes no additional round.
+    RecoveredGoalContinuation(crate::goal::GoalRef),
 }
 
 /// The runtime-owned manual compaction currently holding the conversation.
@@ -884,14 +886,14 @@ struct CoordinatorState {
     /// The child is one-shot, so at most one admission ever consumes it;
     /// a parent conversation never arms it.
     one_shot_cancel: Option<CancellationReason>,
-    /// Whether startup recovery proved that the already-canonical adopted
-    /// turn may continue through one new attempt (recovery Class B).
+    /// Startup recovery's exact provenance for the already-canonical adopted
+    /// turn that may continue through one new attempt.
     ///
     /// This is a one-shot permission, consumed by the first admission that
     /// finds no pending inbound. It is never set for an indeterminate
     /// external outcome (Class C), where continuing would risk duplicating an
     /// external side effect rustX cannot observe.
-    recovered_continuation: bool,
+    recovered_continuation: Option<AttemptProvenance>,
     /// The coordinator-owned transient admission-cycle retry bookkeeping
     /// (Issue #63). The absorbing `DurabilityFailed` fact itself is NOT
     /// stored here: it lives in exactly one place, the runtime-owned
@@ -1462,7 +1464,7 @@ impl RuntimeInner {
         if state.resource_reload_in_progress {
             return Err(Busy::Capability);
         }
-        if state.recovered_continuation {
+        if state.recovered_continuation.is_some() {
             return Err(Busy::Recovery);
         }
         if self.durability_gate.is_failed()
@@ -2792,8 +2794,7 @@ impl RuntimeInner {
                 // A Class C conversation never reaches this branch: an
                 // indeterminate external outcome leaves the permission unset,
                 // so recovery starts nothing at all.
-                if state.recovered_continuation {
-                    state.recovered_continuation = false;
+                if state.recovered_continuation.is_some() {
                     self.admit_continuation(state);
                     return;
                 }
@@ -2892,7 +2893,7 @@ impl RuntimeInner {
             self.mailbox.wake().notify_one();
             return;
         }
-        state.recovered_continuation = false;
+        state.recovered_continuation = None;
         // Mutation preserves identity. Every committed row is a subset of the
         // prevalidated identities; only the committed receipt supplies content.
         let conversation = state.conversation.as_ref().expect("idle conversation");
@@ -2974,12 +2975,11 @@ impl RuntimeInner {
             .conversation
             .take()
             .expect("the coordinator owns the conversation state while idle");
-        self.publish_attempt(
-            state,
-            conversation,
-            None,
-            AttemptProvenance::RecoveredContinuation,
-        );
+        let provenance = state
+            .recovered_continuation
+            .take()
+            .expect("recovered answer obligation");
+        self.publish_attempt(state, conversation, None, provenance);
     }
 
     /// The shared tail of every admission: allocate the attempt identity,
@@ -3568,10 +3568,15 @@ impl ConversationRuntime {
         if let Some(subagents) = &config.subagents {
             subagents.restore_sequence_watermark(recovery.highest_subagent_ordinal());
         }
-        let recovered_continuation = matches!(
-            recovery.resume(),
-            crate::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn
-        );
+        let recovered_continuation = match recovery.resume() {
+            crate::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn { goal } => {
+                Some(match goal {
+                    Some(goal) => AttemptProvenance::RecoveredGoalContinuation(goal),
+                    None => AttemptProvenance::RecoveredContinuation,
+                })
+            }
+            _ => None,
+        };
         let next_attempt_seq = recovery.next_attempt_ordinal();
         // The coordinator receives the narrow interaction audit capability
         // only (Issue #109): it may commit the requested/settled facts of its
@@ -4953,7 +4958,8 @@ impl ConversationRuntime {
     /// 2. if — and only if — it is an autonomous Goal continuation, durably
     ///    commit `Active -> Paused` only while its admitted `GoalRef` is current;
     /// 3. request cancellation of that same attempt;
-    /// 4. report success only once both semantic actions have won.
+    /// 4. report success once the matching pause (if required) and cancellation
+    ///    have won. Stale authority requires no pause and still succeeds.
     ///
     /// Because the durable pause commits **before** cancellation is
     /// requested, the matching authority cannot immediately restart. A newer
@@ -4968,8 +4974,10 @@ impl ConversationRuntime {
     ///
     /// Returns [`CancelAttemptError::NoCurrentAttempt`] when no attempt with
     /// the given identity is currently cancellable, and
-    /// [`CancelAttemptError::GoalPauseFailed`] when the durable pause did not
-    /// commit. The failure case never fabricates a pause: cancellation of
+    /// [`CancelAttemptError::GoalPauseFailed`] when storage or lifecycle refusal
+    /// prevents the pause operation. A stale/superseded `GoalRef` returning
+    /// `Ok(None)` is success: no newer authority is substituted or retried.
+    /// The failure case never fabricates a pause: cancellation of
     /// that exact attempt is still requested (containment), and a genuine
     /// storage failure is recorded through the runtime's own absorbing
     /// durability authority, which fences all further admission — so no later
@@ -4989,7 +4997,8 @@ impl ConversationRuntime {
         let attempt_id = current.attempt_id.clone();
         let cancellation = current.cancellation.clone();
         let pause = match &current.provenance {
-            AttemptProvenance::GoalContinuation(expected) => {
+            AttemptProvenance::GoalContinuation(expected)
+            | AttemptProvenance::RecoveredGoalContinuation(expected) => {
                 self.inner.composed_goal(&state).map(|domain| {
                     self.inner
                         .mailbox
@@ -5276,7 +5285,7 @@ impl ConversationRuntime {
             || state.manual_compaction.is_some()
             || state.conversation.is_none()
             || state.resource_reload_in_progress
-            || state.recovered_continuation
+            || state.recovered_continuation.is_some()
             || !self.inner.durability_gate.healthy_for_idle_claim()
             || state.mcp_settlement_failure.is_some()
             || state.admission_durability_cycle.pending_retry.is_some()
@@ -6017,8 +6026,9 @@ impl std::error::Error for RuntimeResourceReloadError {}
 pub enum CancelAttemptError {
     /// No attempt with the given identity is currently cancellable.
     NoCurrentAttempt,
-    /// The interrupted attempt was an autonomous Goal continuation and its
-    /// durable `Active -> Paused` commit did not win (Issue #351).
+    /// Storage or lifecycle refusal prevented an autonomous Goal attempt's
+    /// pause operation. A superseded exact reference is an intentional no-op
+    /// and successful cancellation, never this error.
     ///
     /// The attempt was still cancelled. Nothing pretends the Goal is paused:
     /// the durable phase is whatever storage actually holds, and a storage
@@ -18469,7 +18479,7 @@ mod tests {
         );
         assert_eq!(
             runtime.recovery().resume(),
-            crate::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn
+            crate::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn { goal: None }
         );
 
         runtime.activate();

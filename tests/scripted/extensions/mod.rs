@@ -2776,7 +2776,7 @@ async fn goal84_recovery_authorizes_pending_human_but_does_not_infer_continuatio
         assert_eq!(
             composed.runtime.recovery().resume(),
             if already_adopted {
-                rustx::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn
+                rustx::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn { goal: None }
             } else {
                 rustx::runtime::recovery::ResumeDisposition::PendingInboundOnly
             },

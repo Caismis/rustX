@@ -419,7 +419,7 @@ fn a_seeded_lineage_owes_no_answer_for_its_bootstrap_prefix() {
     }
     assert_eq!(
         recover_reopened(&durable).resume(),
-        ResumeDisposition::ContinueAdoptedTurn,
+        ResumeDisposition::ContinueAdoptedTurn { goal: None },
         "the lineage's own adopted turn is owed an answer"
     );
 }
@@ -518,7 +518,10 @@ fn crash_before_request_start_is_class_b_and_permits_continuation() {
         },
         "no external side effect crossed a start commit"
     );
-    assert_eq!(plan.resume(), ResumeDisposition::ContinueAdoptedTurn);
+    assert_eq!(
+        plan.resume(),
+        ResumeDisposition::ContinueAdoptedTurn { goal: None }
+    );
     // Classification is pure: the same durable facts classify identically.
     assert_eq!(RecoveryPlan::classify(&evidence), plan);
 
@@ -588,7 +591,10 @@ fn the_answer_obligation_survives_a_chain_of_recovery_terminals() {
     // Recovery #1 permits the continuation *and* durably terminalizes the
     // dead attempt in the same pass.
     let first = recover_reopened(&durable);
-    assert_eq!(first.resume(), ResumeDisposition::ContinueAdoptedTurn);
+    assert_eq!(
+        first.resume(),
+        ResumeDisposition::ContinueAdoptedTurn { goal: None }
+    );
     assert_eq!(
         first.reconciliation().attempt_terminal.as_ref(),
         Some(&attempt_one)
@@ -604,7 +610,7 @@ fn the_answer_obligation_survives_a_chain_of_recovery_terminals() {
     );
     assert_eq!(
         repeated.resume(),
-        ResumeDisposition::ContinueAdoptedTurn,
+        ResumeDisposition::ContinueAdoptedTurn { goal: None },
         "the recovery terminal transferred the obligation instead of consuming it"
     );
     assert!(
@@ -638,7 +644,7 @@ fn the_answer_obligation_survives_a_chain_of_recovery_terminals() {
     );
     assert_eq!(
         second.resume(),
-        ResumeDisposition::ContinueAdoptedTurn,
+        ResumeDisposition::ContinueAdoptedTurn { goal: None },
         "the turn is still owed an answer after a second death"
     );
     assert_eq!(
@@ -777,7 +783,10 @@ fn a_known_outcome_terminal_transfers_the_obligation_of_a_later_adopted_turn() {
         "the interrupted attempt carries a known external outcome: {:?}",
         first.attempt_class()
     );
-    assert_eq!(first.resume(), ResumeDisposition::ContinueAdoptedTurn);
+    assert_eq!(
+        first.resume(),
+        ResumeDisposition::ContinueAdoptedTurn { goal: None }
+    );
     assert_eq!(
         first.reconciliation().attempt_terminal.as_ref(),
         Some(&attempt)
@@ -786,7 +795,7 @@ fn a_known_outcome_terminal_transfers_the_obligation_of_a_later_adopted_turn() {
     let repeated = recover_reopened(&durable);
     assert_eq!(
         repeated.resume(),
-        ResumeDisposition::ContinueAdoptedTurn,
+        ResumeDisposition::ContinueAdoptedTurn { goal: None },
         "the drained turn is still owed an answer after its attempt's recovery terminal"
     );
     assert!(repeated.reconciliation().is_empty());
@@ -2321,7 +2330,7 @@ fn historical_attempt_tool_evidence_never_aliases_the_unsettled_attempt() {
     );
     assert_eq!(
         plan.resume(),
-        ResumeDisposition::ContinueAdoptedTurn,
+        ResumeDisposition::ContinueAdoptedTurn { goal: None },
         "the current attempt has zero external-start evidence of its own"
     );
 

@@ -538,7 +538,10 @@ fn adopted_inbound_is_canonical_and_no_longer_pending() {
     // external can have happened, so the canonical turn continues through one
     // new attempt instead of being stranded.
     assert_eq!(report.attempt_class(), &AttemptRecoveryClass::NotStarted);
-    assert_eq!(report.resume(), ResumeDisposition::ContinueAdoptedTurn);
+    assert_eq!(
+        report.resume(),
+        ResumeDisposition::ContinueAdoptedTurn { goal: None }
+    );
 }
 
 /// The same window one turn later, in an ordinary multi-turn conversation.
@@ -577,7 +580,7 @@ fn a_turn_adopted_after_a_settled_attempt_continues() {
     );
     assert_eq!(
         report.resume(),
-        ResumeDisposition::ContinueAdoptedTurn,
+        ResumeDisposition::ContinueAdoptedTurn { goal: None },
         "the turn adopted after the settled attempt is still owed an answer"
     );
 }
@@ -630,7 +633,7 @@ fn a_turn_drained_into_a_live_attempt_continues() {
     );
     assert_eq!(
         report.resume(),
-        ResumeDisposition::ContinueAdoptedTurn,
+        ResumeDisposition::ContinueAdoptedTurn { goal: None },
         "the turn drained into the dead attempt is still owed an answer"
     );
 }
@@ -681,7 +684,10 @@ fn an_adopted_turn_survives_the_recovery_terminal_of_a_second_death() {
         "the second turn's attempt started nothing: {:?}",
         first.attempt_class()
     );
-    assert_eq!(first.resume(), ResumeDisposition::ContinueAdoptedTurn);
+    assert_eq!(
+        first.resume(),
+        ResumeDisposition::ContinueAdoptedTurn { goal: None }
+    );
     assert!(first.reconciliation().attempt_terminal.is_some());
 
     // Reopening that same durable authority must reach the same verdict.
@@ -692,7 +698,7 @@ fn an_adopted_turn_survives_the_recovery_terminal_of_a_second_death() {
     );
     assert_eq!(
         repeated.resume(),
-        ResumeDisposition::ContinueAdoptedTurn,
+        ResumeDisposition::ContinueAdoptedTurn { goal: None },
         "the recovery terminal transferred the obligation instead of consuming it"
     );
     assert!(repeated.reconciliation().is_empty());
@@ -716,7 +722,7 @@ fn an_adopted_turn_survives_the_recovery_terminal_of_a_second_death() {
     );
     assert_eq!(
         second.resume(),
-        ResumeDisposition::ContinueAdoptedTurn,
+        ResumeDisposition::ContinueAdoptedTurn { goal: None },
         "the turn is still owed an answer after a chain of deaths"
     );
 
@@ -3270,4 +3276,98 @@ fn approval_settlement_and_the_tool_start_boundary_compose() {
         durable.count_events(|event| matches!(event, RuntimeEvent::InteractionSettled { .. })),
         1
     );
+}
+
+/// Case B: the canonical adoption committed, but no request ever started.
+/// This differs from the existing accepted-but-still-pending recovery case.
+#[test]
+fn goal350_process_death_after_adoption_interrupt_pauses_without_refund() {
+    recovered_adopted_interrupt(child::GOAL_ROUND, child::GOAL_RECOVER_INTERRUPT);
+}
+
+#[test]
+fn goal350_recovered_stale_goal_ref_cannot_pause_newer_authority() {
+    recovered_adopted_interrupt(child::GOAL_ROUND, child::GOAL_RECOVER_STALE_INTERRUPT);
+}
+
+#[test]
+fn goal350_recovered_human_interrupt_does_not_pause_unrelated_goal() {
+    recovered_adopted_interrupt(child::TEXT_TURN, child::HUMAN_RECOVER_INTERRUPT);
+}
+
+fn recovered_adopted_interrupt(initial: &str, resumed: &str) {
+    use crate::goal::GoalPhase;
+    let lab = Lab::new();
+    super::harness::write_runtime_config_with_goal(lab.root());
+    let mut process = lab.spawn(initial, Some("after:adopt_pending_batch"));
+    process.wait_reached("after:adopt_pending_batch");
+    process.sigkill();
+    let before = {
+        let durable = lab.durable();
+        assert!(durable.store().load_pending().unwrap().is_empty());
+        let events = durable.store().read_events(None, 256).unwrap().events;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.event, RuntimeEvent::InboundTurnAdopted { .. }))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.event, RuntimeEvent::ModelRequestStarted { .. }))
+        );
+        let goal = durable.store().load_goal().unwrap();
+        assert_eq!(
+            durable.recover().resume(),
+            ResumeDisposition::ContinueAdoptedTurn {
+                goal: goal.as_ref().map(|g| g.reference.clone()),
+            }
+        );
+        goal
+    };
+    let mut process = lab.spawn(resumed, None);
+    process.wait_note("recovered-interrupt-proved");
+    process.sigkill();
+    let durable = lab.durable();
+    let after = durable.store().load_goal().unwrap().unwrap();
+    assert!(durable.store().load_pending().unwrap().is_empty());
+    let events = durable.store().read_events(None, 256).unwrap().events;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e.event, RuntimeEvent::AttemptCancelled { .. }))
+            .count(),
+        1
+    );
+    let rounds = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.event,
+                RuntimeEvent::Goal {
+                    fact: crate::goal::GoalFact::RoundAdmitted { .. }
+                }
+            )
+        })
+        .count();
+    if let Some(before) = before {
+        assert_eq!(rounds, 1);
+        assert_eq!(
+            after.autonomous_rounds_consumed,
+            before.autonomous_rounds_consumed
+        );
+        assert_eq!(after.reference.revision, before.reference.revision + 1);
+        assert_eq!(
+            after.phase,
+            if resumed == child::GOAL_RECOVER_INTERRUPT {
+                GoalPhase::Paused
+            } else {
+                GoalPhase::Active
+            }
+        );
+    } else {
+        assert_eq!(rounds, 0);
+        assert_eq!(after.phase, GoalPhase::Active);
+        assert_eq!(after.reference.revision, 1);
+    }
 }

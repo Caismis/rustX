@@ -543,7 +543,13 @@ pub struct RecoveryEvidence {
     ///
     /// Only the trailing identity of the adopted batch is retained, so the
     /// evidence stays O(1) however large the adopted batch or the lineage is.
-    unanswered_adopted_turn: Option<MessageId>,
+    unanswered_adopted_turn: Option<(MessageId, Option<crate::goal::GoalRef>)>,
+    /// The latest unadopted round candidate. `accept_goal_round` requires an
+    /// empty Pending Inbound queue, so at most one Goal round can await
+    /// adoption. Retaining one candidate is O(1), even if work is discarded.
+    /// This is not authority for the answer obligation until its exact
+    /// message identity occurs in `InboundTurnAdopted`.
+    unadopted_goal_round: Option<(MessageId, crate::goal::GoalRef)>,
     /// Publication streams that never settled (Issue #108).
     ///
     /// The records carry frozen identities and the durable P/U evidence only.
@@ -586,6 +592,7 @@ impl RecoveryEvidence {
             highest_subagent_ordinal: 0,
             saw_any_attempt: false,
             unanswered_adopted_turn: None,
+            unadopted_goal_round: None,
             unsettled_publications: store.load_unsettled_publication_streams()?,
         };
         evidence.active_ids = evidence
@@ -664,12 +671,29 @@ impl RecoveryEvidence {
                         last_accepted_assistant: None,
                     });
             }
+            RuntimeEvent::Goal {
+                fact:
+                    crate::goal::GoalFact::RoundAdmitted {
+                        message_id,
+                        current,
+                        ..
+                    },
+            } => {
+                self.unadopted_goal_round = Some((message_id.clone(), current.clone()));
+            }
             RuntimeEvent::InboundTurnAdopted { message_ids } => {
                 // The adoption transaction opened an answer obligation. Only
-                // the trailing identity is retained: the obligation is one
-                // yes/no fact plus the turn it names, never the batch.
+                // the trailing identity and any exactly correlated Goal
+                // authority are retained, never the batch.
                 if let Some(last) = message_ids.last() {
-                    self.unanswered_adopted_turn = Some(last.clone());
+                    let goal = self
+                        .unadopted_goal_round
+                        .as_ref()
+                        .and_then(|(id, goal)| message_ids.contains(id).then(|| goal.clone()));
+                    if goal.is_some() {
+                        self.unadopted_goal_round = None;
+                    }
+                    self.unanswered_adopted_turn = Some((last.clone(), goal));
                 }
                 // Adoption is the durable boundary of a new logical model
                 // step. An existing attempt may have already completed a
@@ -1400,7 +1424,7 @@ pub struct SubagentRecoveryClass {
 ///
 /// A permission, never an obligation to replay: the conversation runtime
 /// consumes it at activation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResumeDisposition {
     /// Only ordinary Pending Inbound admission. Nothing else is outstanding.
     PendingInboundOnly,
@@ -1423,7 +1447,11 @@ pub enum ResumeDisposition {
     /// drained new inbound at a safe boundary and died before its next request
     /// start. Deciding it from canonical shape instead would strand every one
     /// of those turns the runtime had already accepted.
-    ContinueAdoptedTurn,
+    ContinueAdoptedTurn {
+        /// Exact post-accounting authority of the adopted autonomous round,
+        /// correlated by durable message identity; never today's Goal state.
+        goal: Option<crate::goal::GoalRef>,
+    },
     /// Continuation is blocked because an external outcome is indeterminate
     /// (Class C). Pending Inbound remains admissible — that is new
     /// user/producer-driven work, not a replay of the ambiguous request — but
@@ -1561,8 +1589,8 @@ impl RecoveryPlan {
             AttemptRecoveryClass::IndeterminateExternalOutcome { .. }
         ) {
             ResumeDisposition::BlockedIndeterminate
-        } else if evidence.unanswered_adopted_turn.is_some() {
-            ResumeDisposition::ContinueAdoptedTurn
+        } else if let Some((_, goal)) = &evidence.unanswered_adopted_turn {
+            ResumeDisposition::ContinueAdoptedTurn { goal: goal.clone() }
         } else {
             ResumeDisposition::PendingInboundOnly
         };
@@ -1869,7 +1897,7 @@ impl RecoveryPlan {
     /// What the recovered runtime is permitted to continue.
     #[must_use]
     pub fn resume(&self) -> ResumeDisposition {
-        self.resume
+        self.resume.clone()
     }
 
     /// **Phase 3.** Commits every required recovery fact, each as one atomic
@@ -2488,7 +2516,7 @@ impl RecoveryReport {
     /// What the recovered runtime is permitted to continue.
     #[must_use]
     pub fn resume(&self) -> ResumeDisposition {
-        self.resume
+        self.resume.clone()
     }
 
     /// The new durable facts this recovery committed.
@@ -2626,6 +2654,7 @@ mod tests {
             highest_subagent_ordinal: 0,
             saw_any_attempt: false,
             unanswered_adopted_turn: None,
+            unadopted_goal_round: None,
             unsettled_publications: Vec::new(),
         }
     }
@@ -2978,6 +3007,83 @@ mod tests {
         )
     }
 
+    #[test]
+    fn goal350_recovery_correlates_only_the_unanswered_adopted_message() {
+        use crate::goal::{GoalFact, GoalRef};
+        let round = |id: &str, revision| {
+            envelope(
+                RuntimeEvent::Goal {
+                    fact: GoalFact::RoundAdmitted {
+                        previous: GoalRef {
+                            id: "goal-history".into(),
+                            revision: revision - 1,
+                        },
+                        current: GoalRef {
+                            id: "goal-history".into(),
+                            revision,
+                        },
+                        round: 1,
+                        message_id: MessageId::new(id),
+                    },
+                },
+                None,
+            )
+        };
+        let mut evidence = base_evidence();
+        // Arbitrarily many answered rounds leave no accumulating round map.
+        for revision in 2..1026 {
+            let id = format!("goal-{revision}");
+            fold_all(
+                &mut evidence,
+                &[
+                    round(&id, revision),
+                    adopted(&[&id]),
+                    request_started(attempt(0), "answered"),
+                ],
+            );
+            assert!(evidence.unadopted_goal_round.is_none());
+            assert!(evidence.unanswered_adopted_turn.is_none());
+        }
+        fold_all(
+            &mut evidence,
+            &[
+                round("goal-outstanding", 1026),
+                adopted(&["goal-outstanding"]),
+            ],
+        );
+        let expected = ResumeDisposition::ContinueAdoptedTurn {
+            goal: Some(GoalRef {
+                id: "goal-history".into(),
+                revision: 1026,
+            }),
+        };
+        assert_eq!(RecoveryPlan::classify(&evidence).resume(), expected);
+        // A later accepted round is not the already-adopted obligation. Its
+        // post-accounting revision must never replace the saved authority.
+        fold_all(&mut evidence, &[round("goal-next-pending", 1027)]);
+        assert_eq!(RecoveryPlan::classify(&evidence).resume(), expected);
+        // Adoption of a Human message cannot inherit an unmatched Goal fact.
+        fold_all(&mut evidence, &[adopted(&["human"])]);
+        assert_eq!(
+            RecoveryPlan::classify(&evidence).resume(),
+            ResumeDisposition::ContinueAdoptedTurn { goal: None }
+        );
+        // Exact matching works even when the matching message isn't trailing.
+        fold_all(
+            &mut evidence,
+            &[adopted(&["goal-next-pending", "native-result"])],
+        );
+        assert_eq!(
+            RecoveryPlan::classify(&evidence).resume(),
+            ResumeDisposition::ContinueAdoptedTurn {
+                goal: Some(GoalRef {
+                    id: "goal-history".into(),
+                    revision: 1027
+                }),
+            }
+        );
+    }
+
     fn adopted_by(attempt_id: AttemptId, ids: &[&str]) -> RuntimeEventEnvelope {
         envelope(
             RuntimeEvent::InboundTurnAdopted {
@@ -2998,7 +3104,10 @@ mod tests {
         fold_all(&mut evidence, &[adopted(&["msg-adopted"])]);
         let plan = RecoveryPlan::classify(&evidence);
         assert_eq!(plan.attempt_class(), &AttemptRecoveryClass::NotStarted);
-        assert_eq!(plan.resume(), ResumeDisposition::ContinueAdoptedTurn);
+        assert_eq!(
+            plan.resume(),
+            ResumeDisposition::ContinueAdoptedTurn { goal: None }
+        );
     }
 
     /// The same trailing canonical shape with no adoption behind it — a
@@ -3037,7 +3146,10 @@ mod tests {
         );
         let plan = RecoveryPlan::classify(&evidence);
         assert_eq!(plan.attempt_class(), &AttemptRecoveryClass::AlreadyTerminal);
-        assert_eq!(plan.resume(), ResumeDisposition::ContinueAdoptedTurn);
+        assert_eq!(
+            plan.resume(),
+            ResumeDisposition::ContinueAdoptedTurn { goal: None }
+        );
     }
 
     /// The second counterexample: a live attempt drained new inbound at a safe
@@ -3065,7 +3177,7 @@ mod tests {
         ));
         assert_eq!(
             RecoveryPlan::classify(&evidence).resume(),
-            ResumeDisposition::ContinueAdoptedTurn
+            ResumeDisposition::ContinueAdoptedTurn { goal: None }
         );
     }
 

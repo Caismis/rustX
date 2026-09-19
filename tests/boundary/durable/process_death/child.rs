@@ -54,6 +54,9 @@ use super::harness::{CONVERSATION, MODEL};
 /// One inbound message answered by one plain streaming text turn.
 pub(crate) const TEXT_TURN: &str = "text_turn";
 pub(crate) const GOAL_ROUND: &str = "goal_round";
+pub(crate) const GOAL_RECOVER_INTERRUPT: &str = "goal_recover_interrupt";
+pub(crate) const GOAL_RECOVER_STALE_INTERRUPT: &str = "goal_recover_stale_interrupt";
+pub(crate) const HUMAN_RECOVER_INTERRUPT: &str = "human_recover_interrupt";
 /// [`TEXT_TURN`] composed with **no** observation bridge installed, so no
 /// client-facing consumer exists at the moment of death.
 pub(crate) const TEXT_TURN_NO_CLIENT: &str = "text_turn_no_client";
@@ -815,6 +818,9 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 .unwrap();
             park_owning(child).await;
         }
+        GOAL_RECOVER_INTERRUPT | GOAL_RECOVER_STALE_INTERRUPT | HUMAN_RECOVER_INTERRUPT => {
+            recovered_interrupt(root, scenario).await;
+        }
         TEXT_TURN | TEXT_TURN_NO_CLIENT | TERMINAL_ONLY_TURN | STRUCTURAL_FAILURE => {
             let script = match scenario {
                 TERMINAL_ONLY_TURN => short_text_turn(),
@@ -1566,4 +1572,95 @@ async fn scenario_body(root: &Path, scenario: &str) {
         }
         other => panic!("unknown FND-06 scenario {other}"),
     }
+}
+
+/// The model watch proves recovery admitted an attempt. The exit gate proves
+/// cancellation settled and cleared its named owner before any next frontier.
+async fn recovered_interrupt(root: &Path, scenario: &str) {
+    use crate::goal::{GoalControl, GoalMutation, GoalPhase};
+    use crate::runtime::conversation_runtime::Gate;
+    use crate::runtime::identity::AttemptId;
+    use crate::runtime::recovery::ResumeDisposition;
+
+    let child = Child::require(root, vec![vec![FakeStep::ParkUntilCancelled]], false, true).await;
+    let runtime = child.runtime();
+    let goal = runtime.goal_view().unwrap().unwrap().current;
+    let expected = if scenario == HUMAN_RECOVER_INTERRUPT {
+        None
+    } else {
+        Some(goal.as_ref().unwrap().reference.clone())
+    };
+    assert_eq!(
+        runtime.recovery().resume(),
+        ResumeDisposition::ContinueAdoptedTurn { goal: expected }
+    );
+    child.wait_model_parked().await;
+    let attempt = AttemptId::for_conversation(
+        runtime.conversation_id(),
+        runtime.recovery().next_attempt_ordinal(),
+    );
+
+    // An edit can wake idle admission even while the model is parked. Block
+    // those wakeups for stale/Human cases, whose newer Active Goal is valid.
+    let admission = Arc::new(Gate::default());
+    let admission_release = (scenario != GOAL_RECOVER_INTERRUPT).then(|| admission.arm_scoped());
+    runtime.install_admission_gate(admission);
+    let before = match scenario {
+        GOAL_RECOVER_STALE_INTERRUPT => runtime
+            .control_goal(GoalControl::Mutate {
+                expected: goal.unwrap().reference,
+                mutation: GoalMutation::Edit {
+                    objective: "New authority must survive old recovered work".into(),
+                },
+            })
+            .unwrap()
+            .current
+            .unwrap(),
+        HUMAN_RECOVER_INTERRUPT => runtime
+            .control_goal(GoalControl::Create {
+                objective: "Unrelated Active Goal".into(),
+                budget: 3,
+            })
+            .unwrap()
+            .current
+            .unwrap(),
+        _ => goal.unwrap(),
+    };
+    let exit = Arc::new(Gate::default());
+    let exit_release = exit.arm_scoped();
+    runtime.install_residency_probe(None, Some(exit.clone()));
+    assert_eq!(runtime.cancel_current_attempt(&attempt).unwrap(), attempt);
+    tokio::task::spawn_blocking(move || exit.wait_entered())
+        .await
+        .unwrap();
+    assert!(!runtime.has_current_attempt());
+    let after = runtime.goal_view().unwrap().unwrap().current.unwrap();
+    if scenario == GOAL_RECOVER_INTERRUPT {
+        assert_eq!(after.phase, GoalPhase::Paused);
+        assert_eq!(
+            after.autonomous_rounds_consumed,
+            before.autonomous_rounds_consumed
+        );
+        assert_eq!(after.reference.revision, before.reference.revision + 1);
+        // Exercise the real admission owner repeatedly after settlement, while
+        // Running. Paused must forbid a new round without relying on a delay.
+        for _ in 0..8 {
+            runtime.admit_now_for_test();
+        }
+        assert_eq!(runtime.goal_view().unwrap().unwrap().current, Some(after));
+        assert!(!runtime.has_current_attempt());
+    } else {
+        assert_eq!(
+            after, before,
+            "stale or non-Goal cancellation cannot mutate current authority"
+        );
+    }
+    assert_eq!(child.model.requests().len(), 1);
+    let mut shutdown = Box::pin(runtime.shutdown());
+    assert!(futures_util::poll!(&mut shutdown).is_pending());
+    drop(exit_release);
+    drop(admission_release);
+    shutdown.await.unwrap();
+    note("recovered-interrupt-proved");
+    park_owning(child).await;
 }
