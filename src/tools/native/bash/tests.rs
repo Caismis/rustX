@@ -375,10 +375,9 @@ async fn spill_write_failure_after_allocation_fails_the_invocation_explicitly() 
             result.managed_output
         );
     };
-    assert!(
-        diagnostic.contains("capture") || diagnostic.contains("output"),
-        "storage diagnostic: {diagnostic}"
-    );
+    assert!(diagnostic.contains("cannot write the foreground result spill"));
+    assert!(diagnostic.contains("test-forced output write failure"));
+    assert!(error.contains(diagnostic));
     assert!(
         locator.exists(),
         "a partial foreground spill remains retrievable at its stable locator"
@@ -463,8 +462,9 @@ async fn cancellation_owns_the_outcome_and_a_failed_spill_is_never_advertised() 
     };
     assert_eq!(locator, &partial);
     assert!(
-        diagnostic.contains("capture"),
-        "the bounded capture diagnostic is retained: {diagnostic}"
+        diagnostic.contains("cannot write the foreground result spill")
+            && diagnostic.contains("test-forced output write failure"),
+        "the native storage diagnostic is retained: {diagnostic}"
     );
     // The canonical result projection presents the typed continuation once
     // so the model learns the truth from the result.
