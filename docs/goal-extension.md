@@ -173,14 +173,15 @@ bounds (objective/reason at most 8192 UTF-8 bytes; budget 1–100, default 10).
 Authorization is process-local execution context. Recovery of ordinary Pending
 Human Inbound adopts a fresh batch and installs its trusted identity as usual.
 An already-adopted recovered continuation starts without Goal-create authority:
-the existing `ContinueAdoptedTurn` report carries only an answer obligation, not
-the current Human identity or whether its authorization is unused. Request
+`ContinueAdoptedTurn` carries an answer obligation and any exact autonomous
+Goal cancellation provenance, not the current Human identity or whether its
+create authorization is unused. Request
 Snapshots freeze provider inputs but carry no such authorization. Consequently,
 a crash after adoption can require a later Human message or explicit `/goal create`
 before the model can create a Goal, even when the interrupted request was Human.
 Preserving that right would require extending recovery's trusted request-boundary
-contract; this repair does not infer rights from historical messages or Goal
-journal facts, nor add a Goal replay log. Existing durable Goals still recover
+contract; recovery does not infer Goal-create rights from historical messages
+or Goal journal facts, nor add a Goal replay log. Existing durable Goals still recover
 from GoalDomain alone, with their durable phase intact.
 
 The model may only declare Active -> Complete or Active -> Blocked with a reason.
@@ -254,8 +255,9 @@ second arm operation to perform, and the obsolete "recovers Active but
 disarmed" contract from #84 is gone. rustX adds no background daemon scanning
 unopened Sessions, no Scheduler and no timers; a dormant Session is never loaded
 merely because a durable Goal is Active. A Goal-disabled runtime composition
-likewise never executes stored Goal state: existing extension-composition
-semantics remain authoritative.
+likewise admits no new autonomous Goal rounds and exposes no Goal model tools
+or context. Already-admitted work can still recover under the ordinary durable
+answer-obligation contract; that does not enable future Goal automation.
 
 A previously accepted ordinary continuation follows the existing inbound/attempt
 recovery evidence exactly once; its round remains consumed. Disabling and
@@ -305,19 +307,33 @@ admitted the attempt *for*:
 ```text
 AttemptProvenance::Inbound               ordinary adopted inbound (Human and
                                          every other runtime-generated inbound)
-AttemptProvenance::GoalContinuation      the adopted batch carries the durable
+AttemptProvenance::GoalContinuation(ref) the adopted batch carries the durable
                                          Goal continuation admitted at the
                                          Goal-round frontier
-AttemptProvenance::RecoveredContinuation recovery over already-canonical history
+AttemptProvenance::RecoveredContinuation ordinary recovered answer obligation
+AttemptProvenance::RecoveredGoalContinuation(ref)
+                                         recovered adopted Goal round carrying
+                                         its exact post-accounting GoalRef
 ```
 
-This is derived from the durable inbound the coordinator actually adopted — the
-only place that knows it. It is runtime-owned admission provenance, never Goal
-lifecycle state: it is not persisted, never appears in `GoalView`, never appears
+This is derived from the durable inbound the coordinator actually adopted, or
+from recovery's exact durable Goal-round/adoption correlation. It is runtime-owned
+admission provenance, never Goal lifecycle state: it is not persisted, never appears in `GoalView`, never appears
 in a Runtime Client snapshot or event, is not user-visible, and disappears with
 the attempt it describes. It exists so the runtime can distinguish an autonomous
 Goal attempt from an ordinary Human attempt, from a Human attempt during which
-`create_goal` happened, and from recovery continuation.
+`create_goal` happened, and from ordinary recovery continuation.
+
+Current Goal composition controls future Goal capability and autonomous
+admission: tools, context and the idle GoalRoundDriver remain composition-gated.
+Exact attempt provenance controls interrupt semantics of already-admitted Goal
+work. For a proven fresh or recovered Goal attempt, cancellation uses the existing
+conversation-owned GoalDomain directly and applies `pause_if_current(expected)`
+even if Goal composition is currently disabled. Matching Active authority must
+become durably Paused before cancellation; stale authority leaves newer Goal
+state unchanged. This neither re-enables the extension nor accepts another round.
+Later re-enabling Goal still observes the durable Paused intent. Provenance is
+runtime execution ownership, never another Goal lifecycle state.
 
 ### Interrupt ordering
 
@@ -326,13 +342,13 @@ Goal control commit boundary, `cancel_current_attempt` runs:
 
 ```text
 1. prove the named attempt is the current attempt and read its provenance
-2. if and only if it is a Goal continuation: durably commit Active -> Paused
+2. for a Goal continuation whose admitted GoalRef is still current: commit Active -> Paused
 3. request cancellation of that same attempt
-4. report acceptance only after both boundaries are won
+4. report acceptance after the matching pause (if required) and cancellation win
 ```
 
-The durable pause commits *before* cancellation is requested, so there is no
-window in which the Goal is `Active` with a cancelled attempt. Because step 2 is
+The matching durable pause commits *before* cancellation is requested, so that
+authority cannot immediately restart. A newer Goal authority remains unchanged. Because step 2 is
 gated on provenance, cancelling an ordinary Human attempt never pauses an Active
 Goal merely because one exists. Explicit `/goal pause` remains an independent
 durable user control.
@@ -350,7 +366,10 @@ the frontier wins first
      no subsequent Goal round is admitted while Paused
 ```
 
-If the durable pause does not commit, nothing fabricates one. The attempt is
+A stale/superseded reference returns `Ok(None)`: no newer Goal is mutated or
+substituted, no CAS retry occurs, and cancellation of the old attempt succeeds.
+This is not `GoalPauseFailed`. If storage or lifecycle refusal prevents the pause
+operation, nothing fabricates a pause. The attempt is
 still cancelled (containment), a genuine storage fault is recorded through the
 existing absorbing `goal_pause` durability owner — which fences all further
 admission, so no later Goal round can be admitted even though the phase still
@@ -423,7 +442,7 @@ atomic acceptance transactions. There is exactly one Goal lifecycle source of
 truth, `GoalSnapshot.phase`, and no process-local field whose value changes
 whether `Active` actually means active. GoalRoundDriver has no task, model adapter, execution loop,
 history, capability-generation mutation or private queue. Its sole caller is the
-ordinary coordinator at idle. The Goal reservation and activation lock, existing
+ordinary coordinator at idle. The runtime coordinator lock, existing
 owned-work locks, lifecycle guard and SQLite transaction establish exact winners.
 Ordinary acceptance rejects typed Goal continuation outside the accounting seam.
 Current context samples domain state at each request boundary and stays User data.
@@ -509,3 +528,105 @@ outlive it. No generic plugin, state, scheduling or transaction framework was ad
 - TUI `goal351 folds every durable Goal phase change at its stream cursor`:
   event and snapshot read models agree, and the folded view has no activation
   member to disagree about.
+
+## Issue #350 residual conformance
+
+Audited against `6487224c5e62a0ed0d4ecd6d2ffb824d5b2d9d0a`, after PR #352
+(`58ec906aaaca314a2ed6db2f2d2adfbed6aa37ac`). The #351 regression map above
+continues to own creation, resume, phase-only lifecycle, Human priority, drain,
+composition, CAS, projection, budget and no-polling guarantees. Those paths were
+not reimplemented. Two implementation gaps remained: stale-attempt pause authority
+and generic Goal Tool presentation. Recovery activation and terminal-publication
+liveness needed additional end-to-end evidence.
+
+### Exact interrupt authority and winner
+
+The coordinator captures the accepted inbound's `GoalRef`, advanced by the one
+revision increment committed atomically with round acceptance. It never substitutes
+the current Goal at adoption or cancellation. Under coordinator -> lifecycle ->
+Goal publication -> SQLite ordering, interrupt pauses only that exact reference
+while Active, then requests cancellation of the named attempt. A later edit,
+budget change, pause/resume, completion or replacement wins unchanged. A stale
+reference is an intentional no-op, not a persistence failure or retry opportunity.
+No additional permission or lifecycle state is introduced.
+
+`finish_attempt` clears the current attempt under the same coordinator mutex.
+If interrupt wins that mutex while the named attempt is current, its durable pause
+comparison and cancellation request precede coordinator settlement. The Agent Loop
+still owns its terminal outcome; an already completed outcome is not rewritten.
+If settlement clears the slot first, interrupt returns `NoCurrentAttempt` and
+changes no Goal. It cannot retarget a subsequently admitted attempt. The existing
+storage-failure containment/fencing behavior remains unchanged.
+
+### Adopted Goal recovery retains exact authority
+
+Accepted-but-not-adopted work recovers through typed Pending Inbound as before.
+Already-adopted work instead uses recovery's durable answer obligation:
+`GoalFact::RoundAdmitted.message_id` must occur in
+`RuntimeEvent::InboundTurnAdopted.message_ids`. Recovery retains that fact's
+**post-accounting** `current` reference in `ContinueAdoptedTurn { goal }`.
+No current Goal snapshot, canonical text or transcript adjacency is consulted.
+
+The journal fold keeps one unadopted round candidate (round acceptance requires
+an empty Pending Inbound queue) and one outstanding answer obligation. Adoption
+correlates exact identity before assigning authority; later Goal facts cannot
+change the saved obligation. Request start or a decided terminal clears it;
+recovery's own restart terminal preserves it, including across repeated deaths.
+Working memory remains bounded independently of historical round count.
+
+ConversationRuntime consumes this classified obligation into
+`RecoveredGoalContinuation(GoalRef)` or ordinary `RecoveredContinuation`.
+Fresh and recovered Goal work share one exact `pause_if_current` cancellation
+branch and the same coordinator ordering. An interrupt pauses matching Active
+work without refunding its accepted round; a stale recovered reference leaves
+newer authority unchanged. Recovered Human work carries no Goal pause authority.
+
+### Native activity, authoritative state and diagnostics
+
+Web chat and normal TUI transcript specialize only exact native Goal Tool IDs:
+
+| Successful execution | Historical activity |
+| --- | --- |
+| `native.create_goal` | Goal started |
+| `native.update_goal`, `action=complete` | Goal completed |
+| `native.update_goal`, `action=blocked` | Goal blocked |
+| `native.get_goal` | Goal checked (compact activity) |
+
+Assembled/running/failed/cancelled/unknown executions never claim success. Pause,
+resume, objective and budget changes remain typed user controls; they are not
+model update actions. The Goal dock and `/goal` read authoritative `GoalSnapshot`,
+never these historical activities. Exhausted budget leaves the phase Active but
+permits zero additional autonomous rounds; consumed/budget values remain visible,
+and an explicit user budget edit may restore eligibility. It does not introduce
+an activation state or pin idle residency.
+
+Web activity's collapsed Execution details and TUI expanded activity retain the
+published Tool ID, model-facing name, ToolCallId, arguments, result and lifecycle.
+Web Trajectory continues to expose native Trace identity, lifecycle and payloads;
+TUI has no separate Trajectory screen, so expanded execution details are its
+inspection surface. Canonical execution and protocol types are unchanged.
+
+### Additional deterministic evidence
+
+| Test | Exact invariant |
+| --- | --- |
+| `goal350_old_attempt_cannot_pause_newer_goal_authority` | Park the admitted attempt, commit edit / pause-resume / complete-and-replace, interrupt it, and gate settlement/next admission: the newer snapshot remains exactly unchanged. |
+| `goal350_settlement_before_interrupt_leaves_active_unchanged` | Release provider completion into a gated post-settlement frontier; the old AttemptId is refused and durable Active/accounting are unchanged. The existing `goal351_interrupting_a_goal_continuation_pauses_it_and_cancels_that_attempt` proves interrupt-first. |
+| `goal350_reopen_adopts_already_accepted_round_without_recharging` | Reopen fresh owners with an accepted pending round and spare budget; exactly the accepted MessageId reaches the model, accounting is unchanged, and interrupt retains its exact Goal provenance. Paired with the SIGKILL regression, this covers both durable commit cuts and subsequent runtime activation. |
+| `goal350_background_terminal_publication_wakes_next_continuation` | Owned work prevents requests; native cancellation/terminal publication alone starts result processing, whose settlement admits one Goal round without manual admission or Human input. |
+| `goal350_subagent_terminal_publication_wakes_next_continuation` | A gated child over real control IPC suppresses parent polling; release/terminal publication alone causes parent result processing then one Goal round. |
+| Web `native Goal activity specializes outcomes without generic cards and retains exact execution details` | Native identity selects semantic activity, successful action selects the label, non-success never claims transition, and a same-name MCP tool remains generic. Exact execution data remains inspectable. |
+| Web `Goal semantic chat does not alter native Trace identity, arguments, result or lifecycle` | The Trajectory inspector exposes exact Tool ID, ToolCallId, action/CAS arguments, output and lifecycle. |
+| TUI `native Goal activity` tests | Compact semantics, split canonical ordering, all non-success states and expanded exact diagnostics remain truthful. |
+| Browser `native Todo, Goal and Queue docks follow the real App Server through control, loss and reload` | Model create renders native activity outside generic Tool cards, execution details retain identity, and the independent Goal dock continues typed pause/resume with authoritative revisions. |
+
+No new protocol version, model API, scheduler, queue, Goal execution owner or
+compatibility mode is required by these residual fixes.
+
+| Recovery regression | Exact invariant / synchronization |
+| --- | --- |
+| `goal350_recovery_correlates_only_the_unanswered_adopted_message` | Fold many historical answered rounds, then exact/mismatched adopted identities and a later pending round; only the outstanding adopted round supplies its saved reference, with a bounded working set. |
+| `goal350_process_death_after_adoption_interrupt_pauses_without_refund` | SIGKILL at `after:adopt_pending_batch`, before request start; reopen, model watch, interrupt and post-settlement gate. Paused is durable, the committed round remains consumed, and repeated actual admission calls accept nothing. |
+| `goal350_recovered_stale_goal_ref_cannot_pause_newer_authority` | Same real death cut; after the recovered model parks, edit the Goal before interrupt. Exact snapshot and revision remain unchanged through cancellation and settlement; no stale retry/substitution occurs. |
+| `goal350_recovered_human_interrupt_does_not_pause_unrelated_goal` | Human adoption at the same death cut; create an unrelated Active Goal while the recovered Human attempt parks. Interrupt succeeds and preserves that Goal structurally unchanged. |
+| `goal350_disabled_recovery_interrupt_stays_paused_after_reenable` | Admit with Goal enabled; SIGKILL after adoption, disable Goal before reopen, then use the recovered model watch and settlement gate to prove interrupt commits Paused without refund or another round. Re-enable the same conversation and exercise ordinary admission: no requests or new round, and the exact Paused snapshot remains durable. |

@@ -1,11 +1,15 @@
 # `rustx-tui`
 
 `/goal` shows authoritative Goal state. `/goal create <objective>` creates and
-arms with the native default budget; `/goal pause`, `/goal resume`,
+automatically continues when runtime admission is eligible, with the native default budget; `/goal pause`, `/goal resume`,
 `/goal edit <objective>`, and `/goal budget <rounds>` use typed App Server
 controls with the observed GoalRef. Stale controls fail without retry. Disabled
 Goal gives a feature-disabled response. The TUI owns no timer, admission loop,
-state transition, or accounting. See [Goal extension](../docs/goal-extension.md).
+state transition, or accounting. Normal transcript activity shows Goal started,
+Goal completed, Goal blocked, or Goal checked for successful native model calls.
+Running and failed activity never claims a successful transition. Expand activity
+for exact Tool identity, model name, call ID, arguments, result and lifecycle;
+these execution facts never replace `/goal`'s authoritative current snapshot. See [Goal extension](../docs/goal-extension.md).
 
 The rustX reference terminal client: a Pi-TUI presentation layer over the
 App Server protocol.

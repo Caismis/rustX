@@ -133,3 +133,17 @@ it('selected historical inspector updates terminal details beyond the newest tai
   ui.rerender(<Trajectory cache={older} loadEarlier={() => {}} latest={() => {}} />);
   expect(within(screen.getByLabelText('Trace record inspector')).getByText('2500 ms')).toBeDefined();
 });
+
+it('Goal semantic chat does not alter native Trace identity, arguments, result or lifecycle', () => {
+ const entry = traceEntry(0, { kind: 'tool', request: undefined, state: 'completed', tool: { tool_id: 'native.update_goal', call_id: 'goal-complete-call', arguments: { text: '{"action":"complete","expected":{"id":"goal-1","revision":2}}', redacted: false, truncated: false } }, output: [{ text: '{"phase":"complete"}', redacted: false, truncated: false }] });
+ renderTrace([entry]);
+ fireEvent.click(screen.getByTitle('tool · goal-complete-call'));
+ const inspector = within(screen.getByLabelText('Trace record inspector'));
+ expect(inspector.getByText('native.update_goal')).toBeTruthy();
+ expect(inspector.getByText('goal-complete-call')).toBeTruthy();
+ expect(inspector.getByText('completed')).toBeTruthy();
+ fireEvent.click(inspector.getByRole('tab', { name: 'Input' }));
+ expect(inspector.getByText(entry.tool!.arguments.text)).toBeTruthy();
+ fireEvent.click(inspector.getByRole('tab', { name: 'Output' }));
+ expect(inspector.getByText(entry.output[0]!.text)).toBeTruthy();
+});

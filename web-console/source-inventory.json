@@ -901,7 +901,7 @@
         "provider configuration authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "d45ce013f98c5eb08ae4a09c1c5071799b66fa916b1e125426797e6efa1444e8"
+      "local_sha256": "0cb2fb8b50d7eddc16a0bee4b9cc15e4a83c73d645692622a370aa7cca0181b4"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx",

@@ -83,11 +83,13 @@ after Resume: a successful `Paused|Blocked -> Active` restores continuation
 eligibility by itself. Create, block and complete remain native model
 declarations; the Web `/goal` opens these existing controls, and there is no clear.
 
-Transcript rows for the internal Goal command tools show the semantic effect
-(`Goal started`, `Goal updated`) rather than the tool implementation names. The
-exact native Tool identity stays available for diagnostics: the row carries
-`data-tool-name`, and the Trace surface reports `native.create_goal` /
-`native.update_goal` with full arguments.
+Native Goal calls render compact activity instead of generic Tool cards:
+`Goal started`, `Goal completed`, `Goal blocked`, and `Goal checked`, only after
+successful execution. Assembled/running/failure/cancellation/unknown states remain
+explicit and claim no successful transition. Activity is historical evidence;
+the dock still reads only the authoritative Goal projection. Collapsed Execution
+details retain exact Tool ID, model name, call ID, arguments, result and lifecycle.
+Trajectory continues to expose exact native Trace identity and payloads.
 
 Every mutation is `goal/control` `mutate` with the rendered authoritative
 `GoalRef` as its CAS token. Nothing is ever retried, and no newer revision is ever

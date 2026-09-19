@@ -483,7 +483,7 @@ async fn parent_runtime_plane(
     conversation: &str,
     parent_scripts: Vec<Vec<FakeStep>>,
 ) -> ParentRuntimePlane {
-    compose_parent_runtime_plane(dir, conversation, parent_scripts, false)
+    compose_parent_runtime_plane(dir, conversation, parent_scripts, false, false)
         .await
         .0
 }
@@ -497,7 +497,8 @@ async fn parent_runtime_host_plane(
     conversation: &str,
     parent_scripts: Vec<Vec<FakeStep>>,
 ) -> (ParentRuntimePlane, rustx::runtime_client::RuntimeClientHost) {
-    let (plane, host) = compose_parent_runtime_plane(dir, conversation, parent_scripts, true).await;
+    let (plane, host) =
+        compose_parent_runtime_plane(dir, conversation, parent_scripts, true, false).await;
     (plane, host.expect("the host plane composes the host"))
 }
 
@@ -507,6 +508,7 @@ async fn compose_parent_runtime_plane(
     conversation: &str,
     parent_scripts: Vec<Vec<FakeStep>>,
     with_host: bool,
+    with_goal: bool,
 ) -> (
     ParentRuntimePlane,
     Option<rustx::runtime_client::RuntimeClientHost>,
@@ -516,15 +518,21 @@ async fn compose_parent_runtime_plane(
     std::fs::create_dir_all(&workspace).expect("parent workspace");
     let runtime_root = dir.path().join("parent-runtime");
     std::fs::create_dir_all(&runtime_root).expect("parent runtime root");
+    let extensions = rustx::extensions::NativeAgentExtensions::with_agent_status(
+        rustx::context::AgentStatusConfig::default(),
+    );
+    let extensions = if with_goal {
+        extensions.and_goal()
+    } else {
+        extensions
+    };
     let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
         conversation_id.clone(),
         rustx::tools::runtime::ConversationRuntimeConfig::new(
             &workspace,
             dir.path().join("parent-artifacts"),
         )
-        .with_extensions(rustx::extensions::NativeAgentExtensions::with_agent_status(
-            rustx::context::AgentStatusConfig::default(),
-        )),
+        .with_extensions(extensions),
     )
     .expect("parent tool runtime");
     let capability = rustx::capabilities::CapabilityCoordinator::new(
@@ -534,7 +542,16 @@ async fn compose_parent_runtime_plane(
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: tool_runtime.extension_tool_plane(),
-            agent_activation: rustx::capabilities::AgentActivation::default(),
+            agent_activation: rustx::capabilities::AgentActivation {
+                profile: rustx::local_runtime::config::AgentProfileDocument {
+                    extensions: rustx::extensions::NativeAgentExtensionsDocument {
+                        goal: rustx::extensions::GoalExtensionDocument { enabled: with_goal },
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
@@ -6081,4 +6098,83 @@ async fn a_settled_child_refuses_steering_and_keeps_exactly_one_terminal() {
         vec!["the delegated task".to_owned()],
         "a refused steer never enters the child conversation"
     );
+}
+
+/// The real native child terminal path supplies the wake: no unrelated Human
+/// request or explicit admission call is needed after releasing owned work.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn goal350_subagent_terminal_publication_wakes_next_continuation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (parent, _) = compose_parent_runtime_plane(
+        &dir,
+        "conv_45000000-0000-7000-8000-000000000005",
+        vec![
+            answer_script("Owned result received"),
+            vec![FakeStep::ParkUntilCancelled],
+        ],
+        false,
+        true,
+    )
+    .await;
+    let (finish, wait) = support::fake::model_release();
+    let mut script = vec![FakeStep::ParkUntilReleased(wait)];
+    script.extend(answer_script("Owned child finished"));
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv_45000000-0000-7000-8000-000000000006"),
+        vec![script],
+        ToolRegistry::new(),
+        Vec::new(),
+    )
+    .await;
+    let mut child_parked = child.model.parked();
+    let wired = launch_wired_child(&parent.plane, &child, "owned progress").await;
+    tokio::time::timeout(LIVENESS, child_parked.wait_for(|v| *v))
+        .await
+        .unwrap()
+        .unwrap();
+    parent
+        .runtime
+        .control_goal(rustx::goal::GoalControl::Create {
+            objective: "Use the child result".into(),
+            budget: 2,
+        })
+        .unwrap();
+    parent.runtime.admit_now_for_test();
+    assert!(parent.model.requests().is_empty());
+    assert_eq!(
+        parent
+            .plane
+            .store
+            .load_goal()
+            .unwrap()
+            .unwrap()
+            .autonomous_rounds_consumed,
+        0
+    );
+    let mut parked = parent.model.parked();
+    finish.send(true).unwrap();
+    tokio::time::timeout(LIVENESS, parked.wait_for(|v| *v))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(parent.model.requests().len(), 2);
+    assert_eq!(
+        parent
+            .plane
+            .store
+            .load_goal()
+            .unwrap()
+            .unwrap()
+            .autonomous_rounds_consumed,
+        1
+    );
+    assert!(parent.model.requests()[1].messages.iter().any(|m| matches!(m.as_canonical(), Some(MessageBlock::User(u)) if matches!(u.kind, InboundKind::GoalContinuation(_)))));
+    assert_eq!(
+        terminal_publications(&journal(&parent.plane.store)),
+        vec![SubagentTerminalState::Succeeded]
+    );
+    await_serve(wired.serve).await;
+    child.runtime.shutdown().await.unwrap();
+    parent.runtime.shutdown().await.unwrap();
 }

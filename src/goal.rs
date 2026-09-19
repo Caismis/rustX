@@ -453,21 +453,16 @@ impl GoalDomain {
         self.commit(write)
     }
 
-    /// Durably commits `Active -> Paused` for the current Goal.
+    /// Pauses only the exact durable authority that admitted the interrupted
+    /// attempt. A later revision (including pause/resume or replacement) wins
+    /// unchanged. The comparison and CAS share the publication lock with model
+    /// writes, so no model mutation can slip between them.
     ///
-    /// This is the durable half of the runtime's interrupt contract, and it
-    /// is an ordinary CAS transition, not an activation bit: the
-    /// authoritative reference is read and compare-and-set inside the one
-    /// publication boundary, so no concurrent domain commit can interleave.
-    /// A Goal that is absent or not `Active` is left exactly as it is and
-    /// `Ok(None)` is returned — the runtime proved which attempt it is
-    /// interrupting, and the durable state decides the rest.
-    ///
-    /// # Errors
-    /// Returns a durable read/write failure. A rejected CAS is reported as
-    /// `Err(ConversationStoreError::InvalidReference)`; the caller must never
-    /// report a pause that did not commit.
-    pub(crate) fn pause_current(&self) -> Result<Option<GoalSnapshot>, ConversationStoreError> {
+    /// Returns a storage error on failed persistence, never a fabricated pause.
+    pub(crate) fn pause_if_current(
+        &self,
+        expected: &GoalRef,
+    ) -> Result<Option<GoalSnapshot>, ConversationStoreError> {
         let _publication = self
             .inner
             .publication
@@ -477,7 +472,7 @@ impl GoalDomain {
             .inner
             .store
             .load_goal()?
-            .filter(|goal| goal.phase == GoalPhase::Active)
+            .filter(|goal| goal.phase == GoalPhase::Active && &goal.reference == expected)
         else {
             return Ok(None);
         };
@@ -771,20 +766,29 @@ mod tests {
         );
     }
 
-    /// Issue #351: an explicit interrupt's durable half. `pause_current`
+    /// Issue #351: an explicit interrupt's durable half. `pause_if_current`
     /// reads and compare-and-sets inside one publication boundary, pauses
     /// only an Active Goal, and never fabricates a transition.
     #[test]
     fn goal351_interrupt_pause_commits_active_to_paused_and_nothing_else() {
         let (store, domain) = fixture();
-        assert_eq!(domain.pause_current().unwrap(), None, "no Goal to pause");
+        assert_eq!(
+            domain
+                .pause_if_current(&GoalRef {
+                    id: "absent".into(),
+                    revision: 1
+                })
+                .unwrap(),
+            None,
+            "no Goal to pause"
+        );
         let goal = create(&domain);
-        let paused = domain.pause_current().unwrap().unwrap();
+        let paused = domain.pause_if_current(&goal.reference).unwrap().unwrap();
         assert_eq!(paused.phase, GoalPhase::Paused);
         assert_eq!(paused.reference.revision, goal.reference.revision + 1);
         assert_eq!(store.load_goal().unwrap(), Some(paused.clone()));
-        // Already Paused, Blocked and Complete are left exactly as they are.
-        assert_eq!(domain.pause_current().unwrap(), None);
+        // Already Paused and Blocked are left exactly as they are.
+        assert_eq!(domain.pause_if_current(&paused.reference).unwrap(), None);
         assert_eq!(store.load_goal().unwrap(), Some(paused.clone()));
         let resumed = domain
             .write(GoalWrite::Mutate {
@@ -802,7 +806,7 @@ mod tests {
             })
             .unwrap()
             .unwrap();
-        assert_eq!(domain.pause_current().unwrap(), None);
+        assert_eq!(domain.pause_if_current(&blocked.reference).unwrap(), None);
         assert_eq!(store.load_goal().unwrap(), Some(blocked));
     }
 
@@ -893,7 +897,10 @@ mod tests {
         assert_eq!(store.load_pending().unwrap().len(), 1);
         assert_eq!(store.load_goal().unwrap(), Some(committed.clone()));
         // Pausing the recovered Goal ends authorization with no refund.
-        recovered.pause_current().unwrap().unwrap();
+        recovered
+            .pause_if_current(&committed.reference)
+            .unwrap()
+            .unwrap();
         let paused = store.load_goal().unwrap().unwrap();
         assert_eq!(paused.phase, GoalPhase::Paused);
         assert_eq!(

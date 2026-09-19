@@ -678,18 +678,21 @@ struct CurrentAttempt {
 /// so an explicit interrupt can tell an autonomous Goal continuation apart
 /// from an ordinary Human attempt, including a Human attempt during which the
 /// model called `create_goal`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum AttemptProvenance {
     /// Ordinary adopted inbound that contains no Goal continuation: Human
     /// input, native results, and every other runtime-generated inbound.
     Inbound,
     /// The adopted batch carries the durable Goal continuation admitted at
     /// the Goal-round frontier. Exactly this attempt is an autonomous Goal
-    /// continuation.
-    GoalContinuation,
-    /// Recovery continuation over already-canonical history: no fresh inbound
-    /// was adopted, so no Goal round was consumed for it.
+    /// continuation. The reference is the post-accounting authority, captured
+    /// from the accepted inbound rather than a later current-Goal read.
+    GoalContinuation(crate::goal::GoalRef),
+    /// Ordinary recovery answer obligation with no autonomous Goal authority.
     RecoveredContinuation,
+    /// Already-adopted Goal work: recovery retained the exact post-accounting
+    /// reference from durable history. Admission consumes no additional round.
+    RecoveredGoalContinuation(crate::goal::GoalRef),
 }
 
 /// The runtime-owned manual compaction currently holding the conversation.
@@ -883,14 +886,14 @@ struct CoordinatorState {
     /// The child is one-shot, so at most one admission ever consumes it;
     /// a parent conversation never arms it.
     one_shot_cancel: Option<CancellationReason>,
-    /// Whether startup recovery proved that the already-canonical adopted
-    /// turn may continue through one new attempt (recovery Class B).
+    /// Startup recovery's exact provenance for the already-canonical adopted
+    /// turn that may continue through one new attempt.
     ///
     /// This is a one-shot permission, consumed by the first admission that
     /// finds no pending inbound. It is never set for an indeterminate
     /// external outcome (Class C), where continuing would risk duplicating an
     /// external side effect rustX cannot observe.
-    recovered_continuation: bool,
+    recovered_continuation: Option<AttemptProvenance>,
     /// The coordinator-owned transient admission-cycle retry bookkeeping
     /// (Issue #63). The absorbing `DurabilityFailed` fact itself is NOT
     /// stored here: it lives in exactly one place, the runtime-owned
@@ -1461,7 +1464,7 @@ impl RuntimeInner {
         if state.resource_reload_in_progress {
             return Err(Busy::Capability);
         }
-        if state.recovered_continuation {
+        if state.recovered_continuation.is_some() {
             return Err(Busy::Recovery);
         }
         if self.durability_gate.is_failed()
@@ -2791,8 +2794,7 @@ impl RuntimeInner {
                 // A Class C conversation never reaches this branch: an
                 // indeterminate external outcome leaves the permission unset,
                 // so recovery starts nothing at all.
-                if state.recovered_continuation {
-                    state.recovered_continuation = false;
+                if state.recovered_continuation.is_some() {
                     self.admit_continuation(state);
                     return;
                 }
@@ -2891,7 +2893,7 @@ impl RuntimeInner {
             self.mailbox.wake().notify_one();
             return;
         }
-        state.recovered_continuation = false;
+        state.recovered_continuation = None;
         // Mutation preserves identity. Every committed row is a subset of the
         // prevalidated identities; only the committed receipt supplies content.
         let conversation = state.conversation.as_ref().expect("idle conversation");
@@ -2916,14 +2918,23 @@ impl RuntimeInner {
         // queue at the Goal-round frontier, so a batch carrying one is
         // pursuing that committed round even if ordinary inbound joined it
         // before adoption.
-        let provenance = if adopted
+        let provenance = adopted
             .iter()
-            .any(|item| matches!(item.message().kind, InboundKind::GoalContinuation(_)))
-        {
-            AttemptProvenance::GoalContinuation
-        } else {
-            AttemptProvenance::Inbound
-        };
+            .find_map(|item| {
+                if let InboundKind::GoalContinuation(reference) = &item.message().kind {
+                    // Atomic acceptance advanced this exact authority once. Never
+                    // sample today's Goal here: it may already have been replaced.
+                    let mut admitted = reference.clone();
+                    admitted.revision = admitted
+                        .revision
+                        .checked_add(1)
+                        .expect("accepted Goal round advanced its revision");
+                    Some(AttemptProvenance::GoalContinuation(admitted))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(AttemptProvenance::Inbound);
         // Durable adoption completes this finite admission cycle. The next
         // cycle starts with a fresh select/adopt retry allowance.
         Self::complete_admission_cycle(&mut state);
@@ -2964,12 +2975,11 @@ impl RuntimeInner {
             .conversation
             .take()
             .expect("the coordinator owns the conversation state while idle");
-        self.publish_attempt(
-            state,
-            conversation,
-            None,
-            AttemptProvenance::RecoveredContinuation,
-        );
+        let provenance = state
+            .recovered_continuation
+            .take()
+            .expect("recovered answer obligation");
+        self.publish_attempt(state, conversation, None, provenance);
     }
 
     /// The shared tail of every admission: allocate the attempt identity,
@@ -3558,10 +3568,15 @@ impl ConversationRuntime {
         if let Some(subagents) = &config.subagents {
             subagents.restore_sequence_watermark(recovery.highest_subagent_ordinal());
         }
-        let recovered_continuation = matches!(
-            recovery.resume(),
-            crate::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn
-        );
+        let recovered_continuation = match recovery.resume() {
+            crate::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn { goal } => {
+                Some(match goal {
+                    Some(goal) => AttemptProvenance::RecoveredGoalContinuation(goal),
+                    None => AttemptProvenance::RecoveredContinuation,
+                })
+            }
+            _ => None,
+        };
         let next_attempt_seq = recovery.next_attempt_ordinal();
         // The coordinator receives the narrow interaction audit capability
         // only (Issue #109): it may commit the requested/settled facts of its
@@ -4941,13 +4956,16 @@ impl ConversationRuntime {
     /// 1. prove the named attempt is the current attempt and read its
     ///    runtime-owned [`AttemptProvenance`];
     /// 2. if — and only if — it is an autonomous Goal continuation, durably
-    ///    commit `Active -> Paused`;
+    ///    commit `Active -> Paused` only while its admitted `GoalRef` is current;
     /// 3. request cancellation of that same attempt;
-    /// 4. report success only once both semantic actions have won.
+    /// 4. report success once the matching pause (if required) and cancellation
+    ///    have won. Stale authority requires no pause and still succeeds.
     ///
     /// Because the durable pause commits **before** cancellation is
-    /// requested, there is no window in which the Goal is `Active` with a
-    /// cancelled attempt: the state "Active but inert" does not exist.
+    /// requested, the matching authority cannot immediately restart. A newer
+    /// Goal revision is left unchanged: the old attempt has no pause authority
+    /// over later user intent. Settlement clears the named attempt under this
+    /// same lock; a later interrupt returns `NoCurrentAttempt`.
     /// Because provenance decides step 2, cancelling an ordinary Human
     /// attempt never pauses an Active Goal merely because one exists — not
     /// even a Human attempt during which the model called `create_goal`.
@@ -4956,8 +4974,10 @@ impl ConversationRuntime {
     ///
     /// Returns [`CancelAttemptError::NoCurrentAttempt`] when no attempt with
     /// the given identity is currently cancellable, and
-    /// [`CancelAttemptError::GoalPauseFailed`] when the durable pause did not
-    /// commit. The failure case never fabricates a pause: cancellation of
+    /// [`CancelAttemptError::GoalPauseFailed`] when storage or lifecycle refusal
+    /// prevents the pause operation. A stale/superseded `GoalRef` returning
+    /// `Ok(None)` is success: no newer authority is substituted or retried.
+    /// The failure case never fabricates a pause: cancellation of
     /// that exact attempt is still requested (containment), and a genuine
     /// storage failure is recorded through the runtime's own absorbing
     /// durability authority, which fences all further admission — so no later
@@ -4976,15 +4996,20 @@ impl ConversationRuntime {
         };
         let attempt_id = current.attempt_id.clone();
         let cancellation = current.cancellation.clone();
-        let goal_attempt = current.provenance == AttemptProvenance::GoalContinuation;
-        let pause = goal_attempt
-            .then(|| self.inner.composed_goal(&state))
-            .flatten()
-            .map(|domain| {
-                self.inner
-                    .mailbox
-                    .with_running_commit(|| domain.pause_current())
-            });
+        let pause = match &current.provenance {
+            AttemptProvenance::GoalContinuation(expected)
+            | AttemptProvenance::RecoveredGoalContinuation(expected) => {
+                // Composition gates future automation, not interrupt intent
+                // for already-admitted work. Recovery can retain exact Goal
+                // authority even when the reopened profile disables Goal.
+                self.inner.tool_runtime.goal().map(|domain| {
+                    self.inner
+                        .mailbox
+                        .with_running_commit(|| domain.pause_if_current(expected))
+                })
+            }
+            _ => None,
+        };
         let failure = match pause {
             None | Some(Ok(Ok(_))) => None,
             // A genuine durable failure: fail closed through the existing
@@ -5263,7 +5288,7 @@ impl ConversationRuntime {
             || state.manual_compaction.is_some()
             || state.conversation.is_none()
             || state.resource_reload_in_progress
-            || state.recovered_continuation
+            || state.recovered_continuation.is_some()
             || !self.inner.durability_gate.healthy_for_idle_claim()
             || state.mcp_settlement_failure.is_some()
             || state.admission_durability_cycle.pending_retry.is_some()
@@ -6004,8 +6029,9 @@ impl std::error::Error for RuntimeResourceReloadError {}
 pub enum CancelAttemptError {
     /// No attempt with the given identity is currently cancellable.
     NoCurrentAttempt,
-    /// The interrupted attempt was an autonomous Goal continuation and its
-    /// durable `Active -> Paused` commit did not win (Issue #351).
+    /// Storage or lifecycle refusal prevented an autonomous Goal attempt's
+    /// pause operation. A superseded exact reference is an intentional no-op
+    /// and successful cancellation, never this error.
     ///
     /// The attempt was still cancelled. Nothing pretends the Goal is paused:
     /// the durable phase is whatever storage actually holds, and a storage
@@ -18456,7 +18482,7 @@ mod tests {
         );
         assert_eq!(
             runtime.recovery().resume(),
-            crate::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn
+            crate::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn { goal: None }
         );
 
         runtime.activate();

@@ -585,3 +585,32 @@ commit and after one durable cleanup item. Parent kill/reap establishes death;
 restart reads the frozen catalog record, tolerates removed residue and converges
 even when unrelated storage cannot be scanned. See
 [Session deletion lifecycle](session-deletion-lifecycle.md).
+
+## Adopted Goal interruption (Issue #350)
+
+The `after:adopt_pending_batch` SIGKILL boundary now covers autonomous Goal work
+as well as Human inbound. `goal350_process_death_after_adoption_interrupt_pauses_without_refund`
+proves that the already-canonical unanswered turn resumes with the exact
+`RoundAdmitted.current` reference correlated through its adopted message ID.
+The model watch establishes recovered execution; the attempt-exit gate establishes
+settlement. Interrupt commits Paused, retains the consumed round, and repeated
+ordinary admission frontiers admit no work while Paused.
+
+`goal350_recovered_stale_goal_ref_cannot_pause_newer_authority` advances the Goal
+by an explicit edit while the recovered model is parked, then proves cancellation
+leaves the newer snapshot unchanged. `goal350_recovered_human_interrupt_does_not_pause_unrelated_goal`
+uses Human adoption and proves no Goal authority is invented for its recovery.
+Both gate further admission until shutdown so a valid newer Active Goal cannot
+obscure the exact cancellation assertion. These complement, rather than replace,
+the accepted-but-still-pending Goal-round recovery test.
+
+`goal350_disabled_recovery_interrupt_stays_paused_after_reenable` adds a current
+composition change to that same process-death boundary. Admission happens with
+Goal enabled; the killed conversation reopens with Goal disabled. Recovery still
+carries the exact admitted Goal reference, and interrupt must durably pause it.
+The model watch establishes recovered execution and the attempt-exit gate proves
+settlement before repeated admission checks. After shutdown, Goal is enabled
+again on the same durable conversation: repeated actual idle admission produces
+no request or new round, and the Paused snapshot remains exactly unchanged.
+Current composition gates future automation, not interrupt authority over
+already-admitted work. No sleep establishes any of these orderings.

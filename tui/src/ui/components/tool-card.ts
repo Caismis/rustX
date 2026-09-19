@@ -123,6 +123,8 @@ export function renderToolCard(
   // reduction has to happen while it is still possible to tell content from
   // styling. See {@link drawableTool}.
   const tool = drawableTool(published);
+  const goal = goalActivity(tool, context, part);
+  if (goal !== undefined) return goal;
   const args = sanitizeData(parseArguments(tool.argumentsText));
   const renderer = rendererFor(tool.toolId);
   const call = presentCall(renderer.renderCall(args), tool, args);
@@ -170,6 +172,30 @@ export function renderToolCard(
 
   if (part === "full") {
     pushResult(lines, renderer, tool, args, context);
+  }
+  return drawable(lines);
+}
+
+/** Native Goal activity, never a source of current Goal state. Expanded
+ * execution details keep the exact evidence inspectable in this terminal,
+ * which has no separate Trajectory UI. */
+function goalActivity(tool: CorrelatedTool, context: ToolRenderContext, part: ToolCardPart): string | undefined {
+  const operation = tool.toolId === "native.create_goal" ? "start" : tool.toolId === "native.update_goal" ? "update" : tool.toolId === "native.get_goal" ? "check" : undefined;
+  if (!operation) return undefined;
+  const success = part !== "call" && tool.lifecycle.type === "settled" && tool.lifecycle.result.status.type === "success";
+  const args = parseArguments(tool.argumentsText);
+  const action = args && typeof args === "object" && "action" in args ? args.action : undefined;
+  const label = operation === "start" ? success ? "Goal started" : "Starting Goal"
+    : operation === "check" ? success ? "Goal checked" : "Checking Goal"
+    : success && action === "complete" ? "Goal completed" : success && action === "blocked" ? "Goal blocked" : "Updating Goal";
+  const lines = [`${part === "call" ? role.meta("◇") : statusGlyph(tool.lifecycle)} ${label}${part === "call" ? " · result below" : statusSuffix(tool.lifecycle)}`];
+  if (context.expanded) {
+    lines.push("  Execution details", `  Tool: ${tool.toolId}`, `  Name: ${tool.name}`, `  ToolCall: ${tool.callId}`);
+    lines.push(...toLines(tool.argumentsText).map(line => `  ${line}`));
+    if (part !== "call") {
+      lines.push(`  Lifecycle: ${tool.lifecycle.type}`);
+      if (tool.lifecycle.type === "settled") lines.push(...toLines(JSON.stringify(tool.lifecycle.result)).map(line => `  ${line}`));
+    }
   }
   return drawable(lines);
 }

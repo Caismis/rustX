@@ -558,7 +558,9 @@ impl ConversationToolRuntime {
         self.todos.as_ref()
     }
 
-    /// Goal authority exists exactly when the extension is materialized.
+    /// Conversation-owned durable Goal authority, independent of the current
+    /// Agent composition. Goal tools/context and future autonomous admission
+    /// are gated separately by that composition.
     pub(crate) fn goal(&self) -> Option<&crate::goal::GoalDomain> {
         self.goal.as_ref()
     }
