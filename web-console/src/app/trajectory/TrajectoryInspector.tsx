@@ -24,6 +24,7 @@ import type {
   TraceText,
   TraceToolDefinition,
 } from '../../../../protocol/app-server/v11';
+import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Button } from '../../presentation/primitives/Button';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
@@ -32,6 +33,7 @@ import { navigateTabs } from '../../presentation/primitives/tabs';
 import { Artifact } from '../components/Artifact';
 import { formatDuration, formatInstant } from './timeline';
 import css from './Trajectory.module.css';
+import { previewOf, cellLabel } from './TrajectoryCell';
 
 const JSON_LABELS: JsonTreeLabels = {
   copyValue: 'Copy value',
@@ -62,6 +64,7 @@ function Truncated({ of }: { of: boolean | undefined }) {
 }
 
 function Text({ value, markdown = false }: { value: TraceText; markdown?: boolean }) {
+  const [copied, setCopied] = useState<string>();
   if (value.text === '') return <span className={css.unavailable}>Empty</span>;
   return (
     <>
@@ -72,6 +75,7 @@ function Text({ value, markdown = false }: { value: TraceText; markdown?: boolea
       ) : (
         <pre className={css.payload}>{value.text}</pre>
       )}
+      <Button size="sm" className={css.copyText} onClick={() => { void writeClipboard(value.text).then(ok => setCopied(ok ? 'Copied' : 'Copy failed')); }}>{copied ?? 'Copy text'}</Button>
       <Truncated of={value.truncated} />
     </>
   );
@@ -224,15 +228,16 @@ function sectionsOf(record: TraceRecord, detail: TraceDetail | undefined): strin
   return [
     'Summary',
     ...(messages.length > 0 ? ['Content', 'Raw'] : []),
-    ...(request ? ['Input', 'Tools', 'Options'] : []),
+    ...(request ? ['Prompt', 'Context', ...(request.tools.length ? ['Tools'] : []), 'Options'] : []),
     ...(tool ? ['Input'] : []),
-    ...(tool?.source ? ['Source'] : []),
+    ...(tool?.source ? ['Code'] : []),
+    ...(messages.some(message => message.blocks.some(block => block.type === 'reasoning')) ? ['Thinking'] : []),
     ...(tool?.result ? ['Result'] : []),
     ...(tool?.definition ? ['Schema'] : []),
     ...(record.request?.usage ? ['Usage'] : []),
     'Timing',
     ...(record.attachments.length > 0 || (tool?.result?.attachments.length ?? 0) > 0
-      ? ['Attachments']
+      ? ['Artifacts']
       : []),
   ].filter((value, index, all) => all.indexOf(value) === index);
 }
@@ -272,10 +277,10 @@ export function TrajectoryInspector({
   const messages = detail?.messages ?? [];
   const title =
     record.kind === 'request' && record.request
-      ? `Request #${record.request.retry_number} · ${record.request.model}`
+      ? `Request · ${record.request.model}`
       : record.kind === 'tool' && record.tool
         ? `Tool · ${record.tool.name ?? record.tool.tool_id}`
-        : record.kind;
+        : cellLabel[record.kind];
 
   return (
     <aside className={css.inspector} aria-label="Trace record inspector">
@@ -319,6 +324,23 @@ export function TrajectoryInspector({
         className={css.inspectorBody}
       >
         {active === 'Summary' && (
+          <>
+          <div className={css.summaryPreview}><MarkdownText text={previewOf(record)} /></div>
+          {tool?.source && <section className={css.summaryPreview}>
+            <h3 className={css.sectionLabelHeading}>Code</h3>
+            <CodeBlock code={tool.source.text.text} lang={tool.source.language ?? undefined} lineNumbers copyLabel="Copy source" copiedLabel="Copied" />
+            <Truncated of={tool.source.text.truncated} />
+          </section>}
+          {tool?.arguments && !tool.source && <section className={css.summaryPreview}>
+            <h3 className={css.sectionLabelHeading}>Input</h3><Structured value={tool.arguments} label="Recorded arguments" />
+          </section>}
+          {tool?.result && <section className={css.summaryPreview}>
+            <h3 className={css.sectionLabelHeading}>Result · {tool.result.outcome}</h3>
+            {tool.result.blocks.map((block, index) => <Block key={index} block={block} />)}
+            <Truncated of={tool.result.blocks_truncated} />
+          </section>}
+          <details className={css.nativeDetails}>
+          <summary>Native record · {record.state}</summary>
           <dl className={css.facts}>
             <dt>State</dt>
             <dd>{record.state}</dd>
@@ -332,7 +354,7 @@ export function TrajectoryInspector({
               <>
                 <dt>Actual request</dt>
                 <dd className={css.machine}>{record.request.request_id}</dd>
-                <dt>Request ordinal</dt>
+                <dt>Retry / recovery ordinal</dt>
                 <dd>
                   {record.request.retry_number}
                   {record.request.retry_number > 0
@@ -406,6 +428,8 @@ export function TrajectoryInspector({
             )}
             <Truncated of={record.truncated} />
           </dl>
+          </details>
+          </>
         )}
 
         {active === 'Content' && messages.map(message => (
@@ -431,10 +455,12 @@ export function TrajectoryInspector({
           <Structured value={{ value: messages, truncated: detail?.truncated ?? false }} label="Projected messages" />
         )}
 
-        {active === 'Input' && request && (
+        {active === 'Prompt' && request && (<><h3 className={css.sectionLabelHeading}>Effective system prompt</h3><Text value={request.effective_system_prompt} markdown /></>)}
+
+        {active === 'Thinking' && messages.map(message => <section key={message.message_id}>{message.blocks.filter(block => block.type === 'reasoning').map((block, index) => <Text key={index} value={block.text} markdown />)}</section>)}
+
+        {active === 'Context' && request && (
           <>
-            <h3 className={css.sectionLabelHeading}>Effective system prompt</h3>
-            <Text value={request.effective_system_prompt} />
             <h3 className={css.sectionLabelHeading}>Reconstructed request context</h3>
             <p className={css.note}>
               The exact provider-neutral messages this request carried, rebuilt from its frozen
@@ -478,7 +504,7 @@ export function TrajectoryInspector({
           </>
         )}
 
-        {active === 'Source' && tool?.source && (
+        {active === 'Code' && tool?.source && (
           <>
             <h3 className={css.sectionLabelHeading}>
               Program source · <span className={css.machine}>{tool.source.field}</span>
@@ -668,7 +694,7 @@ export function TrajectoryInspector({
           </dl>
         )}
 
-        {active === 'Attachments' && (
+        {active === 'Artifacts' && (
           <Attachments artifacts={[...record.attachments, ...(tool?.result?.attachments ?? [])]} />
         )}
       </div>

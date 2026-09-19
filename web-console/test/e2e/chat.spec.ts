@@ -97,8 +97,9 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(inspector).toContainText('Logical Step');
     // Historical request input is now inspectable rather than withheld, and
     // it is fetched on demand for the selected record only.
-    await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
+    await inspector.getByRole('tab', { name: 'Prompt', exact: true }).click();
     await expect(inspector).toContainText('Effective system prompt');
+    await inspector.getByRole('tab', { name: 'Context', exact: true }).click();
     await expect(inspector).toContainText('Reconstructed request context');
     await page.screenshot({ path: '/tmp/rustx-364-trajectory-desktop.png' });
     await page.setViewportSize({ width: 390, height: 844 });
@@ -126,13 +127,13 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
 
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
-    await expect(trajectory.getByRole('table')).toContainText('running');
+    await expect(trajectory.getByRole('table').getByLabel('State: running').first()).toBeVisible();
     // A reader away from the tail owns their position while live repair runs.
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await ledger.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
-    await expect(trajectory.getByRole('table')).toContainText('running');
+    await expect(trajectory.getByRole('table').getByLabel('State: running').first()).toBeVisible();
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     const beforeSettlement = Number(await ledger.getAttribute('aria-rowcount'));
     await fixture.release('settle-chat');

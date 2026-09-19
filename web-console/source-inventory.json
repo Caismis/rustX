@@ -461,7 +461,7 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
       "destination": "web-console/src/app/trajectory/Trajectory.module.css",
-      "treatment": "adapted dense ledger geometry: event/content regions, kind tags, hierarchy rail, section hairlines, fold summaries and inspector frame; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers",
+      "treatment": "adapted dense ledger geometry: event/content regions, kind tags, hierarchy rail, section hairlines, fold summaries and inspector frame; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation.",
       "upstream_sha256": "b616ba24e9274a66c63d7027ac7700b9813f640ca41e6910106286d1bbeba925",
       "retained_dependencies": [
         "existing theme tokens"
@@ -476,12 +476,12 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "21be10a81d157fec38e14eaf22e19fdda46cba2060124325cfadb2f99c1d386e"
+      "local_sha256": "f6228d489272cf0e4b00771b67a4dcaa72d838758651da2d326cd118e4000e9b"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/Trajectory.tsx",
-      "treatment": "adapted dense ledger, folding, loaded-window search, virtualization, prepend anchoring and tail-follow onto server-resolved native Trace records; the Harness toolbar is folded into this one view seat; preserve the virtualization enable boundary and bounded canonical message batches",
+      "treatment": "adapted dense ledger, folding, loaded-window search, virtualization, prepend anchoring and tail-follow onto server-resolved native Trace records; the Harness toolbar is folded into this one view seat; preserve the virtualization enable boundary and bounded canonical message batches. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: one paging authority feeds the toolbar, the ledger history row and the overview marker; an explicit overview selection clears a search that would otherwise hide the selected record.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v11",
@@ -490,6 +490,7 @@
         "../../presentation/primitives/Input",
         "../../presentation/primitives/Tooltip",
         "./Trajectory.module.css",
+        "./TrajectoryCell",
         "./TrajectoryInspector",
         "./TrajectoryTimeline",
         "./layout",
@@ -525,12 +526,12 @@
           "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1"
         }
       ],
-      "local_sha256": "8ace7763223cf70b38d5c1e27e50c21013b4225177e3a1c6b9ad85a680ed8959"
+      "local_sha256": "9e9c2ed69709b9c4b9a4624482f5de3a0ef120051a4315bd61a6bb9525dbdf9e"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryInspector.tsx",
-      "treatment": "adapted per-kind inspector sections onto native Trace detail; Markdown, JSON tree, code and artifact rendering use the existing audited rustX primitives; refetch detail after authoritative lifecycle repair; preserve the virtualization enable boundary and bounded canonical message batches; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; distinguish recorded empty text from unavailable authority; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT",
+      "treatment": "adapted per-kind inspector sections onto native Trace detail; Markdown, JSON tree, code and artifact rendering use the existing audited rustX primitives; refetch detail after authoritative lifecycle repair; preserve the virtualization enable boundary and bounded canonical message batches; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; distinguish recorded empty text from unavailable authority; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: the request title reads as model plus native retry, and the native disclosure names retry_number as the retry / recovery ordinal it is.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v11",
@@ -538,9 +539,11 @@
         "../../presentation/markdown/MarkdownText",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/JsonTree",
+        "../../presentation/primitives/clipboard",
         "../../presentation/primitives/tabs",
         "../components/Artifact",
         "./Trajectory.module.css",
+        "./TrajectoryCell",
         "./timeline",
         "react"
       ],
@@ -566,12 +569,12 @@
           "upstream_sha256": "a31b4253ba9c7c2490f942768d060c769ff1b5b4fb653ccf67ab54af1e1593b7"
         }
       ],
-      "local_sha256": "bb351523162d8b26a9a0a826c6bf2c41dded7f60405d5b51d275ee9272635cba"
+      "local_sha256": "0aec686ffa2ea78127dd2e4744af36b35040b417950362447954b15ee43d9637"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
       "destination": "web-console/src/app/trajectory/TrajectoryTimeline.module.css",
-      "treatment": "adapted overview geometry, lane rows, focus interval, boundary rules and span/marker treatments; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT",
+      "treatment": "adapted overview geometry, lane rows, focus interval, boundary rules and span/marker treatments; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: adapted the upstream .earlierHistory edge treatment onto existing rustX theme tokens.",
       "upstream_sha256": "3703f1e5815200ee894b32deb944cbaa70806ae5353f51853002ff322740339c",
       "retained_dependencies": [
         "existing theme tokens"
@@ -586,15 +589,17 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "96a6650d805abd7bcadd2ab259f6016804ee21af2aac7dce73a23bb13ab64602"
+      "local_sha256": "f34a35e460bb258d0efd6bd4dfca190feb475581e3b44e5e970e3e7e9d71f03e"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryTimeline.tsx",
-      "treatment": "adapted lane overview with drag-to-focus, wheel zoom, right-button clear/pan and the recorded TTFT/decode split; spans come only from two authoritative timestamps; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT",
+      "treatment": "adapted lane overview with drag-to-focus, wheel zoom, right-button clear/pan and the recorded TTFT/decode split; spans come only from two authoritative timestamps; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: adapted the upstream EarlierHistoryBoundary as a keyboard-reachable earlier-history marker gated, as upstream gates it, to the earliest edge of the projection; unlike upstream it holds no pending state of its own, because the rustX Trace cache already owns loading and the finite history limit. Request spans are named by model, native retry ordinal and exact request identity, never by a synthesized request number.",
       "upstream_sha256": "c062d06535a38498051346095bb713a292f45085e7de817a9400a92292c4eedc",
       "retained_dependencies": [
         "../../../../protocol/app-server/v11",
+        "../../presentation/primitives/Button",
+        "../../presentation/primitives/Tooltip",
         "./TrajectoryTimeline.module.css",
         "./timeline",
         "react"
@@ -609,12 +614,12 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "7b0f6600f86ec82e9a2df126c5be7f18ea287269d5b6b1dedabe5774216822f6"
+      "local_sha256": "17dc1de0c2c8e9c14f2b8bed9aca65bb526ab9501afcf260dda5c1f697f6ce98"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
       "destination": "web-console/src/app/trajectory/layout.ts",
-      "treatment": "adapted section/group/fold projection; rustX reads the Attempt and Step the server resolved instead of deriving turn and step membership in the browser",
+      "treatment": "adapted section/group/fold projection; rustX reads the Attempt and Step the server resolved instead of deriving turn and step membership in the browser. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation.",
       "upstream_sha256": "9d198059498d082555cb5ea8d3d1a0bf4f991afc47bc55646028eada2fb981f1",
       "retained_dependencies": [
         "../../../../protocol/app-server/v11"
@@ -629,7 +634,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "53f537f00954c3bb041265d913e6c962ed9e6e4f97da06d5b9ddd4e1f790ca19"
+      "local_sha256": "0c8559c6a74904311510abac603c14dd8143aa67bad7e9e46495db24ebd1043d"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
@@ -655,7 +660,7 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
       "destination": "web-console/src/app/trajectory/timeline.ts",
-      "treatment": "adapted sequence/duration projections, focus interval and duration formatting over native Trace timing and settled generation evidence; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT",
+      "treatment": "adapted sequence/duration projections, focus interval and duration formatting over native Trace timing and settled generation evidence; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT WEB-15 review: request span labels carry model, native retry ordinal and exact request identity; retry_number is never presented as a request number.",
       "upstream_sha256": "ed2ebfd8b4233022115d9757d50d3af6cf399690ccc4fcf36f9f3edcf8e7b173",
       "retained_dependencies": [
         "../../../../protocol/app-server/v11"
@@ -670,7 +675,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "e0202ee215f6fccabbb83e029735738f14cfaed6809ed5a5e8eaaf8f7bded2e4"
+      "local_sha256": "2f6a155346f0857f159444d33c9e0536ff6e85719f3f3002d05d760308c0977a"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2336,10 +2341,11 @@
     {
       "upstream": "packages/client/ui-trajectory/tests/table.client.spec.tsx",
       "destination": "web-console/test/trajectory.test.tsx",
-      "treatment": "adapted ledger interaction contracts; rustX-authored regressions for proposal-vs-execution, settled generation metrics, on-demand detail, native source rendering and tail-follow; preserve native Goal Tool inspection regression; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT",
+      "treatment": "adapted ledger interaction contracts; rustX-authored regressions for proposal-vs-execution, settled generation metrics, on-demand detail, native source rendering and tail-follow; preserve native Goal Tool inspection regression; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation.",
       "upstream_sha256": "c2ce0834a8a2577c2182f7112cb8603164df803cb33535a5aa24a9bc9155f171",
       "retained_dependencies": [
         "../src/app/App",
+        "../src/app/components/Artifact",
         "../src/app/trajectory/Trajectory",
         "../src/client/trace",
         "./fixture",
@@ -2364,7 +2370,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "011edadae1d39999fb2fe32e3f094f36ac4d8e66943e003c89f2554506d23190"
+      "local_sha256": "e474412fd450cad8e809683b1c20fb77ce35522b48882ae10a055349984a0928"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -2446,6 +2452,30 @@
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "local_sha256": "9d81d717d40a484a843a8944c08de4f15ba9107d396762b7bc49da40ee2dcaa6"
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
+      "destination": "web-console/src/app/trajectory/TrajectoryCell.tsx",
+      "treatment": "Adapt semantic role glyphs, compact icon/tag cells, Tool name/argument/result separation and content previews. Uses existing MarkdownText; reads native TraceRecord only. No Harness event assembly, Tool-name dispatch or inferred membership. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: ordinary rows carry compact artifact identity (native name, image/file distinction, count for the rest) rendered summary-only, with no ArtifactResources read; rustX-specific domain kinds keep a persistent short label so they stay distinguishable without hover.",
+      "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v11",
+        "../../presentation/markdown/MarkdownText",
+        "../../presentation/primitives/icons",
+        "./Trajectory.module.css"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis",
+        "Harness Session Controller and event assembly",
+        "Host/Remote services",
+        "dynamic view registry",
+        "Harness client-side turn/step inference",
+        "provider configuration authority"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "additional_sources": [],
+      "local_sha256": "d06d2e40f171eafa32ff4f94580626394889d217c2669f7d494937bddf6aff51"
     }
   ],
   "inspected_only": [
@@ -2742,6 +2772,144 @@
       "upstream_sha256": "20e08d14b4efca4ead06e298c661ce94256766b14678489b450d6779e6b12ad0",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "treatment": "Inspected for response-tail, copy, recency and context behavior; native rustX authorities retained."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryView.tsx",
+      "upstream_sha256": "a27937dc782642dbfded762466e5f4ce64a12c39d3ccd4840e8fe730e690e5c4",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
+      "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryCell.tsx",
+      "upstream_sha256": "d5090f8ec0fd12073f24f34276864c5d3a8b2e0270fbaa9736dac44e52ddd43e",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx",
+      "upstream_sha256": "c062d06535a38498051346095bb713a292f45085e7de817a9400a92292c4eedc",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryToolbar.tsx",
+      "upstream_sha256": "f447b983cd249e8d757e111ab99010f34265db9a0b40c443344fa07855cb9c82",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurn.tsx",
+      "upstream_sha256": "f9250599869b4787a15bd99b6ad321a695998d03db8279dfec045ba89db54823",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurnHeader.tsx",
+      "upstream_sha256": "11324bd5f472b3467c05e6c933ca1939d822a0ecd9008cff33cfb6be8a159ffd",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
+      "upstream_sha256": "9d198059498d082555cb5ea8d3d1a0bf4f991afc47bc55646028eada2fb981f1",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/trajectory-record.ts",
+      "upstream_sha256": "fa86cb5f89c99d677793bb673cf723e199baa681ac25f057e04471d6813ba150",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/trajectory-request-header-definition.ts",
+      "upstream_sha256": "ff331b5d530c965547c2054ec42a3ddf9a39208527e030c00f2eb0beb4749e92",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/trajectory-tool-definition.ts",
+      "upstream_sha256": "933210b08d50a9bb24977f80f31cc0b6d40a8cf52a053a0fd1b09326d2377df8",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/code-program.ts",
+      "upstream_sha256": "a31b4253ba9c7c2490f942768d060c769ff1b5b4fb653ccf67ab54af1e1593b7",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/trajectory-preview.ts",
+      "upstream_sha256": "e367a2fff648bb4383df672f3606d0b85bfd5f69efeee80541ead791785c0342",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/trajectory-virtual-rows.ts",
+      "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
+      "upstream_sha256": "b616ba24e9274a66c63d7027ac7700b9813f640ca41e6910106286d1bbeba925",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/tests/table.client.spec.tsx",
+      "upstream_sha256": "c2ce0834a8a2577c2182f7112cb8603164df803cb33535a5aa24a9bc9155f171",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/tests/cell.client.spec.tsx",
+      "upstream_sha256": "83ede6635bc6efe45bb9dd10d7e02b69dd0ff7f12cce1aa9671352955d102fd5",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/tests/code-inspector.client.spec.tsx",
+      "upstream_sha256": "62f9fa642411a9cc1af4f703b2bc2486d2a4be527dc5fd74ca584464d1ee9a4e",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/tests/layout.client.spec.tsx",
+      "upstream_sha256": "eea9258120e587759b7fedd6612678e5d19b21b466c74ee67483a0936908e5a3",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/tests/virtual-rows.client.spec.ts",
+      "upstream_sha256": "45e48ed8d8cab9ec731841ddeb235f6575f8bba4f6ffc69cbbc860d2b7adbe0e",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
+      "upstream_sha256": "df1dbc9771459eb5160a42d28fd284a54ff66b306562a2a3528bd717e42454f4",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/contract/request-inspection.ts",
+      "upstream_sha256": "276817bdd6c5fdf691d0adba06dfdd578016c567c1b8b218bf93c8ebcf39d3e7",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/contract/records.ts",
+      "upstream_sha256": "766d799c9ae27047b52f469d6d7ded6b81e17490d4f8eaeeaa7d4f6e60ab56ec",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "WEB-15 presentation reference; runtime/event interpretation excluded."
     }
   ],
   "historical_inspection": {

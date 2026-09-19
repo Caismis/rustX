@@ -19,13 +19,14 @@ import {
   type CSSProperties,
 } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v11';
+import type { TraceRecord } from '../../../../protocol/app-server/v11';
 import type { TraceCache } from '../../client/trace';
 import { TRACE_LIMIT } from '../../client/trace';
 import { Button } from '../../presentation/primitives/Button';
 import { Input } from '../../presentation/primitives/Input';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { TrajectoryInspector } from './TrajectoryInspector';
+import { CellContent, CellIcon, cellLabel, cellNarrowLabel, previewOf } from './TrajectoryCell';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
 import {
   foldRows,
@@ -50,37 +51,6 @@ const VIRTUALIZATION_THRESHOLD = 100;
 const OVERSCAN_ROWS = 12;
 /** Distance from the bottom within which the reader counts as "at the tail". */
 const TAIL_THRESHOLD_PX = 2;
-
-const KIND_LABEL: Record<TraceKind, string> = {
-  attempt: 'ATTEMPT',
-  step: 'STEP',
-  user: 'USER',
-  request: 'REQUEST',
-  assistant: 'MODEL',
-  tool: 'TOOL',
-  compaction: 'COMPACT',
-  background: 'BACKGROUND',
-  subagent: 'SUBAGENT',
-  workflow: 'WORKFLOW',
-  interaction: 'INTERACT',
-};
-
-/** The one-line content preview of a row, or its identity when it has none. */
-function previewOf(record: TraceRecord): string {
-  if (record.preview && record.preview.text !== '') return record.preview.text;
-  if (record.kind === 'request' && record.request) {
-    return `${record.request.model} · request #${record.request.retry_number}`;
-  }
-  if (record.tool) return record.tool.name ?? record.tool.tool_id;
-  return record.native_id ?? record.message_id ?? record.id;
-}
-
-/** The inline result summary a Tool row shows after its call preview. */
-function resultOf(record: TraceRecord): string | undefined {
-  if (!record.tool) return undefined;
-  if (record.tool.detail && record.tool.detail.text !== '') return record.tool.detail.text;
-  return record.tool.outcome ?? undefined;
-}
 
 function durationOf(record: TraceRecord): string {
   return record.timing.duration_ms == null
@@ -169,6 +139,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
   );
 
   const viewport = useRef<HTMLDivElement>(null);
+  const pendingFocus = useRef<string | undefined>(undefined);
   const followsTail = useRef(true);
   const mounted = useRef(false);
   const prependAnchor = useRef<{ first: string | undefined; scrollHeight: number; scrollTop: number; virtualized: boolean } | null>(null);
@@ -196,6 +167,26 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     followOnAppend: 'auto',
     scrollEndThreshold: TAIL_THRESHOLD_PX,
   });
+
+  useLayoutEffect(() => {
+    const id = pendingFocus.current;
+    if (!id) return;
+    const index = rows.findIndex(row => !row.collapsedSummary && row.record.id === id);
+    if (index < 0) return;
+    pendingFocus.current = undefined;
+    followsTail.current = false;
+    if (virtualized) virtualizer.scrollToIndex(index, { align: 'auto' });
+    else {
+      const node = Array.from(viewport.current?.querySelectorAll<HTMLElement>('[data-trace-id]') ?? []).find(node => node.dataset.traceId === id);
+      if (node && viewport.current) {
+        const pane = viewport.current;
+        const rowBounds = node.getBoundingClientRect();
+        const paneBounds = pane.getBoundingClientRect();
+        if (rowBounds.top < paneBounds.top) pane.scrollTop += rowBounds.top - paneBounds.top;
+        else if (rowBounds.bottom > paneBounds.bottom) pane.scrollTop += rowBounds.bottom - paneBounds.bottom;
+      }
+    }
+  }, [rows, selectedId, virtualized, virtualizer]);
 
   const firstId = records[0]?.id;
   useLayoutEffect(() => {
@@ -226,7 +217,14 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     if (followsTail.current && !virtualized) pane.scrollTop = pane.scrollHeight;
   }, [firstId, rows.length, virtualized, virtualizer]);
 
+  // One paging authority. The toolbar button, the ledger's history row and
+  // the overview's earlier-history marker all read these and call the same
+  // `requestOlder`; none of them tracks a cursor or a pending load itself.
+  const hasEarlierRecords = Boolean(cache.page.next_cursor);
+  const canLoadEarlier = hasEarlierRecords && !cache.loading && records.length < TRACE_LIMIT;
+
   const requestOlder = () => {
+    if (!canLoadEarlier) return;
     const pane = viewport.current;
     if (pane !== null) {
       prependAnchor.current = { first: firstId, scrollHeight: pane.scrollHeight, scrollTop: pane.scrollTop, virtualized };
@@ -246,8 +244,8 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
       if (!next.delete(key)) next.add(key);
       return next;
     });
-  const attemptKeys = useMemo(() => foldableKeys(allRows, row => sectionKeyOf(row.record)), [allRows]);
-  const stepKeys = useMemo(() => foldableKeys(allRows, row => stepFoldKey(row.record)), [allRows]);
+  const attemptKeys = useMemo(() => foldableKeys(allRows.filter(row => row.attempt !== null), row => sectionKeyOf(row.record)), [allRows]);
+  const stepKeys = useMemo(() => foldableKeys(allRows.filter(row => row.record.location.step_id != null), row => stepFoldKey(row.record)), [allRows]);
   const allAttemptsFolded = attemptKeys.length > 0 && attemptKeys.every(key => foldedAttempts.has(key));
   const allStepsFolded = stepKeys.length > 0 && stepKeys.every(key => foldedSteps.has(key));
 
@@ -290,11 +288,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
           onChange={event => setQuery(event.target.value)}
           placeholder="Search loaded records"
         />
-        <Button
-          size="sm"
-          disabled={cache.loading || !cache.page.next_cursor || records.length >= TRACE_LIMIT}
-          onClick={requestOlder}
-        >
+        <Button size="sm" disabled={!canLoadEarlier} onClick={requestOlder}>
           {cache.loading ? 'Loading…' : 'Load older'}
         </Button>
         <Button size="sm" onClick={latest}>
@@ -314,8 +308,25 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
         selectedId={selectedId ?? null}
         searchMatches={searchMatches}
         onRangeChange={setFocusRange}
-        onSelect={select}
+        onSelect={id => {
+          pendingFocus.current = id;
+          const record = records.find(record => record.id === id);
+          if (record) {
+            setFoldedAttempts(current => { const next = new Set(current); next.delete(sectionKeyOf(record)); return next; });
+            setFoldedSteps(current => { const next = new Set(current); next.delete(stepFoldKey(record)); return next; });
+          }
+          // Picking a record in the overview is an explicit request to see
+          // that record. An active query that excludes it would leave it
+          // selected but absent from the ledger, so the query yields to the
+          // selection. A query that already matches it is left alone.
+          if (searchMatches !== null && !searchMatches.has(id)) setQuery('');
+          select(id);
+        }}
         boundaryLabel={boundaryLabel}
+        hasEarlierRecords={hasEarlierRecords}
+        loadingEarlier={cache.loading === true}
+        canLoadEarlier={canLoadEarlier}
+        onLoadEarlier={requestOlder}
       />
 
       {selectionOutsideWindow && (
@@ -347,17 +358,13 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
               pane.scrollHeight - pane.clientHeight - pane.scrollTop <= TAIL_THRESHOLD_PX;
           }}
         >
-          {cache.page.next_cursor && (
-            <div className={css.loadRow}>
-              <Button
-                size="sm"
-                disabled={cache.loading || records.length >= TRACE_LIMIT}
-                onClick={requestOlder}
-              >
+          <div className={css.loadRow}>
+            {hasEarlierRecords ? (
+              <Button size="sm" disabled={!canLoadEarlier} onClick={requestOlder}>
                 {cache.loading ? 'Loading earlier records…' : 'Load earlier records'}
               </Button>
-            </div>
-          )}
+            ) : <span>Beginning of loaded history</span>}
+          </div>
           <div
             style={
               virtualized
@@ -368,7 +375,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
             {rendered.map(({ row, item }) => {
               const record = row.record;
               const folded = row.collapsedSummary !== undefined;
-              const result = folded ? undefined : resultOf(record);
+              const structural = record.kind === 'attempt' || record.kind === 'step';
               const attemptFolded = foldedAttempts.has(sectionKeyOf(record));
               const stepFolded = foldedSteps.has(stepFoldKey(record));
               const style: CSSProperties = virtualized
@@ -385,12 +392,22 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
                 <div
                   key={item.key}
                   role="row"
+                  tabIndex={folded ? -1 : 0}
+                  aria-label={`${cellLabel[record.kind]} · ${previewOf(record) || record.state}`}
+                  onKeyDown={event => {
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(record.id); }
+                    if (event.key === 'Escape') select(undefined);
+                  }}
                   aria-rowindex={item.index + 1}
                   aria-selected={!folded && selectedId === record.id}
                   className={css.record}
                   data-trace-id={record.id}
                   data-kind={record.kind}
                   data-state={record.state}
+                  data-structural={structural || undefined}
+                  data-attempt={record.location.attempt_id ?? undefined}
+                  data-step={record.location.step_id ?? undefined}
                   data-section-start={row.sectionStart || undefined}
                   data-section-end={row.sectionEnd || undefined}
                   data-group-start={row.groupStart || undefined}
@@ -405,27 +422,32 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
                     if (folded) return;
                     event.preventDefault();
                     if (record.location.step_id != null) toggleStep(stepFoldKey(record));
-                    else toggleAttempt(sectionKeyOf(record));
+                    else if (row.attempt !== null) toggleAttempt(sectionKeyOf(record));
                   }}
                 >
                   <span role="cell" className={css.event}>
                     {row.sectionStart && !folded && (
-                      <span className={css.sectionLabel} data-active={row.section === allRows.find(candidate => candidate.record.id === selectedId)?.section || undefined}>
-                        {sectionLabel(row.attempt, ordinals.get(row.section) ?? 0)}
+                      <span className={css.sectionLabel} title={row.attempt === null ? 'Outside an Attempt' : `Native Attempt ${row.attempt}`} data-active={row.section === allRows.find(candidate => candidate.record.id === selectedId)?.section || undefined}>
+                        {row.attempt === null ? 'Unscoped' : sectionLabel(row.attempt, ordinals.get(row.section) ?? 0)}
                       </span>
                     )}
-                    <span className={css.rail} aria-hidden="true" />
+                    {row.attempt !== null && <span className={css.rail} aria-hidden="true" />}
                     {!folded && selectedId === record.id && (
                       <span className={css.selectionRail} aria-hidden="true" />
                     )}
                     {row.requestNumber !== undefined && !folded && (
-                      <Tooltip label={`Request #${row.requestNumber} in the loaded window`} side="right">
-                        <span className={css.requestMarker} data-status={record.state} aria-hidden="true" />
+                      <Tooltip label={`Request ${row.requestNumber} in the loaded window`} side="right">
+                        <span
+                          className={css.requestMarker}
+                          data-status={record.state}
+                          role="img"
+                          aria-label={`Request ${row.requestNumber} in the loaded window`}
+                        />
                       </Tooltip>
                     )}
                     {!folded && (
                       <>
-                        {row.groupStart && (
+                        {row.groupStart && row.attempt !== null && (
                           <button
                             type="button"
                             className={css.foldToggle}
@@ -450,13 +472,24 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
                             {(record.location.step_id == null ? attemptFolded : stepFolded) ? '▸' : '▾'}
                           </button>
                         )}
-                        <span className={css.kindTag} data-kind={record.kind}>
-                          {KIND_LABEL[record.kind]}
-                        </span>
+                        <Tooltip label={cellLabel[record.kind]} side="right">
+                          <span className={css.kindTag} data-kind={record.kind}>
+                            <span className={css.kindIcon} aria-hidden="true"><CellIcon kind={record.kind} /></span>
+                            <span className={css.kindLabel}>{structural ? row.groupLabel : cellLabel[record.kind]}</span>
+                            {cellNarrowLabel[record.kind] !== undefined && (
+                              // The row's own aria-label already names the
+                              // kind, so this narrow-width discriminator is
+                              // visual only and must not be announced twice.
+                              <span className={css.kindShort} aria-hidden="true">
+                                {cellNarrowLabel[record.kind]}
+                              </span>
+                            )}
+                          </span>
+                        </Tooltip>
                       </>
                     )}
                   </span>
-                  <span role="cell" className={css.content} title={previewOf(record)}>
+                  <div role="cell" className={css.content} title={previewOf(record)}>
                     {folded ? (
                       <button
                         type="button"
@@ -471,20 +504,17 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
                       </button>
                     ) : (
                       <>
-                        <span className={css.preview}>{previewOf(record)}</span>
-                        {result !== undefined && (
-                          <span className={css.result} data-error={record.state === 'failed' || undefined}>
-                            → {result}
-                          </span>
-                        )}
+                        <CellContent record={record} />
                       </>
                     )}
-                  </span>
-                  <span role="cell" className={css.state}>
-                    {folded ? '' : record.state}
-                  </span>
-                  <span role="cell" className={css.duration}>
-                    {folded ? '' : durationOf(record)}
+                  </div>
+                  <span role="cell" className={css.trailing}>
+                    {!folded && <>
+                      <span className={css.state} title={record.state} aria-label={`State: ${record.state}`}>
+                        {record.state === 'completed' ? '✓' : record.state === 'running' ? '◌' : record.state}
+                      </span>
+                      <span className={css.duration} title="Recorded Journal duration">{durationOf(record)}</span>
+                    </>}
                   </span>
                 </div>
               );

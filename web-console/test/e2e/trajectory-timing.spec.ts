@@ -7,7 +7,7 @@ for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 700 });
     await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory-timing.html');
     const measured = page.getByRole('region', { name: 'Measured bridge' })
-      .getByRole('button', { name: 'Inspect Request #0 · historical-model' });
+      .getByRole('button', { name: 'Inspect Request · historical-model · request-0' });
     await expect(measured).toBeVisible();
     const geometry = await measured.evaluate(el => {
       const css = getComputedStyle(el);
@@ -28,7 +28,7 @@ for (const width of [1440, 390]) {
     expect(Math.abs(geometry.width - geometry.track * 2000 / 9000)).toBeLessThan(0.1);
     expect(Math.abs(geometry.width * 0.36 - geometry.track * 720 / 9000)).toBeLessThan(0.1);
     const missing = page.getByRole('region', { name: 'Missing bridge' })
-      .getByRole('button', { name: 'Inspect Request #0 · historical-model' });
+      .getByRole('button', { name: 'Inspect Request · historical-model · request-0' });
     await expect(missing).toBeVisible();
     expect(await missing.evaluate(el => getComputedStyle(el).backgroundImage)).toBe('none');
     expect(await missing.evaluate(el => el.style.getPropertyValue('--trajectory-first-output'))).toBe('');

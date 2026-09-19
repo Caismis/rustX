@@ -57,3 +57,16 @@ describe('authoritative request phase positions', () => {
     expect(span.firstOutputAt).toBeUndefined();
   });
 });
+
+it('preserves measured zero separately from absent and running timing', () => {
+  const zero = traceRecord(0, { timing: { started_at: '2026-09-15T00:00:00Z', duration_ms: '0' } });
+  zero.request!.generation = { ttft_ms: '0', generation_ms: '0', terminal_ms: '0', output_tokens_per_second: null, timeline: { dispatch_ms: '0', first_output_ms: '0', last_output_ms: '0', terminal_ms: '0' } };
+  const running = traceRecord(1, { state: 'running', timing: { started_at: '2026-09-15T00:00:00Z' } });
+  const [measured, missing] = trajectoryTimeline([zero, running], 'duration', () => undefined)!.spans;
+  expect(measured!.durationMs).toBe(0);
+  expect(measured!.ttftMs).toBe(0);
+  expect(measured!.firstOutputAt).toBe(start);
+  expect(missing!.durationMs).toBeUndefined();
+  expect(missing!.ttftMs).toBeUndefined();
+  expect(missing!.end).toBe(missing!.start);
+});

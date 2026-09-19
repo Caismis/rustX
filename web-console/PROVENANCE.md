@@ -430,3 +430,87 @@ The rebase preserves #366 Goal chat presentation while retaining exact native
 Goal Tool identity, arguments and result in Trajectory. Its regression uses the
 new summary/detail vocabulary. Lifecycle repairs invalidate cached and pending
 details so a selected running Tool cannot retain a pre-settlement payload.
+
+## WEB-15 Harness-first Trajectory (#371)
+
+The pinned reference remains `ddefc45fbc7f8e46dd73185e68295696d1297887`.
+The inventory records the inspected Trajectory View/Table/Cell/Turn/TurnHeader,
+Toolbar/Timeline, layout/record/preview/virtual-row modules, request-header and
+Tool definitions, code inspector and five requested test files. ToolRow,
+GenericToolCard and conversation request/record contracts were also inspected.
+
+`TrajectoryCell.tsx` adapts the current Table's role icons, compact role tags,
+Tool name / argument / result composition and content-led previews. Existing
+MarkdownText, CodeBlock, JsonTree, Artifact, Tooltip, tabs and clipboard primitives
+remain the renderers. The legacy standalone Harness Cell is inspected, not copied.
+The generic runtime kind/state/duration table is replaced by an event/content
+rail: native Attempt/Step evidence is structural, Request evidence subdued,
+Assistant previews use Markdown, and successful lifecycle state is unobtrusive.
+Native identity moves behind an inspector disclosure. Tool Summary includes native
+source/input and result; Prompt, Context, Thinking, Code and Artifacts tabs exist
+only when supported by the native detail. No dependency was added.
+
+Local adaptations preserve the native finite cache, order, location, selected
+identity, historical request snapshot and dispatch-relative timing. A fixed-height
+history boundary fixes the browser-tested final-page prepend shift. Timeline
+selection reveals folded groups and scrolls to the exact native identity; keyboard
+selection, zoom/reset and pan supplement pointer gestures. Desktop and 390px
+screenshots are pinned with the repository's immutable Playwright container.
+
+Issue #372 remains a native dependency: there is no browser prompt comparison,
+standalone System/Context fabrication, Tool-domain ownership guess, or Subtool
+model. Background/Subagent/Workflow/Interaction remain independent records.
+Unscoped records never acquire Attempt ownership, including during folding.
+Harness event definitions, interrupted lifecycle synthesis, Session/Cordis
+assembly, step-relative TTFT and Tool-name-based code detection stay excluded.
+
+Changed derived files have reviewed local SHA-256/import records; original hashes
+and MIT/DeepSeek attribution remain intact. `check:provenance` and the external
+`--reference /tmp/rustx-371-harness` audit verify local and upstream bytes.
+
+## WEB-15 review follow-up (#371)
+
+The pinned reference remains `ddefc45fbc7f8e46dd73185e68295696d1297887`. No new
+upstream file was introduced: the earlier-history marker is adapted from the
+already-inventoried `ui-trajectory/src/client/TrajectoryTimeline.tsx`, whose
+`EarlierHistoryBoundary` and `.earlierHistory` treatment were re-read for this
+change and mapped onto existing rustX theme tokens.
+
+Five review findings were closed. `retry_number` is no longer presented as
+`Request #N` anywhere; requests are named by model plus exact native request
+identity. The overview gained the
+upstream earlier-history affordance while paging authority stays single: the
+Trace cache owns the cursor, the pending load and `TRACE_LIMIT`, and the marker
+calls the same load the ledger and toolbar call. Ordinary rows now carry compact
+artifact identity read from the native summary alone, with no `ArtifactResources`
+read from a virtualized row. An explicit overview selection clears a search that
+would otherwise hide the selected record, so overview and ledger cannot disagree.
+The rustX-specific `background`, `subagent`, `workflow` and `interaction` kinds
+keep a persistent short label, because they share a fallback glyph and a
+hover-only Tooltip is unavailable to touch and keyboard readers.
+
+Local SHA-256 and import records were refreshed for the nine changed derived
+files. Upstream hashes, the pinned commit, licensing, classifications and
+exclusions are unchanged. Harness Session/Cordis assembly, client-side turn and
+step inference, and step-relative TTFT remain excluded.
+
+A second review pass closed two further findings.
+
+The native ordinal is no longer named in primary presentation at all. Native
+defines `retry_number` as the actual-request ordinal within a logical Step, so a
+nonzero value proves only that the request was not the first one; it does not say
+whether the repeat was a retry or a recovery. The inspector title is therefore
+`Request · <model>` and the overview span label is `Request · <model> ·
+<request_id>`, which disambiguates by native identity rather than by an
+interpretation the browser is not entitled to make. The ordinal keeps its honest
+home in the inspector's native disclosure, under `Retry / recovery ordinal`.
+Deciding retry against recovery would need an explicit native request cause,
+which the pinned contract does not carry.
+
+Earlier-history presentation stays on the model-backed timeline path. Native
+`TraceTiming.started_at` is mandatory and `TraceProjection::page` only sets
+`next_cursor` when it retained an anchor, so a loaded window that projects no
+span is also a window with no earlier cursor. The marker therefore lives where
+upstream puts it, inside the positioned `.canvas`, and the empty overview is a
+plain message. Malformed or incomplete DTO states are not modelled as product
+modes.

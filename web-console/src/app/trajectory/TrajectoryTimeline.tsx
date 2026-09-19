@@ -20,6 +20,8 @@ import {
   type TrajectoryTimeRange,
   type TrajectoryTimelineMode,
 } from './timeline';
+import { Button } from '../../presentation/primitives/Button';
+import { Tooltip } from '../../presentation/primitives/Tooltip';
 import css from './TrajectoryTimeline.module.css';
 
 /** Pointer travel below which a drag is treated as a click. */
@@ -29,6 +31,8 @@ const MINIMUM_ZOOM_SPAN = 4;
 
 interface Drag {
   pointerId: number;
+  recordId?: string;
+  clientX: number;
   anchor: number;
   current: number;
   moved: boolean;
@@ -39,6 +43,54 @@ interface Pan {
   clientX: number;
   start: number;
   moved: boolean;
+}
+
+/**
+ * The earlier-history marker at the overview's left edge.
+ *
+ * Adapted from the pinned Harness `EarlierHistoryBoundary`. Harness holds
+ * its own pending flag because its callback returns a promise; rustX does
+ * not, because the Trace cache already owns loading and the finite limit.
+ * Pointer events stop here so pressing the marker cannot also start a drag
+ * on the canvas underneath it.
+ */
+function EarlierHistoryBoundary({
+  loading,
+  enabled,
+  onLoad,
+}: {
+  loading: boolean;
+  enabled: boolean;
+  onLoad: () => void;
+}) {
+  const actionable = enabled && !loading;
+  return (
+    <Tooltip
+      label={loading ? 'Loading earlier records…' : 'Load earlier records'}
+      side="right"
+    >
+      <button
+        type="button"
+        className={css.earlierHistory}
+        data-earlier-history=""
+        data-loading={loading || undefined}
+        aria-label={
+          loading ? 'Loading earlier records' : 'Load earlier records into the overview'
+        }
+        aria-disabled={!actionable}
+        onClick={event => {
+          event.stopPropagation();
+          if (actionable) onLoad();
+        }}
+        onPointerDown={event => event.stopPropagation()}
+        onPointerMove={event => event.stopPropagation()}
+        onPointerUp={event => event.stopPropagation()}
+        onContextMenu={event => event.stopPropagation()}
+      >
+        …
+      </button>
+    </Tooltip>
+  );
 }
 
 /** Props for the Trajectory timing overview. */
@@ -53,6 +105,19 @@ export interface TrajectoryTimelineProps {
   onSelect: (id: string) => void;
   /** Section boundary label for a record that opens one, else undefined. */
   boundaryLabel: (record: TraceRecord, index: number) => string | undefined;
+  /** True when the Trace cache reports an older page beyond this window. */
+  hasEarlierRecords: boolean;
+  /** True while that older page is already being fetched. */
+  loadingEarlier: boolean;
+  /**
+   * True when another older page may still be requested.
+   *
+   * Paging has one owner. The overview never tracks cursors, pending loads
+   * or the finite history limit itself; it renders the state the Trace cache
+   * resolved and calls back into the same load the ledger uses.
+   */
+  canLoadEarlier: boolean;
+  onLoadEarlier: () => void;
 }
 
 /**
@@ -69,6 +134,10 @@ export function TrajectoryTimeline({
   onRangeChange,
   onSelect,
   boundaryLabel,
+  hasEarlierRecords,
+  loadingEarlier,
+  canLoadEarlier,
+  onLoadEarlier,
 }: TrajectoryTimelineProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<Drag | null>(null);
@@ -108,6 +177,11 @@ export function TrajectoryTimeline({
     return () => { root.removeEventListener('wheel', onWheel); };
   }, [model, viewport]);
 
+  // Native `TraceTiming.started_at` is mandatory, so every projected record
+  // places a span and this branch means the loaded window holds no record at
+  // all. A page with no records carries no cursor either, so there is no
+  // earlier history to offer here: that affordance lives on the model-backed
+  // path below, inside the positioned canvas.
   if (model === null || domain === null) {
     return (
       <section className={css.root} aria-label="Timing overview">
@@ -123,6 +197,10 @@ export function TrajectoryTimeline({
     return domain.start + ratio * span;
   };
   const percent = (value: number) => ((value - domain.start) / span) * 100;
+  // Only at the earliest edge of the projection, exactly as the pinned
+  // Harness overview gates its own boundary: panned or zoomed away from the
+  // start, the marker would point at history that is not adjacent to it.
+  const showsEarlierBoundary = hasEarlierRecords && domain.start === model.start;
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button === 2) {
@@ -132,7 +210,7 @@ export function TrajectoryTimeline({
     }
     if (event.button !== 0) return;
     const at = pointAt(event.clientX);
-    dragRef.current = { pointerId: event.pointerId, anchor: at, current: at, moved: false };
+    dragRef.current = { pointerId: event.pointerId, clientX: event.clientX, recordId: (event.target as HTMLElement).closest<HTMLElement>('[data-record-id]')?.dataset.recordId, anchor: at, current: at, moved: false };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
@@ -150,7 +228,7 @@ export function TrajectoryTimeline({
     const drag = dragRef.current;
     if (drag === null || drag.pointerId !== event.pointerId) return;
     drag.current = pointAt(event.clientX);
-    if (Math.abs(drag.current - drag.anchor) > 0) drag.moved = true;
+    if (Math.abs(event.clientX - drag.clientX) >= MINIMUM_DRAG_PX) drag.moved = true;
     setDraft({ start: Math.min(drag.anchor, drag.current), end: Math.max(drag.anchor, drag.current) });
   };
 
@@ -168,9 +246,7 @@ export function TrajectoryTimeline({
     dragRef.current = null;
     setDraft(null);
     if (!drag.moved) {
-      const at = drag.anchor;
-      const hit = model.spans.find(candidate => candidate.start <= at && candidate.end >= at);
-      if (hit !== undefined) onSelect(hit.id);
+      if (drag.recordId !== undefined) onSelect(drag.recordId);
       return;
     }
     onRangeChange({ start: Math.min(drag.anchor, drag.current), end: Math.max(drag.anchor, drag.current) });
@@ -191,19 +267,42 @@ export function TrajectoryTimeline({
     <section className={css.root} aria-label="Timing overview">
       <div className={css.legend}>
         <span>Overview</span>
-        <small>
-          Recorded timing · loaded window · drag to focus, wheel to zoom, right-click to clear
-        </small>
+        <small>Loaded window · drag to focus · wheel to zoom</small>
+        <div className={css.controls}>
+          <Button size="sm" aria-label="Zoom timeline in" onClick={() => {
+            const next = Math.max(MINIMUM_ZOOM_SPAN, span * .8);
+            if (next < span) setViewport({ start: domain.start, end: domain.start + next });
+          }}>+</Button>
+          <Button size="sm" aria-label="Reset timeline" onClick={() => { setViewport(null); onRangeChange(null); }}>Reset</Button>
+        </div>
       </div>
       <div
         ref={rootRef}
         className={css.canvas}
+        tabIndex={0}
+        aria-label="Timeline navigation: arrow keys pan, Escape clears focus"
+        data-domain-start={domain.start}
+        data-domain-end={domain.end}
+        onKeyDown={event => {
+          if (event.key === 'Escape') { onRangeChange(null); return; }
+          if (event.target !== event.currentTarget || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+          event.preventDefault();
+          const start = Math.max(model.start, Math.min(model.end - span, domain.start + span * (event.key === 'ArrowLeft' ? -.1 : .1)));
+          setViewport({ start, end: start + span });
+        }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={() => { dragRef.current = null; panRef.current = null; setDraft(null); }}
         onContextMenu={event => event.preventDefault()}
       >
+        {showsEarlierBoundary && (
+          <EarlierHistoryBoundary
+            loading={loadingEarlier}
+            enabled={canLoadEarlier}
+            onLoad={onLoadEarlier}
+          />
+        )}
         {focus !== null && (
           <div
             className={css.focus}
@@ -262,6 +361,8 @@ export function TrajectoryTimeline({
                       type="button"
                       className={css.span}
                       data-kind={candidate.kind}
+                      data-record-id={candidate.id}
+                      aria-pressed={candidate.id === selectedId}
                       data-error={candidate.error || undefined}
                       data-selected={candidate.id === selectedId || undefined}
                       data-marker={marker || undefined}
@@ -270,6 +371,8 @@ export function TrajectoryTimeline({
                       }
                       aria-label={`Inspect ${candidate.label}`}
                       title={detail}
+                      onFocus={() => setHover(candidate.id)}
+                      onBlur={() => setHover(null)}
                       onPointerEnter={() => setHover(candidate.id)}
                       onPointerLeave={() => setHover(current => (current === candidate.id ? null : current))}
                       onClick={event => { event.stopPropagation(); onSelect(candidate.id); }}

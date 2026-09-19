@@ -19,7 +19,8 @@ function Fixture({ bridge }: { bridge: boolean }) {
   return <section aria-label={bridge ? 'Measured bridge' : 'Missing bridge'}>
     <h1>{bridge ? '400 ms preparation, 320 ms TTFT, 1280 ms generation' : 'Numeric TTFT without a bridge'}</h1>
     <TrajectoryTimeline records={[request, reference]} mode="duration" range={null}
-      selectedId={null} searchMatches={null} onRangeChange={noop} onSelect={noop} boundaryLabel={boundaryLabel} />
+      selectedId={null} searchMatches={null} onRangeChange={noop} onSelect={noop} boundaryLabel={boundaryLabel}
+      hasEarlierRecords={false} loadingEarlier={false} canLoadEarlier={false} onLoadEarlier={noop} />
   </section>;
 }
 createRoot(document.getElementById('root')!).render(<><Fixture bridge /><Fixture bridge={false} /></>);
