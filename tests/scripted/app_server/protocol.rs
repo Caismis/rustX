@@ -650,10 +650,10 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let connection = AppServerConnection::new(f.host.clone());
         let before = connection.handle_json(r#"{"jsonrpc":"2.0","id":0,"method":"server/info","params":{}}"#).await.unwrap();
         assert!(matches!(before, Response::Failure(Failure { error: RpcError { data: Some(ErrorData::NotInitialized), .. }, .. })));
-        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":7,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
+        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":8,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 8, requested: 7 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 9, requested: 8 })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -1700,7 +1700,7 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
         let before = call(&connection, 901, Method::SessionSnapshot { trace_records: vec![], target: target.clone() }).await;
         let read = call(&connection, 902, Method::Trace { target: target.clone(), before: None, limit: 32 }).await;
         let MethodResult::Trace { page } = read else { panic!("Trace page"); };
-        assert!(page.entries.iter().any(|entry| entry.kind == crate::runtime_client::trace::TraceKind::Request));
+        assert!(page.records.iter().any(|entry| entry.kind == crate::runtime_client::trace::TraceKind::Request));
         assert!(matches!(rejected(&connection, Method::Trace { target: target.clone(), before: None, limit: 0 }).await, ErrorData::InvalidParams));
         let after = call(&connection, 903, Method::SessionSnapshot { trace_records: vec![], target: target.clone() }).await;
         assert_eq!(before, after, "Trace reads change no live cursor, inbound, interactions, attempt, surface or transcript");

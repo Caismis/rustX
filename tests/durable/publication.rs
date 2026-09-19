@@ -173,6 +173,7 @@ fn commit_provider_outcome(store: &SqliteConversationStore, turn: &str, request_
                 request_id: request_id.clone(),
                 finish_reason: ModelFinishReason::Stop,
                 usage: None,
+                generation: None,
             },
         ))
         .expect("provider outcome");
@@ -2519,6 +2520,7 @@ fn publication_generation_rejections_are_side_effect_free() {
             request_id: request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
+            generation: None,
         },
     );
     foreign_provider_attempt.attempt_id = Some(AttemptId::new("foreign-attempt"));
@@ -2533,6 +2535,7 @@ fn publication_generation_rejections_are_side_effect_free() {
             request_id: request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
+            generation: None,
         },
     );
     foreign_provider_turn.turn_id = Some(TurnId::new("foreign-turn"));
@@ -2553,6 +2556,7 @@ fn publication_generation_rejections_are_side_effect_free() {
             request_id: request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
+            generation: None,
         },
     ));
     assert!(matches!(
@@ -2576,6 +2580,7 @@ fn publication_generation_rejections_are_side_effect_free() {
                 generation: None,
             },
             usage: None,
+            generation: None,
         },
     ));
     assert!(matches!(
@@ -2702,6 +2707,7 @@ fn a_provider_outcome_names_one_started_request_exactly_once() {
             request_id: RequestId::new("request-never-started"),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
+            generation: None,
         },
     ));
     assert!(
@@ -2722,6 +2728,7 @@ fn a_provider_outcome_names_one_started_request_exactly_once() {
                 request_id,
                 finish_reason: ModelFinishReason::Stop,
                 usage: None,
+                generation: None,
             },
         )),
         Err(ConversationStoreError::TerminalViolation(_))

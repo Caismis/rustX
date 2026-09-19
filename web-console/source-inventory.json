@@ -46,7 +46,7 @@
       "treatment": "rewritten selectors with Harness Modal and typed rustX dispatch",
       "upstream_sha256": "c6a89ae2771f36ff6da26886fbc6719369f41f9eae004e52561644c788df153f",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v8",
+        "../../../../protocol/app-server/v9",
         "../../bindings/projection",
         "../../client/app-server",
         "../../presentation/primitives/Button",
@@ -818,7 +818,7 @@
       "upstream_sha256": "8761d0bbd471440ce331db1e4537e42cc630969244290f8b66cab090457ac70f",
       "destination": "web-console/src/app/Trajectory.tsx",
       "retained_dependencies": [
-        "../../../protocol/app-server/v8",
+        "../../../protocol/app-server/v9",
         "../client/trace",
         "../presentation/primitives/Button",
         "../presentation/primitives/Input",
@@ -945,7 +945,7 @@
       "treatment": "adapted: collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds a composed-empty strip, blocked_by and active_form",
       "upstream_sha256": "1d1e9d87c12b505fc8bc2bdf9973fc349fb80b9385419e0247420ecdb1fc2f4a",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v8",
+        "../../../../protocol/app-server/v9",
         "../../bindings/composer-context",
         "../../presentation/primitives/icons",
         "./TodoDock.module.css",
@@ -981,7 +981,7 @@
       "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds the rustX durable GoalPhase as the sole lifecycle authority (one Pause-or-Resume control, no activation flag), adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs",
       "upstream_sha256": "fcd9ec77f6e40cf4220a883f276d59be5641768a606ff128a5aa209222a637fa",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v8",
+        "../../../../protocol/app-server/v9",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -1020,7 +1020,7 @@
       "treatment": "adapted: collapsible queue, inline text editing, remove, busy controls and preserved drafts; native exact pending CAS and authoritative readback; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Use latest version conflict copy; exact expected revision remains native. Native authority unchanged.",
       "upstream_sha256": "682d5bb4aa11478acbac0f2e21ed1e129baddd18cbff732c64ae5bdb95fb738e",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v8",
+        "../../../../protocol/app-server/v9",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -1104,7 +1104,7 @@
       "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation.",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v8",
+        "../../../../protocol/app-server/v9",
         "../../client/app-server",
         "../../connection/controller",
         "../../presentation/primitives/Button",
@@ -1146,7 +1146,7 @@
       "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery. Dedicated Provider/Model drill-down with explicit return to the native catalog; unsaved units retained by app draft owner.",
       "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v8",
+        "../../../../protocol/app-server/v9",
         "../../presentation/primitives/Button",
         "../../presentation/settings/SettingsContent",
         "../../presentation/settings/SettingsContent.module.css",
@@ -1176,7 +1176,7 @@
       "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS. infer native MCP transport for display without rewriting authored intent",
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v8",
+        "../../../../protocol/app-server/v9",
         "../../bindings/mcp",
         "../../presentation/primitives/Button",
         "../../presentation/settings/SettingsContent",
@@ -2001,7 +2001,7 @@
       "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. No local delivery preference, runtime or slot/store authority.",
       "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v8",
+        "../../../../protocol/app-server/v9",
         "../../client/app-server",
         "../../client/uploads",
         "../../presentation/agent/Composer.module.css",
@@ -2032,7 +2032,7 @@
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
       "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v8",
+        "../../../../protocol/app-server/v9",
         "../../bindings/questionnaire",
         "../../presentation/agent/Question.module.css",
         "../../presentation/primitives/Button",

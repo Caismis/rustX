@@ -3207,7 +3207,7 @@ model = "provider/model"
         let adopted = store
             .adopt_pending_batch(accepted.sequence, None)
             .expect("adopt pending inbound");
-        assert_eq!(adopted.len(), 1);
+        assert_eq!(adopted.items.len(), 1);
         assert!(
             store
                 .load_pending()

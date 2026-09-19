@@ -2888,6 +2888,8 @@ impl RuntimeInner {
                 return;
             }
         };
+        let adoption = adopted.adoption;
+        let adopted = adopted.items;
         if adopted.is_empty() {
             Self::complete_admission_cycle(&mut state);
             self.mailbox.wake().notify_one();
@@ -2955,6 +2957,15 @@ impl RuntimeInner {
                 attempt_id: None,
                 block,
                 transcript_cursor: item.transcript_cursor(),
+            });
+        }
+        // The adoption fact is published after its canonical messages, with
+        // its exact Journal sequence, releasing the receipt the observation
+        // queue is holding for it.
+        if let Some(adoption) = adoption {
+            self.observe(ConversationObservation::Published {
+                journal_sequence: adoption.sequence,
+                observation: Box::new(ConversationObservation::InboundAdopted),
             });
         }
         self.publish_attempt(state, conversation, Some(fresh), provenance);
@@ -18343,6 +18354,7 @@ mod tests {
                 request_id: request_id.clone(),
                 finish_reason: crate::model::finish::ModelFinishReason::Stop,
                 usage: None,
+                generation: None,
             },
         );
         event.turn_id = Some(TurnId::new("0"));

@@ -3677,7 +3677,7 @@ async fn goal351_trace_still_identifies_the_exact_native_goal_tools() {
     let snapshot = host.snapshot().unwrap().0;
     let traced: Vec<_> = snapshot
         .trace
-        .entries
+        .records
         .iter()
         .filter_map(|record| record.tool.as_ref())
         .map(|tool| tool.tool_id.as_str().to_owned())

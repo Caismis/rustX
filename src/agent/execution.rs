@@ -106,6 +106,7 @@ use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::generation::{GenerationFailure, GenerationGuard, GenerationSafetyPolicy};
+use crate::model::generation_evidence::GenerationTiming;
 use crate::model::session::AttemptModelSnapshot;
 use crate::model::snapshot::{AgentStatusStart, RequestIdentity, RequestSnapshot};
 use crate::model::types::{ModelRequest, ModelUsage};
@@ -535,6 +536,11 @@ pub struct AgentExecution<'a> {
     /// provider outcome fact (P) and the publication stream both name it, so
     /// neither can be attributed to a different request of the same turn.
     last_request_id: Option<RequestId>,
+    /// Generation timing evidence being accumulated for the in-flight actual
+    /// request. Installed at that request's dispatch frontier and taken by
+    /// whichever settlement path records its provider terminal, so exactly
+    /// one terminal fact can carry it and a retry never inherits it.
+    generation_timing: Option<GenerationTiming>,
     /// The bounded publication policy of the attempt.
     publication_policy: CoalescePolicy,
     /// The monotonic clock the publication latency policy reads.
@@ -1267,6 +1273,7 @@ impl<'a> AgentExecution<'a> {
             last_request_anchor: None,
             last_request_estimated_input: None,
             last_request_id: None,
+            generation_timing: None,
             publication_policy: CoalescePolicy::default(),
             monotonic_clock: runtime_policy.monotonic_clock,
             model_timeout_policy: runtime_policy.model_timeout_policy,
@@ -1844,10 +1851,12 @@ impl<'a> AgentExecution<'a> {
         // This downstream copy is derived only after canonical assembly has
         // validated and retained the event's terminal fact.
         let finish_reason = turn_assembly.finish_reason.clone();
+        let generation = self.settle_generation_evidence();
         self.emit(RuntimeEvent::ModelRequestCompleted {
             request_id,
             finish_reason: finish_reason.clone(),
             usage: reported_usage.clone(),
+            generation,
         });
         if let Some(terminal) = self.durable_failure_terminal_from_state() {
             return Some(terminal);
@@ -2184,6 +2193,8 @@ impl<'a> AgentExecution<'a> {
             .map_err(|error| {
                 self.durable_failure_terminal("a selected inbound batch cannot be adopted", &error)
             })?;
+        let adoption = adopted.adoption;
+        let adopted = adopted.items;
         if adopted.is_empty() {
             return Ok(false);
         }
@@ -2214,6 +2225,13 @@ impl<'a> AgentExecution<'a> {
                     item.transcript_cursor(),
                 );
             }
+        }
+        // The adoption fact is published after its canonical messages, with
+        // its exact Journal sequence. Trace projects it as the ledger's User
+        // record, and the observation queue holds its receipt until exactly
+        // this publication releases it.
+        if let (Some(observer), Some(adoption)) = (self.observer, adoption.as_ref()) {
+            observer.observe_event(&self.request.attempt_id, &adoption.event, adoption.sequence);
         }
         self.pending_fresh_inbound = Some(fresh);
         Ok(true)
@@ -3698,8 +3716,15 @@ impl<'a> AgentExecution<'a> {
         // Start the response-start clock at the dispatch frontier, immediately
         // after durable reconstruction verification and before entering the
         // adapter's synchronous dispatch method.
-        let deadline =
-            ModelRequestDeadline::new(self.model_timeout_policy, self.monotonic_clock.now_millis());
+        let dispatch_frontier_ms = self.monotonic_clock.now_millis();
+        let deadline = ModelRequestDeadline::new(self.model_timeout_policy, dispatch_frontier_ms);
+        // Generation timing evidence shares the deadline's and the guard's
+        // exact request-local lifetime and origin. Installing it here — after
+        // durable reconstruction verification, before the adapter stream
+        // exists — means time to first output measures generation rather than
+        // request preparation, and a retry cannot inherit the spans of the
+        // generation it replaces.
+        self.generation_timing = Some(GenerationTiming::started_at(dispatch_frontier_ms));
         // The generation guard is request-local execution state exactly like
         // the deadline: one physical generation, one guard, derived from the
         // attempt's own frozen resolved output budget. It is created here,
@@ -4134,7 +4159,16 @@ impl<'a> AgentExecution<'a> {
                     },
                 });
             }
-            deadline.observe(&item, self.monotonic_clock.now_millis());
+            let observed_at_ms = self.monotonic_clock.now_millis();
+            deadline.observe(&item, observed_at_ms);
+            if let (ModelStreamItem::Event(event), Some(timing)) =
+                (&item, self.generation_timing.as_mut())
+            {
+                // Observed before generation-integrity and budget evaluation
+                // so that a generation discarded as degenerate still reports
+                // when the provider actually started producing output.
+                timing.observe(event, observed_at_ms);
+            }
             // Generation integrity and generation budget are evaluated here,
             // *before* the item reaches assembly or publication: a delta that
             // proves the generation is unusable is not part of a message this
@@ -4274,15 +4308,35 @@ impl<'a> AgentExecution<'a> {
         // The stream is consumed or dropped by the caller before this path
         // returns. No late adapter terminal can re-enter the loop and create
         // a second outcome for this RequestId.
+        let generation = self.settle_generation_evidence();
         self.emit(RuntimeEvent::ModelRequestFailed {
             request_id,
             error: error.clone(),
             usage,
+            generation,
         });
         if let Some(terminal) = self.durable_failure_terminal_from_state() {
             return Err(terminal);
         }
         Ok(())
+    }
+
+    /// Settles the in-flight request's generation timing evidence at its
+    /// provider terminal.
+    ///
+    /// Taking the accumulator is what makes the evidence exactly-once: the
+    /// completion and failure paths call this from the same position in
+    /// their own terminal emission, so a request cannot record two spans and
+    /// a second terminal for the same request cannot invent one. A request
+    /// whose terminal is recorded without an installed accumulator — no
+    /// adapter stream was ever created — truthfully reports no evidence.
+    fn settle_generation_evidence(
+        &mut self,
+    ) -> Option<crate::model::generation_evidence::GenerationEvidence> {
+        let terminal_ms = self.monotonic_clock.now_millis();
+        self.generation_timing
+            .take()
+            .map(|timing| timing.settle(terminal_ms))
     }
 
     /// Retains the latest trustworthy provider input measurement for the
@@ -7327,6 +7381,7 @@ mod tests {
                 request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 finish_reason: ModelFinishReason::ToolCalls,
                 usage: None,
+                generation: None,
             },
             RuntimeEvent::AssistantMessageCommitted {
                 message_id: MessageId::new("attempt-1-agent-1"),
@@ -7378,7 +7433,14 @@ mod tests {
             if page.events.is_empty() {
                 break;
             }
-            events.extend(page.events.into_iter().map(|envelope| envelope.event));
+            // Recorded traces compare semantics. Generation timing evidence
+            // is a measurement of one physical generation, so it is
+            // normalized out here and asserted by the timing regressions.
+            events.extend(
+                page.events
+                    .into_iter()
+                    .map(|envelope| envelope.event.without_generation_evidence()),
+            );
             cursor = page.next_sequence;
         }
         events

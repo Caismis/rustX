@@ -7,7 +7,7 @@ import { createWorkspaceSession, WorkspaceSessionNavigation } from '../workspace
 import { Trajectory } from './Trajectory';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
-import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../../protocol/app-server/v8';
+import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../../protocol/app-server/v9';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { NavigationEpoch } from './commands/native';
 import { available, commands } from './commands/registry';

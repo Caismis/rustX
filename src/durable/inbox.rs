@@ -209,6 +209,29 @@ pub struct PendingBatch {
     pub items: Vec<PendingInboundItem>,
 }
 
+/// The committed result of one adoption transaction.
+///
+/// `adoption` is present exactly when `items` is non-empty: an adoption that
+/// consumed nothing commits no fact, so there is nothing to publish.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdoptedBatch {
+    /// The adopted items, in strict sequence order.
+    pub items: Vec<PendingInboundItem>,
+    /// The committed `InboundTurnAdopted` fact, with its Journal sequence.
+    pub adoption: Option<RuntimeEventEnvelope>,
+}
+
+impl AdoptedBatch {
+    /// An adoption that consumed nothing and committed no fact.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            items: Vec::new(),
+            adoption: None,
+        }
+    }
+}
+
 /// Builds the [`RuntimeEvent::InboundTurnAdopted`] fact of one adoption.
 ///
 /// The adoption transaction commits this fact with the canonical messages it
@@ -1191,11 +1214,17 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
 
     /// Adopts the selected pending watermark atomically, together with the
     /// durable answer obligation of the adopted turn.
+    ///
+    /// The committed adoption fact travels back with the adopted items so
+    /// its owner can publish it with its exact Journal sequence. Trace
+    /// projects that fact as the ledger's User record, and the observation
+    /// queue holds every Trace-affecting receipt until its owner publishes
+    /// it; returning the envelope is what lets that publication happen.
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
         attempt_id: Option<AttemptId>,
-    ) -> Result<Vec<PendingInboundItem>, ConversationStoreError>;
+    ) -> Result<AdoptedBatch, ConversationStoreError>;
 
     /// Edits exactly one pending text item using native compare-and-set.
     fn edit_pending(
@@ -1357,7 +1386,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         watermark: InboundSequence,
         attempt_id: Option<AttemptId>,
-    ) -> Result<Vec<PendingInboundItem>, ConversationStoreError>;
+    ) -> Result<AdoptedBatch, ConversationStoreError>;
 
     /// Edits exactly one pending text item using native compare-and-set.
     fn edit_pending(
@@ -1985,7 +2014,7 @@ impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
         &self,
         watermark: InboundSequence,
         attempt_id: Option<AttemptId>,
-    ) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
+    ) -> Result<AdoptedBatch, ConversationStoreError> {
         ConversationStore::adopt_pending_batch(self, watermark, attempt_id)
     }
 
@@ -2174,7 +2203,7 @@ impl ConversationInboundCapability for StoreInboundCapability {
         &self,
         watermark: InboundSequence,
         attempt_id: Option<AttemptId>,
-    ) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
+    ) -> Result<AdoptedBatch, ConversationStoreError> {
         self.store.adopt_pending_batch(watermark, attempt_id)
     }
 

@@ -47,6 +47,13 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/traceDetail';
+      params: {
+        target: AttachmentTarget;
+        record_id: string;
+      };
+    }
+  | {
       method: 'session/transcript';
       params: {
         target: AttachmentTarget;
@@ -379,7 +386,11 @@ export type AttachmentId = string;
 export type ArtifactId = string;
 export type SessionNodeId = string;
 /**
- * Opaque Trace-only exclusive boundary. Valid only in its conversation.
+ * Opaque Trace-only exclusive boundary, valid only in its conversation.
+ *
+ * It is not a live cursor, a transcript cursor, an Event Journal sequence,
+ * a Request ID, or an artifact ID. Clients order by it and page with it;
+ * they never parse it.
  */
 export type TraceCursor = string;
 /**
@@ -896,6 +907,15 @@ export type MethodResult =
       type: 'trace';
     }
   | {
+      /**
+       * Absent when the identity names no record at the read cut. Boxed
+       * because inspection detail is by far the largest result: keeping it
+       * off the shared enum keeps every other response cheap to move.
+       */
+      detail?: TraceDetail | null;
+      type: 'trace_detail';
+    }
+  | {
       page: RuntimeClientTranscriptPage;
       type: 'transcript';
     }
@@ -1063,17 +1083,30 @@ export type AttemptId = string;
  * Identifies one turn within an attempt.
  */
 export type TurnId = string;
+/**
+ * The closed record vocabulary of the ledger.
+ */
 export type TraceKind =
-  | 'attempt'
-  | 'step'
-  | 'request'
-  | 'assistant'
-  | 'tool'
-  | 'compaction'
-  | 'background'
-  | 'subagent'
-  | 'workflow'
-  | 'interaction';
+  | (
+      | 'attempt'
+      | 'step'
+      | 'request'
+      | 'assistant'
+      | 'tool'
+      | 'compaction'
+      | 'background'
+      | 'subagent'
+      | 'workflow'
+      | 'interaction'
+    )
+  | 'user';
+/**
+ * The closed lifecycle vocabulary.
+ *
+ * `Incomplete` is the truthful answer whenever no terminal fact exists and
+ * no current runtime projection positively proves activity. It is never
+ * upgraded by the absence of evidence.
+ */
 export type TraceState =
   | 'incomplete'
   | 'running'
@@ -1125,6 +1158,71 @@ export type ToolCallId = string;
  * Identifies a tool definition in the capability set.
  */
 export type ToolId = string;
+/**
+ * The closed canonical Tool outcome vocabulary.
+ */
+export type TraceToolOutcome =
+  'success' | 'failed' | 'denied' | 'cancelled' | 'timed_out' | 'outcome_unknown';
+/**
+ * The role of one reconstructed request item.
+ */
+export type TraceMessageRole = ('user' | 'assistant' | 'tool') | 'request_only';
+/**
+ * The closed projected content vocabulary.
+ *
+ * Each variant is a semantic the browser can render with the matching
+ * presentation primitive: prose as Markdown, structure as a JSON reader,
+ * source as code, artifacts through the existing durable carrier.
+ */
+export type TraceContentBlock =
+  | {
+      text: TraceText;
+      type: 'text';
+    }
+  | {
+      text: TraceText;
+      type: 'reasoning';
+    }
+  | {
+      text: TraceText;
+      type: 'refusal';
+    }
+  | {
+      value: TraceJson;
+      type: 'json';
+    }
+  | {
+      call_id: ToolCallId;
+      tool_id: ToolId;
+      name: string;
+      arguments: TraceJson;
+      type: 'tool_call';
+    }
+  | {
+      call_id: ToolCallId;
+      tool_id: ToolId;
+      outcome: TraceToolOutcome;
+      blocks: TraceContentBlock[];
+      truncated: boolean;
+      type: 'tool_result';
+    }
+  | {
+      artifact: TraceArtifact;
+      alt?: string | null;
+      type: 'image';
+    }
+  | {
+      artifact: TraceArtifact;
+      type: 'file';
+    }
+  | {
+      name: string;
+      type: 'upload';
+    };
+/**
+ * How far one Tool call progressed, by its own native evidence.
+ */
+export type TraceToolLifecycle = 'proposed' | 'started' | 'settled';
 /**
  * A content block inside a tool result.
  */
@@ -4325,82 +4423,119 @@ export interface TokenMeasurement {
    */
   source: 'provider_reported' | 'provider_anchored' | 'estimated';
 }
+/**
+ * One finite page of bounded summary records, oldest first.
+ */
 export interface TracePage {
-  entries: TraceEntry[];
+  records: TraceRecord[];
   next_cursor?: TraceCursor | null;
 }
-export interface TraceEntry {
+/**
+ * One bounded pageable ledger record.
+ */
+export interface TraceRecord {
+  /**
+   * Stable native Trace identity. Selection and detail reads use it, and
+   * it survives paging, prepending and reconnect for the same record.
+   */
   id: string;
   /**
-   * Opaque Trace-only exclusive boundary. Valid only in its conversation.
+   * Opaque Trace-only exclusive boundary, valid only in its conversation.
+   *
+   * It is not a live cursor, a transcript cursor, an Event Journal sequence,
+   * a Request ID, or an artifact ID. Clients order by it and page with it;
+   * they never parse it.
    */
   position: string;
   location: TraceLocation;
   kind: TraceKind;
   state: TraceState;
   timing: TraceTiming;
-  request?: TraceRequest | null;
-  tool?: TraceTool | null;
   /**
-   * Accepted canonical `ToolCalls`, in canonical block order. Not start evidence.
+   * One-line content preview, so a ledger row carries meaning rather than
+   * an identity alone.
    */
-  calls: TraceTool[];
+  preview?: TracePreview | null;
+  request?: TraceRequestSummary | null;
+  tool?: TraceToolSummary | null;
   /**
-   * Exact native detached execution / child / Workflow run / interaction ID.
+   * Canonical `ToolCall` proposals of an Assistant record, in block order.
+   */
+  calls: TraceToolCall[];
+  /**
+   * Exact native detached execution / Subagent / Workflow / interaction ID.
    */
   native_id?: string | null;
   /**
-   * Canonical output only. Publication without acceptance is not copied here.
+   * Canonical accepted message; publication without acceptance is absent.
    */
   message_id?: MessageId | null;
-  output: TraceText[];
-  reasoning: TraceText[];
-  artifacts: TraceArtifact[];
+  attachments: TraceArtifact[];
+  /**
+   * Whether this record has heavy detail available for inspection.
+   */
+  has_detail: boolean;
   truncated: boolean;
 }
 /**
- * Server-resolved grouping. Native `TurnId` is the logical model step within
- * an Attempt; actual requests never allocate a new step.
+ * Server-resolved native grouping of one record.
+ *
+ * `TurnId` is the logical model step inside an Attempt. An actual request
+ * retry never allocates a new step, so retries of one step group together.
  */
 export interface TraceLocation {
   attempt_id?: AttemptId | null;
   step_id?: TurnId | null;
 }
+/**
+ * Two authoritative instants, or fewer.
+ *
+ * `duration_ms` exists exactly when both endpoints do. Receipt time, render
+ * time and reconnect time are never endpoints.
+ */
 export interface TraceTiming {
   started_at: string;
   ended_at?: string | null;
   duration_ms?: string | null;
 }
-export interface TraceRequest {
+/**
+ * A one-line summary preview of longer content.
+ *
+ * Whitespace is collapsed so a multi-paragraph message occupies one ledger
+ * row. This is presentation shaping of already-permitted content, not a
+ * second copy of it: the complete value is reached through detail.
+ */
+export interface TracePreview {
+  text: string;
+  truncated: boolean;
+}
+/**
+ * Bounded request facts carried by a pageable summary row.
+ *
+ * The historical request input — system prompt, reconstructed context, Tool
+ * definitions — is deliberately absent. It lives in detail so a page of 32
+ * requests does not carry 32 complete model contexts.
+ */
+export interface TraceRequestSummary {
   request_id: RequestId2;
+  /**
+   * Native actual-request ordinal within the logical step. Zero is the
+   * initial request; retry and recovery requests continue the sequence.
+   * It is read from the frozen snapshot, never inferred from timestamps.
+   */
   retry_number: number;
   assistant_message_id: MessageId;
   /**
-   * Previous actual request failure, proven through the native retry ordinal.
+   * Historical model, from the request's own immutable snapshot.
+   */
+  model: string;
+  /**
+   * The exact preceding actual request's failure class, when recorded.
    */
   previous_failure_kind?: ModelErrorKind | null;
-  model: TraceText;
-  max_output_tokens: number;
-  reasoning_enabled: boolean;
-  effective_system_prompt: TraceText1;
-  context_input: TraceText;
-  tool_schema: TraceText;
   failure_kind?: ModelErrorKind | null;
   usage?: ModelUsage | null;
-}
-export interface TraceText {
-  text: string;
-  truncated: boolean;
-  redacted: boolean;
-}
-/**
- * Exact request input is internal. These sections are explicitly withheld,
- * never replaced by today's configuration or reconstructed in the browser.
- */
-export interface TraceText1 {
-  text: string;
-  truncated: boolean;
-  redacted: boolean;
+  generation?: TraceGeneration | null;
 }
 /**
  * Normalized token accounting for one generation.
@@ -4439,17 +4574,294 @@ export interface UsageDetails {
    */
   cached_input_tokens?: number | null;
 }
-export interface TraceTool {
-  call_id: ToolCallId;
-  tool_id: ToolId;
-  arguments: TraceText;
+/**
+ * Derived generation metrics for one actual request.
+ *
+ * Every field is `None` unless its authoritative endpoints exist. A missing
+ * metric states that rustX did not observe what the metric measures.
+ */
+export interface TraceGeneration {
+  /**
+   * Milliseconds from the request's dispatch frontier to its first output.
+   */
+  ttft_ms?: string | null;
+  /**
+   * Milliseconds from the first output to the provider terminal.
+   */
+  generation_ms?: string | null;
+  /**
+   * Milliseconds from the dispatch frontier to the provider terminal.
+   */
+  terminal_ms: string;
+  /**
+   * Output tokens per second, present only when usage and both decode
+   * endpoints exist and the decode span is measurable.
+   */
+  output_tokens_per_second?: number | null;
 }
 /**
- * Safe reference to the existing native artifact carrier, never a storage path.
+ * Bounded Tool facts carried by a pageable summary row.
+ */
+export interface TraceToolSummary {
+  call_id: ToolCallId;
+  tool_id: ToolId;
+  /**
+   * Recorded model-facing name, when the canonical proposal is loadable.
+   */
+  name?: string | null;
+  /**
+   * Whether execution started, as proven by its own durable start fact.
+   */
+  started: boolean;
+  /**
+   * Typed outcome class, present only once the execution settled.
+   */
+  outcome?: TraceToolOutcome | null;
+  /**
+   * Bounded typed error or status detail from the canonical result.
+   */
+  detail?: TracePreview | null;
+}
+/**
+ * One canonical `ToolCall` the model proposed.
+ *
+ * A proposal proves that the generation assembled a call. It never proves
+ * that execution started: a started Tool record is separate evidence.
+ */
+export interface TraceToolCall {
+  call_id: ToolCallId;
+  tool_id: ToolId;
+  name: string;
+}
+/**
+ * Safe reference to the existing native artifact carrier, never a path.
  */
 export interface TraceArtifact {
   artifact_id: ArtifactId;
   image: boolean;
+  name?: string | null;
+  mime_type?: string | null;
+}
+/**
+ * Heavy inspection detail for one exact record identity.
+ */
+export interface TraceDetail {
+  /**
+   * Echoes the requested identity so a late reply can be fenced.
+   */
+  id: string;
+  kind: TraceKind;
+  request?: TraceRequestDetail | null;
+  tool?: TraceToolDetail | null;
+  message?: TraceMessageDetail | null;
+  truncated: boolean;
+}
+/**
+ * The exact historical request, reconstructed from frozen native authority.
+ *
+ * Every value comes from this request's own immutable Request Snapshot and
+ * the historical Conversation Surface revision it froze. Current model
+ * configuration, the current tool catalog and the current system prompt are
+ * never consulted, so a request reopened after the Session was reconfigured
+ * still shows what was actually sent.
+ */
+export interface TraceRequestDetail {
+  request_id: RequestId2;
+  attempt_id: AttemptId;
+  step_id: TurnId;
+  retry_number: number;
+  assistant_message_id: MessageId;
+  model: string;
+  protocol: string;
+  max_output_tokens: number;
+  context_window_tokens: string;
+  reasoning_enabled: boolean;
+  reasoning_profile?: string | null;
+  /**
+   * Allowlisted provider-neutral sampling options; see the options
+   * allowlist for exactly which keys may appear.
+   */
+  options: TraceRequestOption[];
+  /**
+   * How many configured request parameters were outside the allowlist.
+   * Their names are not disclosed; the count keeps the omission visible.
+   */
+  omitted_option_count: number;
+  effective_system_prompt: TraceText;
+  /**
+   * The reconstructed provider-neutral request context, in wire order.
+   */
+  messages: TraceRequestMessage[];
+  messages_truncated: boolean;
+  /**
+   * The exact historical Tool definitions this request carried.
+   */
+  tools: TraceToolDefinition[];
+  tools_truncated: boolean;
+  usage?: ModelUsage | null;
+  failure?: TraceRequestFailure | null;
+  generation?: TraceGeneration | null;
+}
+/**
+ * One allowlisted provider-neutral request option.
+ */
+export interface TraceRequestOption {
+  name: string;
+  value: TraceJson;
+}
+/**
+ * Bounded structured data with an explicit completeness statement.
+ *
+ * The value stays real JSON rather than a rendered string, so the browser
+ * can present it with a structured reader instead of a preformatted dump.
+ */
+export interface TraceJson {
+  value: unknown;
+  truncated: boolean;
+}
+/**
+ * Bounded text with an explicit completeness statement.
+ */
+export interface TraceText {
+  text: string;
+  truncated: boolean;
+}
+/**
+ * One reconstructed provider-neutral request item.
+ */
+export interface TraceRequestMessage {
+  role: TraceMessageRole;
+  /**
+   * Canonical Ledger identity; absent exactly for a request-only item.
+   */
+  message_id?: MessageId | null;
+  /**
+   * Provenance of a canonical User item.
+   */
+  source?: string | null;
+  blocks: TraceContentBlock[];
+  truncated: boolean;
+}
+/**
+ * The historical model-facing Tool definition of one request.
+ */
+export interface TraceToolDefinition {
+  tool_id: ToolId;
+  name: string;
+  description: TraceText;
+  input_schema: TraceJson;
+}
+/**
+ * The terminal failure of one actual request.
+ */
+export interface TraceRequestFailure {
+  kind: ModelErrorKind;
+  message: TraceText;
+}
+/**
+ * Heavy Tool inspection detail.
+ */
+export interface TraceToolDetail {
+  call_id: ToolCallId;
+  tool_id: ToolId;
+  name?: string | null;
+  lifecycle: TraceToolLifecycle;
+  /**
+   * Exact structured arguments from the canonical `ToolCall` proposal.
+   */
+  arguments?: TraceJson | null;
+  /**
+   * Program source identified by a native Tool contract, when there is one.
+   */
+  source?: TraceToolSource | null;
+  /**
+   * The historical definition this call's own request carried.
+   */
+  definition?: TraceToolDefinition | null;
+  result?: TraceToolResult | null;
+}
+/**
+ * Program source carried by an argument field of a native Tool contract.
+ *
+ * This exists only where a rustX native Tool identity states unambiguously
+ * that one named argument is a program. It is never inferred from a value's
+ * shape, a filename, or a file extension.
+ */
+export interface TraceToolSource {
+  /**
+   * The argument field the native contract identifies as program source.
+   */
+  field: string;
+  text: TraceText;
+  /**
+   * Highlighting language, present only when the native contract fixes
+   * it. A tool whose contract does not fix a language leaves this absent
+   * rather than guessing from the source.
+   */
+  language?: string | null;
+}
+/**
+ * The canonical execution result of one Tool call.
+ */
+export interface TraceToolResult {
+  outcome: TraceToolOutcome;
+  /**
+   * Typed status detail: the error, denial reason, or cancellation reason.
+   */
+  detail?: TraceText | null;
+  blocks: TraceContentBlock[];
+  blocks_truncated: boolean;
+  duration_ms: string;
+  exit_code?: number | null;
+  attachments: TraceArtifact[];
+  /**
+   * Tool-owned output truncation recorded by the execution itself.
+   */
+  truncation?: TraceToolTruncation | null;
+  /**
+   * Runtime-owned managed-output continuation metadata, when present.
+   */
+  managed_output?: TraceManagedOutput | null;
+}
+/**
+ * Tool-recorded output truncation, distinct from Trace's own bounds.
+ */
+export interface TraceToolTruncation {
+  truncated: boolean;
+  original_bytes?: string | null;
+}
+/**
+ * Managed textual-output continuation metadata.
+ *
+ * Only the semantic completeness statement crosses the boundary. The
+ * managed-output locator is a host filesystem path owned by the runtime's
+ * output store, so Trace projects whether complete output exists rather
+ * than where it is kept.
+ */
+export interface TraceManagedOutput {
+  /**
+   * Whether the store holds this result's complete textual output, so the
+   * bounded result content is a preview rather than the whole record.
+   */
+  complete: boolean;
+  /**
+   * Whether any managed output file exists at all.
+   */
+  available: boolean;
+  /**
+   * The bounded advisory output-storage diagnostic, when one was recorded.
+   */
+  diagnostic?: TraceText | null;
+}
+/**
+ * One canonical accepted message, projected for inspection.
+ */
+export interface TraceMessageDetail {
+  message_id: MessageId;
+  role: TraceMessageRole;
+  source?: string | null;
+  blocks: TraceContentBlock[];
+  truncated: boolean;
 }
 /**
  * One bounded newest-or-older page of derived transcript history.
@@ -6538,31 +6950,43 @@ export interface RuntimeClientTranscriptPage1 {
   next_cursor?: RuntimeClientTranscriptCursor | null;
 }
 /**
- * Bounded native Trace read window; independent from transcript and live cursors.
+ * One finite page of bounded summary records, oldest first.
  */
 export interface TracePage1 {
-  entries: TraceEntry[];
+  records: TraceRecord[];
   next_cursor?: TraceCursor | null;
 }
 /**
- * Refresh of a loaded record, resolved by the server at the snapshot cut.
- * No browser lifecycle inference or replacement of canonical payloads.
+ * Refresh of an already loaded record, resolved at the server's snapshot cut.
+ *
+ * Only mutable lifecycle facts travel here. Immutable historical input is
+ * never repeated, because it cannot have changed.
  */
 export interface TraceLifecycle {
   id: string;
   state: TraceState;
   timing: TraceTiming;
   request?: TraceRequestOutcome | null;
+  tool?: TraceToolOutcomeUpdate | null;
   message_id?: MessageId | null;
-  artifacts: TraceArtifact[];
+  attachments: TraceArtifact[];
   truncated: boolean;
 }
 /**
- * Mutable request outcome only; immutable historical input is not repeated.
+ * Mutable request outcome only.
  */
 export interface TraceRequestOutcome {
   failure_kind?: ModelErrorKind | null;
   usage?: ModelUsage | null;
+  generation?: TraceGeneration | null;
+}
+/**
+ * Mutable Tool outcome only.
+ */
+export interface TraceToolOutcomeUpdate {
+  started: boolean;
+  outcome?: TraceToolOutcome | null;
+  detail?: TracePreview | null;
 }
 /**
  * The external attempt view of the Runtime Client projection.

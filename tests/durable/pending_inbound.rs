@@ -193,7 +193,7 @@ fn finite_watermark_excludes_post_watermark_arrivals() {
     let adopted = store
         .adopt_pending_batch(batch.watermark, None)
         .expect("adopt");
-    assert_eq!(adopted.len(), 2);
+    assert_eq!(adopted.items.len(), 2);
     let remaining = store
         .select_pending_batch()
         .expect("select")
@@ -220,7 +220,7 @@ fn adoption_is_atomic_and_exactly_once_across_reopen() {
     let adopted = store
         .adopt_pending_batch(batch.watermark, None)
         .expect("adopt");
-    assert_eq!(adopted.len(), 2);
+    assert_eq!(adopted.items.len(), 2);
     drop(store);
 
     // Crash after the adoption commit: canonical owns both messages exactly
@@ -252,7 +252,7 @@ fn adoption_is_atomic_and_exactly_once_across_reopen() {
         .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(2), None)
         .expect("adopt again");
     assert!(
-        again.is_empty(),
+        again.items.is_empty(),
         "an adopted item can never re-enter adoption"
     );
     let _ = path;
@@ -1098,11 +1098,11 @@ fn mutation_edit_before_claim_uses_committed_content_and_exact_obligation() {
     let receipt = store
         .adopt_pending_batch(selection.watermark, None)
         .unwrap();
-    assert_eq!(receipt[0].message.content, text_blocks("edited"));
-    assert_eq!(receipt[0].revision, 1);
+    assert_eq!(receipt.items[0].message.content, text_blocks("edited"));
+    assert_eq!(receipt.items[0].revision, 1);
     assert_eq!(
         store.load_canonical().unwrap(),
-        vec![MessageBlock::User(receipt[0].message.clone())]
+        vec![MessageBlock::User(receipt.items[0].message.clone())]
     );
     let events = store.read_events(None, 64).unwrap().events;
     assert!(events.iter().any(|event| matches!(&event.event, rustx::events::types::RuntimeEvent::InboundTurnAdopted { message_ids } if message_ids == &vec![accepted.message_id.clone()])));
@@ -1140,8 +1140,8 @@ fn mutation_remove_after_selection_excludes_obligation_and_transcript() {
     let receipt = store
         .adopt_pending_batch(selection.watermark, None)
         .unwrap();
-    assert_eq!(receipt.len(), 1);
-    assert_eq!(receipt[0].message_id, retained.message_id);
+    assert_eq!(receipt.items.len(), 1);
+    assert_eq!(receipt.items[0].message_id, retained.message_id);
     let events = store.read_events(None, 64).unwrap().events;
     assert!(events.iter().any(|event| matches!(&event.event, rustx::events::types::RuntimeEvent::InboundTurnAdopted { message_ids } if message_ids == &vec![retained.message_id.clone()])));
     let page = store.load_transcript_page(None, 64).unwrap();
@@ -1158,6 +1158,7 @@ fn mutation_remove_entire_selection_claims_nothing_and_creates_no_obligation() {
         store
             .adopt_pending_batch(selection.watermark, None)
             .unwrap()
+            .items
             .is_empty()
     );
     assert!(store.read_events(None, 64).unwrap().events.is_empty());

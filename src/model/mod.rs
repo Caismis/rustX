@@ -18,6 +18,7 @@ pub mod event;
 pub mod finish;
 pub mod frozen;
 pub mod generation;
+pub mod generation_evidence;
 pub mod input;
 pub mod invocation;
 pub mod session;

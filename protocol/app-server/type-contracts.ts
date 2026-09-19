@@ -1,6 +1,6 @@
 // Regressions for fields contributed by draft-2020-12 $ref siblings.
 // These must be usable through the public union, not a handwritten DTO.
-import type {MessageBlock, UserContentBlock, RuntimeClientSnapshot} from './v8.js';
+import type {MessageBlock, UserContentBlock, RuntimeClientSnapshot} from './v9.js';
 
 const text = {type: 'text', text: 'Native content'} satisfies UserContentBlock;
 const user = {role: 'user', id: 'user-1', content: [text], source: 'human'} satisfies MessageBlock;

@@ -591,6 +591,7 @@ mod tests {
                 request_id: RequestId::new("req-1"),
                 finish_reason: crate::model::ModelFinishReason::Stop,
                 usage: None,
+                generation: None,
             }),
         );
         assert_eq!(
@@ -615,6 +616,7 @@ mod tests {
                 request_id: RequestId::new("req-1"),
                 error: model_error(),
                 usage: None,
+                generation: None,
             }),
         );
         assert_eq!(
@@ -677,6 +679,7 @@ mod tests {
                 request_id: RequestId::new("req-1"),
                 error: model_error(),
                 usage: None,
+                generation: None,
             }),
         );
         assert_folded(
@@ -708,6 +711,7 @@ mod tests {
                 request_id: RequestId::new("req-2"),
                 finish_reason: crate::model::ModelFinishReason::Stop,
                 usage: None,
+                generation: None,
             }),
         );
 

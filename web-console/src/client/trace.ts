@@ -1,4 +1,4 @@
-import type { TraceEntry, TracePage, TraceLifecycle } from '../../../protocol/app-server/v8';
+import type { TraceEntry, TracePage, TraceLifecycle } from '../../../protocol/app-server/v9';
 
 export const TRACE_LIMIT = 512;
 export const TRACE_MAX_BYTES = 4 * 1024 * 1024;

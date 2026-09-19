@@ -1469,7 +1469,7 @@ impl ConversationStore for SqliteConversationStore {
         &self,
         watermark: InboundSequence,
         attempt_id: Option<crate::runtime::identity::AttemptId>,
-    ) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
+    ) -> Result<crate::durable::inbox::AdoptedBatch, ConversationStoreError> {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1502,13 +1502,14 @@ impl ConversationStore for SqliteConversationStore {
                 [seq_to_i64(watermark.get())?],
             )
             .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
+        let mut adoption = None;
         if !items.is_empty() {
-            let adoption = crate::durable::inbox::inbound_adoption_event(
+            let fact = crate::durable::inbox::inbound_adoption_event(
                 &self.conversation_id,
                 attempt_id,
                 items.iter().map(|item| item.message_id.clone()).collect(),
             );
-            persist_event_tx(&transaction, &self.conversation_id, adoption)?;
+            adoption = Some(persist_event_tx(&transaction, &self.conversation_id, fact)?.event);
         }
         #[cfg(test)]
         if self.consume_admission_fault(AdmissionFaultOperation::AdoptPendingBatch)
@@ -1521,7 +1522,7 @@ impl ConversationStore for SqliteConversationStore {
             .commit()
             .map_err(|error| storage(format!("adopt commit: {error}")))?;
         process_death::reach("after:adopt_pending_batch");
-        Ok(items)
+        Ok(crate::durable::inbox::AdoptedBatch { items, adoption })
     }
 
     fn edit_pending(
@@ -9769,7 +9770,7 @@ mod tests {
         let store = store();
         let accepted = store.accept_inbound(draft("hello")).unwrap();
         let adopted = store.adopt_pending_batch(accepted.sequence, None).unwrap();
-        assert_eq!(adopted.len(), 1);
+        assert_eq!(adopted.items.len(), 1);
         assert!(store.load_pending().unwrap().is_empty());
         assert_eq!(store.load_head().unwrap().active_message_ids.len(), 1);
     }
@@ -9794,7 +9795,7 @@ mod tests {
         );
 
         let adopted = store.adopt_pending_batch(accepted.sequence, None).unwrap();
-        assert_eq!(adopted.len(), 1);
+        assert_eq!(adopted.items.len(), 1);
         assert!(store.load_pending().unwrap().is_empty());
         assert!(
             store.has_accepted_inbound().unwrap(),
@@ -10110,7 +10111,7 @@ mod tests {
         );
 
         let adopted = store.adopt_pending_batch(accepted.sequence, None).unwrap();
-        assert_eq!(adopted.len(), 1);
+        assert_eq!(adopted.items.len(), 1);
         assert!(store.load_pending().unwrap().is_empty());
         assert_eq!(store.load_head().unwrap().active_message_ids.len(), 1);
     }

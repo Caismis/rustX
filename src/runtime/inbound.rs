@@ -1331,7 +1331,7 @@ impl ConversationInboundMailbox {
         &self,
         batch: &InboundBatch,
         attempt_id: Option<AttemptId>,
-    ) -> Result<Vec<InboundItem>, MailboxError> {
+    ) -> Result<AdoptedInbound, MailboxError> {
         if batch.conversation_id() != &self.conversation_id {
             return Err(MailboxError::ConversationMismatch {
                 expected: self.conversation_id.clone(),
@@ -1339,9 +1339,12 @@ impl ConversationInboundMailbox {
             });
         }
         let _publication = self.publication.lock().expect("inbound publication lock");
-        let items: Vec<_> = self
+        let adopted = self
             .inbound
-            .adopt_pending_batch(batch.watermark(), attempt_id)?
+            .adopt_pending_batch(batch.watermark(), attempt_id)?;
+        let adoption = adopted.adoption;
+        let items: Vec<_> = adopted
+            .items
             .into_iter()
             .map(|item| InboundItem {
                 revision: item.revision,
@@ -1361,8 +1364,22 @@ impl ConversationInboundMailbox {
                 observer.on_drained(&committed);
             }
         }
-        Ok(items)
+        Ok(AdoptedInbound { items, adoption })
     }
+}
+
+/// The committed result of one mailbox adoption.
+///
+/// The adoption fact travels with the adopted items so the Agent Loop can
+/// publish it with its exact Journal sequence: Trace consumes that fact as
+/// the ledger's User record, and the observation queue holds every
+/// Trace-affecting receipt until its owner publishes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdoptedInbound {
+    /// The adopted items, in strict sequence order.
+    pub items: Vec<InboundItem>,
+    /// The committed adoption fact, present exactly when `items` is non-empty.
+    pub adoption: Option<crate::events::types::RuntimeEventEnvelope>,
 }
 
 #[cfg(test)]
@@ -1428,12 +1445,14 @@ mod tests {
         let receipt = mailbox.adopt_pending_batch(&selected, None).unwrap();
         let drains = observer.drained.lock().unwrap();
         assert_eq!(drains.len(), 1);
-        assert_eq!(drains[0].items(), receipt);
+        assert_eq!(drains[0].items(), receipt.items);
         assert_eq!(
-            receipt[0].message().content,
+            receipt.items[0].message().content,
             human("unused", "committed").content
         );
-        assert_eq!(receipt.len(), 1);
+        assert_eq!(receipt.items.len(), 1);
+        // The adoption fact travels back so its receipt can be published.
+        assert!(receipt.adoption.is_some());
         assert!(observer.pending.lock().unwrap().is_empty());
         assert!(mailbox.select_pending_batch().unwrap().is_none());
         assert_eq!(
@@ -1628,7 +1647,7 @@ mod tests {
         assert_eq!(again.watermark(), InboundSequence(3));
         // Adoption transfers exactly the watermark and removes the records.
         let adopted = mailbox.adopt_pending_batch(&batch, None).expect("adopt");
-        assert_eq!(adopted.len(), 3);
+        assert_eq!(adopted.items.len(), 3);
         assert!(
             mailbox.select_pending_batch().expect("select").is_none(),
             "adoption consumes the selected pending batch"
@@ -1665,7 +1684,7 @@ mod tests {
         let adopted = mailbox
             .adopt_pending_batch(&first, None)
             .expect("adopt first");
-        assert_eq!(adopted.len(), 2);
+        assert_eq!(adopted.items.len(), 2);
         let remaining = mailbox
             .select_pending_batch()
             .expect("select")

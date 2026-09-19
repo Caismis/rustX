@@ -155,6 +155,16 @@ pub(crate) enum ConversationObservation {
         /// The compaction lifecycle fact.
         event: RuntimeEvent,
     },
+    /// One durable inbound adoption, not owned by an Agent attempt.
+    ///
+    /// The coordinator adopts before it allocates an attempt identity, so
+    /// this observation legitimately has no attempt and carries no payload:
+    /// the adopted turn reaches a client as the committed `UserMessage` it
+    /// names, and Trace reads the durable fact itself from the Journal. It
+    /// exists so the fact's receipt can be published — the queue holds every
+    /// Trace-affecting receipt until its owner publishes it — and so clients
+    /// receive the bounded Trace invalidation for the new ledger record.
+    InboundAdopted,
     /// One canonical message commit (the loop's commit observation seam;
     /// the internal committed-message events reference identity only).
     Committed {
@@ -864,6 +874,11 @@ fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::ModelRequestCompleted { .. }
         | RuntimeEvent::ModelRequestFailed { .. }
         | RuntimeEvent::ModelRetryScheduled { .. }
+        // Adoption is the canonical linearization point at which inbound
+        // became a turn this conversation owes an answer for. Trace projects
+        // it as the ledger's User record, so its receipt must be published
+        // before a later owner may advance the represented prefix past it.
+        | RuntimeEvent::InboundTurnAdopted { .. }
         | RuntimeEvent::AssistantMessageCommitted { .. }
         | RuntimeEvent::ToolExecutionStarted { .. }
         | RuntimeEvent::ToolExecutionCompleted { .. }
@@ -885,7 +900,6 @@ fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::InteractionSettled { .. } => true,
         RuntimeEvent::Goal { .. }
         | RuntimeEvent::NativeToolInvocation { .. }
-        | RuntimeEvent::InboundTurnAdopted { .. }
         | RuntimeEvent::ToolExecutionProgress { .. }
         | RuntimeEvent::ToolExecutionDeadlineFired { .. }
         | RuntimeEvent::ToolExecutionCancellationRequested { .. }
@@ -959,9 +973,13 @@ mod tests {
         assert!(queue.drain().is_empty());
         // A fact excluded from Trace cannot independently publish a cursor.
         let mut ignored = receipt(3);
-        // Inbound adoption is native history, but is not consumed by Trace.
-        ignored.event = RuntimeEvent::InboundTurnAdopted {
-            message_ids: vec![],
+        // Tool execution progress is native execution state that Trace never
+        // consumes, so it allocates no Trace-only cursor transition.
+        ignored.event = RuntimeEvent::ToolExecutionProgress {
+            tool_call_id: ToolCallId::new("call-1"),
+            tool_id: crate::runtime::identity::ToolId::new("tool-1"),
+            execution_id: None,
+            progress: crate::tools::types::ToolProgress::default(),
         };
         queue.committed(Some(vec![ignored]));
         assert!(queue.drain().is_empty());

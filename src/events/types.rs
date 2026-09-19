@@ -96,6 +96,7 @@ use crate::events::interaction::{InteractionSettlement, InteractionSubject};
 use crate::message::types::AgentStatusEmission;
 use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
+use crate::model::generation_evidence::GenerationEvidence;
 use crate::model::types::ModelUsage;
 use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, InteractionId, MessageId, RequestId, SubagentId,
@@ -300,6 +301,16 @@ pub enum RuntimeEvent {
         finish_reason: ModelFinishReason,
         /// Final usage, when reported.
         usage: Option<ModelUsage>,
+        /// Settled provider-independent generation timing evidence for this
+        /// exact request, measured against its own dispatch frontier.
+        ///
+        /// This is execution evidence, not canonical history: it never
+        /// enters the Message Ledger, never reaches a provider adapter, and
+        /// no recovery, settlement, or cancellation decision reads it. It is
+        /// absent only for a request whose terminal was recorded without an
+        /// observed generation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        generation: Option<GenerationEvidence>,
     },
     /// A model request failed with a normalized error.
     ModelRequestFailed {
@@ -310,6 +321,12 @@ pub enum RuntimeEvent {
         /// Latest trustworthy cumulative provider usage observed for this
         /// exact request before failure, when any.
         usage: Option<ModelUsage>,
+        /// Settled provider-independent generation timing evidence for this
+        /// exact request. A generation that streamed output before failing
+        /// keeps a truthful first-output offset; one that failed before
+        /// producing anything keeps none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        generation: Option<GenerationEvidence>,
     },
     /// A model request was scheduled for retry.
     ModelRetryScheduled {
@@ -897,6 +914,28 @@ pub enum RuntimeEvent {
         /// The bounded terminal settlement.
         settlement: InteractionSettlement,
     },
+}
+
+impl RuntimeEvent {
+    /// Returns this fact with request-owned generation timing evidence
+    /// removed.
+    ///
+    /// Generation evidence is a *measurement*: the millisecond offsets one
+    /// physical generation actually produced. Two runs of the same scripted
+    /// scenario record the same semantics and different measurements, so
+    /// comparing facts for semantic equality — which recorded traces do —
+    /// must compare them without it. The evidence's own correctness is
+    /// asserted by the regressions that are about timing.
+    #[must_use]
+    pub fn without_generation_evidence(&self) -> Self {
+        let mut fact = self.clone();
+        match &mut fact {
+            Self::ModelRequestCompleted { generation, .. }
+            | Self::ModelRequestFailed { generation, .. } => *generation = None,
+            _ => {}
+        }
+        fact
+    }
 }
 
 /// Derives the deterministic Event Journal identity of one Agent Status
