@@ -17,6 +17,8 @@ use crate::model::finish::ModelFinishReason;
 use crate::model::types::{ModelUsage, UsageDetails};
 use crate::runtime::identity::{AttemptId, MessageId, RequestId};
 
+mod timing;
+
 use super::snapshot::{RuntimeClientTranscriptItem, RuntimeClientTranscriptPage};
 
 /// Derived response view over local execution or inherited lineage provenance.
@@ -37,6 +39,8 @@ pub struct CompletedResponseView {
     /// All actual requests in the Attempt, only when every usage is known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<ModelUsage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timing: Option<crate::durable::response::CompletedResponseTiming>,
 }
 
 /// Whole-conversation execution totals, independent of any transcript window.
@@ -54,6 +58,8 @@ pub struct ConversationStatistics {
 
 #[derive(Default)]
 struct AttemptEvidence {
+    started_at: Option<chrono::DateTime<chrono::Utc>>,
+    timing: timing::TimingFold,
     closing: Option<MessageId>,
     last_request: Option<RequestId>,
     requests: u64,
@@ -148,6 +154,7 @@ pub(crate) fn decorate_through(
                 completed_at: response.completed_at,
                 retry_message_id: response.retry_message_id,
                 usage: response.usage,
+                timing: response.timing,
             });
         }
     }
@@ -240,21 +247,36 @@ fn project(
             };
             let evidence = attempts.entry(id.clone()).or_default();
             match event.event {
+                RuntimeEvent::AttemptStarted { .. } => {
+                    evidence.started_at = Some(event.timestamp);
+                }
                 RuntimeEvent::ModelRequestStarted { request_id, .. } => {
+                    evidence.timing.start(request_id.clone());
                     evidence.last_request = Some(request_id);
                     evidence.requests += 1;
                     statistics.model_requests += 1;
                 }
                 RuntimeEvent::ModelRequestCompleted {
-                    usage: Some(usage), ..
+                    request_id,
+                    usage,
+                    generation,
+                    ..
                 }
                 | RuntimeEvent::ModelRequestFailed {
-                    usage: Some(usage), ..
+                    request_id,
+                    usage,
+                    generation,
+                    ..
                 } => {
-                    evidence.reports += 1;
-                    statistics.requests_with_usage += 1;
-                    add_usage(&mut evidence.usage, &usage);
-                    add_usage(&mut statistics.reported_usage, &usage);
+                    evidence
+                        .timing
+                        .terminal(&request_id, generation, usage.as_ref());
+                    if let Some(usage) = usage {
+                        evidence.reports += 1;
+                        statistics.requests_with_usage += 1;
+                        add_usage(&mut evidence.usage, &usage);
+                        add_usage(&mut statistics.reported_usage, &usage);
+                    }
                 }
                 RuntimeEvent::AssistantMessageCommitted { message_id } => {
                     evidence.closing = Some(message_id);
@@ -294,6 +316,9 @@ fn project(
                                         closing_message_id: closing,
                                     },
                                     completed_at: event.timestamp,
+                                    timing: evidence
+                                        .timing
+                                        .summary(evidence.started_at, event.timestamp),
                                     retry_message_id,
                                     usage: (evidence.requests > 0
                                         && evidence.requests == evidence.reports)

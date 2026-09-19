@@ -1,281 +1,219 @@
-# Completed-response tails (#367)
+# Completed response tails: architecture and validation
 
-The native Runtime Client derives one tail for the last accepted canonical
-Assistant message of a successfully completed Attempt. Intermediate requests,
-Tool calls, and interrupted output do not acquire completed tails. The Message
-Ledger remains canonical; this projection persists no telemetry or second
-message. App Server exposes the same projection to Web, TUI, and headless clients.
+## Ownership and versions
 
-The historical cut is the first Surface append revision of that exact closing
-message. Native validation rejects a mismatched revision or response. Branch and
-independent Fork both retain the response (`after`); Retry retains its existing
-pre-User cut (`before`) and replays canonical returned input once. Catalog version
-12 records the explicit side; obsolete development catalogs are refused, with no
-migration or fallback.
+PR #368 / Issue #364 merged at `3063ebd63356f057e8c3f9ec2efb44feffe9252d`.
+PR #369 rebases on that architecture. Canonical content remains Message Ledger /
+Conversation authority. Runtime Client derives at most one completed tail for the
+exact closing Assistant of a successfully completed Attempt. Intermediate Tool
+requests, interrupted output and unsuccessful Attempts do not create final tails.
 
-Usage folds existing durable normalized request terminals within the exact
-Attempt. Response totals require every request to report usage; optional buckets
-require every included report to provide that bucket. Conversation totals describe
-the current Conversation's execution epoch and disclose usage-report coverage.
-They are not loaded-window totals and are not inherited execution totals of a
-forked Conversation. Context Engine exposes only the latest provider-measured
-request's input and frozen model capacity; compaction or a newer unmeasured request
-invalidates it. The UI explicitly calls it “Last request context”.
+Mandatory versions: **App Server 10, Runtime Client 42, SQLite 42, Session catalog
+12**. SQLite 42 combines schema-41 generation evidence with immutable bootstrap
+response provenance. Obsolete development stores are rejected without migration.
+Only generated `v10.schema.json` / `v10.ts` exist. Both clients, initialization,
+WebSocket admission, fixtures and freshness checks use v10; no old aliases/readers.
 
-## Native lineage inheritance
+```text
+Native ModelRequestCompleted/Failed.generation: GenerationEvidence
+                   /                          \
+          Trace / Trajectory          completed-response projection
+                                                |
+                                          Chat response tail
+```
 
-Local execution facts stay in the original Conversation's Journal. Previously the
-read model used only that Journal, so a copied Ledger/Surface lost all finalized
-response semantics. Now `LineageSeed` additionally carries validated immutable
-`CompletedResponseProvenance`: closing message, optional preceding Retry input,
-original Conversation/Attempt/closing identity, native completion timestamp and
-optional exact usage. It is persisted atomically in `bootstrap_identity` alongside
-the seeded history, not in another Chat telemetry store. Local execution continues
-to be derived from its Journal; only inherited response meaning is snapshotted.
+Chat does not join Trace records or persist telemetry. Native generation semantics
+and Trace's request-relative phase projection remain unchanged.
 
-The canonical/Surface identity map also remaps closing and Retry IDs. Origins
-remain original provenance, never destination content addresses or execution
-ownership. Missing retained input removes Retry. Seed validation rejects duplicate
-or non-Assistant anchors, Tool-call anchors, and invalid preceding input. Repeated
-bootstrap initialization cannot replace these facts; ordinary reopen retains them.
-This works identically for source → branch A → branch B → fork C, even after the
-original execution owner is unavailable. No copied or synthesized Attempt/request
-Journal events, request snapshots, or recovery state are needed.
+## Timing and coverage
 
-`CompletedResponseView.origin` makes original execution ownership explicit. Its
-`closing_message_id`, `retry_message_id`, and `surface_revision` always address the
-current destination. The native `After` validator checks the exact destination
-append revision plus the shared finalized-response projection. `Before` still
-excludes/replays the selected User once. Source Assistant history is immutable.
-SQLite schema 41 and catalog schema 12 reject obsolete development state; there
-is no migration or compatibility path.
+- Total runtime: authoritative `AttemptStarted.timestamp` to the owning successful
+  `AttemptCompleted.timestamp`. Includes model/tool/retry work. Missing/reversed
+  endpoints omit this value; browser clocks and last-request duration are irrelevant.
+- TTFT: `time_to_first_output_ms()` of the first actual request in Journal order,
+  including a failed first request. It measures adapter dispatch to first
+  provider-independent output, never Attempt start. No fallback to a later request.
+- Generation work: checked sum of `GenerationEvidence::generation_ms()` across
+  output-producing actual requests. This helper defines first output to provider
+  terminal, not last output or later canonical acceptance. Every actual request
+  must have terminal generation evidence. Known no-output requests add no invented
+  span; if none produced output the aggregate is absent. Missing evidence or invalid
+  endpoints makes the aggregate absent. A measured zero span remains `0`.
+- Throughput: corresponding summed output tokens divided by the summed generation
+  seconds. Every actual request must have usage; no-output requests must report zero
+  output; every output-producing span must be positive. Otherwise the rate is absent.
+  Failed/retried requests are included in the same actual-request set as usage.
+  The displayed floating-point rate is derived, not an exact token-count claim.
+- Missing dispatch bridge prevents request-start-relative phases in Trace. It does
+  not erase measured dispatch-relative TTFT or generation in Chat. No phase is
+  proportionally reconstructed from wall duration. Optional usage buckets still
+  require complete coverage; absence is never zero.
 
-Inherited usage belongs to the historical response. Current Conversation
-statistics count only current-Conversation execution events, so a newly copied
-Conversation has zero requests/responses and no cumulative usage despite visible
-historical tails. Its context occupancy is absent until its own request supplies
-provider/model evidence. Compaction changes neither historical response identity
-nor cumulative execution totals.
+## Lineage and statistics
 
-## Dependency boundary and timing
+Local completion comes from source execution evidence. Native lineage capture
+freezes `CompletedResponseProvenance` into `LineageSeed` and the destination's
+immutable SQLite bootstrap row, atomically with canonical history and Surface
+provenance. It carries the minimal product summary (completion, usage, timing,
+Retry input) and `ResponseOrigin`, not individual GenerationEvidence, request
+snapshots, Journal events, or recovery residue.
 
-PR #368 remains **open** at `14f24082845988be97d562ad1593caf26314925e`. Its preceding
-head passed all seven CI jobs; the latest head is undergoing CI. It has not landed in `origin/main` (`a775e709`). The intended
-order is #368 → rebase #369 → timing/protocol integration. #369 is **not ready to
-merge** until that final integration and its response-level timing regressions
-are complete. No dependency code was copied from its active worktree or branch.
+The same canonical identity map remaps closing Assistant and retained Retry User
+IDs. Origin remains the original Conversation/Attempt/closing identity as provenance,
+never a destination content address. Missing retained input removes Retry. Deeper
+lineage repeats this operation without a first-child exception. Bootstrap identity
+validation rejects attempts to mutate the frozen summary on reopen.
 
-The inspected current native contract is request-owned `GenerationEvidence` on
-completed/failed request terminals:
+`After` Branch/Fork includes the selected finalized Assistant and leaves an empty
+composer. Both local and inherited responses are valid anchors with exact destination
+message and immutable append revision validation. Stale revisions are not refreshed
+or replayed. `Before` Retry cuts before the remapped User and replays once, preserving
+old history. Upload ownership and uncertain-response fences remain native.
 
-- `dispatch_after_start_ms` is an optional measured monotonic bridge from the
-  durable-start clock pair to dispatch. Missing bridge forbids start-relative
-  phase positions.
-- `first_output_ms` is dispatch-to-first provider-independent output (text,
-  reasoning, refusal, or assembled Tool call). This is the contract's TTFT.
-- `last_output_ms` is the last such output; provider framing is not output.
-- `terminal_ms` is the provider terminal offset, not canonical acceptance.
-- `generation_ms()` is checked `terminal_ms - first_output_ms`.
-- Throughput requires output usage and a strictly positive generation interval.
+Inherited historical tails retain usage/timing. Whole-Conversation statistics count
+only destination-local execution, starting from zero in a new lineage. Paging and
+compaction do not change totals. Context occupancy remains latest applicable request
+provider input usage divided by frozen RequestSnapshot capacity; compaction or a
+newer unmeasured request invalidates it. No browser tokenization or Trace authority.
 
-These definitions must be consumed, not replaced. For multi-request responses,
-any summed model-generation duration must require every included request's native
-evidence; throughput must divide correspondingly covered output usage by that
-positive summed duration. A request-local TTFT must not be labeled whole-Attempt
-latency. Total user-visible execution includes Tool/inter-request time; summing
-request spans or subtracting Journal wall timestamps cannot establish that total.
-The post-#368 integration must emit only aggregate metrics supported by measured
-clock relationships, with unsupported metrics absent. This revision does not add
-unused timing DTO fields or fabricate any of those measurements.
+## Presentation and provenance
 
-Main currently mandates App Server v8. The branch regenerates only v8 from its
-actual Rust DTOs. #368 replaces it with v9; the required rebase must remove v8,
-regenerate v9, update imports, and add one-/multi-request, missing-bridge, positive
-throughput and reopen regressions against the landed native contract. The latest
-#368 also reserves SQLite schema 41 for generation evidence. This branch independently
-requires schema 41 for bootstrap provenance against current main; the post-#368
-rebase must advance the combined schema to 42 (or the next current version),
-rejecting both obsolete shapes rather than treating them as compatible.
+User messages expose Copy and authoritative time without a lineage toolbar.
+Assistant tails retain Copy, compact Lineage/Usage, optional `Ran for`, and completion
+time. Timing details label first-request dispatch TTFT, model generation work and
+output speed without developer identifiers. Existing Modal, Tooltip, Button and
+Harness-derived clock icon are reused. Hover/focus/no-hover and narrow wrapping
+remain in the existing CSS; no second icon/component system was added.
+
+Source inventory retains both #368 Trace resources and #367 tail resources. Local
+hashes and protocol imports are updated. The pinned Harness TurnTailNodeView,
+TurnUsagePanel and StatsPills remain presentation references only.
 
 ## Projection cost
 
-One shared native fold serves response decoration and lineage provenance. The
-lineage owner reuses its result for `After` validation, avoiding a second Journal
-scan. It reads a finite published prefix in indexed 128-event batches and retains
-requested response identities. It is still O(J + R) per projection (Journal facts
-plus inherited bootstrap summaries), not an incremental cache. The inspected
-#364 Trace implementation has bounded indexed reads but no reusable incremental
-response/statistics accumulator. A native checkpoint/index is a bounded future
-performance task; current paging/read-cut correctness does not depend on it.
+One shared fold serves response decoration and lineage validation/copy. It reads
+finite published Journal prefixes in indexed 128-event batches plus inherited
+bootstrap summaries: O(J + R) per snapshot. This pass adds no second scan or cache
+framework. Bounded incremental optimization remains a separate follow-up.
 
 ## Deterministic regression mapping
 
-| Acceptance | Evidence |
+- `response::tests::timing`: exact 400/320/1280 native evidence, 19s whole Attempt,
+  failed/retried request aggregation, missing bridge/output/usage, zero generation,
+  and absent/reversed lifecycle endpoints.
+- `one_attempt_many_requests...`: Tool-bearing intermediate content and two model
+  requests yield one tail, first-request TTFT and summed generation/throughput.
+- `response::tests::lineage`: source → child → reopened child → grandchild preserves
+  exact timing/usage/origin; content/Retry IDs remap, no fake execution events,
+  bootstrap is immutable, subsequent local execution alone adds statistics.
+- Scripted App Server Branch/Fork/Retry test: independent Session ownership,
+  inherited timing, repeat continuation anchors, empty composer, destination Retry,
+  stale destination revision refusal and reopen.
+- Existing compaction/history tests compare full response views across paging,
+  reopen, compaction and later Attempts; Context occupancy tests retain native
+  applicability/invalidation rules.
+- #364 generation and Trace tests retain original dispatch bridge/phase semantics.
+- Web tests cover native timing detail, absent metrics, measured zero, bounded Copy,
+  missing usage buckets, paging identity and conservative mutation uncertainty.
+- Real browser command flow covers Usage/timing, keyboard activation, Fork,
+  reconnect, inherited timing, Branch, Retry, mobile and preserved original history.
+
+## Final integration validation
+
+Commands and final results are recorded below after execution. Initial integration
+checks found obsolete protocol fixture values and one old missing-generation test
+constructor; these were corrected at their native/version authorities.
+
+### Commands
+
+All commands run in the isolated Issue #367 worktree; package-specific commands
+use the indicated directory. The native full suite uses the CLI serial-runner
+flag, not an inherited `RUST_TEST_THREADS` variable, to retain subprocess framing.
+
+| Command | Result |
 | --- | --- |
-| User Copy/time without primary lineage toolbar; Assistant Copy excludes reasoning | `web-console/test/response-tail.test.tsx` |
-| One Attempt, multiple requests and Tool-call content, exactly one closing tail | `runtime_client::response::tests::one_attempt_many_requests_has_one_exact_tail_and_missing_buckets_stay_absent` |
-| Interrupted output, missing usage and optional buckets, no fabricated timing | native response tests and Web response-tail tests |
-| Exact historical response identity across pages, reopen, newer Attempts, finite read cuts | native response tests |
-| Compaction preserves complete response metadata/cut and cumulative totals | native real-compaction response regression |
-| Native request/model context, invalidation after compaction/new request | native response context regression and composer component test |
-| Branch/Fork include Assistant B, empty composer, distinct Session ownership; Retry excludes User B and preserves source | session catalog regression and scripted App Server `completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_retry` |
-| Mismatched revision and non-Assistant after-cut refused | scripted App Server regression |
-| No stale replay; uncertain admission and lineage-switch safety | existing rewritten `commands.test.tsx` and native lineage suites |
-| Late history page cannot replace newest totals; unresolved off-window response is reread | Web response-tail/transcript tests |
-| Real upload-bearing Retry, independent post-response Fork, copied upload ownership | pinned-container `commands.spec.ts` and `uploads.spec.ts` |
-| 34 paged native tails, pointer reveal, keyboard focus/activation, narrow layout | pinned-container `chat.spec.ts` |
-| Product keyboard/editor reachability at 390/820/1280/1600px | pinned-container `accessibility.spec.ts` |
-| Light/dark desktop/narrow presentation references | pinned-container `agent.spec.ts` (obsolete User-toolbar references replaced) |
-| MIT source inventory, pinned Harness and dependency boundary | provenance/reference audit and notice validation |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo check --all-targets --all-features` | Passed |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
+| `cargo build --bins` | Passed |
+| `cargo test --lib --all-features generation` | 108 passed |
+| `cargo test --lib --all-features runtime_client::response` | 12 passed |
+| `cargo test --lib --all-features lineage` | 14 passed |
+| `cargo test --lib --all-features durable::sqlite::tests` | 71 passed, including preceding-schema refusal/current reopen |
+| `cargo test --lib --all-features runtime_client::trace` | 50 passed |
+| `cargo test --lib --all-features context_measurement` | 1 passed |
+| `cargo test --lib --all-features local_runtime::session_runtime_manager::tests::protocol` | 33 passed |
+| `cargo test --lib --all-features scripted_suites::runtime_client` | 109 passed |
+| `cargo test --test process --all-features app_server::` | 13 passed |
+| `uv sync --frozen` in `test-support/fake-provider` | Passed |
+| `uv run --frozen pytest` in `test-support/fake-provider` | 51 passed |
+| `pnpm --dir protocol/app-server install --frozen-lockfile` | Passed |
+| `pnpm --dir protocol/app-server generate` | Passed, Rust DTOs generated v10 |
+| `pnpm --dir protocol/app-server check` | Passed against staged generated artifacts; reproducible |
+| `pnpm --dir protocol/app-server typecheck` | Passed |
+| `pnpm --dir tui install --frozen-lockfile` | Passed |
+| `pnpm --dir tui typecheck` | Passed |
+| `pnpm --dir tui test` | 799 passed |
+| `pnpm --dir web-console install --frozen-lockfile` | Passed |
+| `pnpm --dir web-console typecheck` | Passed |
+| `pnpm --dir web-console test` | 500 passed |
+| `pnpm --dir web-console check:provenance` | 115 source records and 100 package notices passed |
+| `node web-console/scripts/provenance.ts --reference /home/caismis/Documents/codes/deepseek-harness-364` | Passed |
+| `pnpm --dir web-console build` (also executed by each E2E run) | Passed |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | Final complete run: 44 passed |
+| `pnpm --dir dev install --frozen-lockfile` | Passed |
+| `pnpm --dir dev typecheck` | Passed |
+| `pnpm --dir dev test` | 37 passed |
+| `git diff --check` and `git diff --cached --check` | Passed |
 
-No new synchronization test uses sleeps. Native tests construct exact durable
-identities or use existing gates; browser tests wait on native settlement or
-observable UI conditions.
+Browser plugin not available: used the repository's prescribed immutable
+Playwright container through Podman, with the standard config/ports. Existing
+screenshot references passed unchanged. The real response-timing dialog was
+visually inspected at 390px; it fits and retains legible labels. No console errors
+occurred in the exercised command flow. macOS validation is delegated to PR CI.
 
-## Validation commands
+### Corrections during validation
 
-Commands run in the isolated issue worktree. Repeated development runs are
-collapsed below; early fixture/schema/screenshot failures were corrected and
-revalidated. All existing screenshot references were generated only by the
-repository-pinned Playwright container.
+Initial version fixtures still answered v9 or treated Runtime Client 42 as a
+future unsupported version; they now test current 10/42 and reject 9/41/43 as
+appropriate. Strict Clippy required a named request-reading struct, a boxed large
+lineage test future, and an unambiguous generated-version inventory check. A
+focused invocation initially selected a nonexistent `scripted` integration target;
+these tests live under `scripted_suites` in the library, and the corrected command
+passed 109 tests. The `context::occupancy` filter selected zero tests; the actual
+`context_measurement` regression passed and is also in the full response suite.
 
-- `pnpm --dir {web-console,tui,protocol/app-server} install --frozen-lockfile`
-  (each package separately).
-- `cargo check --lib --all-features`.
-- `cargo fmt --all` and `cargo fmt --all -- --check`.
-- `cargo clippy --all-targets --all-features -- -D warnings`.
-- `cargo test --all-features runtime_client::response::tests`.
-- `cargo test --all-features completed_response_cut_is_shared`.
-- `cargo test --all-features post_response_fork_and_branch_include_the_response_and_retry_excludes_input`.
-- `cargo test --all-features`; also `RUST_TEST_THREADS=4 cargo test --all-features`.
-  Parallel runs exposed intermittent managed-Python source preparation failures;
-  `cargo test --all-features boundary_suites::runtime_client::python_capability -- --test-threads=1`
-  passed both. A full `RUST_TEST_THREADS=1` run was stopped because the inherited
-  setting changes an existing subprocess gate test’s stdout framing. The final
-  full run uses `cargo test --all-features -- --test-threads=1`, which does not
-  alter child-process test scheduling.
-- `cargo build --bins`.
-- `pnpm --dir protocol/app-server generate`, `check`, and `typecheck`.
-- `pnpm --dir tui typecheck` and `pnpm --dir tui test`.
-- `pnpm --dir web-console typecheck`, `test`, `check:provenance`, and `build`.
-- `node web-console/scripts/provenance.ts --reference /home/caismis/Documents/codes/deepseek-harness-364`.
-- `uv run --project test-support/fake-provider --frozen pytest test-support/fake-provider/tests`.
-- `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e --config /tmp/rustx-367-playwright.config.ts`:
-  Chat/commands/uploads; all other native browser suites; all static reference
-  suites plus development launcher use `/tmp/rustx-367-playwright-static.config.ts`. Agent reference updates used
-  `agent.spec.ts --update-snapshots`, followed by comparison without updating.
-- `git diff --check`.
+The earlier full Rust run used an already-running test executable while another
+build replaced that executable. Self-spawning MCP/lifecycle tests then failed
+source admission/ENOENT, in addition to the two outdated future-version assertions.
+The final run is sequenced after all compilation and fixture corrections, with no
+concurrent rebuild or test relaxation. This is recorded as validation interference,
+not a product fallback or an accepted failed test.
 
-The Browser plugin and Docker are unavailable here; the frontend-testing skill's
-fallback is the repository's pinned Playwright image through Podman. Existing
-5173/5174 servers belong to other worktrees, so temporary external configurations
-use 53673–53675. Static fixture URLs are temporarily redirected for validation and
-restored byte-for-byte afterward. No other checkout or server is modified.
+The subsequent full run passed all 3,163 library tests, then exposed one stale
+real-process reconnect assertion still expecting App Server 9. It now expects 10,
+and the transport rejection test explicitly offers obsolete v9. The focused
+real-process App Server suite passed 13/13; the full native suite was rerun again
+after this final fixture correction.
 
-## Original implementation validation results (before this revision)
+One additional full run encountered an existing managed-Python preparation failure
+in `capability_projection_covers_native_python_and_skills` (`source:python:py-echo`,
+"source preparation failed"). The owner did not expose a more specific cause.
+The same test passed unchanged in the preceding full run, its exact diagnostic
+rerun, and the final full run. No retries were added to tests, assertions relaxed,
+production source-preparation code changed, or environment workaround introduced.
+Diagnostic command: `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features
+boundary_suites::runtime_client::python_capability::capability_projection_covers_native_python_and_skills
+-- --exact --nocapture` (1 passed).
 
-| Check | Result |
-| --- | --- |
-| Full Rust, all features, all targets and doctests | PASS: 3,735 passed, 0 failed, 6 existing ignored |
-| Rust formatting / Clippy with warnings denied / whitespace | PASS |
-| Protocol regeneration, committed-file freshness and TypeScript contracts | PASS |
-| TUI typecheck / tests | PASS: 799 tests |
-| Web typecheck / unit and component tests | PASS: 477 tests |
-| Fake-provider Python suite | PASS: 51 tests |
-| All browser suites in pinned container | PASS: 40 tests (3 Chat/lineage/upload, 13 other native, 24 reference/launcher) |
-| Source inventory / approved-reference audit / notices / production build | PASS: 107 source records, 100 production package notices |
+### Final full-run result
 
-The original upstream check was `a775e7094a7664326da1f81861deec704d0baca7`;
-no rebase was required. Timing integration remains the
-explicit dependency limitation above. The environment issues in earlier runs
-were resolved through isolation/test invocation; no production behavior or test
-expectation was weakened to accommodate them.
+- `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features -- --test-threads=1`: **3,779 passed, zero failed, six existing ignored**.
+- `cargo test --doc --all-features`: **9 passed, zero failed**.
+- Final complete pinned-browser run: **44 passed**, including Usage/timing details, inherited facts, mobile/keyboard interaction, and unchanged Trace phase coordinates.
 
-## PR #369 revision: lineage inheritance
-
-Starting HEAD: `cf2956df0cbd6efcd68289071d3d5844cc89e8a0` in the same isolated
-Issue #367 worktree/branch. No unrelated worktree was edited or rebased.
-
-New deterministic regressions:
-
-- `runtime_client::response::tests::lineage::deep_lineage_reopen_preserves_response_facts_without_execution_ownership`:
-  two source responses, three successive remaps, both tails preserved, exact
-  original metrics/origin, destination closing/Retry IDs, identical reopen and
-  paging, immutable bootstrap, empty Journal/frontier, zero destination totals,
-  absent inherited context occupancy, then only local execution counted.
-- `remapping_drops_missing_retry_input_and_bootstrap_rejects_invalid_response_addresses`:
-  omitted input disables Retry; duplicate/non-Assistant anchors and invalid
-  preceding input are rejected.
-- The real-compaction response regression now also copies compacted history and
-  verifies inherited completion/usage and the destination execution-epoch rule.
-- The scripted App Server Branch/Fork regression now seeds authoritative request
-  usage, attaches each child, reopens it, Branches and Forks again, checks remapped
-  Retry input and its exact prefix, refuses stale destination revisions, and
-  confirms source preservation and absence of copied execution events.
-- Pinned-browser `commands.spec.ts` now reconnects to the inherited Fork tail,
-  Branches again, submits inherited Retry once through a provider gate with copied
-  uploads, and returns to the earlier lineage to prove its Assistant is unchanged.
-
-The final timing integration remains dependency-blocked by unmerged #368. No
-#364 generation tests can meaningfully run on this main base; running an absent
-filter and reporting zero selected tests as success would not validate it.
-
-### Validation commands for this revision
-
-- `cargo check --lib --all-features`
-- `cargo fmt --all -- --check`
-- `cargo clippy --all-targets --all-features -- -D warnings`
-- `cargo test --all-features runtime_client::response::tests`
-- `cargo test --all-features completed_response_cut_is_shared`
-- `cargo test --all-features lineage`
-- `cargo test --all-features local_runtime::session_runtime_manager::tests::protocol`
-- `cargo test --all-targets --all-features -- --test-threads=1`
-- `cargo test --doc --all-features`
-- `cargo build --bins`
-- `pnpm --dir protocol/app-server generate`, `check`, `typecheck`
-- `pnpm --dir web-console typecheck`, `test`, `check:provenance`, `build`
-- `node web-console/scripts/provenance.ts --reference /home/caismis/Documents/codes/deepseek-harness-364`
-- `pnpm --dir tui typecheck`, `test`
-- `pnpm --dir dev typecheck`, `test`
-- `uv run --project test-support/fake-provider --frozen pytest test-support/fake-provider/tests`
-- `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e --config /tmp/rev367-playwright.config.ts`
-- The same browser command with `agent.spec.ts --grep 'Harness Agent error'`
-  for the pre-revision fixture control, then `--update-snapshots` for the single
-  reviewed reference, followed by the entire suite without updating.
-- `git diff --check`
-
-The first full Rust run found two explicit version-40 assertions in obsolete-store
-rejection tests; these now assert 41, retaining all rejection checks. The first
-Clippy pass found a long three-generation test, now annotated consistently with
-other complete native lifecycle scenarios.
-
-The first two full browser runs passed 39/40. The only failure was one comparator
-pixel in `agent-error-light.png` (eight raw RGB differences in a 4×2 composer-corner
-area). It also reproduced with the pre-revision fixture and in the previous PR
-HEAD's [Full Web CI run](https://github.com/Caismis/rustX/actions/runs/35416757775/job/105826795197).
-No production Web source changed. The image was visually inspected and this one
-stale raster reference regenerated by the pinned browser. No threshold, assertion,
-UI component, or style was relaxed or changed to accommodate it.
-
-### Final revision results
-
-All validation commands above passed after the corrections described above.
-The full Rust run passed **3,728 tests, zero failures, six existing ignored**;
-all **nine doctests** also passed. Focused response tests passed 8/8 and scripted
-App Server protocol tests passed 33/33. Web passed 477 tests, TUI 799, developer
-tools 37, fake provider 51, and the final complete pinned-browser suite **40/40**.
-Formatting, strict all-target/all-feature Clippy, protocol generation/freshness,
-all typechecks, production build, source/reference/notice audits, and staged and
-unstaged whitespace checks passed. Freshness was checked against staged generated
-DTO artifacts; only mandatory v8 artifacts exist on this main base.
-
-Browser testing used the pinned Playwright container with Podman because the
-Browser plugin was unavailable. Isolated ports 53674/53675 avoided other active
-worktrees; temporary fixture URL overrides were restored. No production Web
-component or style changed in this revision.
-
-Final fetch still reported main `a775e7094a7664326da1f81861deec704d0baca7` and
-#368 open at `14f24082845988be97d562ad1593caf26314925e`; no rebase was required.
-Generation-evidence/timing regression execution remains blocked on that unmerged
-dependency. This is an explicit outstanding integration requirement, not a claim
-that the final #364 contract has been integrated or tested here.
+Final fetch confirmed `origin/main` remained
+`3063ebd63356f057e8c3f9ec2efb44feffe9252d`; no second rebase was required.
+All implementation work stayed in `/home/caismis/Documents/codes/rustX-issue-367`
+on `issue-367-chat-response-tail`. Other worktrees were untouched.
+There is no outstanding #364 integration dependency or known implementation blocker.

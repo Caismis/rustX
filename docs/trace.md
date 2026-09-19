@@ -36,8 +36,8 @@ repeated output are retry evidence. Tool joins include Attempt, logical Step,
 ToolCall ID and Tool ID; parallel physical completion never changes start order.
 Detached executions, Subagents and Workflows retain their own native identities.
 
-Native Runtime Client version 41 and App Server version 9 carry this mandatory
-summary/detail vocabulary. SQLite schema 41 gates the persisted request terminal vocabulary including
+Native Runtime Client version 42 and App Server version 10 carry this mandatory
+summary/detail vocabulary. SQLite schema 42 gates the persisted request terminal vocabulary including
 generation evidence. The Event Journal envelope framing is unchanged; this is
 request terminal event data, not a new Trace store.
 
@@ -181,7 +181,7 @@ bounded diagnostics, plus the exact recorded continuation locator when present.
 
 ## Durable schema contract
 
-SQLite schema **40** retains the indexed Trace presentation seeks. Older stores
+SQLite schema **42** retains the indexed Trace presentation seeks. Older stores
 are rejected without migration. Reads use existing indexed Journal rows and
 immutable native joins, with no Trace persistence table.
 

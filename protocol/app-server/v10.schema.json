@@ -8427,6 +8427,16 @@
               "type": "null"
             }
           ]
+        },
+        "timing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompletedResponseTiming"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
@@ -8458,6 +8468,51 @@
         "attempt_id",
         "closing_message_id"
       ]
+    },
+    "CompletedResponseTiming": {
+      "description": "Historical product timing derived from native lifecycle and generation evidence.\nMissing evidence stays absent; these are not destination execution facts.",
+      "type": "object",
+      "properties": {
+        "total_duration_ms": {
+          "description": "Authoritative successful Attempt completion minus its start timestamp.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "ttft_ms": {
+          "description": "First actual request's adapter-dispatch-to-first-output duration.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "generation_ms": {
+          "description": "Sum of output-producing requests' first-output-to-provider-terminal spans.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "output_tokens_per_second": {
+          "description": "Fully covered output usage divided by fully covered positive generation work.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
     },
     "ForegroundToolExecution": {
       "description": "The foreground tool execution read model of one logical tool call.\n\nKeyed by the canonical logical tool-call identity, so parallel physical\ncompletion timing can never corrupt logical identities or canonical\nordering. Native, MCP, and Python foreground executions converge through\nthis one shape.",

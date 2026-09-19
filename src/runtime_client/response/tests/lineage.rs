@@ -59,6 +59,8 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
         assert_eq!(b.origin, original_b.origin);
         assert_eq!(b.completed_at, original_b.completed_at);
         assert_eq!(b.usage, original_b.usage);
+        assert_eq!(b.timing, original_b.timing);
+        assert_eq!(b.timing.as_ref().unwrap().generation_ms, Some(1280));
         assert!(is_completed_response(&child, &b.closing_message_id).unwrap());
         assert_eq!(
             projected.statistics,
@@ -106,6 +108,10 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
     finish(&store, "local");
     let current = page(&store, None, 64);
     assert_eq!(tails(&current).len(), 3);
+    assert_eq!(
+        tails(&current)[2].timing.as_ref().unwrap().generation_ms,
+        Some(1280)
+    );
     let totals = current.statistics.unwrap();
     assert_eq!(totals.completed_responses, 1);
     assert_eq!(totals.model_requests, 1);

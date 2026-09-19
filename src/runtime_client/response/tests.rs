@@ -69,6 +69,31 @@ pub(crate) fn request(
     retry: u32,
     usage: Option<ModelUsage>,
 ) {
+    request_timed(
+        store,
+        attempt,
+        retry,
+        usage,
+        Some(sample_generation()),
+        false,
+    );
+}
+fn sample_generation() -> crate::model::generation_evidence::GenerationEvidence {
+    crate::model::generation_evidence::GenerationEvidence {
+        dispatch_after_start_ms: Some(400),
+        first_output_ms: Some(320),
+        last_output_ms: Some(900),
+        terminal_ms: 1600,
+    }
+}
+fn request_timed(
+    store: &dyn ConversationStore,
+    attempt: &str,
+    retry: u32,
+    usage: Option<ModelUsage>,
+    generation: Option<crate::model::generation_evidence::GenerationEvidence>,
+    failed: bool,
+) {
     let snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: AttemptId::new(attempt),
@@ -105,10 +130,30 @@ pub(crate) fn request(
     append(
         store,
         attempt,
-        RuntimeEvent::ModelRequestCompleted {
-            request_id: snapshot.request_id,
-            finish_reason: ModelFinishReason::Stop,
-            usage,
+        if failed {
+            RuntimeEvent::ModelRequestFailed {
+                request_id: snapshot.request_id,
+                error: crate::model::error::ModelError {
+                    kind: crate::model::error::ModelErrorKind::Transport,
+                    message: "controlled failure".into(),
+                    retry_disposition: crate::model::error::ModelRetryDisposition::Transient,
+                    retry_after_ms: None,
+                    provider_code: None,
+                    context_overflow: None,
+                    malformed_tool_proposal: None,
+                    timeout_phase: None,
+                    generation: None,
+                },
+                usage,
+                generation,
+            }
+        } else {
+            RuntimeEvent::ModelRequestCompleted {
+                request_id: snapshot.request_id,
+                finish_reason: ModelFinishReason::Stop,
+                usage,
+                generation,
+            }
         },
     );
 }
@@ -213,12 +258,11 @@ fn one_attempt_many_requests_has_one_exact_tail_and_missing_buckets_stay_absent(
     );
     assert!(is_completed_response(&store, &MessageId::new("closing")).unwrap());
     assert!(!is_completed_response(&store, &MessageId::new("intermediate")).unwrap());
-    assert!(
-        !serde_json::to_value(tails[0])
-            .unwrap()
-            .to_string()
-            .contains("timing")
-    );
+    let timing = tails[0].timing.as_ref().unwrap();
+    assert_eq!(timing.total_duration_ms, Some(0));
+    assert_eq!(timing.ttft_ms, Some(320));
+    assert_eq!(timing.generation_ms, Some(2560));
+    assert_eq!(timing.output_tokens_per_second, Some(15.625));
 }
 
 #[test]
@@ -457,3 +501,5 @@ fn is_completed_response(
             .any(|response| response.closing_message_id == *message),
     )
 }
+
+mod timing;

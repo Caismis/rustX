@@ -650,10 +650,10 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let connection = AppServerConnection::new(f.host.clone());
         let before = connection.handle_json(r#"{"jsonrpc":"2.0","id":0,"method":"server/info","params":{}}"#).await.unwrap();
         assert!(matches!(before, Response::Failure(Failure { error: RpcError { data: Some(ErrorData::NotInitialized), .. }, .. })));
-        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":8,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
+        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":9,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 9, requested: 8 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 10, requested: 9 })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -2889,7 +2889,7 @@ async fn another_connection_deletes_an_attached_idle_session_and_closes_its_rout
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)] // One native source proves both lineage destinations and Retry through the public protocol.
 async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_retry() {
-    bounded(async {
+    Box::pin(bounded(async {
         use crate::durable::{ConversationStore, SqliteConversationStore};
         use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
         use crate::local_runtime::session::LineageSide;
@@ -2938,6 +2938,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             assert_eq!(tail.retry_message_id, Some(crate::conversation::message_id_of(&messages[2])));
             assert_eq!(tail.origin.conversation_id, source.active_conversation_id);
             assert_eq!(tail.usage.as_ref().unwrap().total_tokens, 120);
+            assert_eq!(tail.timing.as_ref().unwrap().generation_ms, Some(1280));
             assert_eq!(projected.entries.iter().filter(|entry| entry.completed_response.is_some()).count(), 2);
             assert_eq!(projected.statistics.unwrap(), crate::runtime_client::response::ConversationStatistics::default());
             assert!(copied.read_events(None, 128).unwrap().events.is_empty());
@@ -2978,5 +2979,5 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
         rejected(&connection, Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: revision, boundary: MessageId::new("user-b"), side: LineageSide::After }).await;
         assert_eq!(store.load_canonical().unwrap(), original);
         drop(destination); drop(retry); drop(store); f.close().await;
-    }).await;
+    })).await;
 }

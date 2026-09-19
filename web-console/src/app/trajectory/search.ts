@@ -8,7 +8,7 @@
  * searchable text actually changed, so a live lifecycle repair does not
  * reindex the window.
  */
-import type { TraceRecord } from '../../../../protocol/app-server/v9';
+import type { TraceRecord } from '../../../../protocol/app-server/v10';
 import type { TrajectoryRow } from './layout';
 
 interface SearchEntry {

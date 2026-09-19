@@ -1,6 +1,6 @@
 // Regressions for fields contributed by draft-2020-12 $ref siblings.
 // These must be usable through the public union, not a handwritten DTO.
-import type {MessageBlock, UserContentBlock, RuntimeClientSnapshot} from './v9.js';
+import type {MessageBlock, UserContentBlock, RuntimeClientSnapshot} from './v10.js';
 
 const text = {type: 'text', text: 'Native content'} satisfies UserContentBlock;
 const user = {role: 'user', id: 'user-1', content: [text], source: 'human'} satisfies MessageBlock;
@@ -32,3 +32,16 @@ const {occurrence: nativeOwner, ...missingOwner} = tool;
 const invalidTool: MessageBlock = missingOwner;
 void nativeOwner;
 void invalidTool;
+
+// Native response projections and explicit cut side are the mandatory v10 contract.
+import type {CompletedResponseView, Request1} from './v10.js';
+const completed = {
+  closing_message_id: 'destination-assistant',
+  origin: {conversation_id: 'source-conversation', attempt_id: 'source-attempt', closing_message_id: 'source-assistant'},
+  completed_at: '2026-09-19T00:00:00Z', surface_revision: '42',
+  timing: {total_duration_ms: 19000, ttft_ms: 320, generation_ms: 1280, output_tokens_per_second: 15.625},
+} satisfies CompletedResponseView;
+void completed;
+const after: Extract<Request1, {method: 'session/branch'}>['params']['side'] = 'after';
+const before: Extract<Request1, {method: 'session/branch'}>['params']['side'] = 'before';
+void after; void before;

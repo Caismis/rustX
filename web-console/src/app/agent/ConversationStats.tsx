@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from StatsPills and ContextMeter; see PROVENANCE.md. */
-import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v8';
+import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v10';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { Usage } from './ResponseTail';
 import css from './ResponseTail.module.css';

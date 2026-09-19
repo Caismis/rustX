@@ -31,4 +31,28 @@ pub struct CompletedResponseProvenance {
     pub retry_message_id: Option<MessageId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<ModelUsage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timing: Option<CompletedResponseTiming>,
+}
+
+/// Historical product timing derived from native lifecycle and generation evidence.
+/// Missing evidence stays absent; these are not destination execution facts.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CompletedResponseTiming {
+    /// Authoritative successful Attempt completion minus its start timestamp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub total_duration_ms: Option<u64>,
+    /// First actual request's adapter-dispatch-to-first-output duration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub ttft_ms: Option<u64>,
+    /// Sum of output-producing requests' first-output-to-provider-terminal spans.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub generation_ms: Option<u64>,
+    /// Fully covered output usage divided by fully covered positive generation work.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens_per_second: Option<f64>,
 }

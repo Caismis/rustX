@@ -1,11 +1,11 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from MessageIconActions and TurnUsagePanel; see PROVENANCE.md. */
 import { useState } from 'react';
-import type { CompletedResponseView, ModelUsage } from '../../../../protocol/app-server/v8';
+import type { CompletedResponseView, CompletedResponseTiming, ModelUsage } from '../../../../protocol/app-server/v10';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { Modal } from '../../presentation/primitives/Modal';
 import { Button } from '../../presentation/primitives/Button';
-import { IconCopyOutline16, IconCheckOutline16, IconBranchOutline16, IconDatabaseOutline16 } from '../../presentation/primitives/icons';
+import { IconClockOutline16, IconCopyOutline16, IconCheckOutline16, IconBranchOutline16, IconDatabaseOutline16 } from '../../presentation/primitives/icons';
 import type { HistoryAction } from '../commands/native';
 import css from './ResponseTail.module.css';
 
@@ -31,6 +31,19 @@ export function Usage({ usage, label = 'Usage', showCache = false }: { usage: Mo
       {usage.details?.reasoning_tokens != null && <><dt>Reasoning</dt><dd>{usage.details.reasoning_tokens.toLocaleString()}</dd></>}
     </dl></Modal></>;
 }
+const duration = (ms: number) => `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(ms / 1000)} s`;
+function Timing({ timing }: { timing: CompletedResponseTiming }) {
+  const [open, setOpen] = useState(false);
+  if (timing.total_duration_ms == null) return null;
+  const label = `Ran for ${duration(timing.total_duration_ms)}`;
+  return <><button className={css.stat} type="button" aria-label={label} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}><IconClockOutline16/><span>{label}</span></button>
+    <Modal open={open} title="Response timing" closeLabel="Close timing" onClose={() => setOpen(false)}><dl className={css.metrics}>
+      <dt>Total runtime</dt><dd>{duration(timing.total_duration_ms)}</dd>
+      {timing.ttft_ms != null && <><dt>First request TTFT (from dispatch)</dt><dd>{duration(timing.ttft_ms)}</dd></>}
+      {timing.generation_ms != null && <><dt>Model generation work</dt><dd>{duration(timing.generation_ms)}</dd></>}
+      {timing.output_tokens_per_second != null && <><dt>Output speed</dt><dd>{timing.output_tokens_per_second.toLocaleString(undefined, { maximumFractionDigits: 1 })} tok/s</dd></>}
+    </dl></Modal></>;
+}
 export function ResponseTail({ text, response, onHistorical, disabled, lineageSwitchSafe }: { text: string; response: CompletedResponseView; onHistorical?: (action: HistoryAction, response: CompletedResponseView) => void; disabled?: boolean; lineageSwitchSafe: boolean }) {
   const [open, setOpen] = useState(false);
   return <div className={css.actions} aria-label="Completed response">
@@ -42,6 +55,7 @@ export function ResponseTail({ text, response, onHistorical, disabled, lineageSw
         {response.retry_message_id && <Button disabled={disabled || !lineageSwitchSafe} onClick={() => { setOpen(false); onHistorical('retry', response); }}>Retry / Regenerate</Button>}
       </div></Modal></>}
     {response.usage && <Usage usage={response.usage}/>}
+    {response.timing && <Timing timing={response.timing}/>}
     <MessageTime time={response.completed_at}/>
   </div>;
 }

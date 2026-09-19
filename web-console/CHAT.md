@@ -83,7 +83,7 @@ optional usage. The same identity map remaps messages, Surface operations, and
 these addresses; a missing retained Retry input removes Retry. The origin remains
 unchanged across deeper copies and is never a destination execution identity.
 No source events, requests, recovery pointers, or live execution state are copied.
-SQLite schema 41 stores this provenance atomically in the existing bootstrap row,
+SQLite schema 42 stores this provenance atomically in the existing bootstrap row,
 checks it on repeated initialization, and refuses obsolete stores without migration.
 The native `After` validator accepts local evidence and inherited provenance through
 one shared projection, while still requiring the exact destination append revision.
@@ -181,8 +181,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v8 (`rustx.app-server.v8` and generated
-`protocol/app-server/v8.ts` / `v8.schema.json`). v7 and earlier initialization and
+The mandatory App Server vocabulary is v10 (`rustx.app-server.v10` and generated
+`protocol/app-server/v10.ts` / `v10.schema.json`). v7 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -249,14 +249,21 @@ that exact request snapshot's model capacity. It is labeled **Last request conte
 excludes unsent input, and disappears after compaction or a newer unmeasured request.
 No Web tokenization or browser-clock timing is used.
 
-#364 (PR #368) owns `GenerationEvidence` on provider request terminals. It is not
-on this branch's main base. This change consumes the existing normalized durable
-usage contract and adds no timing evidence or persistence. The response projection
-is the integration point for #364's settled monotonic generation evidence when it
-lands; no guessed wall-clock duration, TTFT, or throughput is emitted meanwhile.
-PR #368 at `14f24082` is still open and undergoing CI at this revision. Main therefore
-still mandates v8; v9 will replace it, without compatibility artifacts, on the
-required post-#368 rebase. #369 is not merge-ready until that integration is done.
+#364 merged as `3063ebd6`. Its native `GenerationEvidence` is the single request
+clock contract consumed independently by Trace and completed-response projections.
+Chat never reads Trace. `Ran for` is successful Attempt completion minus Attempt
+start, including tools and retries. Details distinguish first-request TTFT from
+dispatch (never Attempt-start latency), summed first-output-to-terminal model
+work, and output speed over fully covered positive generation spans. Unknown
+endpoints/usage remain absent; zero measured generation is zero with no rate.
+Known no-output requests add no decode span; missing request evidence invalidates
+exact aggregate generation. Failed requests with evidence remain included.
+
+Immutable bootstrap provenance preserves response timing and usage through
+Branch/Fork/reopen/deeper lineage without copying source execution records.
+Destination execution totals remain destination-local. Mandatory versions are
+App Server v10, Runtime Client v42, SQLite v42, and Session catalog v12, with no
+old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
 Journal prefix plus R inherited response summaries from bootstrap. The finite

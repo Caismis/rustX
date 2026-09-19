@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { ConversationStats } from '../src/app/agent/ConversationStats';
 import { prependTranscript, refreshTranscript, replaceTranscript } from '../src/client/transcript';
-import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v8';
+import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v10';
 import { snapshot } from './fixture';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -79,4 +79,27 @@ it('an unresolved response outside the fresh window is reread instead of freezin
   const refreshed=refreshTranscript(old,newer);
   expect(refreshed.epoch).toBe(old.epoch+1);
   expect(refreshed.error).toContain('reread unresolved native responses');
+});
+
+it('timing details use native whole runtime and distinguish first-request TTFT, missing values and zero', () => {
+  const state = conversation();
+  state.transcript.entries![2].completed_response = { ...response, timing: { total_duration_ms: 19000, ttft_ms: 320, generation_ms: 1280, output_tokens_per_second: 15.625 } };
+  const ui = render(<AgentTranscript snapshot={state}/>);
+  fireEvent.click(ui.getByRole('button', { name: 'Ran for 19 s' }));
+  const detail = within(ui.getByRole('dialog', { name: 'Response timing' }));
+  expect(detail.getByText('First request TTFT (from dispatch)')).toBeTruthy();
+  expect(detail.getByText('0.32 s')).toBeTruthy();
+  expect(detail.getByText('1.28 s')).toBeTruthy();
+  expect(detail.getByText('15.6 tok/s')).toBeTruthy();
+  fireEvent.click(ui.getByRole('button', { name: 'Close timing' }));
+  state.transcript.entries![2].completed_response!.timing = { total_duration_ms: 0, generation_ms: 0 };
+  ui.rerender(<AgentTranscript snapshot={state}/>);
+  fireEvent.click(ui.getByRole('button', { name: 'Ran for 0 s' }));
+  expect(ui.queryByText('First request TTFT (from dispatch)')).toBeNull();
+  expect(ui.queryByText('Output speed')).toBeNull();
+  expect(ui.getAllByText('0 s')).toHaveLength(2);
+  fireEvent.click(ui.getByRole('button', { name: 'Close timing' }));
+  state.transcript.entries![2].completed_response!.timing = { ttft_ms: 320 };
+  ui.rerender(<AgentTranscript snapshot={state}/>);
+  expect(ui.queryByRole('button', { name: /Ran for/ })).toBeNull();
 });

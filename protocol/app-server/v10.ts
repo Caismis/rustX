@@ -5154,6 +5154,7 @@ export interface CompletedResponseView {
    * All actual requests in the Attempt, only when every usage is known.
    */
   usage?: ModelUsage | null;
+  timing?: CompletedResponseTiming | null;
 }
 /**
  * Original execution owner, including for inherited historical responses.
@@ -5165,6 +5166,28 @@ export interface ResponseOrigin {
    * Identifies a committed canonical message block.
    */
   closing_message_id: string;
+}
+/**
+ * Historical product timing derived from native lifecycle and generation evidence.
+ * Missing evidence stays absent; these are not destination execution facts.
+ */
+export interface CompletedResponseTiming {
+  /**
+   * Authoritative successful Attempt completion minus its start timestamp.
+   */
+  total_duration_ms?: number | null;
+  /**
+   * First actual request's adapter-dispatch-to-first-output duration.
+   */
+  ttft_ms?: number | null;
+  /**
+   * Sum of output-producing requests' first-output-to-provider-terminal spans.
+   */
+  generation_ms?: number | null;
+  /**
+   * Fully covered output usage divided by fully covered positive generation work.
+   */
+  output_tokens_per_second?: number | null;
 }
 /**
  * The foreground tool execution read model of one logical tool call.

@@ -4,7 +4,7 @@ No rustX operation, interaction lifetime, or Tool behavior is simulated here.
 """
 import json
 from fake_provider.scenario import (
-    OPENAI_CHAT_COMPLETIONS, Expect, Finish, Gate, Scenario, Step, Stream, Text, ToolCall,
+    OPENAI_CHAT_COMPLETIONS, Expect, Finish, Gate, Scenario, Step, Stream, Text, ToolCall, Usage,
 )
 
 
@@ -61,7 +61,7 @@ def web_commands() -> Scenario:
                       body_contains=("Regenerate my uploaded note", "user_uploaded_files", "note.txt", ".agents/uploads/"),
                       body_excludes=("Original native answer", "Regenerated native answer"))
     return Scenario("web_commands",
-                    Step(expected("second-model"), Stream(Text("Original native answer"), Finish())),
+                    Step(expected("second-model"), Stream(Text("Original native answer"), Finish(), Usage(100, 20))),
                     Step(expected("console-model"), Stream(Gate("retry-request-reached"), Text("Regenerated native answer"), Finish())),
                     Step(expected("console-model"), Stream(Gate("inherited-retry-reached"), Text("Inherited replay answer"), Finish())))
 
