@@ -3029,6 +3029,13 @@ async fn archive_preflight_failures_reach_the_protocol_without_private_diagnosti
             assert!(crate::app_server::schema::fixtures().iter().any(|fixture| {
                 matches!(fixture, ProtocolMessage::Response(Response::Failure(item)) if item.error == failure.error)
             }));
+            if index == 0 {
+                // Global ownership is required even when exporting another Session.
+                // Repair the missing child before independently exercising artifacts.
+                let path = catalog.database_path(&f.sessions[0].id, &child);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                SqliteConversationStore::open(child.clone(), &path).unwrap().initialize(&[]).unwrap();
+            }
         }
         assert_eq!(connection.attachment_counts(), (0, 0));
         assert!(f.provider.request_bodies().is_empty());

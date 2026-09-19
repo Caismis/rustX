@@ -38,20 +38,30 @@ manifest explicitly states that historical uploaded bytes are unavailable.
 ## Exact cut
 
 Preparation acquires the existing native product ownership freeze and reads the
-catalog and selected Session's graph nodes. Existing native typed child-ownership
-traversal enumerates descendants before acquiring execution read barriers; no
-agents are loaded, resumed, attached or synthesized. Ownership cannot change
-under the freeze. Missing or ambiguous children fail the whole preparation.
-Duplicate/cyclic ownership fails explicitly.
+catalog. `local_runtime::session_ownership::SessionOwnership` traverses every
+Session graph root and typed durable child ownership commit into one global
+Conversation identity map. It validates identities, parent relationships and
+unique Session ownership before selecting the requested Session's nodes and
+Conversations. Deletion and child inspection consume this same native primitive;
+archive does not rediscover descendants. Duplicate/cyclic/cross-Session ownership
+fails with `CorruptAuthority` before any archive cut barrier is acquired, including
+when both competing allocations contain readable bytes. Required unreadable
+history fails closed. No agents are loaded, resumed, attached or synthesized.
+The ownership freeze remains held throughout validation and cut capture.
 
 For this finite membership, capture opens each database read-only, establishes a
 rollback-journal SQLite SHARED barrier and reads its immutable append frontiers.
 Previously acquired barriers remain held until all members have been captured.
 It also captures each store's bounded artifact identity/settled-length inventory
 (at most 256 native identities per Conversation), without reading artifact bodies.
-Artifact writers hold an exclusive native file lock for their lifetime; shared
-reader admission proves their writer has ended. Native create-new allocation
-prevents reopening settled identities for writing. Required artifacts that were
+Artifact writers acquire exclusive ownership on the existing `artifact_N.reserved`
+file **before** creating/publishing `artifact_N.bin`, and retain it through their
+whole lifetime. An archive reader first opens the already-published byte file,
+then attempts shared reservation ownership. A reservation without bytes cannot
+be locked by archive inspection; visible bytes with an active writer are refused.
+Thus inspection can never steal writer admission in the publication window.
+Shared reader admission proves the one-shot writer has ended. Native create-new
+allocation prevents reopening settled identities for writing. Required artifacts that were
 absent or still being written at capture fail subsequent preflight, rather than
 being silently read at a later instant.
 
@@ -233,3 +243,21 @@ Use repository CI commands: `cargo fmt --all -- --check`,
 `pnpm check:provenance`, `pnpm build`, `pnpm test:e2e` in `web-console`.
 The E2E script owns the pinned Chromium container; do not replace it with host
 Chromium. `git diff --check` must also pass.
+
+## Final ownership/concurrency regressions
+
+- `archive_reader_cannot_steal_writer_admission_at_publication` parks the real
+  writer with synchronous channels before reservation ownership and again after
+  byte publication but before `open_writer` returns. Direct archive reads and
+  inventory scans run at both boundaries; writer admission/write succeeds and
+  bytes become archiveable only after writer drop. No sleeps or retries.
+- `archive_global_ownership_rejects_same_child_across_sessions_before_cut` creates
+  competing child claims with readable allocations under both Sessions, then
+  repeats with one missing allocation. Both exports fail `CorruptAuthority`.
+- `archive_global_ownership_rejects_two_parents_and_cycles_before_cut` covers two
+  parent claims and a cycle. The ownership regressions also assert deletion
+  rejection and install a capture hook that must never be reached.
+
+Existing decoded archive safety, typed preflight, live-write cut, large artifact,
+deduplication, cancellation, bounded backpressure and corruption tests remain.
+No protocol, archive or durable schema changes accompany these internal repairs.

@@ -13,7 +13,7 @@ use crate::tools::types::{ToolExecutionResult, ToolResultContent};
 pub use prepare_error::SessionArchivePrepareError;
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -78,6 +78,21 @@ impl SessionArchiveProducer {
         session: &SessionId,
         cancel: &CancellationToken,
     ) -> Result<SessionArchiveCut, SessionArchivePrepareError> {
+        Self::prepare_inner(
+            root,
+            session,
+            cancel,
+            #[cfg(test)]
+            || {},
+        )
+    }
+
+    pub(crate) fn prepare_inner(
+        root: &Path,
+        session: &SessionId,
+        cancel: &CancellationToken,
+        #[cfg(test)] before_capture: impl FnOnce(),
+    ) -> Result<SessionArchiveCut, SessionArchivePrepareError> {
         check_cancel(cancel)?;
         let root = ProductRoot::existing(root)?;
         let ownership = root.freeze_ownership()?;
@@ -85,67 +100,38 @@ impl SessionArchiveProducer {
             SessionCatalog::read_under_guard(&root)?.ok_or(SessionArchivePrepareError::Storage)?;
         let snapshot = catalog.snapshot(session)?;
         let cwd = catalog.lineage(session, None)?.1.cwd;
-        let nodes = catalog
-            .deletion_nodes()
-            .remove(session)
-            .ok_or(SessionArchivePrepareError::UnknownSession)?;
-        let mut pending: Vec<_> = nodes
-            .iter()
-            .map(|n| {
-                (
-                    n.conversation_id.clone(),
-                    None,
-                    catalog.database_path(session, &n.conversation_id),
-                )
-            })
-            .collect();
-        let mut seen = BTreeSet::new();
+        let selected = crate::local_runtime::session_ownership::SessionOwnership::inspect(
+            &root,
+            &ownership,
+            &catalog,
+            || check_cancel(cancel),
+        )?
+        .select(session)?;
+        let nodes = selected.nodes;
         let mut conversations = Vec::new();
-        // Each opened store owns its transaction. Dropping on any error releases
-        // every barrier; no runtime/store connection is borrowed or modified.
-        while let Some((id, parent, path)) = pending.pop() {
+        // Global ownership is fully validated before acquiring any archive barrier.
+        // The archive consumes these facts; it never rediscovers descendants.
+        for owned in selected.conversations {
             check_cancel(cancel)?;
-            if !seen.insert(id.clone()) {
-                return Err(SessionArchivePrepareError::CorruptAuthority);
-            }
-            let unavailable = if parent.is_some() {
+            let unavailable = if owned.parent_conversation.is_some() {
                 SessionArchivePrepareError::DescendantUnavailable
             } else {
                 SessionArchivePrepareError::ConversationUnavailable
             };
-            let path = root.confined(&path).map_err(|_| unavailable)?;
-            let allocation = path.parent().ok_or(unavailable)?;
-            let access =
-                ConversationAccess::existing(&root, allocation).map_err(|_| unavailable)?;
-            let store = SqliteConversationStore::open_existing(id.clone(), &path)
+            let access = ConversationAccess::existing(&root, &owned.private_root)
                 .map_err(|_| unavailable)?;
-            let frontiers = ConversationArchiveFrontiers::default();
-            for child in crate::local_runtime::session_deletion::read_facts_while(&store, || {
-                check_cancel(cancel)
-            })
-            .map_err(|_| {
-                if cancel.is_cancelled() {
-                    SessionArchivePrepareError::Cancelled
-                } else {
-                    SessionArchivePrepareError::CorruptAuthority
-                }
-            })?
-            .children
-            {
-                let path = crate::runtime::subagent::child_conversation_store_path(
-                    root.root(),
-                    session,
-                    &child,
-                );
-                pending.push((child, Some(id.clone()), path));
-            }
+            let store = SqliteConversationStore::open_existing(
+                owned.conversation_id.clone(),
+                &owned.database,
+            )
+            .map_err(|_| unavailable)?;
             conversations.push(ConversationCut {
                 manifest: ConversationManifest {
-                    conversation_id: id,
-                    parent_conversation: parent,
-                    frontiers,
+                    conversation_id: owned.conversation_id,
+                    parent_conversation: owned.parent_conversation,
+                    frontiers: ConversationArchiveFrontiers::default(),
                 },
-                root: allocation.to_path_buf(),
+                root: owned.private_root,
                 store,
                 _access: access,
                 artifact_lengths: BTreeMap::new(),
@@ -155,6 +141,8 @@ impl SessionArchiveProducer {
         // Ownership is already frozen, so lineage traversal above needed no
         // execution read barriers. Only bounded frontier/identity reads occur
         // while all included databases are simultaneously read-locked.
+        #[cfg(test)]
+        before_capture();
         for conversation in &mut conversations {
             conversation.store.archive_barrier()?;
             conversation.manifest.frontiers = conversation.store.archive_frontiers()?;

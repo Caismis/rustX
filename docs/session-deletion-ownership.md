@@ -34,8 +34,14 @@ blockers, and semantic ownership revision without destructive allocation exclusi
 `DeletionExclusion::acquire` separately claims private allocations only after the
 runtime manager fences admission and proves writer retirement. It never
 traverses provenance, scans directories for ownership, or performs deletion.
-Catalog-wide unique ownership is checked; ambiguity, cycles, missing stores and
-unsafe identities fail closed. The Session graph stays above linear stores.
+Catalog-wide unique ownership is owned by
+`local_runtime::session_ownership::SessionOwnership`, shared with archive and child
+inspection. It derives graph roots, typed child relationships, identity validity,
+parents and Session attribution under the product ownership freeze. Ambiguity,
+cycles, missing stores and unsafe identities fail closed before selecting a
+Session. Deletion then adds workspace disposal blockers and revision semantics
+under that same freeze; archive adds only historical cut frontiers. Neither owns
+a separate descendant traversal. The Session graph stays above linear stores.
 
 ### Canonical allocation authority
 

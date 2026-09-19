@@ -2299,7 +2299,7 @@ impl LocalConversationInspection {
         conversation_id: &ConversationId,
     ) -> Result<Self, LocalRuntimeError> {
         let session_id =
-            super::session_deletion::conversation_owner(&paths.runtime_root, conversation_id)
+            super::session_ownership::conversation_owner(&paths.runtime_root, conversation_id)
                 .map_err(|error| LocalRuntimeError::ToolRuntime {
                     detail: error.to_string(),
                 })?;

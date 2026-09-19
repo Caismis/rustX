@@ -640,7 +640,7 @@ impl SessionCatalog {
         }
         Ok(())
     }
-    pub(crate) fn deletion_nodes(&self) -> BTreeMap<SessionId, Vec<SessionNode>> {
+    pub(crate) fn ownership_nodes(&self) -> BTreeMap<SessionId, Vec<SessionNode>> {
         self.document
             .sessions
             .iter()

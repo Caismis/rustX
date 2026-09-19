@@ -14,7 +14,7 @@ pub(super) fn child(
     isolated: bool,
 ) -> ConversationId {
     let session =
-        crate::local_runtime::session_deletion::conversation_owner(root, parent.conversation_id())
+        crate::local_runtime::session_ownership::conversation_owner(root, parent.conversation_id())
             .unwrap();
     let subagent = SubagentId::for_conversation(parent.conversation_id(), ordinal);
     let id = ConversationId::generate();

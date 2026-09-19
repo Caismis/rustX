@@ -202,9 +202,11 @@ async fn archive_streams_deduplicated_large_artifact_and_rejects_missing_bytes()
         user.content.extend([reference.clone(), reference]);
     }
     store.append_canonical(&message).unwrap();
-    assert!(
+    assert_eq!(
         SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
-            .is_err(),
+            .err()
+            .unwrap(),
+        crate::session_archive::SessionArchivePrepareError::ArtifactUnavailable,
         "an unsealed artifact is not historical bytes"
     );
     drop(writer);
@@ -480,4 +482,98 @@ async fn archive_preserves_native_inherited_response_provenance_without_executio
     assert_eq!(responses[0]["origin"], serde_json::json!(origin));
     assert!(records(&files, &cloned.conversation_id, "journal").is_empty());
     assert!(records(&files, &cloned.conversation_id, "requests").is_empty());
+}
+
+fn claim_child(parent: &SqliteConversationStore, child: &ConversationId) {
+    use crate::runtime::identity::{AgentId, SubagentId};
+    let subagent = SubagentId::for_conversation(parent.conversation_id(), 1);
+    parent
+        .append_event(crate::runtime::subagent::ownership_event(
+            parent.conversation_id(),
+            &subagent,
+            &AgentId::new("duplicate-owner"),
+            child,
+            &ToolCallId::new("duplicate-call"),
+            &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
+            &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
+            &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
+                .unwrap(),
+            crate::events::types::SubagentOwnershipKind::Normal,
+            &crate::runtime::workspace::WorkspaceSnapshot::shared(std::path::PathBuf::from(
+                "/authored/workspace",
+            )),
+            Utc::now(),
+        ))
+        .unwrap();
+}
+
+fn assert_ownership_rejected_before_archive_capture(root: &std::path::Path, session: &SessionId) {
+    assert_eq!(
+        SessionArchiveProducer::prepare_inner(root, session, &CancellationToken::new(), || {
+            panic!("ambiguous ownership reached archive cut capture");
+        })
+        .err()
+        .unwrap(),
+        crate::session_archive::SessionArchivePrepareError::CorruptAuthority,
+    );
+    assert!(
+        crate::local_runtime::session_deletion::DeletionTargetSnapshot::inspect(root, session)
+            .is_err()
+    );
+}
+
+#[test]
+fn archive_global_ownership_rejects_same_child_across_sessions_before_cut() {
+    let (root, mut catalog, _) = open_catalog();
+    let (conversation, session, _) = append_history(&catalog, &[]);
+    let store = store_for(&catalog, &session, &conversation);
+    let child = super::deletion_tests::child(root.path(), &store, 1, false);
+    let source = lineage_at(&store, &conversation, store.load_head().unwrap().revision);
+    let other = catalog.prepare_clone_session(&state(), &source).unwrap();
+    catalog
+        .publish_session(&other, SessionNodeOrigin::New)
+        .unwrap();
+    let other_store = store_for(&catalog, &other.session_id, &other.conversation_id);
+    claim_child(&other_store, &child);
+    // Deliberately materialize both invalid private allocations. Neither export
+    // may appear successful merely because its local child bytes exist.
+    let foreign_path = crate::runtime::subagent::child_conversation_store_path(
+        root.path(),
+        &other.session_id,
+        &child,
+    );
+    fs::create_dir_all(foreign_path.parent().unwrap()).unwrap();
+    SqliteConversationStore::open(child.clone(), &foreign_path)
+        .unwrap()
+        .initialize(&[])
+        .unwrap();
+    for selected in [&session, &other.session_id] {
+        assert_ownership_rejected_before_archive_capture(root.path(), selected);
+    }
+    // Ambiguity still wins if traversal sees an unavailable allocation first.
+    fs::remove_file(foreign_path).unwrap();
+    for selected in [&session, &other.session_id] {
+        assert_ownership_rejected_before_archive_capture(root.path(), selected);
+    }
+}
+
+#[test]
+fn archive_global_ownership_rejects_two_parents_and_cycles_before_cut() {
+    let (root, catalog, _) = open_catalog();
+    let (conversation, session, _) = append_history(&catalog, &[]);
+    let store = store_for(&catalog, &session, &conversation);
+    let first = super::deletion_tests::child(root.path(), &store, 1, false);
+    let second = super::deletion_tests::child(root.path(), &store, 2, false);
+    let first_store = store_for(&catalog, &session, &first);
+    let second_store = store_for(&catalog, &session, &second);
+    let shared = super::deletion_tests::child(root.path(), &first_store, 1, false);
+    claim_child(&second_store, &shared);
+    assert_ownership_rejected_before_archive_capture(root.path(), &session);
+
+    let (root, catalog, _) = open_catalog();
+    let (conversation, session, _) = append_history(&catalog, &[]);
+    let store = store_for(&catalog, &session, &conversation);
+    let child = super::deletion_tests::child(root.path(), &store, 1, false);
+    claim_child(&store_for(&catalog, &session, &child), &conversation);
+    assert_ownership_rejected_before_archive_capture(root.path(), &session);
 }

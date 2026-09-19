@@ -3,69 +3,21 @@
 //! Ownership comes from catalog membership and typed native durable ownership
 //! commits. Origin references and model-visible history are never traversed.
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
 use super::session::{SessionCatalog, SessionId, SessionNode};
+use super::session_ownership::{OwnedConversation, SessionOwnership};
 use crate::durable::{ConversationStore, SqliteConversationStore};
 use crate::events::types::{
     RuntimeEvent, SubagentWorkspaceDisposalSettlement, SubagentWorkspaceTerminalResource,
 };
 use crate::runtime::identity::ConversationId;
 use crate::runtime::local_storage::{ConversationExclusion, OwnershipSnapshot, ProductRoot};
-use crate::runtime::subagent::child_conversation_store_path;
 use crate::runtime::workspace::{
     WorkspaceDisposalSettlement, WorkspaceSettlementDisposition, WorkspaceSnapshot,
 };
-
-/// Resolve inspection through durable ownership, never by finding an orphan file.
-pub(crate) fn conversation_owner(
-    root: &Path,
-    target: &ConversationId,
-) -> std::io::Result<SessionId> {
-    let authority = ProductRoot::existing(root)?;
-    let catalog = SessionCatalog::read_under_guard(&authority)
-        .map_err(invalid)?
-        .ok_or_else(|| invalid("unknown Session catalog"))?;
-    let mut pending = Vec::new();
-    for (owner, nodes) in catalog.deletion_nodes() {
-        for node in nodes {
-            pending.push((owner.clone(), node.conversation_id));
-        }
-    }
-    let mut seen = BTreeSet::new();
-    let mut found = None;
-    while let Some((owner, id)) = pending.pop() {
-        if !seen.insert(id.clone()) {
-            return Err(invalid("duplicate or cyclic Conversation ownership"));
-        }
-        if id == *target && found.replace(owner.clone()).is_some() {
-            return Err(invalid("ambiguous Conversation ownership"));
-        }
-        let database = authority.confined(&catalog.database_path(&owner, &id))?;
-        let store = SqliteConversationStore::open_existing(id, &database).map_err(invalid)?;
-        for child in read_facts(&store)?.children {
-            pending.push((owner.clone(), child));
-        }
-    }
-    found.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "Conversation has no durable Session owner",
-        )
-    })
-}
-
-/// A lineage and its exclusive private allocation, never a workspace allocation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OwnedConversation {
-    pub conversation_id: ConversationId,
-    pub parent_conversation: Option<ConversationId>,
-    pub private_root: PathBuf,
-    pub database: PathBuf,
-    pub inspection_socket: Option<PathBuf>,
-}
 
 /// Native disposal authority must settle this resource before deletion can proceed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,83 +59,29 @@ impl DeletionTargetSnapshot {
         let catalog = SessionCatalog::read_under_guard(&authority)
             .map_err(invalid)?
             .ok_or_else(|| invalid("unknown Session catalog"))?;
-        let sessions = catalog.deletion_nodes();
-        let nodes = sessions
-            .get(session_id)
-            .ok_or_else(|| invalid("unknown Session"))?
-            .clone();
-        let mut all = BTreeMap::new();
+        let selected = SessionOwnership::inspect(&authority, &freeze, &catalog, || Ok(()))
+            .and_then(|ownership| ownership.select(session_id))
+            .map_err(invalid)?;
+        let nodes = selected.nodes;
+        let conversations = selected.conversations;
         let mut blockers = Vec::new();
-        // Check ownership uniqueness across all native Sessions. An ambiguous
-        // child shared by two parents must not be assigned to either Session.
-        let mut pending = Vec::new();
-        for (owner, nodes) in sessions {
-            for node in nodes {
-                let database =
-                    authority.confined(&catalog.database_path(&owner, &node.conversation_id))?;
-                pending.push((owner.clone(), node.conversation_id, None, database));
-            }
+        // Deletion adds resource/disposal facts to the shared ownership set.
+        // The same freeze protects this read and the revision calculation.
+        for owned in &conversations {
+            let store = SqliteConversationStore::open_existing(
+                owned.conversation_id.clone(),
+                &owned.database,
+            )
+            .map_err(invalid)?;
+            blockers.extend(read_facts(&store)?.blockers.into_iter().map(
+                |(resource_id, (workspace, state))| WorkspaceBlocker {
+                    conversation_id: owned.conversation_id.clone(),
+                    resource_id,
+                    workspace,
+                    state,
+                },
+            ));
         }
-        while let Some((owner, id, parent, database)) = pending.pop() {
-            safe_identity(&id)?;
-            if catalog.conversation_is_deleted(&id) {
-                return Err(invalid(
-                    "live ownership references a deleted Conversation identity",
-                ));
-            }
-            if all.contains_key(&id) {
-                return Err(invalid("duplicate or cyclic Conversation ownership"));
-            }
-            let private_root = database
-                .parent()
-                .ok_or_else(|| invalid("missing private allocation"))?
-                .to_path_buf();
-            let inspection_socket = if parent.is_some() {
-                Some(authority.confined(
-                    &crate::runtime::subagent::child_conversation_inspection_socket_path(
-                        authority.root(),
-                        &id,
-                    ),
-                )?)
-            } else {
-                None
-            };
-            let owned = OwnedConversation {
-                inspection_socket,
-                conversation_id: id.clone(),
-                parent_conversation: parent,
-                private_root,
-                database: database.clone(),
-            };
-            authority.confined(&owned.private_root.join("tool-output"))?;
-            let store =
-                SqliteConversationStore::open_existing(id.clone(), &database).map_err(invalid)?;
-            let facts = read_facts(&store)?;
-            for child in facts.children {
-                safe_identity(&child)?;
-                let database = authority.confined(&child_conversation_store_path(
-                    authority.root(),
-                    &owner,
-                    &child,
-                ))?;
-                pending.push((owner.clone(), child, Some(id.clone()), database));
-            }
-            if owner == *session_id {
-                blockers.extend(facts.blockers.into_iter().map(
-                    |(resource_id, (workspace, state))| WorkspaceBlocker {
-                        conversation_id: id.clone(),
-                        resource_id,
-                        workspace,
-                        state,
-                    },
-                ));
-            }
-            all.insert(id, (owner, owned));
-        }
-        let conversations: Vec<_> = all
-            .into_values()
-            .filter_map(|(owner, lineage)| (owner == *session_id).then_some(lineage))
-            .collect();
         blockers.sort_by(|a, b| {
             (&a.conversation_id, &a.resource_id).cmp(&(&b.conversation_id, &b.resource_id))
         });
@@ -226,37 +124,22 @@ fn invalid(error: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::other(error.to_string())
 }
 
-fn safe_identity(id: &ConversationId) -> std::io::Result<()> {
-    let value = id.as_str();
-    if value.is_empty()
-        || value == "."
-        || value == ".."
-        || value.contains(['/', '\\'])
-        || value.chars().any(char::is_control)
-    {
-        return Err(invalid("invalid Conversation identity"));
-    }
-    Ok(())
-}
-
-pub(crate) struct Facts {
-    pub(crate) children: BTreeSet<ConversationId>,
+struct Facts {
     blockers: BTreeMap<String, (WorkspaceSnapshot, WorkspaceBlockerState)>,
 }
 
 // Reuse the existing typed native ownership and disposal authority. This is
 // neither a text search nor a second subagent lifecycle persistence system.
 #[allow(clippy::too_many_lines)] // One closed native ownership/disposal vocabulary.
-pub(crate) fn read_facts(store: &SqliteConversationStore) -> std::io::Result<Facts> {
+fn read_facts(store: &SqliteConversationStore) -> std::io::Result<Facts> {
     read_facts_while(store, || Ok(()))
 }
 
 #[allow(clippy::too_many_lines)] // One closed native ownership/disposal vocabulary.
-pub(crate) fn read_facts_while(
+fn read_facts_while(
     store: &SqliteConversationStore,
     check: impl Fn() -> std::io::Result<()>,
 ) -> std::io::Result<Facts> {
-    let mut children = BTreeSet::new();
     let mut blockers = BTreeMap::new();
     let mut resources = BTreeSet::new();
     // Retain immutable authority even after its blocker is disposed. Borrowing
@@ -285,20 +168,11 @@ pub(crate) fn read_facts_while(
             match envelope.event {
                 RuntimeEvent::SubagentOwnershipCommitted {
                     subagent_id,
-                    child_conversation_id,
                     workspace,
                     ownership,
                     ..
                 } => {
                     workspace.validate().map_err(invalid)?;
-                    if envelope.event_id
-                        != crate::runtime::subagent::subagent_ownership_event_id(&subagent_id)
-                    {
-                        return Err(invalid("child ownership commit identity mismatch"));
-                    }
-                    if !children.insert(child_conversation_id) {
-                        return Err(invalid("duplicate child ownership"));
-                    }
                     let key = format!("child:{subagent_id}");
                     if !resources.insert(key.clone()) {
                         return Err(invalid("duplicate resource ownership"));
@@ -466,7 +340,7 @@ pub(crate) fn read_facts_while(
             }
         }
     }
-    Ok(Facts { children, blockers })
+    Ok(Facts { blockers })
 }
 
 // Explicit length-delimited semantic vocabulary. No event envelopes or catalog

@@ -49,3 +49,20 @@ impl From<crate::local_runtime::session::SessionError> for SessionArchivePrepare
         }
     }
 }
+
+impl From<crate::local_runtime::session_ownership::OwnershipInspectionError>
+    for SessionArchivePrepareError
+{
+    fn from(error: crate::local_runtime::session_ownership::OwnershipInspectionError) -> Self {
+        use crate::local_runtime::session_ownership::OwnershipInspectionError as Ownership;
+        match error {
+            Ownership::Invalid | Ownership::DeletedConversation => Self::CorruptAuthority,
+            Ownership::ConversationUnavailable { descendant: true } => Self::DescendantUnavailable,
+            Ownership::ConversationUnavailable { descendant: false } => {
+                Self::ConversationUnavailable
+            }
+            Ownership::Cancelled => Self::Cancelled,
+            Ownership::UnknownSession => Self::UnknownSession,
+        }
+    }
+}
