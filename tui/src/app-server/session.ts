@@ -19,7 +19,8 @@
  * for exactly one Session. It owns no agent semantics: it starts nothing,
  * settles nothing, and interprets no model, tool or capability value. The
  * server is authoritative; everything held here is a projection that one fresh
- * snapshot rebuilds completely.
+ * snapshot rebuilds completely. Ordinary settlement reads refresh those facts
+ * over the existing subscription, preserving safely joined history and local UI.
  *
  * # Identity and fencing
  *
@@ -81,6 +82,7 @@ import {
 } from "../protocol/app-server.ts";
 import {
   mergeTranscriptPage,
+  refreshFromSnapshot,
   reduce,
   replaceFromSnapshot,
 } from "../presentation/projection.ts";
@@ -118,6 +120,8 @@ export class AppServerSession {
   #serverClosed = false;
   /** Serializes repairs so two resyncs cannot interleave their installs. */
   #repair: Promise<void> = Promise.resolve();
+  #refresh: Promise<void> | undefined;
+  #refreshRequested = false;
 
   private constructor(
     client: AppServerClient,
@@ -274,6 +278,46 @@ export class AppServerSession {
     };
   }
 
+  /** Steering and queue admission stay native; neither retains a client queue. */
+  async steer(content: UserInputBlock[]): Promise<void> {
+    await this.#client.call("turn/steer", { target: this.#target, content }, "inbound_accepted");
+  }
+
+  async editPending(expected: import("../protocol/app-server.ts").MethodParams<"inbound/edit">["expected"], text: string): Promise<void> {
+    const result = await this.#client.call("inbound/edit", { target: this.#target, expected, text }, "inbound_mutation");
+    if (result.outcome.status !== "applied") throw new Error(`Pending edit: ${result.outcome.status}. Not retried.`);
+  }
+
+  async removePending(expected: import("../protocol/app-server.ts").MethodParams<"inbound/remove">["expected"]): Promise<void> {
+    const result = await this.#client.call("inbound/remove", { target: this.#target, expected }, "inbound_mutation");
+    if (result.outcome.status !== "applied") throw new Error(`Pending removal: ${result.outcome.status}. Not retried.`);
+  }
+
+  async upload(name: string, bytes: Uint8Array): Promise<UserInputBlock[]> {
+    const result = await this.#client.call("session/upload", {
+      target: this.#target, files: [{ name, data: Buffer.from(bytes).toString("base64") }],
+    }, "session_uploaded");
+    return result.files.map(({ receipt }) => ({ type: "upload", ...receipt }));
+  }
+
+  async permissionSources() {
+    return (await this.#client.call("configuration/sourcesRead", { session_id: this.sessionId }, "source_settings")).projection;
+  }
+
+  async writePermission(revision: string, mode: import("../protocol/app-server.ts").ApprovalMode) {
+    await this.#client.call("configuration/sourceWrite", {
+      session_id: this.sessionId, expected_revision: revision,
+      mutation: { kind: "config", scope: "workspace", mutation: { unit: "approval", authored: mode } },
+    }, "source_settings");
+    return this.permissionSources();
+  }
+
+  async publishPermissions() {
+    await this.#client.call("configuration/reload", { target: this.#target }, "configuration_reloaded");
+    await this.resync();
+    return this.permissionSources();
+  }
+
   /** Requests cancellation of the current attempt. Acceptance, not settlement. */
   async cancelCurrentAttempt(): Promise<string> {
     const accepted = await this.#client.call(
@@ -335,10 +379,10 @@ export class AppServerSession {
     }
     const epoch = this.#epoch;
     const page = await this.transcriptPage(beforeCursor, limit);
-    if (epoch !== this.#epoch) {
-      // The projection was authoritatively replaced while this page was in
-      // flight. Merging it now would splice history into a state it does not
-      // describe.
+    if (epoch !== this.#epoch || this.#state.transcriptNextCursor !== beforeCursor) {
+      // A page belongs to the exact boundary requested. A live refresh can
+      // replace that window without replacing attachment ownership. Neither
+      // that stale page nor its next cursor may be spliced into the new window.
       return false;
     }
     this.#state = mergeTranscriptPage(this.#state, page);
@@ -583,11 +627,42 @@ export class AppServerSession {
   // -------------------------------------------------------------------------
 
   #enqueueRepair(): void {
+    // Fence reads immediately, even before the serialized repair starts.
+    this.#epoch += 1;
     this.#repair = this.#repair.then(
       () => (this.#released ? undefined : this.resync()),
       () => undefined,
     );
     void this.#repair.catch(() => {});
+  }
+
+  /** Read facts over the existing subscription; never replace presentation ownership. */
+  #enqueueRefresh(): void {
+    this.#refreshRequested = true;
+    if (this.#refresh) return;
+    this.#refresh = this.#refreshLive().finally(() => {
+      this.#refresh = undefined;
+      if (this.#refreshRequested && !this.#released && !this.#serverClosed) this.#enqueueRefresh();
+    });
+    void this.#refresh.catch(() => {});
+  }
+
+  async #refreshLive(): Promise<void> {
+    while (this.#refreshRequested && !this.#released && !this.#serverClosed) {
+      this.#refreshRequested = false;
+      const epoch = this.#epoch;
+      const target = this.#target;
+      const fresh = await this.#client.call("session/snapshot", { target }, "snapshot");
+      if (epoch !== this.#epoch || !sameTarget(target, this.#target)) return;
+      // Events may advance while the read is in flight. Never roll them back.
+      // A subsequent read crosses that exact cursor without replaying any action.
+      if (compareExact(fresh.cursor, this.#state.cursor) < 0) {
+        this.#refreshRequested = true;
+        continue;
+      }
+      this.#state = refreshFromSnapshot(this.#state, fresh.snapshot, fresh.cursor);
+      this.#publish();
+    }
   }
 
   async #subscribe(afterCursor: RuntimeClientCursor): Promise<void> {
@@ -620,6 +695,8 @@ export class AppServerSession {
     }
     this.#state = reduce(this.#state, { cursor, event });
     this.#publish();
+    // Completion/statistics are native read facts, not fields to derive from events.
+    if (event.type === "attempt_settled") this.#enqueueRefresh();
   }
 
   #install(snapshot: RuntimeClientSnapshot, cursor: RuntimeClientCursor): void {

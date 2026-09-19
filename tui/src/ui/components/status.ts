@@ -1,3 +1,4 @@
+import { truncateToWidth } from "@earendil-works/pi-tui";
 /**
  * The working indicator and the footer/status bar.
  *
@@ -255,8 +256,11 @@ export function footerSegments(
   if (typeof session?.name === "string" && session.name.trim()) {
     segments.push({ text: role.meta(`session ${session.name}`), priority: 3 });
   }
-  const usage = state.attempt?.lastUsage;
-  if (usage) segments.push({ text: role.meta(`↑${compact(usage.input_tokens)} ↓${compact(usage.output_tokens)}`), priority: 4 });
+  const usage = state.statistics?.reported_usage;
+  if (usage) segments.push({ text: role.meta(`reported ↑${compact(usage.input_tokens)} ↓${compact(usage.output_tokens)}`), priority: 4 });
+  if (state.statistics && state.statistics.requests_with_usage !== state.statistics.model_requests) {
+    segments.push({ text: role.meta(`usage coverage ${state.statistics.requests_with_usage}/${state.statistics.model_requests} requests`), priority: 4 });
+  }
   return segments;
 }
 
@@ -341,17 +345,9 @@ export function startupVisible(state: PresentationState): boolean {
  * model. With no published usage yet, the numerator stays unknown.
  */
 export function contextLabel(state: PresentationState): string {
-  const usage = state.attempt?.lastUsage;
-  const window =
-    usage === undefined
-      ? (state.sessionModel?.effective.contextWindow ?? 0)
-      : state.attempt?.model?.primary.contextWindow ?? 0;
-  if (window <= 0) return "";
-  if (usage === undefined) {
-    return `context —/${compact(window)}`;
-  }
-  const percentage = Math.min(100, Math.round((usage.input_tokens / window) * 100));
-  return `context ${percentage}%/${compact(window)}`;
+  const occupancy = state.context.last_request_occupancy;
+  if (occupancy == null) return "context unreported";
+  return `last context ${compact(occupancy.input_tokens)}/${compact(occupancy.context_window_tokens)}`;
 }
 
 /** The model's display provider, derived from the published model reference. */
@@ -396,18 +392,15 @@ export function renderStartup(
   ];
   if (session !== undefined) {
     lines.push(
-      `${role.meta("session")} ${role.accent(sessionLabel(session))} · ${role.meta(`node ${session.active_node}`)}`,
+      `${role.meta("session")} ${role.accent(sessionLabel(session))}`,
     );
   }
   lines.push(
-    role.meta("Ctrl+L model · Esc cancel · Ctrl+T reasoning · Ctrl+O tools · /help commands"),
+    role.meta("Enter send/steer · Tab queue · Esc interrupt · Ctrl+R history · Ctrl+L model · /help commands"),
   );
   return lines.map((line) => fit(line, width)).join("\n");
 }
 
 function fit(text: string, width: number): string {
-  if (plainWidth(text) <= width) {
-    return text;
-  }
-  return `${[...plainText(text)].slice(0, Math.max(0, width - 1)).join("")}…`;
+  return truncateToWidth(text, Math.max(1, width));
 }

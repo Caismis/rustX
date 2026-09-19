@@ -35,11 +35,22 @@
  * semantic: every collapsed band is restored from `PresentationState` alone.
  */
 
+import { editorText } from "../app-server/editor.ts";
+import { PasteGuard } from "./paste-guard.ts";
+import { ComposerDraft } from "./composer-draft.ts";
+import { ComposerCommand } from "./components/composer-command.ts";
+import { open } from "node:fs/promises";
+import { basename } from "node:path";
+import { ComposerEditor, composerIntent } from "./composer.ts";
+import { PromptHistory } from "./components/prompt-history.ts";
+import { PermissionsView } from "./components/permissions.ts";
+import { ComposerContext } from "./components/composer-context.ts";
+import { PendingInputView } from "./components/pending-input.ts";
+import { isAttemptActive } from "../presentation/state.ts";
 import type { SessionCatalogPage } from "../startup.ts";
 import {
   Box,
   Container,
-  Editor,
   Loader,
   Markdown,
   ProcessTerminal,
@@ -67,7 +78,6 @@ import {
 import { correlateTools } from "../presentation/tools.ts";
 import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
-import { editorText, editorSubmission, RestoredEditorOrderingError } from "../app-server/editor.ts";
 import { AppServerRequestError } from "../app-server/client.ts";
 import type { AppServerHost } from "../app-server/host.ts";
 import type { AppServerSession } from "../app-server/session.ts";
@@ -127,7 +137,7 @@ import {
   withToggledInteraction,
   withToggledToolCall,
 } from "./preferences.ts";
-import { background, editorTheme, markdownTheme, style } from "./theme.ts";
+import { background, markdownTheme, style } from "./theme.ts";
 import type { TranscriptBlock } from "./components/transcript.ts";
 import { HumanInteractionOverlay } from "./components/hitl.ts";
 import type { InteractionResponse } from "../protocol/app-server.ts";
@@ -194,9 +204,14 @@ export class RustxTuiApp {
     session: this.#sessionInfo,
     conversation: this.#conversationContext(),
   }));
-  readonly #editor: Editor;
-  #restoredEditor: UserInputBlock[] | undefined;
-  readonly #restoredUploads = new Text("", 0, 0);
+  readonly #editor: ComposerEditor;
+  readonly #promptHistory: string[] = [];
+  readonly #composerContext = new ComposerContext(() => ({ state: this.#session?.state, draft: this.#draft }));
+  #submitting = false;
+  #draft = new ComposerDraft();
+  readonly #drafts = new Map<string, ComposerDraft>();
+  #uploading = false;
+  readonly #inputPaste = new PasteGuard();
   readonly #loader: Loader;
 
   #preferences: PresentationPreferences = defaultPreferences();
@@ -251,19 +266,12 @@ export class RustxTuiApp {
     this.#workspace = options.cwd;
 
     this.#tui = new TUI(new ProcessTerminal());
-    this.#editor = new Editor(this.#tui, editorTheme, { paddingX: 1 });
+    this.#editor = new ComposerEditor(this.#tui);
     this.#editor.setAutocompleteProvider(new SlashCommandAutocompleteProvider());
-    // Pi clears and trims input before onSubmit. Restored drafts need the
-    // exact pre-submit text for ordered round trips and refused-edit recovery.
-    let editorInput = "";
-    const handleEditorInput = this.#editor.handleInput.bind(this.#editor);
-    this.#editor.handleInput = (data) => {
-      editorInput = this.#editor.getExpandedText();
-      handleEditorInput(data);
-    };
-    this.#editor.onSubmit = (text) => {
-      void this.#onSubmit(this.#restoredEditor !== undefined ? editorInput : text);
-    };
+    this.#editor.onChange = () => { this.#draft.text = this.#editor.getExpandedText(); };
+    this.#editor.running = () => this.#session !== undefined && isAttemptActive(this.#session.state);
+    this.#editor.onPrompt = (text, commands) => { void this.#onSubmit(text, false, commands); };
+    this.#editor.onQueue = text => { void this.#onSubmit(text, true, false); };
     this.#loader = new Loader(this.#tui, style.cyan, style.dim, "");
 
     this.#dispatcher = new CommandDispatcher({
@@ -279,7 +287,7 @@ export class RustxTuiApp {
     this.#tui.addChild(this.#transient);
     this.#tui.addChild(this.#todos);
     this.#tui.addChild(new Spacer(1));
-    this.#tui.addChild(this.#restoredUploads);
+    this.#tui.addChild(this.#composerContext);
     this.#tui.addChild(this.#editor);
     this.#tui.addChild(this.#footer);
 
@@ -372,6 +380,15 @@ export class RustxTuiApp {
    * them, so they are dropped rather than repainted over a different one.
    */
   #bindSession(session: AppServerSession | undefined): void {
+    this.#draft.text = this.#editor.getExpandedText();
+    if (this.#session !== undefined) this.#drafts.set(`${this.#session.sessionId}:${this.#session.target.conversation_id}`, this.#draft);
+    const key = session === undefined ? undefined : `${session.sessionId}:${session.target.conversation_id}`;
+    const draft = key === undefined ? new ComposerDraft() : this.#drafts.get(key) ?? new ComposerDraft();
+    if (draft !== this.#draft) {
+      this.#draft = draft;
+      this.#editor.setText(draft.text);
+      this.#refreshDraftLabel();
+    }
     this.#deletion?.terminate();
     this.#invalidatePresentation();
     this.#removeStateListener?.();
@@ -486,10 +503,11 @@ export class RustxTuiApp {
         await next.resync();
       }
       if (this.#session !== next || this.#host.client.closed !== undefined) return;
-      this.#restoredEditor = editorContent;
-      const uploads = editorContent?.filter(block => block.type === "upload").length ?? 0;
-      this.#restoredUploads.setText(uploads ? `${uploads} restored uploaded file(s) will be sent with this draft.` : "");
-      if (editorContent !== undefined) this.#editor.setText(editorText(editorContent));
+      if (editorContent !== undefined) {
+        this.#draft.restore(editorContent);
+        this.#editor.setText(this.#draft.text);
+      }
+      this.#refreshDraftLabel();
       this.#showTransient("info", notice ?? `showing session ${sessionId}`);
       this.#renderState(next.state);
     } catch (error: unknown) {
@@ -554,6 +572,11 @@ export class RustxTuiApp {
         void this.#openResumeSelector(page);
       }
       this.#tui.addInputListener((data) => {
+        // Paste packets are content, even when delivered in multiple fragments.
+        // Pi owns their decoding; no global shortcut may inspect their payload.
+        if (this.#inputPaste.content(data)) {
+          return undefined;
+        }
         // Any user input acknowledges the one current transient feedback item.
         // A later command or lifecycle result may replace it explicitly.
         this.#acknowledgeTransient();
@@ -566,6 +589,23 @@ export class RustxTuiApp {
           if (matchesKey(data, "ctrl+c")) { void this.quit(); return { consume: true }; }
           if (this.#overlay !== undefined) return undefined;
           if (matchesKey(data, "ctrl+r") || matchesKey(data, "enter")) void this.#openResumeSelector();
+          return { consume: true };
+        }
+        if (this.#overlay === undefined && matchesKey(data, "ctrl+p")) {
+          const command = new ComposerCommand(text => {
+            this.#closeOverlay();
+            void this.#onSubmit(text, false, true, true);
+          }, () => this.#closeOverlay());
+          this.#showPopup(command, { width: "90%", heightPercent: 50 });
+          return { consume: true };
+        }
+        if (this.#overlay === undefined && matchesKey(data, "ctrl+r")) {
+          const history = new PromptHistory(this.#promptHistory, text => {
+            // Accept is an intentional replacement, so uploaded receipts are retired.
+            this.#draft.clear(); this.#refreshDraftLabel();
+            this.#editor.setText(text); this.#closeOverlay();
+          }, () => this.#closeOverlay());
+          this.#showPopup(history, { width: "85%", heightPercent: 60 });
           return { consume: true };
         }
         // The subagent list is an explicit presentation focus. Ctrl+Up/Down
@@ -673,45 +713,104 @@ export class RustxTuiApp {
     });
   }
 
-  async #onSubmit(text: string): Promise<void> {
+  async #onSubmit(text: string, queue = false, commands = true, preserveDraft = false): Promise<void> {
     if (this.#session === undefined || this.#switching || this.#finished) return;
+    if (this.#submitting || this.#uploading) { if (!preserveDraft) this.#editor.setText(text); return; }
     const lease = this.#presentationLease();
+    const session = this.#session;
     const line = text.trim();
-    if (line.length === 0 && !this.#restoredEditor?.some(block => block.type === "upload")) return;
-    if (this.#restoredEditor !== undefined && !line.startsWith("/")) {
-      try {
-        await this.#session.submitInbound(editorSubmission(this.#restoredEditor, text));
-        if (this.#isCurrentPresentationLease(lease)) {
-          this.#restoredEditor = undefined;
-          this.#restoredUploads.setText("");
-          this.#editor.setText("");
-        }
-      } catch (error) {
-        if (this.#isCurrentPresentationLease(lease)) {
-          if (error instanceof RestoredEditorOrderingError) this.#editor.setText(text);
-          this.#showTransient("error", `draft admission failed: ${compactDiagnostic(error)}`);
-        }
-      }
+    if (!line && !this.#draft.blocks?.length) return;
+    const command = commands && line.startsWith("/");
+    if (preserveDraft && !command) { this.#showTransient("error", "Enter a slash command; the prompt draft is unchanged."); return; }
+    if (!command) {
+      let content: UserInputBlock[];
+      try { content = this.#draft.submission(text); }
+      catch (error) { this.#editor.setText(text); this.#showTransient("error", compactDiagnostic(error)); return; }
+      const intent = composerIntent(session.state, queue);
+      // Transfer this draft once. New typing cannot be cleared by a late result.
+      this.#editor.setText(""); this.#draft.clear(); this.#refreshDraftLabel();
+      const prompt = editorText(content);
+      if (prompt) this.#promptHistory.push(prompt);
+      if (this.#promptHistory.length > 1000) this.#promptHistory.shift();
+      this.#editor.addToHistory(prompt);
+      this.#submitting = true;
+      try { if (intent === "steer") await session.steer(content); else await session.submitInbound(content); }
+      catch (error) { if (this.#isCurrentPresentationLease(lease)) this.#showTransient("error", `${intent}: ${compactDiagnostic(error)} · Not replayed. Prompt remains in local history.`); }
+      finally { this.#submitting = false; }
       return;
     }
-    this.#editor.addToHistory(text);
-    this.#editor.setText("");
-
+    if (!preserveDraft) this.#editor.setText("");
     try {
-      // Reopening a retained deletion workflow queries its actual native search,
-      // rather than relabeling an unfiltered page with the preserved query.
+      if (line === "/permissions") {
+        const source = await session.permissionSources();
+        if (this.#isCurrentPresentationLease(lease)) this.#showPopup(new PermissionsView(session, source, () => this.#closeOverlay(), () => this.#tui.requestRender()), { width: "90%", heightPercent: 75 });
+        return;
+      }
+      if (line === "/capabilities") {
+        this.#showInspection("Agent capabilities", renderResourceBanner(session.state, { workspace: this.#workspace }), lease);
+        return;
+      }
+      if (line === "/queue") {
+        this.#showPopup(new PendingInputView(this.#tui, session, () => this.#closeOverlay(), () => this.#tui.requestRender()), { width: "90%", heightPercent: 75 });
+        return;
+      }
+      if (line.startsWith("/attach ")) {
+        await this.#attach(line.slice(8).trim(), lease);
+        return;
+      }
       const query = this.#resumeQuery ?? this.#deletion.context.query;
       const outcome = line === "/resume" && this.#deletion.state.kind !== "idle"
         ? { kind: "choose_session" as const, ...await this.#host.listSessions(query, 0), query }
         : await this.#dispatcher.submit(text);
-      if (!this.#isCurrentPresentationLease(lease)) return;
-      await this.#handleOutcome(outcome, lease);
-    } catch (error: unknown) {
-      if (this.#isCurrentPresentationLease(lease)) {
-        this.#showTransient("error", `command failed: ${compactDiagnostic(error)}`);
-      }
+      if (this.#isCurrentPresentationLease(lease)) await this.#handleOutcome(outcome, lease);
+    } catch (error) {
+      if (this.#isCurrentPresentationLease(lease)) this.#showTransient("error", `command: ${compactDiagnostic(error)}`);
     }
   }
+
+  async #attach(path: string, lease: PresentationLease): Promise<void> {
+    const session = lease.session;
+    if (session === undefined) return;
+    if (this.#uploading) throw new Error("An upload is already awaiting confirmation.");
+    // Reserve the presentation position before any filesystem/transport await.
+    // Newly typed text remains after the selected attachment, even during I/O.
+    const draft = this.#draft;
+    const prefix = draft.submission(this.#editor.getExpandedText());
+    this.#uploading = true;
+    draft.blocks = prefix;
+    draft.tail = true;
+    this.#editor.setText("");
+    this.#refreshDraftLabel();
+    this.#showTransient("info", "Uploading selected bytes; submission waits for native confirmation…");
+    try {
+      // Explicit user selection is the only intentional client file read.
+      const file = await open(path, "r");
+      let bytes: Buffer;
+      try {
+        const stat = await file.stat();
+        if (!stat.isFile() || stat.size > 256 * 1024) throw new Error("Select a regular file of at most 256 KiB.");
+        const buffer = Buffer.alloc(256 * 1024 + 1);
+        let bytesRead = 0;
+        while (bytesRead < buffer.length) {
+          const read = await file.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+          if (read.bytesRead === 0) break;
+          bytesRead += read.bytesRead;
+        }
+        if (bytesRead > 256 * 1024) throw new Error("Attachment exceeds 256 KiB.");
+        bytes = buffer.subarray(0, bytesRead);
+      } finally { await file.close(); }
+      const receipts = await session.upload(basename(path), bytes);
+      // A resync cannot invalidate a confirmed Session receipt. Navigation
+      // retains this draft under its original Session/conversation identity.
+      draft.blocks = [...prefix, ...receipts];
+      if (draft === this.#draft) {
+        this.#refreshDraftLabel();
+        this.#showTransient("info", `Attached ${basename(path)}`);
+      }
+    } finally { this.#uploading = false; }
+  }
+
+  #refreshDraftLabel(): void { this.#tui.requestRender(); }
 
   /** Moves the presentation focus through the authoritative child rows. */
   #moveSubagentSelection(direction: -1 | 1): void {

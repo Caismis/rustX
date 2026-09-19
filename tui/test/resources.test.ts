@@ -40,7 +40,9 @@ describe("loaded resources", () => {
     assert.match(rendered, /^ {2}review$/m);
     assert.match(rendered, /^\[Tools\]$/m);
     // The active catalog, alphabetically, by the model-facing name.
-    assert.match(rendered, /^ {2}bash, search$/m);
+    assert.match(rendered, /^ {2}Builtin$/m);
+    assert.match(rendered, /^ {4}bash$/m);
+    assert.match(rendered, /^ {4}search$/m);
   });
 
   it("keeps context files in the runtime's own precedence order", () => {
@@ -67,7 +69,7 @@ describe("loaded resources", () => {
     assert.ok(!rendered.includes("[Context]"), "no project instructions were loaded");
     assert.ok(!rendered.includes("[Skills]"));
     assert.ok(!rendered.includes("[Tools]"));
-    assert.equal(rendered, "", "an empty banner is drawn as nothing at all");
+    assert.equal(rendered, "", "absent native extensions do not invent a section");
   });
 
   it("reports a frozen agent profile as context", () => {
