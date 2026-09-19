@@ -62,10 +62,38 @@ impl TraceProjection<'_> {
             has_detail,
             truncated,
         } = facts;
-        // Everything below is presentation-only: a preview that needs its own
-        // Ledger read, the recorded Tool name, and the two request-relative
-        // relationships. None of it reaches a lifecycle update.
-        let mut summary = None;
+        // Everything below is presentation-only: the previews that need a
+        // Ledger read of their own, the recorded Tool name, and the two
+        // request-relative relationships. None of it reaches a lifecycle
+        // update, and a lifecycle refresh performs none of these reads.
+        //
+        // The request anchor is the one that froze a snapshot, so the
+        // resolved facts drive this rather than a second match on the event.
+        // The immutable snapshot is also this request's identity authority.
+        let summary = match request {
+            Some(request) => {
+                let frozen = &request.frozen;
+                // Both relationships below are resolved here, from native
+                // authority, so no client has to compare request details or
+                // diff messages to discover them.
+                let system_prompt = self.system_prompt_presentation(anchor.sequence, frozen)?;
+                let (context_additions, context_truncated) = self.context_presentation(frozen)?;
+                Some(TraceRequestSummary {
+                    previous_failure_kind: self.previous_request_failure(frozen)?,
+                    assistant_message_id: frozen.provisional_message_id.clone(),
+                    request_id: frozen.request_id.clone(),
+                    retry_number: frozen.identity.retry_number,
+                    model: frozen.invocation.model.clone(),
+                    failure_kind: request.failure_kind,
+                    usage: request.usage,
+                    generation: request.generation,
+                    system_prompt,
+                    context_additions,
+                    context_truncated,
+                })
+            }
+            None => None,
+        };
         match &anchor.event {
             E::InboundTurnAdopted { message_ids } => {
                 for message in self
@@ -83,28 +111,6 @@ impl TraceProjection<'_> {
                         preview = message_preview(&message);
                     }
                 }
-            }
-            E::ModelRequestStarted { request_id, .. } => {
-                let request = request.as_ref().expect("a request anchor froze a snapshot");
-                let frozen = &request.frozen;
-                // Both relationships below are resolved here, from native
-                // authority, so no client has to compare request details or
-                // diff messages to discover them.
-                let system_prompt = self.system_prompt_presentation(anchor.sequence, frozen)?;
-                let (context_additions, context_truncated) = self.context_presentation(frozen)?;
-                summary = Some(TraceRequestSummary {
-                    previous_failure_kind: self.previous_request_failure(frozen)?,
-                    assistant_message_id: frozen.provisional_message_id.clone(),
-                    request_id: request_id.clone(),
-                    retry_number: frozen.identity.retry_number,
-                    model: frozen.invocation.model.clone(),
-                    failure_kind: request.failure_kind.clone(),
-                    usage: request.usage.clone(),
-                    generation: request.generation,
-                    system_prompt,
-                    context_additions,
-                    context_truncated,
-                });
             }
             E::ToolExecutionStarted {
                 tool_call_id,
