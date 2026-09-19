@@ -2,7 +2,8 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Trajectory } from '../src/app/trajectory/Trajectory';
-import { completeTraceDetail, replaceTrace, refreshTrace, selectTrace, type TraceCache } from '../src/client/trace';
+import { completeTraceDetail, replaceTrace, refreshTrace, selectTrace, TRACE_LIMIT, type TraceCache } from '../src/client/trace';
+import { ArtifactContext } from '../src/app/components/Artifact';
 import { requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
 import { App } from '../src/app/App';
 import { Server, snapshot } from './fixture';
@@ -41,9 +42,13 @@ afterEach(() => {
 });
 
 const noop = () => {};
-function renderTrajectory(cache: TraceCache, onLoadDetail: (id: string) => void = noop) {
+function renderTrajectory(
+  cache: TraceCache,
+  onLoadDetail: (id: string) => void = noop,
+  loadEarlier: () => void = noop,
+) {
   return render(
-    <Trajectory cache={cache} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={onLoadDetail} />,
+    <Trajectory cache={cache} loadEarlier={loadEarlier} latest={noop} onSelect={noop} onLoadDetail={onLoadDetail} />,
   );
 }
 const cacheOf = (records = [traceRecord(0), traceRecord(1)], next_cursor: string | null = null) =>
@@ -130,7 +135,7 @@ it('paints preparation and first-output boundaries from native request offsets',
   };
   renderTrajectory(cacheOf([record]));
   fireEvent.click(screen.getByRole('button', { name: 'Duration' }));
-  const span = screen.getByRole('button', { name: 'Inspect Request #0 · historical-model' });
+  const span = screen.getByRole('button', { name: 'Inspect Request · historical-model · request-0' });
   expect(span.style.getPropertyValue('--trajectory-dispatch')).toBe('20%');
   expect(span.style.getPropertyValue('--trajectory-first-output')).toBe('36%');
 });
@@ -324,7 +329,7 @@ it('the timing overview draws spans only from recorded timing', () => {
 it('timeline and ledger selections refer to the same stable record identity', () => {
   renderTrajectory(cacheOf([traceRecord(0), traceRecord(1)]));
   const overview = screen.getByLabelText('Timing overview');
-  fireEvent.click(within(overview).getByLabelText('Inspect Request #0 · historical-model'));
+  fireEvent.click(within(overview).getByLabelText('Inspect Request · historical-model · request-0'));
   expect(within(screen.getByLabelText('Trace record inspector')).getByText('request-0')).toBeDefined();
 });
 
@@ -487,4 +492,176 @@ it('Attempt folding does not fold unscoped domain records or invent their owner'
   fireEvent.click(screen.getByRole('button', { name: 'Fold Attempts' }));
   expect(screen.getByText('Independent workflow')).toBeTruthy();
   expect(screen.getByText('Independent child')).toBeTruthy();
+});
+
+it('names a request by model and native identity, never by a request number', () => {
+  const initial = traceRecord(0, { request: { ...traceRecord(0).request!, retry_number: 0 } });
+  renderTrajectory(selectTrace(cacheOf([initial]), initial.id));
+  const overview = screen.getByLabelText('Timing overview');
+  const inspector = screen.getByLabelText('Trace record inspector');
+  // retry 0 is the initial actual request: it is not "request #0".
+  expect(within(overview).queryByLabelText(/Request #/)).toBeNull();
+  expect(within(inspector).queryByText(/Request #/)).toBeNull();
+  expect(within(inspector).getByText('Request · historical-model')).toBeDefined();
+  expect(
+    within(overview).getByLabelText('Inspect Request · historical-model · request-0'),
+  ).toBeDefined();
+  // The exact native request identity stays inspectable.
+  fireEvent.click(within(inspector).getByText(/Native record/));
+  expect(within(inspector).getByText('Retry / recovery ordinal')).toBeDefined();
+  expect(within(inspector).getByText('request-0')).toBeDefined();
+  expect(within(inspector).getByText(/0 · initial request/)).toBeDefined();
+});
+
+it('identifies a retry as a retry rather than as the next request number', () => {
+  const retry = traceRecord(0, { request: { ...traceRecord(0).request!, retry_number: 2 } });
+  renderTrajectory(selectTrace(cacheOf([retry]), retry.id));
+  const inspector = screen.getByLabelText('Trace record inspector');
+  expect(within(inspector).getByText('Request · historical-model · retry 2')).toBeDefined();
+  expect(
+    within(screen.getByLabelText('Timing overview')).getByLabelText(
+      'Inspect Request · historical-model · retry 2 · request-0',
+    ),
+  ).toBeDefined();
+  fireEvent.click(within(inspector).getByText(/Native record/));
+  expect(within(inspector).getByText(/2 · retry or recovery within this Step/)).toBeDefined();
+});
+
+it('the loaded-window request marker names its own scope and is not an identity', () => {
+  renderTrajectory(cacheOf([traceRecord(0), traceRecord(1)]));
+  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
+  // Scoped wording only, and never the "#N" form that reads as an identity.
+  expect(within(ledger).getByLabelText('Request 1 in the loaded window')).toBeDefined();
+  expect(within(ledger).getByLabelText('Request 2 in the loaded window')).toBeDefined();
+  expect(ledger.innerHTML).not.toContain('Request #');
+});
+
+it('the overview offers earlier history only while an older page may be loaded', () => {
+  const older = vi.fn();
+  const { unmount } = renderTrajectory(cacheOf([traceRecord(0)], 'older'), noop, older);
+  const overview = screen.getByLabelText('Timing overview');
+  const boundary = within(overview).getByLabelText('Load earlier records into the overview');
+  expect(boundary.getAttribute('aria-disabled')).toBe('false');
+  // Keyboard activation reaches the same single paging operation.
+  boundary.focus();
+  expect(document.activeElement).toBe(boundary);
+  fireEvent.click(boundary);
+  expect(older).toHaveBeenCalledTimes(1);
+  unmount();
+
+  // No older cursor: no affordance at all.
+  renderTrajectory(cacheOf([traceRecord(0)], null), noop, older);
+  expect(
+    within(screen.getByLabelText('Timing overview')).queryByLabelText(
+      'Load earlier records into the overview',
+    ),
+  ).toBeNull();
+});
+
+it('a pending or limit-reached load cannot be requested again from the overview', () => {
+  const older = vi.fn();
+  const pending = { ...cacheOf([traceRecord(0)], 'older'), loading: true };
+  const { unmount } = renderTrajectory(pending, noop, older);
+  const loadingBoundary = within(screen.getByLabelText('Timing overview')).getByLabelText(
+    'Loading earlier records',
+  );
+  expect(loadingBoundary.getAttribute('aria-disabled')).toBe('true');
+  fireEvent.click(loadingBoundary);
+  expect(older).not.toHaveBeenCalled();
+  unmount();
+
+  // The finite history limit is the cache's, and the overview obeys it.
+  const full = cacheOf(
+    Array.from({ length: TRACE_LIMIT }, (_, n) => traceRecord(n)),
+    'older',
+  );
+  renderTrajectory(full, noop, older);
+  const limited = within(screen.getByLabelText('Timing overview')).getByLabelText(
+    'Load earlier records into the overview',
+  );
+  expect(limited.getAttribute('aria-disabled')).toBe('true');
+  fireEvent.click(limited);
+  expect(older).not.toHaveBeenCalled();
+});
+
+it('an ordinary row names its artifacts without reading any artifact resource', () => {
+  const read = vi.fn();
+  const records = [
+    traceRecord(0, { kind: 'user', request: null, attachments: [
+      { artifact_id: 'brief-0', name: 'brief.md', mime_type: 'text/markdown', image: false },
+      { artifact_id: 'shot-0', name: 'screenshot.png', mime_type: 'image/png', image: true },
+    ] }),
+    traceRecord(1, { kind: 'assistant', request: null, attachments: [
+      { artifact_id: 'diagram-1', name: 'diagram.png', mime_type: 'image/png', image: true },
+    ] }),
+    traceRecord(2, { kind: 'assistant', request: null, attachments: [
+      { artifact_id: 'unnamed-2', name: null, mime_type: 'image/png', image: true },
+    ] }),
+  ];
+  render(
+    <ArtifactContext.Provider value={{ read, release: noop } as never}>
+      <Trajectory cache={cacheOf(records)} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />
+    </ArtifactContext.Provider>,
+  );
+  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
+  // Named file first, with a compact count for the rest.
+  expect(within(ledger).getByText('brief.md')).toBeDefined();
+  expect(within(ledger).getByText('+1')).toBeDefined();
+  // An image is marked as one, distinctly from a generic file.
+  const file = ledger.querySelector('[data-trace-id="trace:0"] [data-image]');
+  const image = ledger.querySelector('[data-trace-id="trace:1"] [data-image]');
+  expect(file).toBeNull();
+  expect(image).not.toBeNull();
+  expect(within(ledger).getByText('diagram.png')).toBeDefined();
+  // A nameless artifact falls back to what it is, never to its machine id.
+  expect(within(ledger).getByText('Image')).toBeDefined();
+  expect(ledger.innerHTML).not.toContain('unnamed-2');
+  // Rendering an ordinary row must never begin owning artifact bytes.
+  expect(read).not.toHaveBeenCalled();
+});
+
+it('selecting a record in the overview clears a search that would hide it', () => {
+  const match = traceTool(0, { preview: { text: 'cargo check', truncated: false } });
+  const hidden = traceTool(1, { preview: { text: 'git diff --stat', truncated: false } });
+  renderTrajectory(cacheOf([match, hidden]));
+  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
+  const search = screen.getByLabelText('Search loaded Trace');
+  fireEvent.change(search, { target: { value: 'cargo check' } });
+  expect(within(ledger).getByText('cargo check')).toBeDefined();
+  expect(within(ledger).queryByText('git diff --stat')).toBeNull();
+
+  fireEvent.click(
+    within(screen.getByLabelText('Timing overview')).getByLabelText('Inspect Tool · bash · call-1'),
+  );
+  // The explicit selection wins: the query yields so the record is reachable.
+  expect((search as HTMLInputElement).value).toBe('');
+  expect(within(ledger).getByText('git diff --stat')).toBeDefined();
+  expect(ledger.querySelector('[data-trace-id="trace:1"]')?.getAttribute('aria-selected')).toBe('true');
+});
+
+it('a search that already matches the selected record is preserved', () => {
+  const match = traceTool(0, { preview: { text: 'cargo check', truncated: false } });
+  renderTrajectory(cacheOf([match, traceTool(1)]));
+  const search = screen.getByLabelText('Search loaded Trace');
+  fireEvent.change(search, { target: { value: 'cargo' } });
+  fireEvent.click(
+    within(screen.getByLabelText('Timing overview')).getByLabelText('Inspect Tool · bash · call-0'),
+  );
+  expect((search as HTMLInputElement).value).toBe('cargo');
+});
+
+it('rustX domain kinds carry a visible discriminator that is not the preview text', () => {
+  const kinds = ['background', 'subagent', 'workflow', 'interaction'] as const;
+  renderTrajectory(cacheOf(kinds.map((kind, n) => traceRecord(n, {
+    kind, request: null, location: {}, preview: { text: `neutral summary ${n}`, truncated: false },
+  }))));
+  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
+  // Each kind is told apart by its own persistent label, never by hovering
+  // and never by preview text that happens to name the kind.
+  for (const [n, short] of ['BG', 'SUBAGENT', 'WORKFLOW', 'INTERACT'].entries()) {
+    const row = ledger.querySelector(`[data-trace-id="trace:${n}"]`)!;
+    expect(row.textContent).toContain(short);
+    expect(row.textContent).toContain(`neutral summary ${n}`);
+    expect(row.getAttribute('data-kind')).toBe(kinds[n]);
+  }
 });

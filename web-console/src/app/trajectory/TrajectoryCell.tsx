@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness TrajectoryTable.tsx semantic cells; see PROVENANCE.md. */
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v11';
+import type { TraceArtifact, TraceKind, TraceRecord } from '../../../../protocol/app-server/v11';
 import { IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import css from './Trajectory.module.css';
@@ -9,6 +9,21 @@ export const cellLabel: Record<TraceKind, string> = {
   user: 'User', assistant: 'Assistant', tool: 'Tool', compaction: 'Compaction',
   attempt: 'Attempt', step: 'Step', request: 'Request',
   background: 'Background', subagent: 'Subagent', workflow: 'Workflow', interaction: 'Interaction',
+};
+
+/**
+ * Compact labels for the kinds that share the generic fallback glyph.
+ *
+ * `background`, `subagent`, `workflow` and `interaction` are rustX-specific
+ * evidence with no Harness counterpart and no distinct icon, so at narrow
+ * widths the icon alone cannot tell them apart. They keep a short visible
+ * word instead of relying on a hover Tooltip that a touch reader never gets.
+ */
+export const cellNarrowLabel: Partial<Record<TraceKind, string>> = {
+  background: 'BG',
+  subagent: 'SUBAGENT',
+  workflow: 'WORKFLOW',
+  interaction: 'INTERACT',
 };
 
 export function previewOf(record: TraceRecord): string {
@@ -30,6 +45,56 @@ export function CellIcon({ kind }: { kind: TraceKind }) {
   </svg>;
 }
 
+/**
+ * The name a ledger row shows for one artifact.
+ *
+ * Native `name` when the record carries one. Otherwise a neutral word for
+ * what it is: the artifact id is a machine identity and belongs in the
+ * inspector, not in the primary label of an ordinary row.
+ */
+export function artifactLabel(artifact: TraceArtifact): string {
+  return artifact.name?.trim() || (artifact.image ? 'Image' : 'File');
+}
+
+/**
+ * Compact artifact identity for an ordinary row.
+ *
+ * Summary-only by construction: it reads the artifact facts already on the
+ * record and never touches `ArtifactResources`, so scrolling a virtualized
+ * history cannot start a resource read. Loading and preview stay in the
+ * inspector's Artifacts section.
+ */
+export function CellArtifacts({ artifacts }: { artifacts: readonly TraceArtifact[] }) {
+  const [first, ...rest] = artifacts;
+  if (first === undefined) return null;
+  return (
+    <span
+      className={css.attachment}
+      data-image={first.image || undefined}
+      title={
+        rest.length === 0
+          ? artifactLabel(first)
+          : [first, ...rest].map(artifactLabel).join(' · ')
+      }
+    >
+      <span className={css.attachmentIcon} aria-hidden="true">
+        {first.image ? (
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+            <rect x="2" y="3" width="12" height="10" rx="1.5" />
+            <circle cx="6" cy="6.5" r="1" /><path d="m3 11.5 3-3 2.5 2.5L11 8l2 2" />
+          </svg>
+        ) : (
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+            <path d="M9 2H4.5A1.5 1.5 0 0 0 3 3.5v9A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5V6L9 2Z" /><path d="M9 2v4h4" />
+          </svg>
+        )}
+      </span>
+      <span className={css.attachmentName}>{artifactLabel(first)}</span>
+      {rest.length > 0 && <span className={css.attachmentMore}>+{rest.length}</span>}
+    </span>
+  );
+}
+
 export function CellContent({ record }: { record: TraceRecord }) {
   const preview = previewOf(record);
   const result = record.tool?.detail?.text || record.tool?.outcome;
@@ -41,6 +106,6 @@ export function CellContent({ record }: { record: TraceRecord }) {
         : preview}
     </div>
     {result && <span className={css.result} data-error={record.state === 'failed' || undefined}>→ {result}</span>}
-    {record.attachments.length > 0 && <span className={css.attachmentCount} title="Open the record to inspect attachments">▧ {record.attachments.length}</span>}
+    <CellArtifacts artifacts={record.attachments} />
   </>;
 }

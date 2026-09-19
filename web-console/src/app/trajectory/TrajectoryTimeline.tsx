@@ -21,6 +21,7 @@ import {
   type TrajectoryTimelineMode,
 } from './timeline';
 import { Button } from '../../presentation/primitives/Button';
+import { Tooltip } from '../../presentation/primitives/Tooltip';
 import css from './TrajectoryTimeline.module.css';
 
 /** Pointer travel below which a drag is treated as a click. */
@@ -44,6 +45,54 @@ interface Pan {
   moved: boolean;
 }
 
+/**
+ * The earlier-history marker at the overview's left edge.
+ *
+ * Adapted from the pinned Harness `EarlierHistoryBoundary`. Harness holds
+ * its own pending flag because its callback returns a promise; rustX does
+ * not, because the Trace cache already owns loading and the finite limit.
+ * Pointer events stop here so pressing the marker cannot also start a drag
+ * on the canvas underneath it.
+ */
+function EarlierHistoryBoundary({
+  loading,
+  enabled,
+  onLoad,
+}: {
+  loading: boolean;
+  enabled: boolean;
+  onLoad: () => void;
+}) {
+  const actionable = enabled && !loading;
+  return (
+    <Tooltip
+      label={loading ? 'Loading earlier records…' : 'Load earlier records'}
+      side="right"
+    >
+      <button
+        type="button"
+        className={css.earlierHistory}
+        data-earlier-history=""
+        data-loading={loading || undefined}
+        aria-label={
+          loading ? 'Loading earlier records' : 'Load earlier records into the overview'
+        }
+        aria-disabled={!actionable}
+        onClick={event => {
+          event.stopPropagation();
+          if (actionable) onLoad();
+        }}
+        onPointerDown={event => event.stopPropagation()}
+        onPointerMove={event => event.stopPropagation()}
+        onPointerUp={event => event.stopPropagation()}
+        onContextMenu={event => event.stopPropagation()}
+      >
+        …
+      </button>
+    </Tooltip>
+  );
+}
+
 /** Props for the Trajectory timing overview. */
 export interface TrajectoryTimelineProps {
   records: readonly TraceRecord[];
@@ -56,6 +105,19 @@ export interface TrajectoryTimelineProps {
   onSelect: (id: string) => void;
   /** Section boundary label for a record that opens one, else undefined. */
   boundaryLabel: (record: TraceRecord, index: number) => string | undefined;
+  /** True when the Trace cache reports an older page beyond this window. */
+  hasEarlierRecords: boolean;
+  /** True while that older page is already being fetched. */
+  loadingEarlier: boolean;
+  /**
+   * True when another older page may still be requested.
+   *
+   * Paging has one owner. The overview never tracks cursors, pending loads
+   * or the finite history limit itself; it renders the state the Trace cache
+   * resolved and calls back into the same load the ledger uses.
+   */
+  canLoadEarlier: boolean;
+  onLoadEarlier: () => void;
 }
 
 /**
@@ -72,6 +134,10 @@ export function TrajectoryTimeline({
   onRangeChange,
   onSelect,
   boundaryLabel,
+  hasEarlierRecords,
+  loadingEarlier,
+  canLoadEarlier,
+  onLoadEarlier,
 }: TrajectoryTimelineProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<Drag | null>(null);
@@ -115,6 +181,13 @@ export function TrajectoryTimeline({
     return (
       <section className={css.root} aria-label="Timing overview">
         <p className={css.empty}>No recorded timing in the loaded window</p>
+        {hasEarlierRecords && (
+          <EarlierHistoryBoundary
+            loading={loadingEarlier}
+            enabled={canLoadEarlier}
+            onLoad={onLoadEarlier}
+          />
+        )}
       </section>
     );
   }
@@ -126,6 +199,10 @@ export function TrajectoryTimeline({
     return domain.start + ratio * span;
   };
   const percent = (value: number) => ((value - domain.start) / span) * 100;
+  // Only at the earliest edge of the projection, exactly as the pinned
+  // Harness overview gates its own boundary: panned or zoomed away from the
+  // start, the marker would point at history that is not adjacent to it.
+  const showsEarlierBoundary = hasEarlierRecords && domain.start === model.start;
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button === 2) {
@@ -221,6 +298,13 @@ export function TrajectoryTimeline({
         onPointerCancel={() => { dragRef.current = null; panRef.current = null; setDraft(null); }}
         onContextMenu={event => event.preventDefault()}
       >
+        {showsEarlierBoundary && (
+          <EarlierHistoryBoundary
+            loading={loadingEarlier}
+            enabled={canLoadEarlier}
+            onLoad={onLoadEarlier}
+          />
+        )}
         {focus !== null && (
           <div
             className={css.focus}

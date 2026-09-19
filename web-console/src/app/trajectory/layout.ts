@@ -99,9 +99,10 @@ export function trajectoryRows(records: readonly TraceRecord[]): TrajectoryRow[]
       sectionStart: false,
       sectionEnd: false,
       groupStart: false,
-      // Requests are numbered across the loaded window in server order, so a
-      // reader can name "request #7" the way the Harness ledger does. It is a
-      // display ordinal; the native retry ordinal stays on the record itself.
+      // Requests are counted across the loaded window in server order, so a
+      // reader can name "request 7 in the loaded window". It is a display
+      // ordinal scoped to what is loaded, never a stable request identity:
+      // the native retry ordinal and request id stay on the record itself.
       ...(record.kind === 'request' ? { requestNumber: ++requestNumber } : {}),
     };
   });

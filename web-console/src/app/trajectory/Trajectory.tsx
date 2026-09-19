@@ -26,7 +26,7 @@ import { Button } from '../../presentation/primitives/Button';
 import { Input } from '../../presentation/primitives/Input';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { TrajectoryInspector } from './TrajectoryInspector';
-import { CellContent, CellIcon, cellLabel, previewOf } from './TrajectoryCell';
+import { CellContent, CellIcon, cellLabel, cellNarrowLabel, previewOf } from './TrajectoryCell';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
 import {
   foldRows,
@@ -217,7 +217,14 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     if (followsTail.current && !virtualized) pane.scrollTop = pane.scrollHeight;
   }, [firstId, rows.length, virtualized, virtualizer]);
 
+  // One paging authority. The toolbar button, the ledger's history row and
+  // the overview's earlier-history marker all read these and call the same
+  // `requestOlder`; none of them tracks a cursor or a pending load itself.
+  const hasEarlierRecords = Boolean(cache.page.next_cursor);
+  const canLoadEarlier = hasEarlierRecords && !cache.loading && records.length < TRACE_LIMIT;
+
   const requestOlder = () => {
+    if (!canLoadEarlier) return;
     const pane = viewport.current;
     if (pane !== null) {
       prependAnchor.current = { first: firstId, scrollHeight: pane.scrollHeight, scrollTop: pane.scrollTop, virtualized };
@@ -281,11 +288,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
           onChange={event => setQuery(event.target.value)}
           placeholder="Search loaded records"
         />
-        <Button
-          size="sm"
-          disabled={cache.loading || !cache.page.next_cursor || records.length >= TRACE_LIMIT}
-          onClick={requestOlder}
-        >
+        <Button size="sm" disabled={!canLoadEarlier} onClick={requestOlder}>
           {cache.loading ? 'Loading…' : 'Load older'}
         </Button>
         <Button size="sm" onClick={latest}>
@@ -312,9 +315,18 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
             setFoldedAttempts(current => { const next = new Set(current); next.delete(sectionKeyOf(record)); return next; });
             setFoldedSteps(current => { const next = new Set(current); next.delete(stepFoldKey(record)); return next; });
           }
+          // Picking a record in the overview is an explicit request to see
+          // that record. An active query that excludes it would leave it
+          // selected but absent from the ledger, so the query yields to the
+          // selection. A query that already matches it is left alone.
+          if (searchMatches !== null && !searchMatches.has(id)) setQuery('');
           select(id);
         }}
         boundaryLabel={boundaryLabel}
+        hasEarlierRecords={hasEarlierRecords}
+        loadingEarlier={cache.loading === true}
+        canLoadEarlier={canLoadEarlier}
+        onLoadEarlier={requestOlder}
       />
 
       {selectionOutsideWindow && (
@@ -347,12 +359,8 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
           }}
         >
           <div className={css.loadRow}>
-            {cache.page.next_cursor ? (
-              <Button
-                size="sm"
-                disabled={cache.loading || records.length >= TRACE_LIMIT}
-                onClick={requestOlder}
-              >
+            {hasEarlierRecords ? (
+              <Button size="sm" disabled={!canLoadEarlier} onClick={requestOlder}>
                 {cache.loading ? 'Loading earlier records…' : 'Load earlier records'}
               </Button>
             ) : <span>Beginning of loaded history</span>}
@@ -428,8 +436,13 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
                       <span className={css.selectionRail} aria-hidden="true" />
                     )}
                     {row.requestNumber !== undefined && !folded && (
-                      <Tooltip label={`Request #${row.requestNumber} in the loaded window`} side="right">
-                        <span className={css.requestMarker} data-status={record.state} aria-hidden="true" />
+                      <Tooltip label={`Request ${row.requestNumber} in the loaded window`} side="right">
+                        <span
+                          className={css.requestMarker}
+                          data-status={record.state}
+                          role="img"
+                          aria-label={`Request ${row.requestNumber} in the loaded window`}
+                        />
                       </Tooltip>
                     )}
                     {!folded && (
@@ -463,6 +476,14 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
                           <span className={css.kindTag} data-kind={record.kind}>
                             <span className={css.kindIcon} aria-hidden="true"><CellIcon kind={record.kind} /></span>
                             <span className={css.kindLabel}>{structural ? row.groupLabel : cellLabel[record.kind]}</span>
+                            {cellNarrowLabel[record.kind] !== undefined && (
+                              // The row's own aria-label already names the
+                              // kind, so this narrow-width discriminator is
+                              // visual only and must not be announced twice.
+                              <span className={css.kindShort} aria-hidden="true">
+                                {cellNarrowLabel[record.kind]}
+                              </span>
+                            )}
                           </span>
                         </Tooltip>
                       </>

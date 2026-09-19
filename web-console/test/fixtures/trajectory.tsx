@@ -9,7 +9,10 @@ import '../../src/presentation/theme/reset.css';
 
 const text = (text: string) => ({ text, truncated: false });
 const records = [
-  traceRecord(0, { kind: 'user', request: null, location: {}, preview: text('Inspect **the workspace** and summarize what changed.') }),
+  traceRecord(0, { kind: 'user', request: null, location: {}, preview: text('Inspect **the workspace** and summarize what changed.'), attachments: [
+    { artifact_id: 'brief-0', name: 'brief.md', mime_type: 'text/markdown', image: false },
+    { artifact_id: 'shot-0', name: 'screenshot.png', mime_type: 'image/png', image: true },
+  ] }),
   traceRecord(1, { kind: 'attempt', request: null, location: { attempt_id: 'attempt-a' }, preview: null }),
   traceRecord(2, { kind: 'step', request: null, preview: null }),
   traceRecord(3, { preview: text('deepseek-chat · historical request'), request: { ...traceRecord(3).request!, retry_number: 0 } }),
@@ -17,11 +20,15 @@ const records = [
   traceTool(5, { preview: text('git diff --stat'), tool: { ...traceTool(5).tool!, detail: text('3 files changed, 28 insertions') } }),
   traceRecord(6, { kind: 'background', request: null, native_id: 'background-6', preview: text('Indexing workspace'), state: 'running', timing: { started_at: '2026-09-15T00:00:02Z' } }),
   traceRecord(7, { kind: 'step', request: null, preview: null, location: { attempt_id: 'attempt-a', step_id: '2' } }),
-  traceRecord(8, { location: { attempt_id: 'attempt-a', step_id: '2' }, preview: text('deepseek-chat · historical request') }),
+  traceRecord(8, { location: { attempt_id: 'attempt-a', step_id: '2' }, preview: text('deepseek-chat · historical request'), request: { ...traceRecord(8).request!, retry_number: 1 } }),
   traceTool(9, { location: { attempt_id: 'attempt-a', step_id: '2' }, state: 'failed', preview: text('cargo check'), tool: { ...traceTool(9).tool!, outcome: 'failed', detail: text('Missing field `name`') } }),
-  traceRecord(10, { kind: 'assistant', request: null, location: { attempt_id: 'attempt-a', step_id: '2' }, preview: text('The changes add a **workspace index**. One check needs attention.') }),
+  traceRecord(10, { kind: 'assistant', request: null, location: { attempt_id: 'attempt-a', step_id: '2' }, preview: text('The changes add a **workspace index**. One check needs attention.'), attachments: [
+    { artifact_id: 'diagram-10', name: 'diagram.png', mime_type: 'image/png', image: true },
+  ] }),
   traceRecord(11, { kind: 'compaction', request: null, location: {}, preview: text('Earlier messages summarized; workspace findings retained.') }),
-  ...(['subagent', 'workflow', 'interaction'] as const).map((kind, n) => traceRecord(12 + n, { kind, request: null, location: {}, preview: text(`${kind} evidence outside the Attempt`) })),
+  traceRecord(12, { kind: 'subagent', request: null, location: {}, preview: text('Delegated review of the parser') }),
+  traceRecord(13, { kind: 'workflow', request: null, location: {}, preview: text('Release checklist run') }),
+  traceRecord(14, { kind: 'interaction', request: null, location: {}, preview: text('Approval requested for write access') }),
 ];
 const long = new URLSearchParams(location.search).has('long');
 function Fixture() {

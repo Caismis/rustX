@@ -467,3 +467,29 @@ assembly, step-relative TTFT and Tool-name-based code detection stay excluded.
 Changed derived files have reviewed local SHA-256/import records; original hashes
 and MIT/DeepSeek attribution remain intact. `check:provenance` and the external
 `--reference /tmp/rustx-371-harness` audit verify local and upstream bytes.
+
+## WEB-15 review follow-up (#371)
+
+The pinned reference remains `ddefc45fbc7f8e46dd73185e68295696d1297887`. No new
+upstream file was introduced: the earlier-history marker is adapted from the
+already-inventoried `ui-trajectory/src/client/TrajectoryTimeline.tsx`, whose
+`EarlierHistoryBoundary` and `.earlierHistory` treatment were re-read for this
+change and mapped onto existing rustX theme tokens.
+
+Five review findings were closed. `retry_number` is no longer presented as
+`Request #N` anywhere; it is a native retry / recovery ordinal, and requests are
+named by model plus exact native request identity. The overview gained the
+upstream earlier-history affordance while paging authority stays single: the
+Trace cache owns the cursor, the pending load and `TRACE_LIMIT`, and the marker
+calls the same load the ledger and toolbar call. Ordinary rows now carry compact
+artifact identity read from the native summary alone, with no `ArtifactResources`
+read from a virtualized row. An explicit overview selection clears a search that
+would otherwise hide the selected record, so overview and ledger cannot disagree.
+The rustX-specific `background`, `subagent`, `workflow` and `interaction` kinds
+keep a persistent short label, because they share a fallback glyph and a
+hover-only Tooltip is unavailable to touch and keyboard readers.
+
+Local SHA-256 and import records were refreshed for the nine changed derived
+files. Upstream hashes, the pinned commit, licensing, classifications and
+exclusions are unchanged. Harness Session/Cordis assembly, client-side turn and
+step inference, and step-relative TTFT remain excluded.

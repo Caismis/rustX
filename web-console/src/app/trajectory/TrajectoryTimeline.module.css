@@ -167,3 +167,45 @@
 .controls { display: flex; gap: 2px; margin-left: auto; }
 .controls button { min-height: 20px; height: 20px; padding: 0 5px; font-size: 10px; }
 .canvas:focus-visible, .span:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+
+/* Adapted from pinned Harness TrajectoryTimeline.module.css .earlierHistory. */
+.earlierHistory {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  width: 28px;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: flex-start;
+  padding-left: 3px;
+  border: 0;
+  appearance: none;
+  background: linear-gradient(
+    to right,
+    var(--dsw-alias-bg-layer-1) 0,
+    var(--dsw-alias-bg-layer-1) 38%,
+    transparent 100%
+  );
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.72;
+  cursor: pointer;
+}
+
+.earlierHistory:hover {
+  opacity: 1;
+}
+
+.earlierHistory[aria-disabled='true'] {
+  cursor: default;
+}
+
+.earlierHistory:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: -2px;
+  opacity: 1;
+}

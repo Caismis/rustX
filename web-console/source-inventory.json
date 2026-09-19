@@ -20,7 +20,7 @@
       "upstream_sha256": "6e627be2ae8990290e94fc9d35d36802695c457fd98a8655fd73e52c4ce1d2db",
       "classification": "B",
       "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. No local delivery preference, runtime or slot/store authority.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v11",
         "../../client/app-server",
@@ -51,7 +51,7 @@
       "upstream_sha256": "b4ff56bd18dfef03299dd7dc43f928b7ac2a7d5253ecf65a5fbe64ca9b65ec8e",
       "classification": "B",
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v11",
         "../../bindings/questionnaire",
@@ -476,12 +476,12 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "ac369c151acd6f8ff07593acb670c443398f2f9b22a71353f37effa046a6e24c"
+      "local_sha256": "f6228d489272cf0e4b00771b67a4dcaa72d838758651da2d326cd118e4000e9b"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/Trajectory.tsx",
-      "treatment": "adapted dense ledger, folding, loaded-window search, virtualization, prepend anchoring and tail-follow onto server-resolved native Trace records; the Harness toolbar is folded into this one view seat; preserve the virtualization enable boundary and bounded canonical message batches. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation.",
+      "treatment": "adapted dense ledger, folding, loaded-window search, virtualization, prepend anchoring and tail-follow onto server-resolved native Trace records; the Harness toolbar is folded into this one view seat; preserve the virtualization enable boundary and bounded canonical message batches. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: one paging authority feeds the toolbar, the ledger history row and the overview marker; an explicit overview selection clears a search that would otherwise hide the selected record.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v11",
@@ -526,12 +526,12 @@
           "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1"
         }
       ],
-      "local_sha256": "71366fc3e9a6009a98c3e58e7aec7c00bb330545ecdf83bf53a4b2966e281ff6"
+      "local_sha256": "9e9c2ed69709b9c4b9a4624482f5de3a0ef120051a4315bd61a6bb9525dbdf9e"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryInspector.tsx",
-      "treatment": "adapted per-kind inspector sections onto native Trace detail; Markdown, JSON tree, code and artifact rendering use the existing audited rustX primitives; refetch detail after authoritative lifecycle repair; preserve the virtualization enable boundary and bounded canonical message batches; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; distinguish recorded empty text from unavailable authority; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation.",
+      "treatment": "adapted per-kind inspector sections onto native Trace detail; Markdown, JSON tree, code and artifact rendering use the existing audited rustX primitives; refetch detail after authoritative lifecycle repair; preserve the virtualization enable boundary and bounded canonical message batches; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; distinguish recorded empty text from unavailable authority; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: the request title reads as model plus native retry, and the native disclosure names retry_number as the retry / recovery ordinal it is.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v11",
@@ -569,12 +569,12 @@
           "upstream_sha256": "a31b4253ba9c7c2490f942768d060c769ff1b5b4fb653ccf67ab54af1e1593b7"
         }
       ],
-      "local_sha256": "d614821dfeb35f6da907b2bd48155fa3e57f55f9be4e9a09648bcc419c4f92c0"
+      "local_sha256": "709c7fc7f48353bd95510f5665aa896ae57829cb3f4a037527a8a85af1f87cbc"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
       "destination": "web-console/src/app/trajectory/TrajectoryTimeline.module.css",
-      "treatment": "adapted overview geometry, lane rows, focus interval, boundary rules and span/marker treatments; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation.",
+      "treatment": "adapted overview geometry, lane rows, focus interval, boundary rules and span/marker treatments; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: adapted the upstream .earlierHistory edge treatment onto existing rustX theme tokens.",
       "upstream_sha256": "3703f1e5815200ee894b32deb944cbaa70806ae5353f51853002ff322740339c",
       "retained_dependencies": [
         "existing theme tokens"
@@ -589,16 +589,17 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "454be0b73904ab5c11a698c15544536dd6db113177d447fc1e6dd30ca3ba9ca7"
+      "local_sha256": "f34a35e460bb258d0efd6bd4dfca190feb475581e3b44e5e970e3e7e9d71f03e"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryTimeline.tsx",
-      "treatment": "adapted lane overview with drag-to-focus, wheel zoom, right-button clear/pan and the recorded TTFT/decode split; spans come only from two authoritative timestamps; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation.",
+      "treatment": "adapted lane overview with drag-to-focus, wheel zoom, right-button clear/pan and the recorded TTFT/decode split; spans come only from two authoritative timestamps; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: adapted the upstream EarlierHistoryBoundary as a keyboard-reachable earlier-history marker gated, as upstream gates it, to the earliest edge of the projection; unlike upstream it holds no pending state of its own, because the rustX Trace cache already owns loading and the finite history limit. Request spans are named by model, native retry ordinal and exact request identity, never by a synthesized request number.",
       "upstream_sha256": "c062d06535a38498051346095bb713a292f45085e7de817a9400a92292c4eedc",
       "retained_dependencies": [
         "../../../../protocol/app-server/v11",
         "../../presentation/primitives/Button",
+        "../../presentation/primitives/Tooltip",
         "./TrajectoryTimeline.module.css",
         "./timeline",
         "react"
@@ -613,7 +614,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "97f499a729fc9451b83f17dcf866761dbef6e7706568c2e9fb300c30dfe8ced1"
+      "local_sha256": "59806089d9d29725e365ab39a440a663c7d497988e90fb98684e87d5673801cd"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -633,7 +634,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "6f436446fed27ffef9b406d60c6187c0b0436d57647c70490cfd5f8a0336e8f4"
+      "local_sha256": "0c8559c6a74904311510abac603c14dd8143aa67bad7e9e46495db24ebd1043d"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
@@ -659,7 +660,7 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
       "destination": "web-console/src/app/trajectory/timeline.ts",
-      "treatment": "adapted sequence/duration projections, focus interval and duration formatting over native Trace timing and settled generation evidence; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT",
+      "treatment": "adapted sequence/duration projections, focus interval and duration formatting over native Trace timing and settled generation evidence; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT WEB-15 review: request span labels carry model, native retry ordinal and exact request identity; retry_number is never presented as a request number.",
       "upstream_sha256": "ed2ebfd8b4233022115d9757d50d3af6cf399690ccc4fcf36f9f3edcf8e7b173",
       "retained_dependencies": [
         "../../../../protocol/app-server/v11"
@@ -674,7 +675,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "e0202ee215f6fccabbb83e029735738f14cfaed6809ed5a5e8eaaf8f7bded2e4"
+      "local_sha256": "b0faa305656706cd4c087eff0c6df3d23b4b88dd2c2039d0c7496d10481ea44e"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -683,7 +684,7 @@
       "upstream_sha256": "d2baf40fcc375fa4189322bf1b91b84e2d3335704a06fe0d294a9803817bdd64",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -700,7 +701,7 @@
       "upstream_sha256": "e108d9a196672dc99613d5789569c6bd3f49ef689aa1e33817bc6cecfa03e6aa",
       "classification": "B",
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../primitives/Button",
         "./Approval.module.css",
@@ -721,7 +722,7 @@
       "upstream_sha256": "f2696301b4ec912ecdf1df83229a87140566a1c6dabca8bac55259df2c29a695",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -738,7 +739,7 @@
       "upstream_sha256": "dda4354ed278a20a2eda4e18fcde289d9c9ba21d2c039bc400f84237cd7ac2a1",
       "classification": "A",
       "treatment": "Harness card width, 22px radius, elevation, 36px floor and toolbar rhythm retained. Native textarea alone owns measured growth and capped overflow; subdued file accessory and bounded responsive control groups.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -755,7 +756,7 @@
       "upstream_sha256": "03880a4702978e8403a882f9036205ab7ff791f80cc06e47fdafa4fef6971c67",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -772,7 +773,7 @@
       "upstream_sha256": "998c35f8b412380fb64819d8036f136dd0661d6fbc31692656c7ce0514fb9308",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -789,7 +790,7 @@
       "upstream_sha256": "181844e9c1809607458dfdfbbffa50cbc16357d0696ae78a8ee13f86b5fd6354",
       "classification": "B",
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "./Message.module.css",
         "react"
@@ -809,7 +810,7 @@
       "upstream_sha256": "0c3385a4ffa34b2a534b70a326193f441d5f8ffb0de471bcdf145844dfbe94fa",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -826,7 +827,7 @@
       "upstream_sha256": "4726d9ddcffd63295b0635fac728512308d56ef412ed9f6b037b3eddc552d1c0",
       "classification": "B",
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../primitives/Menu",
         "../primitives/icons",
@@ -848,7 +849,7 @@
       "upstream_sha256": "dc6cea246e452bfef40b1085c5b624b742c509bf54c8ea5fd15c2c8ca52be328",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -865,7 +866,7 @@
       "upstream_sha256": "d426510c88d64789c0f126d2e2649e7ddb7a2f46f7f8832cc69fd5e563045958",
       "classification": "B",
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. Optional effective-policy tooltip keeps ambient caption out of the composer toolbar; actionable pending Reload remains in the native binding.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../primitives/Menu",
         "../primitives/icons",
@@ -887,7 +888,7 @@
       "upstream_sha256": "2f1f5a9b40b7df4645f9cd2f858806333400cf1ac8c0a8d45029b0bb6799b50c",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -904,7 +905,7 @@
       "upstream_sha256": "de90c417934f43f7c10386ee9e60f551eedc85f7462ee72bf876a138cd379e19",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -921,7 +922,7 @@
       "upstream_sha256": "3be7189ac85b1d1484dcce1d1952e2186aa521f1b0428c384cf659cb51839f76",
       "classification": "B",
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../markdown/MarkdownText",
         "../primitives/DisclosureRow",
@@ -944,7 +945,7 @@
       "upstream_sha256": "84b5078051034c194b743b4fd3b607acaa847fff3b1adad717342ff40acac439",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -961,7 +962,7 @@
       "upstream_sha256": "df1dbc9771459eb5160a42d28fd284a54ff66b306562a2a3528bd717e42454f4",
       "classification": "B",
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. retain native Tool diagnostic identity independently of Goal display labels",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../primitives/DisclosureRow",
         "../primitives/StateDot",
@@ -985,7 +986,7 @@
       "upstream_sha256": "9ff57a944f9c7364c7ee2197d5727a612e931c37994d9baf3420337ff839d5d1",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -2120,7 +2121,7 @@
       "upstream_sha256": "a0765d599b80c91798c00b2fd1a917fb37d99ddcdabd67b5a8f1d90cd9e9fdc1",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -2344,6 +2345,7 @@
       "upstream_sha256": "c2ce0834a8a2577c2182f7112cb8603164df803cb33535a5aa24a9bc9155f171",
       "retained_dependencies": [
         "../src/app/App",
+        "../src/app/components/Artifact",
         "../src/app/trajectory/Trajectory",
         "../src/client/trace",
         "./fixture",
@@ -2368,7 +2370,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "173c7fa2e73e1c1f204eca76cd938f9ff7fb8696c04d0b21a441d350ce4d71ce"
+      "local_sha256": "3d5599a2b25213078970ac0ecfac1d939336d2ce9866f6b2e898495edef9c7ab"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -2454,7 +2456,7 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryCell.tsx",
-      "treatment": "Adapt semantic role glyphs, compact icon/tag cells, Tool name/argument/result separation and content previews. Uses existing MarkdownText; reads native TraceRecord only. No Harness event assembly, Tool-name dispatch or inferred membership. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation.",
+      "treatment": "Adapt semantic role glyphs, compact icon/tag cells, Tool name/argument/result separation and content previews. Uses existing MarkdownText; reads native TraceRecord only. No Harness event assembly, Tool-name dispatch or inferred membership. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: ordinary rows carry compact artifact identity (native name, image/file distinction, count for the rest) rendered summary-only, with no ArtifactResources read; rustX-specific domain kinds keep a persistent short label so they stay distinguishable without hover.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v11",
@@ -2473,7 +2475,7 @@
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "additional_sources": [],
-      "local_sha256": "d15b3dc19995069f2606a256d20819510ca696c1e59d60e179a6e0d13eb9763d"
+      "local_sha256": "d06d2e40f171eafa32ff4f94580626394889d217c2669f7d494937bddf6aff51"
     }
   ],
   "inspected_only": [

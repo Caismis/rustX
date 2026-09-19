@@ -68,14 +68,19 @@ function isError(record: TraceRecord): boolean {
 /**
  * The span's accessible name.
  *
- * It names the record, not just its kind: two requests of one Step differ
- * only by their native ordinal, and two Tool spans only by their call, so a
- * label that omitted those would make the overview ambiguous to a screen
- * reader and to the ledger it links to.
+ * It names the record, not just its kind: two Tool spans differ only by
+ * their call, so a label that omitted that would make the overview
+ * ambiguous to a screen reader and to the ledger it links to. Requests are
+ * named by model, and by native retry ordinal only when one was recorded —
+ * `retry_number` counts retries within a native execution context, so it is
+ * never presented as a request number. Two requests that still share a
+ * label are separated by their exact native request identity.
  */
 function label(record: TraceRecord): string {
   if (record.kind === 'request' && record.request) {
-    return `Request #${record.request.retry_number} · ${record.request.model}`;
+    const retry =
+      record.request.retry_number > 0 ? ` · retry ${record.request.retry_number}` : '';
+    return `Request · ${record.request.model}${retry} · ${record.request.request_id}`;
   }
   if (record.kind === 'tool' && record.tool) {
     return `Tool · ${record.tool.name ?? record.tool.tool_id} · ${record.tool.call_id}`;
