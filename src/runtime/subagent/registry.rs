@@ -508,6 +508,18 @@ struct RegistryState {
     /// spawning the real child binary.
     #[cfg(test)]
     staged_overrides: std::collections::VecDeque<StagedChild>,
+    /// Signals the production allocation attempt; substitutes only process
+    /// staging AFTER the real identity/incarnation reservation has completed.
+    #[cfg(test)]
+    allocation_test_hook: Option<AllocationTestHook>,
+}
+
+#[cfg(test)]
+struct AllocationTestHook {
+    entered: tokio::sync::oneshot::Sender<()>,
+    stage: Box<
+        dyn FnOnce(super::process::PhysicalChildRuntimeRoot, WorkspaceUse) -> StagedChild + Send,
+    >,
 }
 
 /// The public lifecycle vocabulary of one subagent snapshot.
@@ -1449,6 +1461,8 @@ impl SubagentRegistry {
                 deadline_completion: HashMap::new(),
                 #[cfg(test)]
                 staged_overrides: std::collections::VecDeque::new(),
+                #[cfg(test)]
+                allocation_test_hook: None,
             })),
             state_version: tokio::sync::watch::Sender::new(0),
             #[cfg(test)]
@@ -2096,10 +2110,22 @@ impl SubagentRegistry {
                     });
                 }
             }
+            #[cfg(test)]
+            let allocation_stage = self
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .allocation_test_hook
+                .take()
+                .map(|hook| {
+                    hook.entered.send(()).unwrap();
+                    hook.stage
+                });
             let runtime_root = match self
                 .config
                 .spawn
-                .allocate_child_runtime_root(&child_conversation_id)
+                .allocate_child_runtime_root(&child_conversation_id, preparation_cancellation)
+                .await
             {
                 Ok(runtime_root) => runtime_root,
                 Err(super::process::SpawnError::ConversationIdentityInUse { .. }) => {
@@ -2117,12 +2143,33 @@ impl SubagentRegistry {
                     continue;
                 }
                 Err(error) => {
-                    let start_error = SubagentStartError::Spawn {
-                        detail: error.to_string(),
+                    let start_error = match error {
+                        super::process::SpawnError::Cancelled => SubagentStartError::Cancelled,
+                        error => SubagentStartError::Spawn {
+                            detail: error.to_string(),
+                        },
                     };
                     return Err(settle_staged_workspace(workspace_lease, start_error).await);
                 }
             };
+            #[cfg(test)]
+            if let Some(stage) = allocation_stage {
+                return Ok(PreparedSubagent {
+                    subagent_id,
+                    child_agent_id,
+                    child_conversation_id,
+                    tool_call_id: spec.tool_call_id.clone(),
+                    agent: spec.resolved.agent.clone(),
+                    definition_digest: spec.resolved.definition_digest.clone(),
+                    profile_digest: spec.resolved.profile_digest(),
+                    terminal: spec.terminal.clone(),
+                    task: spec.task.clone(),
+                    context: spec.context.clone(),
+                    execution_deadline: spec.resolved.execution_deadline,
+                    profile,
+                    staged: stage(runtime_root, workspace_lease),
+                });
+            }
             break (
                 subagent_id,
                 child_conversation_id,
@@ -2364,6 +2411,25 @@ impl SubagentRegistry {
         let mut capacity_changes = self.state_version.subscribe();
         let decision = loop {
             capacity_changes.borrow_and_update();
+            // Product ownership admission precedes every registry, durability
+            // and lifecycle commit mutex. A read-only snapshot delays this
+            // transition without making the staged child fail. The existing
+            // arbitration below rechecks cancellation, capacity, drain and
+            // durability after admission, before any ownership publication.
+            let ownership_admission = match self
+                .config
+                .spawn
+                .product_root
+                .runtime_ownership_admission()
+                .await
+            {
+                Ok(admission) => admission,
+                Err(error) => {
+                    break Decision::Failed(SubagentStartError::Durability {
+                        detail: error.to_string(),
+                    });
+                }
+            };
             let decision = {
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 let mailbox = self.config.mailbox.clone();
@@ -2445,24 +2511,27 @@ impl SubagentRegistry {
                             return Decision::RolledBack;
                         }
                         let started_at = clock.now();
-                        let committed = match mailbox.commit_subagent_ownership(ownership_event(
-                            &config.conversation_id,
-                            &subagent_id,
-                            &child_agent_id,
-                            &child_conversation_id,
-                            &tool_call_id,
-                            &agent,
-                            &definition_digest,
-                            &profile_digest,
-                            match &terminal {
-                                SubagentTerminalMode::Normal => SubagentOwnershipKind::Normal,
-                                SubagentTerminalMode::WorkflowOutput { .. } => {
-                                    SubagentOwnershipKind::Workflow
-                                }
-                            },
-                            &workspace,
-                            started_at,
-                        )) {
+                        let committed = match mailbox.commit_subagent_ownership(
+                            &ownership_admission,
+                            ownership_event(
+                                &config.conversation_id,
+                                &subagent_id,
+                                &child_agent_id,
+                                &child_conversation_id,
+                                &tool_call_id,
+                                &agent,
+                                &definition_digest,
+                                &profile_digest,
+                                match &terminal {
+                                    SubagentTerminalMode::Normal => SubagentOwnershipKind::Normal,
+                                    SubagentTerminalMode::WorkflowOutput { .. } => {
+                                        SubagentOwnershipKind::Workflow
+                                    }
+                                },
+                                &workspace,
+                                started_at,
+                            ),
+                        ) {
                             Ok(committed) => committed,
                             Err(error) => {
                                 return Decision::Failed(SubagentStartError::Durability {
@@ -2535,6 +2604,10 @@ impl SubagentRegistry {
                     decision
                 }
             };
+            // The durable event and Running record are now one published fact.
+            // Never retain this guard during capacity waits, rollback or driver
+            // handoff. Archive may capture before or after this whole transition.
+            drop(ownership_admission);
             if wait_for_capacity
                 && self
                     .state
@@ -5365,6 +5438,7 @@ impl SteerAcknowledgementHook {
 
 #[cfg(test)]
 mod tests {
+    mod archive_ownership;
     mod capacity_wait;
     use std::sync::Arc;
 

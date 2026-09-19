@@ -30,7 +30,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v10. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v11. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -159,7 +159,7 @@ saves alone leave the loaded generation unchanged.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v10)
+  -> initialize (App Server protocol v11)
   -> session/create or choose a durable Session
   -> session/attach (authoritative snapshot, cursor, subscription)
   -> interactive
@@ -942,3 +942,13 @@ Deletion works directly for the focused Session after confirmation. The composer
 is disabled during deletion; completion focuses an existing Session or the empty
 Session selector. `/resume` implicitly ensures a runtime; there is no manual
 unload command and no ordinary residency status.
+
+### Export a Session archive
+
+`/export [output-path]` downloads the native Session archive, including durable
+descendants, to the **TUI machine**. The default is
+`./rustx-session-<session-id>.zip`; `/export ~/session.zip` resolves `~` locally,
+even when connected to a remote App Server. Existing files are not overwritten;
+parent directories must exist. Failed transfers remove the partial output when
+possible and report failure. The server receives only the Session ID.
+See [archive format and transport](../docs/session-archive.md).

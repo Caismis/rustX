@@ -343,6 +343,43 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             },
         })));
     }
+    fixtures.push(ProtocolMessage::Request(Box::new(Request {
+        jsonrpc: JsonRpcVersion::V2,
+        id: RequestId::String("archive-fixture".into()),
+        call: Method::SessionExportPrepare {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
+        },
+    })));
+    fixtures.push(ProtocolMessage::Response(Response::Success(Box::new(
+        Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("archive-fixture".into()),
+            result: MethodResult::SessionArchive {
+                download: super::archive_download::ArchiveDownloadDescriptor {
+                    path: format!("/session-archive/{}", "a".repeat(43)),
+                    filename: "rustx-session-fixture.zip".into(),
+                    expires_in_seconds: 60,
+                    loopback_port: None,
+                },
+            },
+        },
+    ))));
+    for reason in [
+        crate::session_archive::SessionArchivePrepareError::DescendantUnavailable,
+        crate::session_archive::SessionArchivePrepareError::ArtifactUnavailable,
+    ] {
+        fixtures.push(ProtocolMessage::Response(Response::Failure(Failure {
+            jsonrpc: JsonRpcVersion::V2,
+            id: Some(RequestId::String("archive-failure-fixture".into())),
+            error: RpcError {
+                code: -32000,
+                message: reason.to_string(),
+                data: Some(super::protocol::ErrorData::ArchivePreparationFailed { reason }),
+            },
+        })));
+    }
     fixtures
 }
 
@@ -508,9 +545,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v10.schema.json", "v10.ts"]);
+        assert_eq!(generations, ["v11.schema.json", "v11.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v10.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v11.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

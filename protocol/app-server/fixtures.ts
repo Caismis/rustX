@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v10.js';
+import type {ProtocolMessage} from './v11.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -73,7 +73,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 10,
+      "protocol_version": 11,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -90,7 +90,7 @@ export const fixtures = [
     "id": 7,
     "result": {
       "type": "initialized",
-      "protocol_version": 10,
+      "protocol_version": 11,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,
@@ -490,6 +490,51 @@ export const fixtures = [
       "message": "Operation rejected",
       "data": {
         "kind": "server_draining"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "archive-fixture",
+    "method": "session/exportPrepare",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "archive-fixture",
+    "result": {
+      "type": "session_archive",
+      "download": {
+        "path": "/session-archive/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "filename": "rustx-session-fixture.zip",
+        "expires_in_seconds": 60,
+        "loopback_port": null
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "archive-failure-fixture",
+    "error": {
+      "code": -32000,
+      "message": "Cannot export complete Session: a required descendant is missing or unreadable",
+      "data": {
+        "kind": "archive_preparation_failed",
+        "reason": "descendant_unavailable"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "archive-failure-fixture",
+    "error": {
+      "code": -32000,
+      "message": "Cannot export complete Session: required artifact content is missing, unreadable, changed, or still being written; wait for active tools to finish and retry",
+      "data": {
+        "kind": "archive_preparation_failed",
+        "reason": "artifact_unavailable"
       }
     }
   }

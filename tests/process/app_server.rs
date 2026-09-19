@@ -170,7 +170,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":10,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":11,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -198,7 +198,7 @@ async fn app_server_websocket_real_process_shared_conformance_and_listener_survi
         replacement.send(INITIALIZE.into()).await.unwrap();
         assert_eq!(
             json_response(&mut replacement).await["result"]["protocol_version"],
-            10
+            11
         );
         kill(
             Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
@@ -227,9 +227,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v9, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v10"),
+            Some("rustx.app-server.v11"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v10, rustx-token.wrong"),
+            Some("rustx.app-server.v11, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -1219,4 +1219,54 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         terminate(&processes[0]); assert!(processes[0].wait().await.unwrap().success());
         pa.finish().await; pb.finish().await;
     }).await;
+}
+
+#[tokio::test]
+async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachment() {
+    use app_server_conformance::AppServerConformanceDriver;
+    use rustx::app_server::protocol::*;
+    use std::io::Read;
+    bounded(async {
+        let f = Fixture::new().await;
+        let mut child = f.command("stdio").spawn().unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        let initialized = client
+            .request(serde_json::from_str(INITIALIZE).unwrap())
+            .await;
+        assert!(matches!(initialized, Response::Success(_)));
+        let response = client
+            .request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(2),
+                call: Method::SessionExportPrepare {
+                    session_id: f.sessions[0].clone(),
+                },
+            })
+            .await;
+        let Response::Success(response) = response else {
+            panic!("native archive preparation failed");
+        };
+        let MethodResult::SessionArchive { download } = response.result else {
+            panic!("archive descriptor required");
+        };
+        let port = download.loopback_port.expect("owned stdio stream port");
+        let url = format!("http://127.0.0.1:{port}{}", download.path);
+        let response = reqwest::get(&url).await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "application/zip");
+        let bytes = response.bytes().await.unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut manifest = String::new();
+        zip.by_name("manifest.json")
+            .unwrap()
+            .read_to_string(&mut manifest)
+            .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+        assert_eq!(manifest["format"], "rustx-session-archive/v1");
+        assert_eq!(manifest["session"]["id"], f.sessions[0].as_str());
+        client.close().await;
+        detach_then_shutdown(&mut child).await;
+        assert!(child.wait().await.unwrap().success());
+    })
+    .await;
 }

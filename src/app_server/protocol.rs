@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v10 envelope and method vocabulary.
+//! Rust authority for the App Server v11 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 10;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 11;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -173,6 +173,8 @@ pub enum Method {
     ServerInfo {},
     #[serde(rename = "server/diagnostics")]
     ServerDiagnostics {},
+    #[serde(rename = "session/exportPrepare")]
+    SessionExportPrepare { session_id: SessionId },
     #[serde(rename = "session/list")]
     SessionList {
         query: Option<String>,
@@ -309,6 +311,9 @@ pub enum Method {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ErrorData {
+    ArchivePreparationFailed {
+        reason: crate::session_archive::SessionArchivePrepareError,
+    },
     ConfigurationBusy {
         reason: crate::runtime::RuntimeResourceReloadBusyReason,
     },
@@ -393,6 +398,9 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
+    SessionArchive {
+        download: super::archive_download::ArchiveDownloadDescriptor,
+    },
     InboundMutation {
         outcome: crate::durable::inbox::PendingMutationOutcome,
     },

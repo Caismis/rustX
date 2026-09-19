@@ -8,7 +8,7 @@ import { createWorkspaceSession, WorkspaceSessionNavigation } from '../workspace
 import { Trajectory } from './trajectory/Trajectory';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
-import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../../protocol/app-server/v10';
+import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../../protocol/app-server/v11';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { NavigationEpoch } from './commands/native';
 import { available, commands } from './commands/registry';
@@ -249,8 +249,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       <header className={agentCss.header}><div className={`${agentCss.titleRow} agent-title-row`}><div className={agentCss.titleCluster}><strong id="session-title" aria-label="Session title">{sessionDisplayTitle(state.sessions.find(session => session.id === view.id) ?? view.summary)}</strong><small aria-label="Session location" title={view.settings?.cwd}>{view.settings?.cwd ?? 'Location unavailable'}</small></div>
         <div className="row"><Menu open={sessionMenuOpen} onClose={() => setSessionMenuOpen(false)} align="end" autoFocus portal
           anchor={<Button aria-label="Session actions" aria-haspopup="menu" aria-expanded={sessionMenuOpen} onClick={() => setSessionMenuOpen(value => !value)}>•••</Button>}
-          items={[{ id: 'tree', label: 'Session tree', disabled: !attached || commandOpen || !lineageSwitchSafe(view) }]}
-          onSelect={id => { setSessionMenuOpen(false); if (id === 'tree') invokeCommand({ id: 'tree' }); }} />
+          items={[{ id: 'export', label: 'Export', disabled: state.connection !== 'connected' }, { id: 'tree', label: 'Session tree', disabled: !attached || commandOpen || !lineageSwitchSafe(view) }]}
+          onSelect={id => { setSessionMenuOpen(false); if (id === 'tree') invokeCommand({ id: 'tree' }); else if (id === 'export') run(() => client.exportSession(view.id)); }} />
           <Button aria-label="Toggle Inspector" aria-expanded={inspectorOpen} onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></div>
       </div>
       <div className={agentCss.tabs} role="tablist" aria-label="Conversation view" onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <Button className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? 'Chat' : 'Trajectory'}</Button>)}</div>

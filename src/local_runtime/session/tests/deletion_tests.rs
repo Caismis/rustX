@@ -7,14 +7,14 @@ use crate::local_runtime::session_deletion::DeletionTargetSnapshot;
 use crate::runtime::identity::{AgentId, SubagentId};
 use crate::runtime::workspace::{GitWorktreeSnapshot, WorkspaceIsolation, WorkspaceSnapshot};
 
-fn child(
+pub(super) fn child(
     root: &std::path::Path,
     parent: &SqliteConversationStore,
     ordinal: u64,
     isolated: bool,
 ) -> ConversationId {
     let session =
-        crate::local_runtime::session_deletion::conversation_owner(root, parent.conversation_id())
+        crate::local_runtime::session_ownership::conversation_owner(root, parent.conversation_id())
             .unwrap();
     let subagent = SubagentId::for_conversation(parent.conversation_id(), ordinal);
     let id = ConversationId::generate();

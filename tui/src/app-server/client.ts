@@ -70,7 +70,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 10;
+export const APP_SERVER_PROTOCOL_VERSION = 11;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -165,6 +165,7 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "server/info": "read",
   "server/diagnostics": "read",
   "session/list": "read",
+  "session/exportPrepare": "connection_local",
   "session/summary": "read",
   "session/create": "side_effecting",
   "session/read": "read",
@@ -347,7 +348,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v10 protocol message");
+      this.#fail("invalid App Server v11 protocol message");
       return;
     }
 

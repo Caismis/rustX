@@ -147,6 +147,12 @@ export type Request1 =
       params: {};
     }
   | {
+      method: 'session/exportPrepare';
+      params: {
+        session_id: SessionId;
+      };
+    }
+  | {
       method: 'session/list';
       params: {
         query?: string | null;
@@ -876,6 +882,10 @@ export type NativeTool = 'read' | 'write' | 'edit' | 'glob' | 'grep' | 'bash';
  */
 export type Response = Success | Failure;
 export type MethodResult =
+  | {
+      download: ArchiveDownloadDescriptor;
+      type: 'session_archive';
+    }
   | {
       outcome: PendingMutationOutcome;
       type: 'inbound_mutation';
@@ -2275,6 +2285,10 @@ export type Origin =
 export type CapabilityRevision = string;
 export type ErrorData =
   | {
+      reason: SessionArchivePrepareError;
+      kind: 'archive_preparation_failed';
+    }
+  | {
       reason: RuntimeResourceReloadBusyReason;
       kind: 'configuration_busy';
     }
@@ -2357,6 +2371,15 @@ export type ErrorData =
   | {
       kind: 'operation_failed';
     };
+export type SessionArchivePrepareError =
+  | 'unknown_session'
+  | 'busy'
+  | 'descendant_unavailable'
+  | 'conversation_unavailable'
+  | 'artifact_unavailable'
+  | 'corrupt_authority'
+  | 'storage'
+  | 'cancelled';
 /**
  * The semantic owner preventing a quiescent reload.
  */
@@ -3777,6 +3800,16 @@ export interface Success {
   jsonrpc: JsonRpcVersion;
   id: RequestId;
   result: MethodResult;
+}
+/**
+ * Resolve path against the selected App Server's HTTP(S) origin. Only an
+ * owned stdio child supplies a loopback port; never a server filesystem path.
+ */
+export interface ArchiveDownloadDescriptor {
+  path: string;
+  filename: string;
+  expires_in_seconds: number;
+  loopback_port?: number | null;
 }
 /**
  * A successful ordered file allocation. Paths are a presentation of ownership,

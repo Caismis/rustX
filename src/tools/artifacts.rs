@@ -10,6 +10,7 @@
 //! The shared lifetime identity capacity is [`MAX_ARTIFACTS_PER_STORE`]; durable
 //! reservations consume slots even when the subsequent byte write is abandoned.
 
+use nix::fcntl::{Flock, FlockArg};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -202,16 +203,112 @@ impl ArtifactStore {
     /// Panics only if the store lock is poisoned, which would mean a
     /// previous operation panicked while holding the lock.
     pub fn open_writer(&self, id: &ArtifactId) -> Result<ArtifactWriter, ArtifactError> {
+        self.open_writer_inner(
+            id,
+            #[cfg(test)]
+            || {},
+            #[cfg(test)]
+            || {},
+        )
+    }
+
+    fn open_writer_inner(
+        &self,
+        id: &ArtifactId,
+        #[cfg(test)] before_ownership: impl FnOnce(),
+        #[cfg(test)] after_publication: impl FnOnce(),
+    ) -> Result<ArtifactWriter, ArtifactError> {
         validate_id(id)?;
+        #[cfg(test)]
+        before_ownership();
+        // Writer admission precedes publication of bytes. Readers open .bin
+        // BEFORE consulting this reservation, so they cannot lock a reservation
+        // whose writer has not yet published bytes. No reader can defeat admission.
+        let reservation = File::options()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(self.root.join(format!("{}.reserved", id.as_str())))
+            .map_err(|_| ArtifactError::WriteFailed("artifact reservation unavailable".into()))?;
+        let reservation = Flock::lock(reservation, FlockArg::LockExclusiveNonblock)
+            .map_err(|(_, error)| ArtifactError::WriteFailed(error.to_string()))?;
         let path = self.path_of(id);
         let file = File::options()
             .create_new(true)
             .write(true)
             .open(&path)
             .map_err(|error| ArtifactError::WriteFailed(format!("{}: {error}", path.display())))?;
+        #[cfg(test)]
+        after_publication();
         Ok(ArtifactWriter {
             file,
+            _reservation: reservation,
             _lifecycle: self.lifecycle.clone(),
+        })
+    }
+
+    /// Capture bounded native identity/settled-length facts. Reading unreferenced
+    /// artifacts must not turn their active writers into required export data.
+    pub(crate) fn archive_lengths(
+        root: &Path,
+        check: impl Fn() -> std::io::Result<()>,
+    ) -> std::io::Result<std::collections::BTreeMap<ArtifactId, Option<u64>>> {
+        let mut lengths = std::collections::BTreeMap::new();
+        for entry in std::fs::read_dir(root)? {
+            check()?;
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(id) = name.to_str().and_then(|s| s.strip_suffix(".bin")) else {
+                continue;
+            };
+            if !id.starts_with("artifact_") {
+                continue;
+            }
+            let id = ArtifactId::new(id);
+            validate_id(&id).map_err(std::io::Error::other)?;
+            if u64::try_from(lengths.len()).map_err(std::io::Error::other)?
+                >= MAX_ARTIFACTS_PER_STORE
+            {
+                return Err(std::io::Error::other("artifact identity capacity exceeded"));
+            }
+            // Successful shared admission proves the native one-shot writer has
+            // ended. Create-new semantics make these bytes immutable thereafter.
+            let len = Self::open_archive_reader(root, &id)
+                .ok()
+                .map(|reader| reader.len);
+            lengths.insert(id, len);
+        }
+        Ok(lengths)
+    }
+
+    /// Open existing durable bytes without a presentation-size limit.
+    /// The caller reads bounded chunks and retains the Conversation allocation.
+    /// # Errors
+    /// Invalid identities, symlinks, missing bytes and non-files fail explicitly.
+    pub(crate) fn open_archive_reader(
+        root: &Path,
+        id: &ArtifactId,
+    ) -> std::io::Result<ArtifactReadHandle> {
+        validate_id(id).map_err(std::io::Error::other)?;
+        let file = File::options()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(root.join(format!("{}.bin", id.as_str())))?;
+        // Never acquire reservation ownership without an already-published byte
+        // file. Its publication proves writer-exclusive ownership came first.
+        let reservation = File::options()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(root.join(format!("{}.reserved", id.as_str())))?;
+        let reservation = Flock::lock(reservation, FlockArg::LockSharedNonblock)
+            .map_err(|(_, error)| std::io::Error::other(error.to_string()))?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(std::io::Error::other("artifact is not a regular file"));
+        }
+        Ok(ArtifactReadHandle {
+            file,
+            _reservation: reservation,
+            len: metadata.len(),
         })
     }
 
@@ -303,6 +400,7 @@ fn validate_id(id: &ArtifactId) -> Result<(), ArtifactError> {
 pub struct ArtifactWriter {
     _lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     file: File,
+    _reservation: Flock<File>,
 }
 
 impl Write for ArtifactWriter {
@@ -315,11 +413,79 @@ impl Write for ArtifactWriter {
     }
 }
 
+/// A settled, append-immutable artifact. An active native writer is refused.
+/// Native writers are exclusive for their whole lifetime; `create_new` prevents
+/// reopening a settled identity for mutation. Paths remain private to the store.
+pub(crate) struct ArtifactReadHandle {
+    file: File,
+    _reservation: Flock<File>,
+    pub(crate) len: u64,
+}
+impl Read for ArtifactReadHandle {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.file.read(buffer)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ArtifactError, ArtifactStore};
     use crate::runtime::identity::ConversationId;
     use std::io::Write;
+
+    #[test]
+    fn archive_reader_cannot_steal_writer_admission_at_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(ConversationId::generate(), dir.path()).unwrap();
+        let id = store.create_artifact().unwrap();
+        std::thread::scope(|scope| {
+            let (reached, boundary) = std::sync::mpsc::sync_channel(0);
+            let (release, proceed) = std::sync::mpsc::sync_channel(0);
+            let writer_store = store.clone();
+            let writer_id = id.clone();
+            let writing = scope.spawn(move || {
+                let mut writer = writer_store
+                    .open_writer_inner(
+                        &writer_id,
+                        || {
+                            reached.send(()).unwrap();
+                            proceed.recv().unwrap();
+                        },
+                        || {
+                            reached.send(()).unwrap();
+                            proceed.recv().unwrap();
+                        },
+                    )
+                    .unwrap();
+                writer.write_all(b"legitimate execution succeeds").unwrap();
+            });
+            // Identity is durable; writer is parked just before admission. A
+            // reader must not acquire a reservation lock while bytes are absent.
+            boundary.recv().unwrap();
+            assert!(ArtifactStore::open_archive_reader(dir.path(), &id).is_err());
+            assert!(
+                !ArtifactStore::archive_lengths(dir.path(), || Ok(()))
+                    .unwrap()
+                    .contains_key(&id)
+            );
+            release.send(()).unwrap();
+            // Exactly the old dangerous boundary: .bin is now visible and
+            // open_writer has not returned. The reservation is already exclusive.
+            boundary.recv().unwrap();
+            assert!(store.path_of(&id).is_file());
+            assert!(ArtifactStore::open_archive_reader(dir.path(), &id).is_err());
+            assert_eq!(
+                ArtifactStore::archive_lengths(dir.path(), || Ok(())).unwrap()[&id],
+                None
+            );
+            release.send(()).unwrap();
+            writing.join().unwrap();
+        });
+        let mut reader = ArtifactStore::open_archive_reader(dir.path(), &id).unwrap();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut bytes).unwrap();
+        assert_eq!(bytes, b"legitimate execution succeeds");
+    }
 
     #[test]
     fn cold_reopen_preserves_bytes_and_never_overwrites() {

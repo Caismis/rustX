@@ -98,6 +98,7 @@ impl Probe {
 }
 struct Fixture {
     _root: tempfile::TempDir,
+    archive_root: std::path::PathBuf,
     manager: SessionRuntimeManager,
     host: crate::app_server::host::AppServerHost,
     sessions: [SessionSnapshot; 2],
@@ -205,6 +206,7 @@ impl Fixture {
                     .session,
             );
         }
+        let archive_root = paths.runtime_root.clone();
         let manager = SessionRuntimeManager::new(
             controller,
             UserConfigManager::new(paths.sources.clone()).unwrap(),
@@ -218,6 +220,7 @@ impl Fixture {
         .unwrap();
         Self {
             _root: root,
+            archive_root,
             host: crate::app_server::host::AppServerHost::new(
                 manager.clone(),
                 crate::local_runtime::app_server_policy::AppServerPolicy::default(),

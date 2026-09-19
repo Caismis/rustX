@@ -138,3 +138,14 @@ def web_workflow_conformance() -> Scenario:
 
 
 SCENARIOS["web_workflow_conformance"] = web_workflow_conformance
+
+
+def web_session_archive() -> Scenario:
+    """One settled native history shared by browser and remote TUI exports."""
+    return Scenario("web_session_archive", Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Archive this Session",)),
+        Stream(Text("Archive fixture settled."), Finish()),
+    ))
+
+
+SCENARIOS["web_session_archive"] = web_session_archive

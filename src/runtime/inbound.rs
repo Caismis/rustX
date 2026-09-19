@@ -1097,7 +1097,9 @@ impl ConversationInboundMailbox {
     /// shape to [`ConversationInboundMailbox::commit_background_ownership`]:
     /// the commit is the linearization point that grants a staged child the
     /// right to receive its delegation, so the subagent registry performs
-    /// it strictly before releasing the child's start gate.
+    /// it strictly before releasing the child's start gate. The product ownership
+    /// admission is required here so this durable fact cannot bypass a native
+    /// ownership snapshot; the registry retains it through record publication.
     ///
     /// # Errors
     ///
@@ -1105,6 +1107,7 @@ impl ConversationInboundMailbox {
     /// the fact; the caller must then tear the staged child down.
     pub(crate) fn commit_subagent_ownership(
         &self,
+        _ownership: &crate::runtime::local_storage::OwnershipMutation,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, MailboxError> {
         Ok(self.inbound.commit_subagent_ownership(event)?)

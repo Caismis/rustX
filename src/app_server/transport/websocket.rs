@@ -20,7 +20,7 @@ pub const MAX_CLIENTS: usize = 32;
 /// Incomplete/authentication handshakes cannot retain slots indefinitely.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Browser clients offer this protocol plus `rustx-token.<dedicated token>`.
-pub const SUBPROTOCOL: &str = "rustx.app-server.v10";
+pub const SUBPROTOCOL: &str = "rustx.app-server.v11";
 
 /// Dedicated transport credential. Deliberately has no Debug/Serialize.
 #[derive(Clone)]
@@ -73,6 +73,7 @@ pub(crate) async fn serve_listener(
     shutdown: CancellationToken,
     #[cfg(test)] slots: Option<tokio::sync::watch::Sender<usize>>,
 ) -> io::Result<()> {
+    host.archives().serve_remote();
     let mut clients = JoinSet::new();
     let stop = shutdown.child_token();
     let result = loop {
@@ -95,7 +96,7 @@ pub(crate) async fn serve_listener(
                 let stop = stop.clone();
                 clients.spawn(async move {
                     let _lease = lease;
-                    let _ = connection(socket, host, credential, stop).await;
+                    let _ = crate::app_server::archive_download::dispatch(socket, host, credential, stop).await;
                 });
                 #[cfg(test)]
                 if let Some(slots) = &slots { slots.send_replace(clients.len()); }

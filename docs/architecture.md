@@ -55,6 +55,17 @@ name, never a second absolute private runtime root. Inspection uses the same
 identity-derived allocation. Embedded workspace managers may remain independent;
 native workspace managers derive storage from their composed Conversation access.
 
+## Native Session archive packaging (Issue #365)
+
+`SessionArchiveProducer` in the native library reads catalog/lineage, immutable
+SQLite history and ArtifactStore bytes. It owns one finite cut and one versioned
+inspection archive, without loading runtimes or depending on transport/Trace.
+App Server v11 prepares a scoped streaming-download capability; Web consumes it
+through the browser download manager and TUI writes bytes to a client-local file.
+Neither client composes the archive. Execution coordination ends before history
+serialization, compression or transport backpressure. See the exact authority,
+cut, cancellation and safety contracts in [Session archive export](session-archive.md).
+
 ## Session ownership and local lifecycle exclusion (Issue #254)
 
 Session deletion cascades along durable ownership, never provenance. `/tree`
@@ -4627,7 +4638,7 @@ The outermost layer exposes the runtime to humans and other systems:
 - Runtime command interface
 - Runtime projection/event streaming
 
-See [App Server protocol v10](app-server-protocol.md) for the method vocabulary,
+See [App Server protocol v11](app-server-protocol.md) for the method vocabulary,
 generated client schemas, connection multiplexing, weak attachment lifetime and
 headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
 local TUI-owned child and WebSocket for browser/remote/existing-server clients;
@@ -4652,7 +4663,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v10
+       App Server protocol v11
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4669,7 +4680,7 @@ point. Neither binding owns domain semantics. The existing `src/protocol` bounda
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
 The following version history describes the local Runtime Client stdio contract,
-which after #290 has no external client: `rustx-tui` speaks App Server v10, and
+which after #290 has no external client: `rustx-tui` speaks App Server v11, and
 `src/runtime_client` is an internal projection foundation the App Server reuses.
 App Server clients never negotiate or nest it. Its local version is
 `RUNTIME_CLIENT_PROTOCOL_VERSION`.
@@ -6933,7 +6944,7 @@ See [Session-owned workspace uploads](session-uploads.md) for receipt admission,
 
 ### Pending inbound mutation and committed claim receipts
 
-The exact pending controls described in [App Server protocol v10](app-server-protocol.md#exact-pending-inbound-controls-web-06)
+The exact pending controls described in [App Server protocol v11](app-server-protocol.md#exact-pending-inbound-controls-web-06)
 remain native `ConversationStore` transitions. Sequence + MessageId identify one
 occurrence, and a monotonic pending revision prevents lost updates. The durable
 mutation transaction and canonical adoption transaction are the only ownership

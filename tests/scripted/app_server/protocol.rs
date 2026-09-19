@@ -650,10 +650,10 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let connection = AppServerConnection::new(f.host.clone());
         let before = connection.handle_json(r#"{"jsonrpc":"2.0","id":0,"method":"server/info","params":{}}"#).await.unwrap();
         assert!(matches!(before, Response::Failure(Failure { error: RpcError { data: Some(ErrorData::NotInitialized), .. }, .. })));
-        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":9,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
+        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":10,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 10, requested: 9 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 11, requested: 10 })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -2980,4 +2980,65 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
         assert_eq!(store.load_canonical().unwrap(), original);
         drop(destination); drop(retry); drop(store); f.close().await;
     })).await;
+}
+
+#[tokio::test]
+async fn archive_preflight_failures_reach_the_protocol_without_private_diagnostics() {
+    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
+    use crate::session_archive::SessionArchivePrepareError;
+    bounded(async {
+        let f = Fixture::new().await;
+        let root = crate::runtime::local_storage::ProductRoot::existing(&f.archive_root).unwrap();
+        let catalog = crate::local_runtime::session::SessionCatalog::read_under_guard(&root).unwrap().unwrap();
+        let session = &f.sessions[0];
+        let store = SqliteConversationStore::open(session.active_conversation_id.clone(), &catalog.database_path(&session.id, &session.active_conversation_id)).unwrap();
+        let child = ConversationId::generate();
+        let event = crate::runtime::subagent::ownership_event(
+            &session.active_conversation_id, &SubagentId::for_conversation(&session.active_conversation_id, 1),
+            &AgentId::new("archive-child"), &child, &ToolCallId::new("archive-child-call"),
+            &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
+            &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
+            &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64)))).unwrap(),
+            crate::events::types::SubagentOwnershipKind::Normal,
+            &crate::runtime::workspace::WorkspaceSnapshot::shared(f.workspaces[0].clone()), chrono::Utc::now(),
+        );
+        store.append_event(event).unwrap(); // Required child deliberately has no allocation.
+        let session = &f.sessions[1];
+        let store = SqliteConversationStore::open(session.active_conversation_id.clone(), &catalog.database_path(&session.id, &session.active_conversation_id)).unwrap();
+        let mut message = crate::message::types::UserMessageBlock {
+            id: crate::runtime::identity::MessageId::new("archive-artifact"), content: input("authored"),
+            source: crate::message::types::UserSource::Human, kind: crate::message::types::InboundKind::default(), timestamp: None,
+        };
+        message.content.push(crate::message::types::UserContentBlock::File(crate::message::content::FileReference {
+            artifact_id: crate::runtime::identity::ArtifactId::new("artifact_1"), name: None, mime_type: None, description: None,
+        }));
+        store.append_canonical(&crate::message::types::MessageBlock::User(message)).unwrap();
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        for (index, reason) in [SessionArchivePrepareError::DescendantUnavailable, SessionArchivePrepareError::ArtifactUnavailable].into_iter().enumerate() {
+            let response = connection.handle_request(Request { jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(2),
+                call: Method::SessionExportPrepare { session_id: f.sessions[index].id.clone() } }).await;
+            let Response::Failure(failure) = response else { panic!("preflight returned a descriptor") };
+            assert_eq!(failure.error.data, Some(ErrorData::ArchivePreparationFailed { reason }));
+            assert_eq!(failure.error.message, reason.to_string());
+            assert!(!failure.error.message.contains(f.archive_root.to_str().unwrap()));
+            let encoded = serde_json::to_value(Response::Failure(failure.clone())).unwrap();
+            assert!(jsonschema::validator_for(&crate::app_server::schema::protocol_schema()).unwrap().is_valid(&encoded));
+            // These exact native errors are generated into the fixtures used by both clients.
+            assert!(crate::app_server::schema::fixtures().iter().any(|fixture| {
+                matches!(fixture, ProtocolMessage::Response(Response::Failure(item)) if item.error == failure.error)
+            }));
+            if index == 0 {
+                // Global ownership is required even when exporting another Session.
+                // Repair the missing child before independently exercising artifacts.
+                let path = catalog.database_path(&f.sessions[0].id, &child);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                SqliteConversationStore::open(child.clone(), &path).unwrap().initialize(&[]).unwrap();
+            }
+        }
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    }).await;
 }

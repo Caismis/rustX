@@ -130,6 +130,7 @@ describe("command registry", () => {
     assert.deepEqual(
       COMMANDS.map((command) => command.name),
       [
+        "/export",
         "/settings",
         "/help",
         "/goal",
@@ -235,6 +236,20 @@ describe("slash-command autocomplete", () => {
 });
 
 describe("CommandDispatcher", () => {
+  it("routes /export through the local byte consumer and reports its outcome", async () => {
+    const h = await harness();
+    const calls: string[][] = [];
+    h.host.exportSession = async (id, destination) => { calls.push([id, destination]); return destination; };
+    const result = await h.dispatcher.submit("/export /client/a path.zip");
+    assert.deepEqual(calls, [[h.session.sessionId, "/client/a path.zip"]]);
+    assert.deepEqual(result, { kind: "transient", level: "info", text: "Session archive saved to /client/a path.zip" });
+    h.host.exportSession = async () => { throw new Error("Native preflight failed"); };
+    const failure = await h.dispatcher.submit("/export");
+    assert.equal(failure.kind, "transient");
+    if (failure.kind === "transient") { assert.equal(failure.level, "error"); assert.match(failure.text, /Native preflight failed/); }
+    assert.equal(h.transport.log.count("turn/start"), 0);
+  });
+
   it("submits plain text as one inbound message", async () => {
     const h = await harness();
     const submitting = h.dispatcher.submit("hello runtime");

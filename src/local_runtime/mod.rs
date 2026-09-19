@@ -90,6 +90,7 @@ pub use supervisor::{
 mod settings_e2e;
 
 pub mod session_deletion;
+pub mod session_ownership;
 
 pub use configuration::{
     AdmittedSessionConfig, SessionConfigInput, SessionLocations, UserConfigManager,

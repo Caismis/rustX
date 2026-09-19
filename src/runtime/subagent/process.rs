@@ -122,11 +122,27 @@ impl SubagentSpawnPlan {
     /// authority is the exclusively-created `incarnation-...` child below
     /// that grouping directory, so a stale child can keep writing in its own
     /// old directory without ever naming a later child's directory.
-    pub(crate) fn allocate_child_runtime_root(
+    pub(crate) async fn allocate_child_runtime_root(
         &self,
         conversation_id: &ConversationId,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
     ) -> Result<PhysicalChildRuntimeRoot, SpawnError> {
-        PhysicalChildRuntimeRoot::allocate(&self.product_root, &self.session_id, conversation_id)
+        let ownership = self
+            .product_root
+            .runtime_ownership_admission()
+            .await
+            .map_err(|error| SpawnError::WorkspaceSetup {
+                detail: error.to_string(),
+            })?;
+        if cancellation.is_cancelled() {
+            return Err(SpawnError::Cancelled);
+        }
+        PhysicalChildRuntimeRoot::allocate(
+            &self.product_root,
+            &ownership,
+            &self.session_id,
+            conversation_id,
+        )
     }
 
     /// The one typed startup specification of a child.
@@ -208,6 +224,7 @@ impl PhysicalChildRuntimeRoot {
     /// fresh incarnation directory beneath it.
     fn allocate(
         product: &crate::runtime::local_storage::ProductRoot,
+        ownership: &crate::runtime::local_storage::OwnershipMutation,
         session_id: &crate::runtime::identity::SessionId,
         conversation_id: &ConversationId,
     ) -> Result<Self, SpawnError> {
@@ -244,8 +261,9 @@ impl PhysicalChildRuntimeRoot {
                 });
             }
         }
-        crate::local_runtime::session::SessionCatalog::reserve_conversation_directory(
+        crate::local_runtime::session::SessionCatalog::reserve_conversation_directory_under(
             product,
+            ownership,
             &semantic_root,
             conversation_id,
         )
@@ -1104,6 +1122,27 @@ impl StagedChild {
             observation,
             runtime_root: PhysicalChildRuntimeRoot::from_existing(runtime_root),
             workspace: None,
+            retained: RetainedProcessUnits::default(),
+        }
+    }
+
+    /// Uses a production-reserved allocation with a controlled process peer.
+    #[cfg(test)]
+    pub(crate) fn for_allocated_test(
+        child: tokio::process::Child,
+        control: tokio::net::UnixStream,
+        observation: tokio::net::UnixStream,
+        runtime_root: PhysicalChildRuntimeRoot,
+        workspace: WorkspaceUse,
+    ) -> Self {
+        assert!(runtime_root.path().is_dir());
+        assert!(runtime_root.path().parent().unwrap().is_dir());
+        Self {
+            child,
+            control,
+            observation,
+            runtime_root,
+            workspace: Some(workspace),
             retained: RetainedProcessUnits::default(),
         }
     }
@@ -2691,7 +2730,11 @@ mod tests {
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
         };
         let runtime_root = plan
-            .allocate_child_runtime_root(&spec.child_conversation_id)
+            .allocate_child_runtime_root(
+                &spec.child_conversation_id,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
             .expect("a physical incarnation root");
         spec.product_root = plan.product_root.root().to_path_buf();
         spec.incarnation = runtime_root
@@ -2731,8 +2774,8 @@ mod tests {
     /// A stale physical incarnation is retained as its own namespace; a
     /// later spawn of the same semantic child receives a fresh sibling
     /// namespace rather than deleting and recreating the stale pathname.
-    #[test]
-    fn a_stale_child_incarnation_never_becomes_the_next_childs_authority() {
+    #[tokio::test]
+    async fn a_stale_child_incarnation_never_becomes_the_next_childs_authority() {
         let dir = tempfile::tempdir().expect("lab");
         let runtime_root = dir.path().join("runtime");
         let plan = allocation_plan(runtime_root);
@@ -2751,11 +2794,19 @@ mod tests {
         std::fs::write(stale_environment.join("pyvenv.cfg"), "stale").expect("the stale artifact");
 
         assert!(matches!(
-            plan.allocate_child_runtime_root(&semantic_id),
+            plan.allocate_child_runtime_root(
+                &semantic_id,
+                &crate::runtime::cancellation::CancellationSignal::new()
+            )
+            .await,
             Err(super::SpawnError::ConversationIdentityInUse { .. })
         ));
         let fresh_root = plan
-            .allocate_child_runtime_root(&ConversationId::generate())
+            .allocate_child_runtime_root(
+                &ConversationId::generate(),
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
             .expect("the fresh physical incarnation root");
 
         assert!(
@@ -2783,13 +2834,17 @@ mod tests {
     /// the physical incarnation is gone. Reissuing that identity would make
     /// a later child append to an earlier child's transcript, so allocation
     /// reports a typed collision for the registry to skip.
-    #[test]
-    fn an_existing_durable_store_blocks_semantic_identity_reuse() {
+    #[tokio::test]
+    async fn an_existing_durable_store_blocks_semantic_identity_reuse() {
         let dir = tempfile::tempdir().expect("lab");
         let plan = allocation_plan(dir.path().join("runtime"));
         let conversation_id = ConversationId::generate();
         let first_root = plan
-            .allocate_child_runtime_root(&conversation_id)
+            .allocate_child_runtime_root(
+                &conversation_id,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
             .expect("first physical incarnation");
         let durable_path = crate::runtime::subagent::child_conversation_store_path(
             plan.product_root.root(),
@@ -2799,7 +2854,11 @@ mod tests {
         std::fs::write(&durable_path, b"durable child state").expect("durable marker");
 
         let error = plan
-            .allocate_child_runtime_root(&conversation_id)
+            .allocate_child_runtime_root(
+                &conversation_id,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
             .expect_err("the semantic identity is already durable");
         assert!(matches!(
             error,
@@ -2818,7 +2877,11 @@ mod tests {
         let plan = allocation_plan(dir.path().join("runtime"));
         let conversation_id = ConversationId::generate();
         let runtime_root = plan
-            .allocate_child_runtime_root(&conversation_id)
+            .allocate_child_runtime_root(
+                &conversation_id,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
             .expect("physical child incarnation");
         let physical_path = runtime_root.path().to_path_buf();
         let durable_path = crate::runtime::subagent::child_conversation_store_path(
@@ -2863,13 +2926,17 @@ mod tests {
     /// semantic identity through the production allocator while the old
     /// process is still alive. The old write then succeeds, but its exact
     /// pathname is a sibling of — never an alias for — the new root.
-    #[test]
-    fn a_surviving_old_incarnation_can_write_only_to_its_own_root() {
+    #[tokio::test]
+    async fn a_surviving_old_incarnation_can_write_only_to_its_own_root() {
         let dir = tempfile::tempdir().expect("lab");
         let plan = allocation_plan(dir.path().join("runtime"));
         let semantic_id = ConversationId::generate();
         let old_root = plan
-            .allocate_child_runtime_root(&semantic_id)
+            .allocate_child_runtime_root(
+                &semantic_id,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
             .expect("the old physical incarnation root");
         let old_path = old_root.path().to_path_buf();
 
@@ -2909,7 +2976,11 @@ mod tests {
         // the same stable runtime root and the same semantic child identity.
         let restarted_plan = plan.clone();
         let new_root = restarted_plan
-            .allocate_child_runtime_root(&ConversationId::generate())
+            .allocate_child_runtime_root(
+                &ConversationId::generate(),
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
             .expect("the new physical incarnation root");
         let new_path = new_root.path().to_path_buf();
         assert_ne!(old_path, new_path);

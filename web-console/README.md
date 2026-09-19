@@ -69,7 +69,7 @@ an independently managed runtime/Host. The [Host contract](WORKSPACES.md) descri
 that operator-owned integration. Use the launcher for complete local composition.
 
 Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v10` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v11` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -109,7 +109,7 @@ requests provider/MCP configuration.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v10.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v11.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -385,3 +385,12 @@ badges. The Developer Inspector retains exact attachment/incarnation observation
 server diagnostics retain process residency. Branch switching is semantic, not
 a manual unload sequence. Deletion disables controls, closes the deleted view,
 and focuses another existing view or the normal New Session empty state.
+
+### Export
+
+Choose **Session actions → Export**. Native preflight captures a finite Session
+archive, including durable descendants, then the browser download manager streams
+it directly from the authenticated App Server download capability. Web does not
+assemble ZIPs or buffer their bytes. Preparation failures use the existing alert;
+subsequent transfer status appears in the browser's download manager. See
+[Session archive](../docs/session-archive.md), including TLS proxy routing.

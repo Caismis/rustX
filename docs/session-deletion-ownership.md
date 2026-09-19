@@ -34,8 +34,14 @@ blockers, and semantic ownership revision without destructive allocation exclusi
 `DeletionExclusion::acquire` separately claims private allocations only after the
 runtime manager fences admission and proves writer retirement. It never
 traverses provenance, scans directories for ownership, or performs deletion.
-Catalog-wide unique ownership is checked; ambiguity, cycles, missing stores and
-unsafe identities fail closed. The Session graph stays above linear stores.
+Catalog-wide unique ownership is owned by
+`local_runtime::session_ownership::SessionOwnership`, shared with archive and child
+inspection. It derives graph roots, typed child relationships, identity validity,
+parents and Session attribution under the product ownership freeze. Ambiguity,
+cycles, missing stores and unsafe identities fail closed before selecting a
+Session. Deletion then adds workspace disposal blockers and revision semantics
+under that same freeze; archive adds only historical cut frontiers. Neither owns
+a separate descendant traversal. The Session graph stays above linear stores.
 
 ### Canonical allocation authority
 
@@ -75,7 +81,16 @@ derives its workspace allocation from the composed Conversation access.
   guards. Explicit Workflow disposal retains its guard across physical cleanup
   and durable settlement, rather than just individual event commits. Ordinary
   user/model/assistant/tool execution facts
-  do not take this root lock. Target `ConversationExclusion` guards provide the
+  do not take this root lock. Runtime child identity reservation takes waitable
+  `runtime_ownership_admission()` before Conversation allocation serialization;
+  it releases after reservation/incarnation creation, before process staging.
+  Cancellation is rechecked after waiting, before reservation. The later,
+  separate durable Subagent ownership commit
+  uses waitable `runtime_ownership_admission()` before registry/durability/lifecycle
+  commit mutexes; a transient inspection freeze delays it without rejecting a
+  valid staged child. Blocking OS admission runs only in the blocking pool. Its
+  shared guard covers both the ownership Journal event and registry publication,
+  and releases before capacity waits or driver handoff. Target `ConversationExclusion` guards provide the
   separate exclusive private-resource access authority.
 
 ### Ordering and linearization
@@ -349,7 +364,7 @@ execute reacquires them. Conversation admission checks catalog deletion authorit
 after acquiring its allocation lock. Cleanup begins only after file/parent-directory
 durability and runs outside the root freeze and supervisor catalog mutex.
 See [session-deletion-lifecycle.md](session-deletion-lifecycle.md) for commit points,
-uncertainty, recovery, allocator monotonicity, catalog generations, bounded App Server protocol v10 and test mapping.
+uncertainty, recovery, allocator monotonicity, catalog generations, bounded App Server protocol v11 and test mapping.
 
 Preview never retains `ConversationExclusion` while awaiting user confirmation.
 Final inspection remains under the ownership snapshot through exclusion acquisition,

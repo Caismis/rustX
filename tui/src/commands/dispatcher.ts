@@ -1,3 +1,4 @@
+import { archiveDestination } from "../app-server/archive.ts";
 /**
  * The command/input dispatcher.
  *
@@ -228,6 +229,11 @@ export class CommandDispatcher {
 
     try {
       switch (name) {
+        case "/export": {
+          const destination = archiveDestination(session.sessionId, argument);
+          const path = await this.#context.host.exportSession(session.sessionId, destination);
+          return { kind: "transient", level: "info", text: `Session archive saved to ${path}` };
+        }
         case "/help":
           return inspect("Help", renderHelp());
         case "/settings":

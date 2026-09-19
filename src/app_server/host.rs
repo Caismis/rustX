@@ -48,6 +48,7 @@ struct HostInner {
     state: Mutex<HostState>,
     requests: watch::Sender<usize>,
     transport: Arc<TransportResources>,
+    archives: super::archive_download::ArchiveDownloads,
 }
 #[derive(Clone, Debug)]
 pub struct AppServerHost(Arc<HostInner>);
@@ -80,6 +81,10 @@ impl Drop for AttachmentPermit {
 }
 
 impl AppServerHost {
+    pub(crate) fn archives(&self) -> &super::archive_download::ArchiveDownloads {
+        &self.0.archives
+    }
+
     #[must_use]
     pub fn new(manager: SessionRuntimeManager, policy: AppServerPolicy) -> Self {
         Self(Arc::new(HostInner {
@@ -88,6 +93,7 @@ impl AppServerHost {
             state: Mutex::default(),
             requests: watch::channel(0).0,
             transport: Arc::default(),
+            archives: super::archive_download::ArchiveDownloads::default(),
         }))
     }
     #[must_use]

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { RuntimeLayer, SourceScope, ContextLayer, TimeoutLayer, ToolDeadlineLayer, NativePolicyOverrideDocument, NativeTool, ApprovalMode, AppServerPolicy } from '../../../../protocol/app-server/v10';
+import type { RuntimeLayer, SourceScope, ContextLayer, TimeoutLayer, ToolDeadlineLayer, NativePolicyOverrideDocument, NativeTool, ApprovalMode, AppServerPolicy } from '../../../../protocol/app-server/v11';
 import { Button } from '../../presentation/primitives/Button';
 import { TextField, UnitForm, policyTools, type SaveSource } from './controls';
 
