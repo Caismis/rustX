@@ -221,8 +221,8 @@ bounded reused capabilities, not a second Agent presentation architecture.
 | `src/presentation/layout/ChatViewport.tsx` | `packages/client/ui-chat/src/client/chat/ChatView.tsx` |
 | `src/presentation/attachments/AttachmentCard.tsx` | `packages/client/ui-attachment/src/MessageImage.tsx` |
 | `src/presentation/attachments/AttachmentCard.module.css` | `packages/client/ui-attachment/src/MessageImage.module.css` |
-| `src/app/Trajectory.tsx` | `packages/client/ui-trajectory/src/client/TrajectoryTable.tsx` |
-| `src/app/Trajectory.module.css` | `packages/client/ui-trajectory/src/client/TrajectoryTable.module.css` |
+| `src/app/trajectory/Trajectory.tsx` | `packages/client/ui-trajectory/src/client/TrajectoryTable.tsx` |
+| `src/app/trajectory/Trajectory.module.css` | `packages/client/ui-trajectory/src/client/TrajectoryTable.module.css` |
 | `test/trajectory.test.tsx` | `packages/client/ui-trajectory/tests/table.client.spec.tsx` |
 | `src/app/composer/ComposerContextStack.tsx` | `packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx` |
 | `src/app/composer/ComposerContextStack.module.css` | `packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css` |
@@ -392,3 +392,31 @@ unless already present. MIT/DeepSeek copyright is retained in the adapted policy
 the existing complete Harness license and production third-party notices remain
 unchanged. `check:provenance` checks local hashes/import closure; the optional
 `--reference` audit verifies original hashes against the exact external checkout.
+
+## Native Trace inspection and Trajectory (#364)
+
+The reference checkout `/home/caismis/Documents/codes/deepseek-harness-364` is
+pinned at `ddefc45fbc7f8e46dd73185e68295696d1297887`. The ui-trajectory table,
+layout, search index, virtual rows, timeline, code inspector and their tests,
+ui-conversation composition, ui-tool presentation, ui-primitives JSON/Markdown/code
+and attachment rendering informed the implementation. The per-file inventory
+records the precise original paths, hashes, additional sources and exclusions.
+
+`src/app/trajectory/` replaces the old single-file view. It adapts dense native
+Attempt/Step sections, folding, search, stable selection, anchored virtualization,
+tail following, timeline zoom/pan/focus and entity-specific inspection. JsonTree
+and its stylesheet are imported with bounded primitive bindings; existing audited
+Markdown/code and artifact components are reused. No dependency was added.
+
+Deliberate semantic deviations: rustX resolves all native ordering, hierarchy,
+retries, acceptance and outcomes on the server; it never imports Harness Session
+or Cordis event assembly. Details are bounded on-demand reads, with explicit
+truncation. Unknown timing is a marker, never an invented span. Code source is
+recognized only by exact native Bash/Write contracts; no Tool-name heuristic or
+extension-derived language is used. Generation evidence is three scalar offsets,
+not a per-token event stream. Inspection never acquires execution authority.
+
+The rebase preserves #366 Goal chat presentation while retaining exact native
+Goal Tool identity, arguments and result in Trajectory. Its regression uses the
+new summary/detail vocabulary. Lifecycle repairs invalidate cached and pending
+details so a selected running Tool cannot retain a pre-settlement payload.

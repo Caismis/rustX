@@ -140,7 +140,7 @@ describe("initialization", () => {
       protocol_version: 6,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 6, this client speaks 8/);
+    await assert.rejects(pending, /negotiated protocol 6, this client speaks 9/);
   });
 });
 

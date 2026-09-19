@@ -63,6 +63,10 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     const traceAnchorTop = await traceAnchor.evaluate(el => el.getBoundingClientRect().top);
     await trajectory.getByRole('button', { name: 'Load earlier records', exact: true }).click();
     await expect(ledger).toHaveAttribute('aria-rowcount', '64');
+    for (const count of [96, 128]) {
+      await trajectory.getByRole('button', { name: 'Load earlier records', exact: true }).click();
+      await expect(ledger).toHaveAttribute('aria-rowcount', String(count));
+    }
     expect(await trajectory.locator('[data-trace-id]').count()).toBeLessThan(64);
     await expect.poll(async () => Math.abs(await trajectory.locator(`[data-trace-id="${traceAnchorId}"]`).evaluate(el => el.getBoundingClientRect().top) - traceAnchorTop)).toBeLessThan(2);
     const requestRecord = traceBeforeBrowser.records.find(record => record.request)!;
@@ -76,6 +80,11 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
     await expect(inspector).toContainText('Effective system prompt');
     await expect(inspector).toContainText('Reconstructed request context');
+    await page.screenshot({ path: '/tmp/rustx-364-trajectory-desktop.png' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(inspector).toBeVisible();
+    await page.screenshot({ path: '/tmp/rustx-364-trajectory-mobile.png' });
+    await page.setViewportSize({ width: 1440, height: 1000 });
     await inspector.getByRole('tab', { name: 'Options', exact: true }).click();
     await expect(inspector).toContainText(requestRecord.request!.model);
     // Infrastructure authority still does not cross the boundary.

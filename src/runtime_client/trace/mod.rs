@@ -220,7 +220,7 @@ impl<'a> TraceProjection<'a> {
             result.blocks_truncated = true;
         }
         if bounds::encoded_len(&detail) > TRACE_DETAIL_BYTES {
-            detail.message = None;
+            detail.messages.clear();
             detail.tool = None;
             detail.request = None;
             detail.truncated = true;

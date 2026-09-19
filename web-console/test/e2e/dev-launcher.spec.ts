@@ -44,7 +44,7 @@ compat = { chat_reasoning_replay = "omit" }
     const token = readFileSync(ready.tokenFile, 'utf8');
     const launchToken = new URL(ready.url).searchParams.get('token')!;
     expect(launchToken).not.toBe(token);
-    // Real native admission: browser credentials cannot enter the v8 transport.
+    // Real native admission: browser credentials cannot enter the v9 transport.
     await new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v9', `rustx-token.${launchToken}`]);
       socket.onopen = () => { socket.close(); reject(new Error('Browser token admitted by native App Server')); };

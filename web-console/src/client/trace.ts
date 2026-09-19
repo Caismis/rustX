@@ -131,7 +131,7 @@ export function completeTraceDetail(
   return {
     ...cache,
     details: boundDetails(
-      { ...cache.details, [id]: { epoch, ...(detail ? { detail } : {}), ...(error ? { error } : {}) } },
+      { ...cache.details, [id]: { epoch, ...(detail ? { detail } : {}), ...(!detail ? { error: error ?? 'Record detail is unavailable at this read cut.' } : {}) } },
       cache.selection?.id,
       id,
     ),
@@ -166,10 +166,18 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
     return { ...replaceTrace(page, previous), selection };
   }
   const records = merge(previous.page.records.map(repair), page.records);
+  const latest = new Map(records.map(record => [record.id, record]));
+  if (selection) latest.set(selection.id, selection);
+  const old = new Map(previous.page.records.map(record => [record.id, record]));
+  if (previous.selection) old.set(previous.selection.id, previous.selection);
+  // A repaired record needs detail from the new native read cut.
+  const details = Object.fromEntries(Object.entries(previous.details).filter(([id]) =>
+    JSON.stringify(old.get(id)) === JSON.stringify(latest.get(id)),
+  ));
   if (!bounded(records)) {
     return { ...replaceTrace(page, previous), selection, error: 'Trace window reached its bound; showing latest.' };
   }
-  return { ...previous, selection, page: { records, next_cursor: previous.page.next_cursor } };
+  return { ...previous, selection, details, page: { records, next_cursor: previous.page.next_cursor } };
 }
 
 export function prependTrace(previous: TraceCache, page: TracePage): TraceCache {

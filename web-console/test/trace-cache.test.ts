@@ -198,3 +198,19 @@ it('a detail reply cannot attach to a different attachment target', async () => 
   await pending;
   expect(server.client.getSnapshot().views.A.trace?.details['trace:10']?.detail).toBeUndefined();
 });
+
+it('a lifecycle repair invalidates cached detail and fences a pending older read', async () => {
+  server = new Server();
+  const running = entry(1, { state: 'running' });
+  server.snapshots.set('A', { ...snapshot(), trace: { records: [running] } });
+  await server.attached('A');
+  server.held.add('session/traceDetail');
+  const pending = server.client.loadTraceDetail('A', running.id);
+  const request = await server.waitFor('session/traceDetail', 1);
+  await server.update('A', { ...snapshot(), trace: { records: [entry(1)] } });
+  server.socket.success(request, { type: 'trace_detail', detail: detail(1) });
+  await pending;
+  expect(server.client.getSnapshot().views.A.trace?.details[running.id]).toBeUndefined();
+  const cached = completeTraceDetail(replaceTrace({ records: [running] }), running.id, 1, detail(1));
+  expect(refreshTrace(cached, { records: [entry(1)] }).details[running.id]).toBeUndefined();
+});

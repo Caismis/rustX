@@ -171,7 +171,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
   const viewport = useRef<HTMLDivElement>(null);
   const followsTail = useRef(true);
   const mounted = useRef(false);
-  const prependAnchor = useRef<{ first: string | undefined; scrollHeight: number; scrollTop: number } | null>(null);
+  const prependAnchor = useRef<{ first: string | undefined; scrollHeight: number; scrollTop: number; virtualized: boolean } | null>(null);
   const virtualized = rows.length > VIRTUALIZATION_THRESHOLD;
   const rowKey = useCallback(
     (index: number) => {
@@ -206,6 +206,11 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     // restore the previous distance from the bottom of the content.
     if (anchor !== null && anchor.first !== firstId) {
       if (!virtualized) pane.scrollTop = anchor.scrollTop + pane.scrollHeight - anchor.scrollHeight;
+      else if (!anchor.virtualized) {
+        // The virtualizer has no prior keyed anchor on its first enabled
+        // render. Transfer the existing reader offset across that boundary.
+        virtualizer.scrollToOffset(anchor.scrollTop + virtualizer.getTotalSize() - anchor.scrollHeight);
+      }
       prependAnchor.current = null;
       followsTail.current = false;
       return;
@@ -224,7 +229,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
   const requestOlder = () => {
     const pane = viewport.current;
     if (pane !== null) {
-      prependAnchor.current = { first: firstId, scrollHeight: pane.scrollHeight, scrollTop: pane.scrollTop };
+      prependAnchor.current = { first: firstId, scrollHeight: pane.scrollHeight, scrollTop: pane.scrollTop, virtualized };
     }
     loadEarlier();
   };

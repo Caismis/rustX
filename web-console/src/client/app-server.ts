@@ -727,10 +727,12 @@ export class AppServerClient {
     const epoch = cache.epoch;
     const existing = cache.details[record];
     if (existing && (existing.loading || existing.detail)) return;
+    const pending = beginTraceDetail(cache, record);
     const current = () => this.current(generation)
       && sameTarget(this.state.views[id]?.target, target)
-      && this.state.views[id]?.trace?.epoch === epoch;
-    this.setSession(id, { trace: beginTraceDetail(cache, record) });
+      && this.state.views[id]?.trace?.epoch === epoch
+      && this.state.views[id]?.trace?.details[record] === pending.details[record];
+    this.setSession(id, { trace: pending });
     try {
       const result = await this.request({ method: 'session/traceDetail', params: { target, record_id: record } }, 'trace_detail');
       if (!current()) return;

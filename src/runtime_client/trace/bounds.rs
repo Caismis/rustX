@@ -170,31 +170,40 @@ fn bound_value(
                 *truncated = true;
                 return serde_json::Value::String(ELIDED.to_owned());
             }
-            serde_json::Value::Array(
-                items
-                    .iter()
-                    .map(|item| bound_value(item, depth + 1, budget, truncated))
-                    .collect(),
-            )
+            let mut bounded = Vec::new();
+            for item in items {
+                if *budget == 0 {
+                    *truncated = true;
+                    break;
+                }
+                bounded.push(bound_value(item, depth + 1, budget, truncated));
+            }
+            serde_json::Value::Array(bounded)
         }
         serde_json::Value::Object(entries) => {
             if depth >= TRACE_JSON_DEPTH {
                 *truncated = true;
                 return serde_json::Value::String(ELIDED.to_owned());
             }
-            serde_json::Value::Object(
-                entries
-                    .iter()
-                    .map(|(key, entry)| {
-                        // A property name is part of the recorded structure,
-                        // so it is bounded rather than dropped: losing the
-                        // name would change what the value means.
-                        let name = TraceText::bounded(key, TRACE_JSON_STRING_BYTES);
-                        *truncated |= name.truncated;
-                        (name.text, bound_value(entry, depth + 1, budget, truncated))
-                    })
-                    .collect(),
-            )
+            let mut bounded = serde_json::Map::new();
+            for (key, entry) in entries {
+                if *budget == 0 {
+                    *truncated = true;
+                    break;
+                }
+                // Never shorten keys: two long names could collapse into
+                // one and silently change the recorded structure.
+                *budget -= 1;
+                if key.len() > TRACE_JSON_STRING_BYTES {
+                    *truncated = true;
+                    continue;
+                }
+                bounded.insert(
+                    key.clone(),
+                    bound_value(entry, depth + 1, budget, truncated),
+                );
+            }
+            serde_json::Value::Object(bounded)
         }
         other => other.clone(),
     }
@@ -283,6 +292,24 @@ mod tests {
         );
         let bounded = TraceJson::bounded(&value);
         assert!(bounded.truncated);
+        assert!(bounded.value.as_array().expect("array").len() < TRACE_JSON_NODES);
+    }
+
+    #[test]
+    fn json_objects_stop_at_budget_and_do_not_alias_long_keys() {
+        let value = serde_json::Value::Object(
+            (0..TRACE_JSON_NODES * 10)
+                .map(|index| (index.to_string(), serde_json::json!([index])))
+                .collect(),
+        );
+        let bounded = TraceJson::bounded(&value);
+        assert!(bounded.truncated);
+        assert!(bounded.value.as_object().expect("object").len() < TRACE_JSON_NODES);
+        let key = "x".repeat(TRACE_JSON_STRING_BYTES + 1);
+        let value = serde_json::json!({key: 1, "kept": 2});
+        let bounded = TraceJson::bounded(&value);
+        assert!(bounded.truncated);
+        assert_eq!(bounded.value, serde_json::json!({"kept": 2}));
     }
 
     /// A single enormous string leaf is bounded on its own.

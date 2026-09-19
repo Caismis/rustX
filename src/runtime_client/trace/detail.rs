@@ -34,7 +34,7 @@ impl TraceProjection<'_> {
             kind: TraceKind::Step,
             request: None,
             tool: None,
-            message: None,
+            messages: Vec::new(),
             truncated: false,
         };
         match &anchor.event {
@@ -54,16 +54,17 @@ impl TraceProjection<'_> {
             E::InboundTurnAdopted { message_ids } => {
                 detail.kind = TraceKind::User;
                 detail.truncated = message_ids.len() > ADOPTED_MESSAGE_LIMIT;
-                // Adoption may commit several canonical messages at once.
-                // The first is projected as the record's message; the rest
-                // are reachable through their own records.
-                if let Some(message) = self
+                // One adoption transaction can contain several canonical
+                // messages. Preserve the batch order and each identity.
+                for message in self
                     .store
                     .load_messages(&message_ids[..message_ids.len().min(ADOPTED_MESSAGE_LIMIT)])?
-                    .into_iter()
-                    .next()
                 {
-                    detail.message = message_detail(&message);
+                    if let Some(message) = message_detail(&message) {
+                        detail.messages.push(message);
+                    } else {
+                        detail.truncated = true;
+                    }
                 }
             }
             E::AssistantMessageCommitted { message_id } => {
@@ -73,7 +74,7 @@ impl TraceProjection<'_> {
                     .load_messages(std::slice::from_ref(message_id))?
                     .first()
                 {
-                    detail.message = message_detail(message);
+                    detail.messages.extend(message_detail(message));
                 }
             }
             E::CompactionStarted => {
@@ -102,7 +103,7 @@ impl TraceProjection<'_> {
                         .load_messages(std::slice::from_ref(summary_message_id))?
                         .first()
                 {
-                    detail.message = message_detail(message);
+                    detail.messages.extend(message_detail(message));
                 }
             }
             E::ToolExecutionStarted {

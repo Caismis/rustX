@@ -20,7 +20,7 @@
 //!
 //! ## Why this is compact
 //!
-//! Exactly four scalars are retained per request. No provider delta is
+//! Exactly three scalars are retained per request. No provider delta is
 //! journalled, no provider chunk type is represented, and no per-token
 //! series is stored: a graph that needs one derives it from spans, and a
 //! metric that needs more evidence than this stays unavailable rather than
@@ -139,8 +139,7 @@ impl GenerationTiming {
     ///
     /// Only generated model content advances the output span. The order of
     /// the two assignments matters: the first output also becomes the last,
-    /// so a single-output generation reports a zero-length decode span
-    /// rather than an absent one.
+    /// so a single-output generation retains both output endpoints.
     pub fn observe(&mut self, event: &ModelEvent, now_ms: u64) {
         if !carries_model_output(event) {
             return;

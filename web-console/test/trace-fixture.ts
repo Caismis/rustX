@@ -89,7 +89,7 @@ export const requestDetail = (n: number, overrides: Partial<TraceDetail> = {}): 
     generation: null,
   },
   tool: null,
-  message: null,
+  messages: [],
   truncated: false,
   ...overrides,
 });
@@ -99,7 +99,7 @@ export const toolDetail = (n: number, overrides: Partial<TraceDetail> = {}): Tra
   id: `trace:${n}`,
   kind: 'tool',
   request: null,
-  message: null,
+  messages: [],
   tool: {
     call_id: `call-${n}`,
     tool_id: 'tool-bash',

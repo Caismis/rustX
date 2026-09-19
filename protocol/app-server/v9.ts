@@ -4653,7 +4653,10 @@ export interface TraceDetail {
   kind: TraceKind;
   request?: TraceRequestDetail | null;
   tool?: TraceToolDetail | null;
-  message?: TraceMessageDetail | null;
+  /**
+   * Canonical messages in native order (an adoption can contain a batch).
+   */
+  messages: TraceMessageDetail[];
   truncated: boolean;
 }
 /**

@@ -334,3 +334,31 @@ it('Chat / Trajectory switching stays on one attachment while live facts change'
   expect(screen.getByLabelText('Canonical conversation')).toBeDefined();
   expect(server.requests.filter(item => item.request.method === 'session/attach')).toHaveLength(attachments);
 });
+
+it('Goal chat presentation preserves exact native Tool inspection', () => {
+  const record = traceTool(0, { tool: { call_id: 'goal-complete-call', tool_id: 'native.update_goal', name: 'update_goal', started: true, outcome: 'success' }, preview: { text: 'Complete goal', truncated: false } });
+  const detail = toolDetail(0);
+  detail.tool = { ...detail.tool!, call_id: 'goal-complete-call', tool_id: 'native.update_goal', name: 'update_goal', source: null, arguments: { value: { action: 'complete', expected: { id: 'goal-1', revision: 2 } }, truncated: false }, result: { ...detail.tool!.result!, blocks: [{ type: 'text', text: { text: 'Goal completed exactly', truncated: false } }] } };
+  renderTrajectory(completeTraceDetail(cacheOf([record]), record.id, 1, detail));
+  fireEvent.click(screen.getByText('Complete goal'));
+  const inspector = within(screen.getByLabelText('Trace record inspector'));
+  expect(inspector.getByText('native.update_goal')).toBeTruthy();
+  expect(inspector.getByText('goal-complete-call')).toBeTruthy();
+  fireEvent.click(inspector.getByRole('tab', { name: 'Input' }));
+  expect(inspector.getByRole('tree', { name: 'update_goal arguments' }).textContent).toContain('complete');
+  fireEvent.click(inspector.getByRole('tab', { name: 'Result' }));
+  expect(inspector.getByText('Goal completed exactly')).toBeTruthy();
+});
+
+it('one adopted User batch renders every bounded canonical message', () => {
+  const record = traceRecord(0, { kind: 'user', request: null, preview: { text: 'Adopted batch', truncated: false } });
+  const detail = requestDetail(0, { kind: 'user', request: null, messages: [
+    { message_id: 'user-first', role: 'user', source: 'human', blocks: [{ type: 'text', text: { text: 'First adopted message', truncated: false } }], truncated: false },
+    { message_id: 'user-second', role: 'user', source: 'human', blocks: [{ type: 'text', text: { text: 'Second adopted message', truncated: false } }], truncated: false },
+  ] });
+  renderTrajectory(completeTraceDetail(cacheOf([record]), record.id, 1, detail));
+  fireEvent.click(screen.getByText('Adopted batch'));
+  fireEvent.click(screen.getByRole('tab', { name: 'Content' }));
+  expect(screen.getByText('First adopted message')).toBeTruthy();
+  expect(screen.getByText('Second adopted message')).toBeTruthy();
+});

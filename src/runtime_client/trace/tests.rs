@@ -675,6 +675,18 @@ fn adopted_inbound_becomes_a_user_record_with_canonical_content() {
             correlation: None,
         })
         .unwrap();
+    store
+        .accept_inbound(crate::durable::InboundDraft {
+            message_id: Some(MessageId::new("second-adopted-user")),
+            source: crate::message::types::UserSource::Human,
+            kind: crate::message::types::InboundKind::Message,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "Also inspect this second message.".into(),
+            })],
+            timestamp: timestamp(1),
+            correlation: None,
+        })
+        .unwrap();
     let batch = store.select_pending_batch().unwrap().unwrap();
     store
         .adopt_pending_batch(batch.watermark, Some(AttemptId::new("attempt-a")))
@@ -694,7 +706,15 @@ fn adopted_inbound_becomes_a_user_record_with_canonical_content() {
     assert!(record.has_detail);
 
     let detail = detail_of(&store, &record.id);
-    let message = detail.message.as_ref().expect("canonical message");
+    assert_eq!(detail.messages.len(), 2);
+    assert_eq!(
+        detail.messages[1].message_id,
+        MessageId::new("second-adopted-user")
+    );
+    assert!(
+        matches!(&detail.messages[1].blocks[0], TraceContentBlock::Text { text } if text.text == "Also inspect this second message.")
+    );
+    let message = detail.messages.first().expect("canonical message");
     assert_eq!(message.role, TraceMessageRole::User);
     assert_eq!(message.source.as_deref(), Some("human"));
     assert!(matches!(

@@ -347,7 +347,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v8 protocol message");
+      this.#fail("invalid App Server v9 protocol message");
       return;
     }
 

@@ -1,4 +1,4 @@
-/** The sole untrusted-JSON → generated DTO boundary for App Server v8. */
+/** The sole untrusted-JSON → generated DTO boundary for App Server v9. */
 import { readFileSync } from "node:fs";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";

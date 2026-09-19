@@ -481,7 +481,7 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/Trajectory.tsx",
-      "treatment": "adapted dense ledger, folding, loaded-window search, virtualization, prepend anchoring and tail-follow onto server-resolved native Trace records; the Harness toolbar is folded into this one view seat",
+      "treatment": "adapted dense ledger, folding, loaded-window search, virtualization, prepend anchoring and tail-follow onto server-resolved native Trace records; the Harness toolbar is folded into this one view seat; preserve the virtualization enable boundary and bounded canonical message batches",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v9",
@@ -489,12 +489,12 @@
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Input",
         "../../presentation/primitives/Tooltip",
+        "./Trajectory.module.css",
         "./TrajectoryInspector",
         "./TrajectoryTimeline",
         "./layout",
         "./search",
         "./timeline",
-        "./Trajectory.module.css",
         "@tanstack/react-virtual",
         "react"
       ],
@@ -525,12 +525,12 @@
           "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1"
         }
       ],
-      "local_sha256": "0b98ac20ba5e218d82b8ac50d4e60d9299977b796fcf030d1f62bdefeae30e15"
+      "local_sha256": "062b45392d1eeaa91e7a43b61799cc6e2b7726bbfb8a50858eac210d3d06ff48"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryInspector.tsx",
-      "treatment": "adapted per-kind inspector sections onto native Trace detail; Markdown, JSON tree, code and artifact rendering use the existing audited rustX primitives",
+      "treatment": "adapted per-kind inspector sections onto native Trace detail; Markdown, JSON tree, code and artifact rendering use the existing audited rustX primitives; refetch detail after authoritative lifecycle repair; preserve the virtualization enable boundary and bounded canonical message batches",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v9",
@@ -566,7 +566,7 @@
           "upstream_sha256": "a31b4253ba9c7c2490f942768d060c769ff1b5b4fb653ccf67ab54af1e1593b7"
         }
       ],
-      "local_sha256": "8fd6831c86343bb65de76f06d11b3c56bb6700e4a99a583a7f18d519d3271e30"
+      "local_sha256": "54100ae6b34d790adf1fb5c85d7ed56f1bb62f83e13b8f5c457273aa5d17f111"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -1545,9 +1545,9 @@
       "treatment": "imported read-only JSON inspector; rustX adapts its import paths and gives React 19 refs explicit initial values. No Harness runtime is introduced.",
       "upstream_sha256": "dbae1610448f4fe0e52f02357776ee78e1cc86497d4dc4a48e71d2216b8a943c",
       "retained_dependencies": [
+        "./JsonTree.module.css",
         "./Menu",
         "./icons",
-        "./JsonTree.module.css",
         "clsx",
         "react"
       ],
@@ -2336,7 +2336,7 @@
     {
       "upstream": "packages/client/ui-trajectory/tests/table.client.spec.tsx",
       "destination": "web-console/test/trajectory.test.tsx",
-      "treatment": "adapted ledger interaction contracts; rustX-authored regressions for proposal-vs-execution, settled generation metrics, on-demand detail, native source rendering and tail-follow",
+      "treatment": "adapted ledger interaction contracts; rustX-authored regressions for proposal-vs-execution, settled generation metrics, on-demand detail, native source rendering and tail-follow; preserve native Goal Tool inspection regression",
       "upstream_sha256": "c2ce0834a8a2577c2182f7112cb8603164df803cb33535a5aa24a9bc9155f171",
       "retained_dependencies": [
         "../src/app/App",
@@ -2364,7 +2364,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "e0571fd9ea7e3ec9c673933b967300cf9df6005e0b4b39f2ac5f0b46f1375197"
+      "local_sha256": "552939db362ff8785c7003da21924d3948994a6abf9c3d183ceb36759b876fc3"
     }
   ],
   "inspected_only": [

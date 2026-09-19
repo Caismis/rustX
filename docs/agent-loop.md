@@ -2073,3 +2073,14 @@ Request Snapshots and execution facts after their owners commit them. Logical
 Steps and actual request ordinals come from native `RequestIdentity`. Trace is
 never consulted by the Agent Loop, recovery, cancellation, Tool dispatch or
 settlement. Removing the Web Trajectory view removes only presentation.
+
+### Historical generation timing
+
+Each dispatched model request owns a `GenerationTiming` accumulator starting at
+its monotonic dispatch frontier. Non-empty normalized output records first/last
+output offsets; usage and framing do not count as output. Completion or failure
+takes the accumulator once and persists its compact `GenerationEvidence` with
+the exact request terminal. Retries create a new accumulator. This evidence is
+inspection data, never canonical Assistant acceptance or recovery authority.
+Trace derives TTFT, first-output-to-terminal duration and usage-backed throughput
+from those settled values; absent evidence remains unavailable after reopen.

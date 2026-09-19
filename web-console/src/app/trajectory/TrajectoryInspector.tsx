@@ -216,10 +216,10 @@ function Generation({ generation }: { generation: TraceGeneration }) {
 function sectionsOf(record: TraceRecord, detail: TraceDetail | undefined): string[] {
   const request = detail?.request ?? undefined;
   const tool = detail?.tool ?? undefined;
-  const message = detail?.message ?? undefined;
+  const messages = detail?.messages ?? [];
   return [
     'Summary',
-    ...(message ? ['Content', 'Raw'] : []),
+    ...(messages.length > 0 ? ['Content', 'Raw'] : []),
     ...(request ? ['Input', 'Tools', 'Options'] : []),
     ...(tool ? ['Input'] : []),
     ...(tool?.source ? ['Source'] : []),
@@ -259,13 +259,13 @@ export function TrajectoryInspector({
 }: TrajectoryInspectorProps) {
   const [section, setSection] = useState('Summary');
   useEffect(() => {
-    if (record.has_detail) onLoadDetail(record.id);
-  }, [record.id, record.has_detail, onLoadDetail]);
+    if (record.has_detail && !detail && !loading && !error) onLoadDetail(record.id);
+  }, [record.id, record.has_detail, detail, loading, error, onLoadDetail]);
   const sections = sectionsOf(record, detail);
   const active = sections.includes(section) ? section : 'Summary';
   const request = detail?.request ?? undefined;
   const tool = detail?.tool ?? undefined;
-  const message = detail?.message ?? undefined;
+  const messages = detail?.messages ?? [];
   const title =
     record.kind === 'request' && record.request
       ? `Request #${record.request.retry_number} · ${record.request.model}`
@@ -404,8 +404,8 @@ export function TrajectoryInspector({
           </dl>
         )}
 
-        {active === 'Content' && message && (
-          <>
+        {active === 'Content' && messages.map(message => (
+          <section key={message.message_id}>
             <dl className={css.facts}>
               <dt>Role</dt>
               <dd>{message.role}</dd>
@@ -420,11 +420,11 @@ export function TrajectoryInspector({
               <Block key={index} block={block} />
             ))}
             <Truncated of={message.truncated} />
-          </>
-        )}
+          </section>
+        ))}
 
-        {active === 'Raw' && message && (
-          <Structured value={{ value: message as unknown as object, truncated: message.truncated }} label="Projected message" />
+        {active === 'Raw' && (
+          <Structured value={{ value: messages, truncated: detail?.truncated ?? false }} label="Projected messages" />
         )}
 
         {active === 'Input' && request && (

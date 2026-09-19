@@ -7377,15 +7377,12 @@
             }
           ]
         },
-        "message": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TraceMessageDetail"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "messages": {
+          "description": "Canonical messages in native order (an adoption can contain a batch).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceMessageDetail"
+          }
         },
         "truncated": {
           "type": "boolean"
@@ -7395,6 +7392,7 @@
       "required": [
         "id",
         "kind",
+        "messages",
         "truncated"
       ]
     },

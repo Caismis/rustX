@@ -295,7 +295,8 @@ pub struct TraceDetail {
     pub kind: TraceKind,
     pub request: Option<TraceRequestDetail>,
     pub tool: Option<TraceToolDetail>,
-    pub message: Option<TraceMessageDetail>,
+    /// Canonical messages in native order (an adoption can contain a batch).
+    pub messages: Vec<TraceMessageDetail>,
     pub truncated: bool,
 }
 
