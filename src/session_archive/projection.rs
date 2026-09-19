@@ -118,15 +118,37 @@ fn tool_execution_status(status: &crate::tools::types::ToolExecutionStatus) -> V
     }
 }
 
-/// Tool-owned content and structured execution facts remain intact. Only the
-/// Journal's status copy crosses the restricted diagnostic boundary; canonical
-/// Tool messages use `message()` and retain the original result exactly.
+/// Continuation state and locators are history; storage diagnostics are not.
+/// Exhaustive by design so new continuation variants require a v1 decision.
+fn managed_output_continuation(
+    continuation: &crate::tools::types::ManagedOutputContinuation,
+) -> Value {
+    use crate::tools::types::ManagedOutputContinuation;
+    match continuation {
+        ManagedOutputContinuation::Complete { locator } => {
+            json!({"type":"complete", "locator":locator})
+        }
+        ManagedOutputContinuation::Partial { locator, .. } => {
+            json!({"type":"partial", "locator":locator,
+                "diagnostic_unavailable":"output-storage diagnostic excluded"})
+        }
+        ManagedOutputContinuation::Unavailable { .. } => {
+            json!({"type":"unavailable",
+                "diagnostic_unavailable":"output-storage diagnostic excluded"})
+        }
+    }
+}
+
+/// Tool-owned content and structured execution facts remain intact. Journal
+/// status and output-storage diagnostics cross explicit restricted projections;
+/// canonical Tool messages retain the original result exactly via `message()`.
 fn tool_execution_result(result: &crate::tools::types::ToolExecutionResult) -> Value {
     json!({
         "status":tool_execution_status(&result.status), "content":result.content,
         "duration_ms":result.duration_ms, "exit_code":result.exit_code,
         "artifacts":result.artifacts, "truncation":result.truncation,
-        "workflow":result.workflow, "managed_output":result.managed_output,
+        "workflow":result.workflow,
+        "managed_output":result.managed_output.as_ref().map(managed_output_continuation),
     })
 }
 
@@ -390,6 +412,38 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn archive_managed_output_preserves_state_and_exact_locators() {
+        use crate::tools::types::ManagedOutputContinuation as Continuation;
+        let locator =
+            std::path::PathBuf::from("/home/user/project/.rustx/tool-output/tasks/exec_42.output");
+        for (continuation, expected) in [
+            (
+                Continuation::Complete {
+                    locator: locator.clone(),
+                },
+                json!({"type":"complete","locator":locator}),
+            ),
+            (
+                Continuation::Partial {
+                    locator: locator.clone(),
+                    diagnostic: "ARCHIVE_MANAGED_PARTIAL_DIAGNOSTIC".into(),
+                },
+                json!({"type":"partial","locator":locator,
+                    "diagnostic_unavailable":"output-storage diagnostic excluded"}),
+            ),
+            (
+                Continuation::Unavailable {
+                    diagnostic: "ARCHIVE_MANAGED_UNAVAILABLE_DIAGNOSTIC".into(),
+                },
+                json!({"type":"unavailable",
+                    "diagnostic_unavailable":"output-storage diagnostic excluded"}),
+            ),
+        ] {
+            assert_eq!(managed_output_continuation(&continuation), expected);
+        }
+    }
+
     #[test]
     fn archive_tool_status_preserves_only_closed_execution_semantics() {
         use crate::runtime::types::CancellationReason;

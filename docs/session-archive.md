@@ -187,7 +187,7 @@ configuration and process-local runtime_resource_revision are deliberately absen
 
 | Authority | v1 boundary and ownership rationale |
 | --- | --- |
-| Journal | Explicit envelope and exhaustive event classification. Pure identity/measurement/control facts use native encoding. Tool execution results explicitly retain Tool-owned content and structured facts while projecting their status. Mixed events project typed model failure/retry/timing evidence and runtime failure classes, excluding raw ModelError message/provider_code, unnormalized provider finish codes, runtime/executor diagnostic prose, workspace cleanup diagnostics and recovery comparison guards. New event variants require an explicit classification. |
+| Journal | Explicit envelope and exhaustive event classification. Pure identity/measurement/control facts use native encoding. Tool execution results explicitly retain Tool-owned content and structured facts while projecting their status and managed-output continuation. Mixed events project typed model failure/retry/timing evidence and runtime failure classes, excluding raw ModelError message/provider_code, unnormalized provider finish codes, runtime/executor diagnostic prose, workspace cleanup diagnostics and recovery comparison guards. New event variants require an explicit classification. |
 | Ledger | User and Tool native values are accepted model-visible historical content, including authored JSON and Tool failure feedback. Assistant projection names identity/content and reasoning text; provider_state is never serialized. Other Assistant blocks contain authored text, Tool calls or artifact references. |
 | Surface | Direct native encoding: only structural operations over canonical message identities. |
 | Requests | Explicit v1 DTO and shared closed option allowlist described above. No durable snapshot or invocation flattening. |
@@ -208,6 +208,20 @@ outer diagnostic and native settlement-control diagnostics remain excluded.
 Native Prepared/Started/Progress and closed lifecycle facts retain their existing
 historical fields; both status and lifecycle matches require new variants to
 receive an archive decision.
+
+Journal `ToolExecutionCompleted.result.managed_output` also uses an exhaustive
+v1 projection. `complete` preserves its exact locator; `partial` preserves its
+exact locator and state; `unavailable` preserves its state. The latter two carry
+`diagnostic_unavailable: "output-storage diagnostic excluded"` instead of native
+output-storage diagnostic prose. No locator is normalized or redacted. Absent
+continuations remain null. Duration, exit code, artifact references, truncation
+flags/byte counts and workflow identity remain structured historical facts;
+Tool-owned content remains intact.
+
+A decoded durable-archive regression covers all three continuation states and
+compares an original canonical Tool message containing a Partial continuation
+against its archived value. Its diagnostic remains in canonical history while
+the same diagnostic is absent from the Journal projection.
 
 This restriction belongs to the Journal, not canonical Tool history. A canonical
 Tool message retains its exact result, including model-visible failure feedback,

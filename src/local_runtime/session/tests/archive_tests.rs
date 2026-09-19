@@ -760,3 +760,93 @@ async fn archive_tool_status_diagnostics_are_excluded_but_canonical_tool_history
         assert_eq!(statuses.iter().filter(|s| s.as_str() == kind).count(), 4);
     }
 }
+
+#[tokio::test]
+async fn archive_managed_output_projects_journal_but_preserves_canonical_tool() {
+    use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
+    use crate::runtime::identity::EventId;
+    use crate::tools::types::ManagedOutputContinuation as Continuation;
+    use serde_json::json;
+
+    let locator = std::path::PathBuf::from("/home/user/project/tool-output/result.txt");
+    let partial_diagnostic = "AUTHORED_OR_CANONICAL_MANAGED_OUTPUT_DETAIL";
+    let unavailable_diagnostic = "ARCHIVE_MANAGED_UNAVAILABLE_DIAGNOSTIC";
+    let partial = Continuation::Partial {
+        locator: locator.clone(),
+        diagnostic: partial_diagnostic.into(),
+    };
+    let mut history = source_history();
+    let MessageBlock::Tool(tool) = &mut history[2] else {
+        panic!("Tool fixture")
+    };
+    tool.result.managed_output = Some(partial.clone());
+    let original_result = tool.result.clone();
+    let canonical_tool = serde_json::to_value(&history[2]).unwrap();
+    let (directory, catalog, _) = open_catalog();
+    let (conversation, session, _) = append_history(&catalog, &history);
+    let store = store_for(&catalog, &session, &conversation);
+    let continuations = [
+        Continuation::Complete {
+            locator: locator.clone(),
+        },
+        partial,
+        Continuation::Unavailable {
+            diagnostic: unavailable_diagnostic.into(),
+        },
+    ];
+    for (index, continuation) in continuations.into_iter().enumerate() {
+        let mut result = original_result.clone();
+        result.managed_output = Some(continuation);
+        store
+            .append_event(RuntimeEventEnvelope {
+                schema_version: EVENT_SCHEMA_VERSION,
+                event_id: EventId::new(format!("managed-output-{index}")),
+                sequence: 0,
+                conversation_id: conversation.clone(),
+                attempt_id: None,
+                turn_id: None,
+                timestamp: Utc::now(),
+                event: RuntimeEvent::ToolExecutionCompleted {
+                    tool_call_id: ToolCallId::new("source-call"),
+                    tool_id: ToolId::new("tool-test"),
+                    result,
+                },
+            })
+            .unwrap();
+    }
+    let files = decode(
+        SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
+            .unwrap(),
+    )
+    .await;
+    let messages = records(&files, &conversation, "messages");
+    assert_eq!(
+        messages[2], canonical_tool,
+        "canonical continuation remains exact"
+    );
+    assert_eq!(
+        messages[2]["result"]["managed_output"]["diagnostic"],
+        partial_diagnostic
+    );
+    let journal = records(&files, &conversation, "journal");
+    // The Partial diagnostic intentionally survives in canonical history, so
+    // exclusion is asserted only against the Journal authority.
+    let encoded = serde_json::to_string(&journal).unwrap();
+    assert!(!encoded.contains(partial_diagnostic));
+    assert!(!encoded.contains(unavailable_diagnostic));
+    let projected: Vec<_> = journal
+        .iter()
+        .filter(|record| record["event"]["type"] == "tool_execution_completed")
+        .map(|record| record["event"]["result"]["managed_output"].clone())
+        .collect();
+    assert_eq!(
+        projected,
+        vec![
+            json!({"type":"complete","locator":locator}),
+            json!({"type":"partial","locator":locator,
+            "diagnostic_unavailable":"output-storage diagnostic excluded"}),
+            json!({"type":"unavailable",
+            "diagnostic_unavailable":"output-storage diagnostic excluded"}),
+        ]
+    );
+}
