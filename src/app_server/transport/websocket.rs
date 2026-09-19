@@ -73,6 +73,7 @@ pub(crate) async fn serve_listener(
     shutdown: CancellationToken,
     #[cfg(test)] slots: Option<tokio::sync::watch::Sender<usize>>,
 ) -> io::Result<()> {
+    host.archives().serve_remote();
     let mut clients = JoinSet::new();
     let stop = shutdown.child_token();
     let result = loop {
@@ -95,7 +96,7 @@ pub(crate) async fn serve_listener(
                 let stop = stop.clone();
                 clients.spawn(async move {
                     let _lease = lease;
-                    let _ = connection(socket, host, credential, stop).await;
+                    let _ = crate::app_server::archive_download::dispatch(socket, host, credential, stop).await;
                 });
                 #[cfg(test)]
                 if let Some(slots) = &slots { slots.send_replace(clients.len()); }

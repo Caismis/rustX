@@ -173,6 +173,8 @@ pub enum Method {
     ServerInfo {},
     #[serde(rename = "server/diagnostics")]
     ServerDiagnostics {},
+    #[serde(rename = "session/exportPrepare")]
+    SessionExportPrepare { session_id: SessionId },
     #[serde(rename = "session/list")]
     SessionList {
         query: Option<String>,
@@ -393,6 +395,9 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
+    SessionArchive {
+        download: super::archive_download::ArchiveDownloadDescriptor,
+    },
     InboundMutation {
         outcome: crate::durable::inbox::PendingMutationOutcome,
     },

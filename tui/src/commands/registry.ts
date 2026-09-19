@@ -25,6 +25,7 @@ export interface CommandSpec {
  * client-facing attachment contract.
  */
 export const COMMANDS: readonly CommandSpec[] = [
+  { name: "/export", description: "Export this Session archive to a client-local file.", argumentHint: "[output-path]" },
   { name: "/settings", description: "Inspect native settings, captured sources, and application boundaries." },
   { name: "/help", description: "List the available commands." },
   { name: "/goal", description: "Show, create, pause, resume, edit, or budget a persistent Goal." },

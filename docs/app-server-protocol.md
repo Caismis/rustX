@@ -926,3 +926,12 @@ Detail is nullable when no allowlisted record exists at the captured read cut.
 List payloads never carry complete request contexts or Tool results. Inspection
 reads do not mutate runtime state or advance live cursors. See [Trace](trace.md)
 for native ownership, limits, allowlists and the historical read boundary.
+
+## Session archive preparation (v10)
+
+`session/exportPrepare { session_id }` returns a `session_archive` result with a
+short-lived, single-use native download descriptor. All clients consume the same
+`rustx-session-archive/v1` stream. The request has no output-path field. Remote
+HTTP(S) downloads share the App Server listener; owned stdio children advertise a
+loopback stream port. See [Session archive](session-archive.md) for cut semantics,
+authentication, resource bounds and cancellation. Durable SQLite remains v41.

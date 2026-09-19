@@ -1,3 +1,4 @@
+import { SessionExportController } from "./session-export";
 import { TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
 import type {
   RuntimeClientSessionDeletionResult, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
@@ -511,6 +512,16 @@ export class AppServerClient {
     this.summaryInFlight.delete(id);
     return this.readSessionSummary(id);
   }
+  private exports = new SessionExportController(async id => {
+    const endpoint = this.state.endpoint;
+    const generation = this.state.generation;
+    if (!endpoint) throw new Error('No App Server connected');
+    const { download } = await this.request({ method: 'session/exportPrepare', params: { session_id: id } }, 'session_archive');
+    if (!this.current(generation)) throw new Error('Archive preparation belongs to a disconnected App Server');
+    return { download, endpoint };
+  });
+  exportSession(id: string): Promise<void> { return this.exports.download(id); }
+
   async deleteSession(id: string, expectedRevision: string) {
     const generation = this.state.generation;
     if (this.state.views[id]?.deleting) throw new Error('Session deletion is already pending verification.');

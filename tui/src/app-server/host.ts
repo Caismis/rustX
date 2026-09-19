@@ -1,3 +1,5 @@
+import { archiveDownloadUrl } from "../../../protocol/app-server/download.ts";
+import { saveSessionArchive } from "./archive.ts";
 /**
  * The App Server a TUI is talking to, and who owns its process.
  *
@@ -91,6 +93,7 @@ export interface LocalAppServerOptions
  * from the one fact that settles it — whether this process spawned the server.
  */
 export interface AppServerHostComposition {
+  endpoint?: string;
   client: AppServerClient;
   ownership: ProcessOwnership;
   /** The owned child, present exactly when `ownership` is `owned_child`. */
@@ -99,14 +102,17 @@ export interface AppServerHostComposition {
 }
 
 export class AppServerHost {
+  readonly endpoint: string | undefined;
   readonly client: AppServerClient;
   readonly ownership: ProcessOwnership;
   readonly #child: AppServerChild | undefined;
   readonly #sessions = new Map<string, AppServerSession>();
   #shutdown: Promise<ChildExit | undefined> | undefined;
+  readonly #exports = new Set<AbortController>();
 
   constructor(composition: AppServerHostComposition) {
     const { client, ownership, child } = composition;
+    this.endpoint = composition.endpoint;
     if ((ownership === "owned_child") !== (child !== undefined)) {
       throw new Error(
         "an owned App Server host has a child process and an external one does not",
@@ -183,12 +189,27 @@ export class AppServerHost {
     const transport = await WebSocketTransport.connect(options);
     try {
       const client = await AppServerClient.initialize({ transport });
-      return new AppServerHost({ client, ownership: "external" });
+      return new AppServerHost({ client, ownership: "external", endpoint: options.endpoint });
     } catch (error) {
       // Only this client's socket is closed. The server keeps running.
       transport.close();
       throw error;
     }
+  }
+
+  /** Destination stays entirely on the TUI machine, including remote mode. */
+  async exportSession(sessionId: string, destination: string, signal?: AbortSignal): Promise<string> {
+    const abort = new AbortController();
+    this.#exports.add(abort);
+    const combined = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
+    try {
+      return await saveSessionArchive(destination, async () => {
+        const { download } = await this.client.call("session/exportPrepare", { session_id: sessionId }, "session_archive");
+        combined.throwIfAborted();
+        if (this.ownership === "external" && !this.endpoint) throw new Error("Missing remote App Server endpoint");
+        return fetch(archiveDownloadUrl(download, this.endpoint), { signal: combined, redirect: "error" });
+      }, combined);
+    } finally { this.#exports.delete(abort); }
   }
 
   /** Every Session currently attached through this connection. */
@@ -488,6 +509,7 @@ export class AppServerHost {
   }
 
   async #settle(): Promise<ChildExit | undefined> {
+    for (const abort of this.#exports) abort.abort(new Error("TUI disconnected during export"));
     this.#sessions.clear();
     if (this.ownership === "external" || this.#child === undefined) {
       await this.client.close();

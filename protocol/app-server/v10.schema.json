@@ -594,6 +594,31 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "session/exportPrepare"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "session/list"
             },
             "params": {
@@ -4798,6 +4823,23 @@
         {
           "type": "object",
           "properties": {
+            "download": {
+              "$ref": "#/$defs/ArchiveDownloadDescriptor"
+            },
+            "type": {
+              "type": "string",
+              "const": "session_archive"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "download"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "outcome": {
               "$ref": "#/$defs/PendingMutationOutcome"
             },
@@ -5523,6 +5565,39 @@
             "capability_revision"
           ]
         }
+      ]
+    },
+    "ArchiveDownloadDescriptor": {
+      "description": "Resolve path against the selected App Server's HTTP(S) origin. Only an\nowned stdio child supplies a loopback port; never a server filesystem path.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "expires_in_seconds": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "loopback_port": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "filename",
+        "expires_in_seconds"
       ]
     },
     "PendingMutationOutcome": {

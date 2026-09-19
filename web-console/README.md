@@ -385,3 +385,12 @@ badges. The Developer Inspector retains exact attachment/incarnation observation
 server diagnostics retain process residency. Branch switching is semantic, not
 a manual unload sequence. Deletion disables controls, closes the deleted view,
 and focuses another existing view or the normal New Session empty state.
+
+### Export
+
+Choose **Session actions → Export**. Native preflight captures a finite Session
+archive, including durable descendants, then the browser download manager streams
+it directly from the authenticated App Server download capability. Web does not
+assemble ZIPs or buffer their bytes. Preparation failures use the existing alert;
+subsequent transfer status appears in the browser's download manager. See
+[Session archive](../docs/session-archive.md), including TLS proxy routing.

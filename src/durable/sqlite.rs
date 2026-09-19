@@ -14213,3 +14213,6 @@ mod tests {
         ));
     }
 }
+
+// Finite archive readers share the concrete durable schema, never transport DTOs.
+pub(crate) mod archive;

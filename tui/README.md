@@ -942,3 +942,13 @@ Deletion works directly for the focused Session after confirmation. The composer
 is disabled during deletion; completion focuses an existing Session or the empty
 Session selector. `/resume` implicitly ensures a runtime; there is no manual
 unload command and no ordinary residency status.
+
+### Export a Session archive
+
+`/export [output-path]` downloads the native Session archive, including durable
+descendants, to the **TUI machine**. The default is
+`./rustx-session-<session-id>.zip`; `/export ~/session.zip` resolves `~` locally,
+even when connected to a remote App Server. Existing files are not overwritten;
+parent directories must exist. Failed transfers remove the partial output when
+possible and report failure. The server receives only the Session ID.
+See [archive format and transport](../docs/session-archive.md).

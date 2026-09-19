@@ -1220,3 +1220,53 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         pa.finish().await; pb.finish().await;
     }).await;
 }
+
+#[tokio::test]
+async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachment() {
+    use app_server_conformance::AppServerConformanceDriver;
+    use rustx::app_server::protocol::*;
+    use std::io::Read;
+    bounded(async {
+        let f = Fixture::new().await;
+        let mut child = f.command("stdio").spawn().unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        let initialized = client
+            .request(serde_json::from_str(INITIALIZE).unwrap())
+            .await;
+        assert!(matches!(initialized, Response::Success(_)));
+        let response = client
+            .request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(2),
+                call: Method::SessionExportPrepare {
+                    session_id: f.sessions[0].clone(),
+                },
+            })
+            .await;
+        let Response::Success(response) = response else {
+            panic!("native archive preparation failed");
+        };
+        let MethodResult::SessionArchive { download } = response.result else {
+            panic!("archive descriptor required");
+        };
+        let port = download.loopback_port.expect("owned stdio stream port");
+        let url = format!("http://127.0.0.1:{port}{}", download.path);
+        let response = reqwest::get(&url).await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "application/zip");
+        let bytes = response.bytes().await.unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut manifest = String::new();
+        zip.by_name("manifest.json")
+            .unwrap()
+            .read_to_string(&mut manifest)
+            .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+        assert_eq!(manifest["format"], "rustx-session-archive/v1");
+        assert_eq!(manifest["session"]["id"], f.sessions[0].as_str());
+        client.close().await;
+        detach_then_shutdown(&mut child).await;
+        assert!(child.wait().await.unwrap().success());
+    })
+    .await;
+}

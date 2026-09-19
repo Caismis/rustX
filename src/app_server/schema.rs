@@ -343,6 +343,29 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             },
         })));
     }
+    fixtures.push(ProtocolMessage::Request(Box::new(Request {
+        jsonrpc: JsonRpcVersion::V2,
+        id: RequestId::String("archive-fixture".into()),
+        call: Method::SessionExportPrepare {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
+        },
+    })));
+    fixtures.push(ProtocolMessage::Response(Response::Success(Box::new(
+        Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("archive-fixture".into()),
+            result: MethodResult::SessionArchive {
+                download: super::archive_download::ArchiveDownloadDescriptor {
+                    path: format!("/session-archive/{}", "a".repeat(43)),
+                    filename: "rustx-session-fixture.zip".into(),
+                    expires_in_seconds: 60,
+                    loopback_port: None,
+                },
+            },
+        },
+    ))));
     fixtures
 }
 

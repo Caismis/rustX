@@ -7,7 +7,7 @@ use crate::local_runtime::session_deletion::DeletionTargetSnapshot;
 use crate::runtime::identity::{AgentId, SubagentId};
 use crate::runtime::workspace::{GitWorktreeSnapshot, WorkspaceIsolation, WorkspaceSnapshot};
 
-fn child(
+pub(super) fn child(
     root: &std::path::Path,
     parent: &SqliteConversationStore,
     ordinal: u64,

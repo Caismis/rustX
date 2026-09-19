@@ -21,6 +21,7 @@ pub mod protocol;
 pub mod publication;
 pub mod runtime;
 pub mod runtime_client;
+pub mod session_archive;
 pub mod skills;
 pub mod toml_authoring;
 pub mod tools;

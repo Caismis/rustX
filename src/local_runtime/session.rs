@@ -5624,5 +5624,6 @@ model = "provider/model"
         assert_eq!(first.len(), 2);
         assert!(head.revision > SurfaceRevision::new(2));
     }
+    mod archive_tests;
     mod deletion_tests;
 }

@@ -239,15 +239,23 @@ fn safe_identity(id: &ConversationId) -> std::io::Result<()> {
     Ok(())
 }
 
-struct Facts {
-    children: BTreeSet<ConversationId>,
+pub(crate) struct Facts {
+    pub(crate) children: BTreeSet<ConversationId>,
     blockers: BTreeMap<String, (WorkspaceSnapshot, WorkspaceBlockerState)>,
 }
 
 // Reuse the existing typed native ownership and disposal authority. This is
 // neither a text search nor a second subagent lifecycle persistence system.
 #[allow(clippy::too_many_lines)] // One closed native ownership/disposal vocabulary.
-fn read_facts(store: &SqliteConversationStore) -> std::io::Result<Facts> {
+pub(crate) fn read_facts(store: &SqliteConversationStore) -> std::io::Result<Facts> {
+    read_facts_while(store, || Ok(()))
+}
+
+#[allow(clippy::too_many_lines)] // One closed native ownership/disposal vocabulary.
+pub(crate) fn read_facts_while(
+    store: &SqliteConversationStore,
+    check: impl Fn() -> std::io::Result<()>,
+) -> std::io::Result<Facts> {
     let mut children = BTreeSet::new();
     let mut blockers = BTreeMap::new();
     let mut resources = BTreeSet::new();
@@ -258,6 +266,7 @@ fn read_facts(store: &SqliteConversationStore) -> std::io::Result<Facts> {
     let mut cursor = None;
     let through = store.event_high_watermark().map_err(invalid)?;
     while cursor.unwrap_or(0) < through {
+        check()?;
         let page = store.read_events(cursor, 256).map_err(invalid)?;
         if page.events.is_empty() {
             break;

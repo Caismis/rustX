@@ -437,6 +437,12 @@ impl AppServerConnection {
             Method::ServerInfo {} => Ok(MethodResult::ServerInfo {
                 capabilities: ServerCapabilities::default(),
             }),
+            Method::SessionExportPrepare { session_id } => {
+                let download = super::archive_download::prepare(&self.host, session_id)
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))?;
+                Ok(MethodResult::SessionArchive { download })
+            }
             Method::SessionList {
                 query,
                 offset,

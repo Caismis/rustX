@@ -78,6 +78,29 @@ pub struct SessionController {
     copy_gate: Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
 }
 impl SessionController {
+    /// Prepare historical export through native authorities, without residency.
+    /// # Errors
+    /// Missing history, ownership conflicts and cancellation fail explicitly.
+    pub async fn prepare_archive(
+        &self,
+        id: SessionId,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> std::io::Result<crate::session_archive::SessionArchiveCut> {
+        let root = self
+            .catalog
+            .lock()
+            .await
+            .controller()
+            .map_err(std::io::Error::other)?
+            .root()
+            .to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            crate::session_archive::SessionArchiveProducer::prepare(&root, &id, &cancel)
+        })
+        .await
+        .map_err(std::io::Error::other)?
+    }
+
     /// Commit a transport-independent batch to the addressed Session workspace.
     /// # Errors
     /// Invalid names, stale Session authority and durability failures are explicit.

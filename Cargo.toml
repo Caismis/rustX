@@ -102,6 +102,8 @@ xberg = { version = "1.0.14", default-features = false, features = [
 ] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake", "connect"] }
 
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
+
 [lints.rust]
 # The runtime process-supervision capability and the per-invocation Bash
 # supervisor perform a small bounded set of explicitly allowed OS shims:

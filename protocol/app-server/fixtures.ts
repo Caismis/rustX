@@ -492,5 +492,26 @@ export const fixtures = [
         "kind": "server_draining"
       }
     }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "archive-fixture",
+    "method": "session/exportPrepare",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "archive-fixture",
+    "result": {
+      "type": "session_archive",
+      "download": {
+        "path": "/session-archive/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "filename": "rustx-session-fixture.zip",
+        "expires_in_seconds": 60,
+        "loopback_port": null
+      }
+    }
   }
 ] satisfies ProtocolMessage[];

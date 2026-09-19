@@ -7502,3 +7502,17 @@ and fsync the parent directory. External edits invalidate stale revisions. An
 uncertain result is reread, never blindly replayed. Normal projections redact
 secrets. Save and Reload remain separate. Clients never parse, overlay, derive
 provenance or treat a draft as loaded effective state.
+
+
+### Finite Session archive inspection (#365)
+
+An archive is one finite historical cut, never another canonical or recovery
+authority. Native ownership exclusion freezes lineage; overlapping SQLite read
+barriers freeze immutable append prefixes and settled artifact inventory. All
+barriers end before record serialization or compression. Later records and
+children cannot enter the captured domain. Required missing descendants or
+artifacts fail explicitly. Streaming is bounded and consumer cancellation stops
+production. Session-authored content is preserved; infrastructure credentials and
+provider-private continuation are excluded by typed ownership. TUI destinations
+remain client-local and never appear in export RPC parameters. See
+[Session archive export](session-archive.md) for the tested contract.
