@@ -129,6 +129,8 @@
 .markdownPreview button { display: none; }
 .result { flex: 0 1 auto; min-width: 24px; max-width: 45%; overflow: hidden; color: var(--dsw-alias-label-tertiary); text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .result[data-error] { color: var(--dsw-alias-state-error-primary); }
+.relation { display: inline-flex; flex: none; align-items: center; gap: 4px; max-width: 40%; min-width: 0; overflow: hidden; color: var(--dsw-alias-label-tertiary); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.relation[data-changed] { color: var(--dsw-alias-label-secondary); }
 .kindShort { display: none; }
 .attachment { display: inline-flex; flex: none; align-items: center; gap: 3px; max-width: 30%; min-width: 0; color: var(--dsw-alias-label-tertiary); font-size: 10px; white-space: nowrap; }
 .attachmentIcon { display: inline-flex; flex: none; }

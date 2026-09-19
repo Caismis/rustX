@@ -112,7 +112,7 @@ record. Recovery never rediscovers a new deletion workset.
 Deletion preview, execution, and recovery on `SessionController` remain
 crate-private. `DeletionScope`, `DeletionRecord`, previews, blockers, and internal
 results are not public native DTOs: their frozen scopes are cleanup authority.
-App Server v11 exposes bounded public control-plane projections. Compile-fail API
+App Server v12 exposes bounded public control-plane projections. Compile-fail API
 regressions enforce this boundary.
 
 ## Schema
@@ -129,7 +129,7 @@ all Sessions without inventing client focus or runtime residency.
 
 See [Session-owned workspace uploads](session-uploads.md) for receipt admission, model paths, fork copies and durable cleanup.
 
-## Session lifecycle (App Server v11)
+## Session lifecycle (App Server v12)
 
 Create, open/resume, switch, fork/branch, and delete operate on durable Sessions.
 Opening implicitly reuses or composes a runtime. Close view releases an attachment

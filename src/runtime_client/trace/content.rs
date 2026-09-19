@@ -96,6 +96,32 @@ pub(super) fn user_blocks(content: &[UserContentBlock]) -> (Vec<TraceContentBloc
     (blocks, truncated)
 }
 
+/// Canonical artifact references carried by one canonical User message.
+///
+/// `limit` is the caller's own bound, because a summary row and a detail
+/// response can afford very different numbers of references. An identity
+/// that does not fit is omitted whole and reported as partial.
+pub(super) fn user_artifacts(
+    content: &[UserContentBlock],
+    limit: usize,
+) -> (Vec<TraceArtifact>, bool) {
+    let mut truncated = false;
+    let mut artifacts = Vec::new();
+    for block in content {
+        let artifact = match block {
+            UserContentBlock::Image(image) => image_artifact(image),
+            UserContentBlock::File(file) => file_artifact(file),
+            UserContentBlock::Text(_) | UserContentBlock::UploadedFile(_) => continue,
+        };
+        if !identity_fits(artifact.artifact_id.as_str()) || artifacts.len() >= limit {
+            truncated = true;
+            continue;
+        }
+        artifacts.push(artifact);
+    }
+    (artifacts, truncated)
+}
+
 /// Projects canonical Assistant content blocks.
 pub(super) fn assistant_blocks(
     content: &[AssistantContentBlock],

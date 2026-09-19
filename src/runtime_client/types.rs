@@ -369,7 +369,15 @@ pub enum RuntimeClientSessionRequest {
 /// Version 42 adds completed-response provenance/timing, execution statistics,
 /// native context occupancy and explicit post-response lineage semantics.
 /// Version 41 clients are rejected without a compatibility projection.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 42;
+/// Version 43 makes three Trace presentation relationships native, mandatory
+/// facts instead of client inferences: the request-relative System Prompt
+/// state resolved against the nearest preceding actual request, the canonical
+/// request Context introduced by a request's own frozen
+/// `request_context_ids`, and the exact outer `ToolCallId` of Background,
+/// Subagent and Workflow records. Version 42 clients are rejected: the
+/// mandatory summary vocabulary changed shape, and no compatibility decoder
+/// or dual Trace DTO path exists in either version.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 43;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1370,7 +1378,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 42);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 43);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

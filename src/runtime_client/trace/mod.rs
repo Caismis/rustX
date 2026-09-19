@@ -29,6 +29,19 @@
 //! | Canonical `ToolMessage` | the one Tool result authority |
 //! | Request-owned generation evidence | settled TTFT / decode timing |
 //! | Current runtime projections | positive current lifecycle evidence only |
+//!
+//! ## Resolved presentation relationships
+//!
+//! Some facts a reader needs are relationships between records rather than
+//! facts about one record. They are resolved here, by native authority, and
+//! never left for a client to infer from adjacency, names, timestamps or the
+//! window it happens to have loaded:
+//!
+//! ```text
+//! System Prompt state  nearest preceding actual request, in durable order
+//! Context introduction RequestSnapshot.request_context_ids + Ledger reads
+//! Tool-owned domains   the outer ToolCallId frozen in the native start fact
+//! ```
 
 mod bounds;
 mod content;
@@ -36,20 +49,23 @@ mod detail;
 mod live;
 mod record;
 mod request;
+mod summary;
 mod tool;
 mod types;
 
 pub use bounds::{
-    TRACE_DETAIL_BYTES, TRACE_PAGE_BYTES, TRACE_RECORD_BYTES, TraceJson, TracePreview, TraceText,
+    TRACE_DETAIL_BYTES, TRACE_PAGE_BYTES, TRACE_RECORD_BYTES, TRACE_SUMMARY_CONTEXT,
+    TRACE_SUMMARY_CONTEXT_BYTES, TraceJson, TracePreview, TraceText,
 };
 pub use types::{
-    TraceArtifact, TraceContentBlock, TraceCursor, TraceDetail, TraceGeneration,
-    TraceGenerationTimeline, TraceKind, TraceLifecycle, TraceLocation, TraceManagedOutput,
-    TraceMessageDetail, TraceMessageRole, TracePage, TraceRecord, TraceRequestDetail,
-    TraceRequestFailure, TraceRequestMessage, TraceRequestOption, TraceRequestOutcome,
-    TraceRequestSummary, TraceState, TraceTiming, TraceToolCall, TraceToolDefinition,
-    TraceToolDetail, TraceToolLifecycle, TraceToolOutcome, TraceToolOutcomeUpdate, TraceToolResult,
-    TraceToolSource, TraceToolSummary, TraceToolTruncation,
+    TraceArtifact, TraceContentBlock, TraceContextKind, TraceContextPresentation, TraceCursor,
+    TraceDetail, TraceGeneration, TraceGenerationTimeline, TraceKind, TraceLifecycle,
+    TraceLocation, TraceManagedOutput, TraceMessageDetail, TraceMessageRole, TracePage,
+    TraceRecord, TraceRequestDetail, TraceRequestFailure, TraceRequestMessage, TraceRequestOption,
+    TraceRequestOutcome, TraceRequestSummary, TraceState, TraceSystemPromptPresentation,
+    TraceSystemPromptState, TraceTiming, TraceToolCall, TraceToolDefinition, TraceToolDetail,
+    TraceToolLifecycle, TraceToolOutcome, TraceToolOutcomeUpdate, TraceToolResult, TraceToolSource,
+    TraceToolSummary, TraceToolTruncation,
 };
 
 use record::bound_record;

@@ -47,6 +47,7 @@ impl TraceProjection<'_> {
             tool: None,
             calls: vec![],
             native_id: None,
+            originating_tool_call_id: None,
             message_id: None,
             attachments: vec![],
             has_detail: false,
@@ -113,6 +114,11 @@ impl TraceProjection<'_> {
                 )?;
                 let (failure_kind, usage, generation) = request_terminal(end.as_ref());
                 record.preview = Some(TracePreview::of(&frozen.invocation.model));
+                // Both relationships below are resolved here, from native
+                // authority, so no client has to compare request details or
+                // diff messages to discover them.
+                let system_prompt = self.system_prompt_presentation(anchor.sequence, &frozen)?;
+                let (context_additions, context_truncated) = self.context_presentation(&frozen)?;
                 record.request = Some(TraceRequestSummary {
                     previous_failure_kind: self.previous_request_failure(&frozen)?,
                     assistant_message_id: frozen.provisional_message_id.clone(),
@@ -123,6 +129,9 @@ impl TraceProjection<'_> {
                     usage: usage.clone(),
                     generation: generation
                         .map(|evidence| generation_metrics(evidence, usage.as_ref())),
+                    system_prompt,
+                    context_additions,
+                    context_truncated,
                 });
                 end
             }
@@ -274,27 +283,41 @@ impl TraceProjection<'_> {
                 }
                 end
             }
-            E::BackgroundExecutionCommitted { execution_id, .. } => {
+            E::BackgroundExecutionCommitted {
+                execution_id,
+                tool_call_id,
+                ..
+            } => {
                 record.kind = TraceKind::Background;
                 record.native_id = Some(execution_id.to_string());
+                record.originating_tool_call_id = Some(tool_call_id.clone());
                 self.ending(
                     FactScope::Execution(execution_id.to_string()),
                     &["background_terminal_published"],
                 )?
             }
             E::SubagentOwnershipCommitted {
-                subagent_id, agent, ..
+                subagent_id,
+                agent,
+                tool_call_id,
+                ..
             } => {
                 record.kind = TraceKind::Subagent;
                 record.native_id = Some(subagent_id.to_string());
+                record.originating_tool_call_id = Some(tool_call_id.clone());
                 record.preview = Some(TracePreview::of(agent.as_str()));
                 self.ending(
                     FactScope::Subagent(subagent_id.to_string()),
                     &["subagent_terminal_published", "subagent_terminal_settled"],
                 )?
             }
-            E::WorkflowStarted { run_id, .. } => {
+            E::WorkflowStarted {
+                run_id,
+                tool_call_id,
+                ..
+            } => {
                 record.kind = TraceKind::Workflow;
+                record.originating_tool_call_id = Some(tool_call_id.clone());
                 let id = serde_json::to_string(run_id).map_err(|_| {
                     ConversationStoreError::InvalidReference("invalid Workflow identity".into())
                 })?;
@@ -537,6 +560,14 @@ pub(super) fn bound_record(record: &mut TraceRecord) {
         record.message_id = None;
         record.truncated = true;
     }
+    if record
+        .originating_tool_call_id
+        .as_ref()
+        .is_some_and(|id| !identity_fits(id.as_str()))
+    {
+        record.originating_tool_call_id = None;
+        record.truncated = true;
+    }
     if record.request.as_ref().is_some_and(|request| {
         !identity_fits(request.request_id.as_str())
             || !identity_fits(request.assistant_message_id.as_str())
@@ -562,6 +593,16 @@ pub(super) fn bound_record(record: &mut TraceRecord) {
         record.preview = None;
         record.calls.clear();
         record.truncated = true;
+    }
+    // Context presentation is the largest optional block a request row can
+    // carry. Releasing it keeps the request's own identity, classification
+    // and outcome visible rather than losing the whole summary for it.
+    if encoded_len(record) > TRACE_RECORD_BYTES
+        && let Some(request) = record.request.as_mut()
+    {
+        request.context_additions.clear();
+        request.context_truncated = true;
+        request.system_prompt.preview = None;
     }
     // JSON escaping can expand even bounded identity and model strings
     // several times over, so the bound is re-checked after each release.

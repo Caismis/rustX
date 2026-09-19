@@ -1,4 +1,4 @@
-import type { QuestionSpecification, QuestionnaireAnswerEntry, QuestionnaireSubmission } from '../../../protocol/app-server/v11';
+import type { QuestionSpecification, QuestionnaireAnswerEntry, QuestionnaireSubmission } from '../../../protocol/app-server/v12';
 export interface QuestionDraft { selected: number[]; text: string; boolean?: boolean }
 export const emptyDraft = (): QuestionDraft => ({ selected: [], text: '' });
 
