@@ -9,8 +9,8 @@
 use super::bounds::{TRACE_RECORD_BYTES, TracePreview, encoded_len, identity_fits};
 use super::content::{message_preview, tool_outcome, tool_status_detail};
 use super::types::{
-    TraceArtifact, TraceCursor, TraceGeneration, TraceKind, TraceLocation, TraceRecord,
-    TraceRequestSummary, TraceState, TraceTiming, TraceToolCall, TraceToolSummary,
+    TraceArtifact, TraceCursor, TraceGeneration, TraceGenerationTimeline, TraceKind, TraceLocation,
+    TraceRecord, TraceRequestSummary, TraceState, TraceTiming, TraceToolCall, TraceToolSummary,
 };
 use super::{ADOPTED_MESSAGE_LIMIT, TraceProjection};
 use crate::durable::ConversationStoreError;
@@ -398,6 +398,7 @@ pub(super) fn generation_metrics(
     usage: Option<&ModelUsage>,
 ) -> TraceGeneration {
     TraceGeneration {
+        timeline: generation_timeline(evidence),
         ttft_ms: evidence.time_to_first_output_ms(),
         generation_ms: evidence.generation_ms(),
         terminal_ms: evidence.terminal_ms,
@@ -406,6 +407,25 @@ pub(super) fn generation_metrics(
         output_tokens_per_second: usage
             .and_then(|usage| evidence.throughput_tokens_per_second(usage.output_tokens)),
     }
+}
+
+/// Positions require the runtime's bridge; numeric TTFT alone is insufficient.
+fn generation_timeline(evidence: GenerationEvidence) -> Option<TraceGenerationTimeline> {
+    let dispatch_ms = evidence.dispatch_after_start_ms?;
+    let first_output_ms = match evidence.first_output_ms {
+        Some(v) => Some(dispatch_ms.checked_add(v)?),
+        None => None,
+    };
+    let last_output_ms = match evidence.last_output_ms {
+        Some(v) => Some(dispatch_ms.checked_add(v)?),
+        None => None,
+    };
+    Some(TraceGenerationTimeline {
+        dispatch_ms,
+        first_output_ms,
+        last_output_ms,
+        terminal_ms: dispatch_ms.checked_add(evidence.terminal_ms)?,
+    })
 }
 
 /// The typed state proven by one terminal fact.

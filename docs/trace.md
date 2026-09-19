@@ -194,12 +194,60 @@ rather than aliased by shortening. Identities over 512 bytes are omitted whole.
 Summary records are at most 8 KiB, page records 128 KiB and one detail 512 KiB
 encoded JSON. Every omitted or shortened value carries a truncation indication.
 
-GenerationTiming observes normalized model output from a request-local monotonic
-dispatch origin. Empty deltas, framing and usage updates do not start TTFT.
-The request terminal commits first-output, last-output and terminal offsets with
-usage; no per-delta Journal events are added. TTFT is first output; generation
-is first output through terminal; throughput requires output usage and a positive
-generation interval. Missing evidence stays unavailable, including after reopen.
+### Generation clock contract
+
+Every phase boundary drawn in Trajectory must have native evidence in the same
+request timeline domain. The Agent Loop owns that evidence; Trace only projects
+it and the browser only renders it.
+
+| Boundary or metric | Exact meaning |
+| --- | --- |
+| Durable request start | The UTC timestamp supplied to `commit_model_turn_start`, recorded atomically with the immutable Request Snapshot and `ModelRequestStarted` |
+| Dispatch frontier | Monotonic reading immediately before entering the actual adapter dispatch, after durable commit and request reconstruction/verification |
+| First / last output | First / last non-empty provider-independent normalized text, reasoning, refusal or Tool-call output observed by the execution owner |
+| Provider terminal | Observed normalized completion/failure; runtime failures without a provider terminal use the native failure-settlement boundary |
+| Canonical Assistant acceptance | Separate later canonical message commit; provider completion never proves acceptance |
+| Request duration | Paired durable-start origin → provider terminal, including preparation, measured monotonically |
+| TTFT | Adapter dispatch → first output, excluding preparation |
+| Generation duration | First output → provider terminal |
+| Throughput | Reported output tokens / generation seconds; requires usage, first output, terminal and a positive interval |
+
+Inside cancellation/start arbitration, immediately before the start transaction,
+the Agent Loop samples monotonic time and UTC as one deliberate origin pair at
+millisecond precision. That exact UTC value is passed to the transaction. The
+successful commit linearizes the start fact's existence; its supplied timestamp
+is its timing coordinate (not a later transaction-return timestamp). The paired
+monotonic origin is retained only for a fresh successful commit, never for an
+idempotent historical receipt. No provider dispatch moves before that commit;
+cancellation arbitration, snapshot/start identity and atomicity are unchanged.
+
+At dispatch, execution measures `dispatch_after_start_ms` from that retained
+origin. `GenerationEvidence` settles this bridge plus first/last/terminal offsets
+from dispatch in the exact request terminal event. The provider terminal offset
+is captured on observation, so EOF, publication and Journal append delays cannot
+extend generation. Each retry owns a new accumulator. There are no per-delta
+Journal events, absolute timestamp streams, Trace tables or recovery inputs.
+
+`TraceGeneration.timeline` projects dispatch, first/last output and terminal
+as offsets from the paired request start. The duration timeline anchors these
+coordinates at `TraceTiming.started_at`; it does **not** rescale them to the
+independent Journal UTC start/end span. `TraceTiming.duration_ms` remains that
+Journal wall duration, including terminal recording delay and any wall-clock
+adjustment, and is labelled separately in Inspector. No current clock participates
+in reopening or projection. Equal-width sequence mode does not paint duration
+phase boundaries. Missing bridge evidence leaves the wall span unsplit even if
+numeric TTFT/generation metrics exist; missing output never acquires a boundary.
+
+For example, preparation 400 ms + dispatch-origin TTFT 320 ms + generation
+1280 ms yields request-relative dispatch 400 ms, first output 720 ms and terminal
+2000 ms. Multiplying the Journal wall span by `320 / 1600` is prohibited.
+
+**Deliberate Harness deviation:** the pinned Harness `TrajectoryTable.tsx`
+derives TTFT as `firstTokenTime - stepStartTime`. rustX retains its native
+**adapter dispatch → first provider-independent output** contract because its
+durable request-start/reconstruction lifecycle precedes actual dispatch. These
+metric definitions are not identical, even though the overview presentation is
+adapted from Harness.
 
 The browser retains at most eight detail responses. A server lifecycle repair
 invalidates affected payloads and pending detail reads; the selected inspector

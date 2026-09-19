@@ -133,6 +133,8 @@ pub struct TraceTiming {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceGeneration {
+    /// Request-relative monotonic phase positions, only with a native clock bridge.
+    pub timeline: Option<TraceGenerationTimeline>,
     /// Milliseconds from the request's dispatch frontier to its first output.
     pub ttft_ms: Option<u64>,
     /// Milliseconds from the first output to the provider terminal.
@@ -142,6 +144,17 @@ pub struct TraceGeneration {
     /// Output tokens per second, present only when usage and both decode
     /// endpoints exist and the decode span is measurable.
     pub output_tokens_per_second: Option<f64>,
+}
+
+/// All offsets share the paired durable request-start origin. The browser must
+/// not stretch them to fit the independently recorded Journal wall duration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceGenerationTimeline {
+    pub dispatch_ms: u64,
+    pub first_output_ms: Option<u64>,
+    pub last_output_ms: Option<u64>,
+    pub terminal_ms: u64,
 }
 
 /// Safe reference to the existing native artifact carrier, never a path.

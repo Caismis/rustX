@@ -43,13 +43,13 @@ pub use bounds::{
     TRACE_DETAIL_BYTES, TRACE_PAGE_BYTES, TRACE_RECORD_BYTES, TraceJson, TracePreview, TraceText,
 };
 pub use types::{
-    TraceArtifact, TraceContentBlock, TraceCursor, TraceDetail, TraceGeneration, TraceKind,
-    TraceLifecycle, TraceLocation, TraceManagedOutput, TraceMessageDetail, TraceMessageRole,
-    TracePage, TraceRecord, TraceRequestDetail, TraceRequestFailure, TraceRequestMessage,
-    TraceRequestOption, TraceRequestOutcome, TraceRequestSummary, TraceState, TraceTiming,
-    TraceToolCall, TraceToolDefinition, TraceToolDetail, TraceToolLifecycle, TraceToolOutcome,
-    TraceToolOutcomeUpdate, TraceToolResult, TraceToolSource, TraceToolSummary,
-    TraceToolTruncation,
+    TraceArtifact, TraceContentBlock, TraceCursor, TraceDetail, TraceGeneration,
+    TraceGenerationTimeline, TraceKind, TraceLifecycle, TraceLocation, TraceManagedOutput,
+    TraceMessageDetail, TraceMessageRole, TracePage, TraceRecord, TraceRequestDetail,
+    TraceRequestFailure, TraceRequestMessage, TraceRequestOption, TraceRequestOutcome,
+    TraceRequestSummary, TraceState, TraceTiming, TraceToolCall, TraceToolDefinition,
+    TraceToolDetail, TraceToolLifecycle, TraceToolOutcome, TraceToolOutcomeUpdate, TraceToolResult,
+    TraceToolSource, TraceToolSummary, TraceToolTruncation,
 };
 
 use record::bound_record;

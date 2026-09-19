@@ -413,8 +413,18 @@ retries, acceptance and outcomes on the server; it never imports Harness Session
 or Cordis event assembly. Details are bounded on-demand reads, with explicit
 truncation. Unknown timing is a marker, never an invented span. Code source is
 recognized only by exact native Bash/Write contracts; no Tool-name heuristic or
-extension-derived language is used. Generation evidence is three scalar offsets,
-not a per-token event stream. Inspection never acquires execution authority.
+extension-derived language is used. Generation evidence is four bounded scalar offsets, including the native
+start/dispatch clock bridge, not a per-token event stream. Duration phases use
+request-relative native positions; missing bridge evidence leaves the span
+unsplit. Equal-width sequence mode has no duration splits. Inspector distinguishes
+Journal wall duration from measured request and dispatch intervals.
+
+TTFT deliberately differs from the pinned Harness `TrajectoryTable.tsx`'s
+`firstTokenTime - stepStartTime`: Harness measures step start → first token;
+rustX measures adapter dispatch → first provider-independent output. Native
+durable request preparation precedes dispatch and is rendered separately when
+measured. See [the native timing contract](../docs/trace.md#generation-clock-contract).
+Inspection never acquires execution authority.
 
 The rebase preserves #366 Goal chat presentation while retaining exact native
 Goal Tool identity, arguments and result in Trajectory. Its regression uses the

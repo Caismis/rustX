@@ -4582,6 +4582,10 @@ export interface UsageDetails {
  */
 export interface TraceGeneration {
   /**
+   * Request-relative monotonic phase positions, only with a native clock bridge.
+   */
+  timeline?: TraceGenerationTimeline | null;
+  /**
    * Milliseconds from the request's dispatch frontier to its first output.
    */
   ttft_ms?: string | null;
@@ -4598,6 +4602,16 @@ export interface TraceGeneration {
    * endpoints exist and the decode span is measurable.
    */
   output_tokens_per_second?: number | null;
+}
+/**
+ * All offsets share the paired durable request-start origin. The browser must
+ * not stretch them to fit the independently recorded Journal wall duration.
+ */
+export interface TraceGenerationTimeline {
+  dispatch_ms: string;
+  first_output_ms?: string | null;
+  last_output_ms?: string | null;
+  terminal_ms: string;
 }
 /**
  * Bounded Tool facts carried by a pageable summary row.

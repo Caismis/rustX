@@ -103,6 +103,7 @@ it('settled generation evidence renders TTFT, decode duration and throughput', (
         request: {
           ...traceRecord(0).request!,
           generation: {
+            timeline: null,
             ttft_ms: '320',
             generation_ms: '1280',
             terminal_ms: '1600',
@@ -118,6 +119,20 @@ it('settled generation evidence renders TTFT, decode duration and throughput', (
   expect(within(inspector).getByText('320 ms')).toBeDefined();
   expect(within(inspector).getByText('1.28 s')).toBeDefined();
   expect(within(inspector).getByText('93.8 tokens/s')).toBeDefined();
+});
+
+it('paints preparation and first-output boundaries from native request offsets', () => {
+  const record = traceRecord(0);
+  record.timing.duration_ms = '9000';
+  record.request!.generation = {
+    timeline: { dispatch_ms: '400', first_output_ms: '720', last_output_ms: '1920', terminal_ms: '2000' },
+    ttft_ms: '320', generation_ms: '1280', terminal_ms: '1600', output_tokens_per_second: 93.75,
+  };
+  renderTrajectory(cacheOf([record]));
+  fireEvent.click(screen.getByRole('button', { name: 'Duration' }));
+  const span = screen.getByRole('button', { name: 'Inspect Request #0 · historical-model' });
+  expect(span.style.getPropertyValue('--trajectory-dispatch')).toBe('20%');
+  expect(span.style.getPropertyValue('--trajectory-first-output')).toBe('36%');
 });
 
 it('request detail is fetched on demand and renders historical input with its Tool catalog', () => {

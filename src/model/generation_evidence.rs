@@ -8,23 +8,16 @@
 //!
 //! ## Why offsets rather than timestamps
 //!
-//! Every value here is an integer-millisecond offset from one origin: the
-//! request's own dispatch frontier, read once from the runtime's
-//! [`MonotonicClock`](crate::runtime::monotonic::MonotonicClock) immediately
-//! before the adapter stream is created. A monotonic origin cannot be moved
-//! by a wall-clock correction, a suspend/resume, or a timezone change, so a
-//! span reopened years later is exactly the span that was measured. The
-//! absolute instant a span is anchored to remains the Event Journal's own
-//! `ModelRequestStarted` timestamp, which already exists and is already
-//! authoritative.
+//! Output and terminal offsets use the adapter dispatch monotonic origin.
+//! `dispatch_after_start_ms` bridges that origin to the monotonic reading
+//! paired with the exact UTC timestamp supplied to the durable start transaction.
+//! The pair is captured under start arbitration; it is retained only after a
+//! fresh successful commit. Commit linearizes the fact's existence, while its
+//! supplied timestamp defines its timeline origin. No later wall clock repairs
+//! or estimates this relationship. Missing bridge evidence means no phase positions.
 //!
-//! ## Why this is compact
-//!
-//! Exactly three scalars are retained per request. No provider delta is
-//! journalled, no provider chunk type is represented, and no per-token
-//! series is stored: a graph that needs one derives it from spans, and a
-//! metric that needs more evidence than this stays unavailable rather than
-//! becoming an estimate.
+//! Four bounded scalars are retained. No provider deltas or per-token series
+//! are journalled, and Trace only projects this request-owned evidence.
 //!
 //! ## What "model output" means
 //!
@@ -41,13 +34,18 @@ use crate::model::event::ModelEvent;
 
 /// Settled provider-independent timing evidence for one actual request.
 ///
-/// A field is `None` exactly when the corresponding fact never happened.
-/// Absence is therefore a truthful statement about the generation, never a
-/// gap the reader may fill: a request that failed before producing output
-/// has no first output, and no reader may substitute its terminal for one.
+/// An optional boundary or clock relationship is absent when it was not
+/// observed. Readers must never fill missing evidence: a request that failed
+/// before producing output has no first output, and a historical request
+/// without a measured start/dispatch bridge has no request-relative phases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GenerationEvidence {
+    /// Monotonic elapsed time from the paired durable-start origin to dispatch.
+    /// Absent when that relationship was not captured; never infer it later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub dispatch_after_start_ms: Option<u64>,
     /// Offset of the first non-empty provider-independent model output.
     ///
     /// `None` when this request produced no model output at all. Time to
@@ -89,7 +87,7 @@ impl GenerationEvidence {
     #[must_use]
     pub fn generation_ms(&self) -> Option<u64> {
         self.first_output_ms
-            .map(|first| self.terminal_ms.saturating_sub(first))
+            .and_then(|first| self.terminal_ms.checked_sub(first))
     }
 
     /// Output throughput in tokens per second, given this request's usage.
@@ -118,6 +116,8 @@ impl GenerationEvidence {
 pub struct GenerationTiming {
     /// The monotonic reading of this request's dispatch frontier.
     origin: u64,
+    dispatch_after_start_ms: Option<u64>,
+    terminal: Option<u64>,
     /// Offset of the first observed model output.
     first: Option<u64>,
     /// Offset of the most recent observed model output.
@@ -126,10 +126,15 @@ pub struct GenerationTiming {
 
 impl GenerationTiming {
     /// Starts the accumulator at this request's dispatch frontier.
+    /// `request_start_ms` must be the monotonic reading paired with the exact
+    /// timestamp supplied to this request's freshly committed durable start.
     #[must_use]
-    pub const fn started_at(origin_ms: u64) -> Self {
+    pub fn started_at(origin_ms: u64, request_start_ms: Option<u64>) -> Self {
         Self {
             origin: origin_ms,
+            dispatch_after_start_ms: request_start_ms
+                .and_then(|start| origin_ms.checked_sub(start)),
+            terminal: None,
             first: None,
             last: None,
         }
@@ -141,7 +146,14 @@ impl GenerationTiming {
     /// the two assignments matters: the first output also becomes the last,
     /// so a single-output generation retains both output endpoints.
     pub fn observe(&mut self, event: &ModelEvent, now_ms: u64) {
-        if !carries_model_output(event) {
+        if matches!(
+            event,
+            ModelEvent::Completed { .. } | ModelEvent::Failed { .. }
+        ) {
+            self.terminal
+                .get_or_insert(now_ms.saturating_sub(self.origin));
+        }
+        if self.terminal.is_some() || !carries_model_output(event) {
             return;
         }
         let offset = now_ms.saturating_sub(self.origin);
@@ -155,9 +167,12 @@ impl GenerationTiming {
     #[must_use]
     pub fn settle(self, terminal_ms: u64) -> GenerationEvidence {
         GenerationEvidence {
+            dispatch_after_start_ms: self.dispatch_after_start_ms,
             first_output_ms: self.first,
             last_output_ms: self.last,
-            terminal_ms: terminal_ms.saturating_sub(self.origin),
+            terminal_ms: self
+                .terminal
+                .unwrap_or_else(|| terminal_ms.saturating_sub(self.origin)),
         }
     }
 }
@@ -201,7 +216,7 @@ mod tests {
     /// Offsets are measured from the dispatch frontier, not from zero.
     #[test]
     fn offsets_are_relative_to_the_dispatch_frontier() {
-        let mut timing = GenerationTiming::started_at(10_000);
+        let mut timing = GenerationTiming::started_at(10_000, Some(10_000));
         timing.observe(&text("hello"), 10_250);
         timing.observe(&text(" world"), 10_900);
         let evidence = timing.settle(11_000);
@@ -213,7 +228,7 @@ mod tests {
     /// A provider frame that carries no generated content is not output.
     #[test]
     fn framing_events_do_not_start_the_output_span() {
-        let mut timing = GenerationTiming::started_at(0);
+        let mut timing = GenerationTiming::started_at(0, Some(0));
         timing.observe(&ModelEvent::Started, 100);
         timing.observe(
             &ModelEvent::UsageUpdate {
@@ -234,7 +249,7 @@ mod tests {
     /// A generation with no output keeps every output span unavailable.
     #[test]
     fn a_generation_without_output_has_no_spans() {
-        let evidence = GenerationTiming::started_at(0).settle(750);
+        let evidence = GenerationTiming::started_at(0, Some(0)).settle(750);
         assert_eq!(evidence.first_output_ms, None);
         assert_eq!(evidence.last_output_ms, None);
         assert_eq!(evidence.terminal_ms, 750);
@@ -247,6 +262,7 @@ mod tests {
     #[test]
     fn derived_metrics_use_authoritative_endpoints_only() {
         let evidence = GenerationEvidence {
+            dispatch_after_start_ms: None,
             first_output_ms: Some(200),
             last_output_ms: Some(1_100),
             terminal_ms: 1_200,
@@ -263,6 +279,7 @@ mod tests {
     #[test]
     fn a_zero_length_decode_span_has_no_throughput() {
         let evidence = GenerationEvidence {
+            dispatch_after_start_ms: None,
             first_output_ms: Some(400),
             last_output_ms: Some(400),
             terminal_ms: 400,
@@ -274,7 +291,7 @@ mod tests {
     /// A single output is both the first and the last one.
     #[test]
     fn a_single_output_settles_both_endpoints() {
-        let mut timing = GenerationTiming::started_at(0);
+        let mut timing = GenerationTiming::started_at(0, Some(0));
         timing.observe(&text("only"), 300);
         let evidence = timing.settle(310);
         assert_eq!(evidence.first_output_ms, Some(300));

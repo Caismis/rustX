@@ -979,11 +979,16 @@ fn generation_metrics_use_authoritative_endpoints_only() {
     };
     let complete = generation_metrics(
         GenerationEvidence {
+            dispatch_after_start_ms: None,
             first_output_ms: Some(400),
             last_output_ms: Some(2_300),
             terminal_ms: 2_400,
         },
         Some(&usage),
+    );
+    assert_eq!(
+        complete.timeline, None,
+        "numeric TTFT never invents a bridge"
     );
     assert_eq!(complete.ttft_ms, Some(400));
     assert_eq!(complete.generation_ms, Some(2_000));
@@ -993,6 +998,7 @@ fn generation_metrics_use_authoritative_endpoints_only() {
     // No model output: TTFT, decode and throughput are all unknown.
     let silent = generation_metrics(
         GenerationEvidence {
+            dispatch_after_start_ms: None,
             first_output_ms: None,
             last_output_ms: None,
             terminal_ms: 900,
@@ -1009,6 +1015,7 @@ fn generation_metrics_use_authoritative_endpoints_only() {
 #[test]
 fn throughput_requires_usage_evidence() {
     let evidence = GenerationEvidence {
+        dispatch_after_start_ms: None,
         first_output_ms: Some(100),
         last_output_ms: Some(1_100),
         terminal_ms: 1_100,
@@ -1051,6 +1058,7 @@ fn reopening_a_session_reproduces_identical_historical_timing() {
             details: None,
         }),
         Some(GenerationEvidence {
+            dispatch_after_start_ms: Some(400),
             first_output_ms: Some(320),
             last_output_ms: Some(1_520),
             terminal_ms: 1_600,
@@ -1070,6 +1078,11 @@ fn reopening_a_session_reproduces_identical_historical_timing() {
         .unwrap()
         .generation
         .expect("settled generation evidence survives reopen");
+    let timeline = generation.timeline.unwrap();
+    assert_eq!(timeline.dispatch_ms, 400);
+    assert_eq!(timeline.first_output_ms, Some(720));
+    assert_eq!(timeline.last_output_ms, Some(1_920));
+    assert_eq!(timeline.terminal_ms, 2_000);
     assert_eq!(generation.ttft_ms, Some(320));
     assert_eq!(generation.generation_ms, Some(1_280));
     assert_eq!(generation.terminal_ms, 1_600);

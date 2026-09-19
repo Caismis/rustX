@@ -235,17 +235,24 @@ export function TrajectoryTimeline({
                 .map(candidate => {
                   const left = percent(candidate.start);
                   const width = percent(candidate.end) - left;
+                  const marker = mode === 'duration'
+                    ? candidate.end === candidate.start
+                    : candidate.durationMs === undefined;
+                  const phasePercent = (at: number | undefined) =>
+                    at === undefined || candidate.end <= candidate.start
+                      ? undefined
+                      : `${100 * (at - candidate.start) / (candidate.end - candidate.start)}%`;
                   const detail = [
                     candidate.label,
                     `Started ${formatInstant(
                       candidate.startedAt === undefined ? undefined : new Date(candidate.startedAt).toISOString(),
                     )}`,
                     candidate.durationMs === undefined
-                      ? 'Duration unavailable'
-                      : `Duration ${formatDuration(candidate.durationMs)}`,
+                      ? 'Journal duration unavailable'
+                      : `Journal duration ${formatDuration(candidate.durationMs)}`,
                     candidate.ttftMs === undefined || candidate.generationMs === undefined
                       ? undefined
-                      : `TTFT ${formatDuration(candidate.ttftMs)} · decode ${formatDuration(candidate.generationMs)}`,
+                      : `Dispatch → first output ${formatDuration(candidate.ttftMs)} · first output → provider terminal ${formatDuration(candidate.generationMs)}`,
                   ]
                     .filter(value => value !== undefined)
                     .join('\n');
@@ -257,7 +264,7 @@ export function TrajectoryTimeline({
                       data-kind={candidate.kind}
                       data-error={candidate.error || undefined}
                       data-selected={candidate.id === selectedId || undefined}
-                      data-marker={candidate.durationMs === undefined || undefined}
+                      data-marker={marker || undefined}
                       data-dimmed={
                         searchMatches !== null && !searchMatches.has(candidate.id) ? '' : undefined
                       }
@@ -269,10 +276,9 @@ export function TrajectoryTimeline({
                       style={
                         {
                           left: `${left}%`,
-                          width: candidate.durationMs === undefined ? undefined : `${Math.max(0.3, width)}%`,
-                          '--trajectory-ttft': candidate.ttftFraction === undefined
-                            ? undefined
-                            : `${candidate.ttftFraction * 100}%`,
+                          width: marker ? undefined : `${width}%`,
+                          '--trajectory-dispatch': phasePercent(candidate.dispatchAt),
+                          '--trajectory-first-output': phasePercent(candidate.firstOutputAt),
                         } as CSSProperties
                       }
                     />

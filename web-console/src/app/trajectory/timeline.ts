@@ -2,12 +2,10 @@
 /**
  * Timing projections for the Trajectory overview.
  *
- * Every span comes from two authoritative timestamps the server recorded. A
- * record with only a start has no span: it contributes a start marker, and
- * the overview never fills the missing end with render time, reconnect time
- * or `Date.now()`. An Assistant request additionally splits its span into
- * the TTFT and decode halves the server settled, so the visual division is
- * evidence rather than an estimate.
+ * Generation phases use request-relative monotonic offsets supplied by Trace,
+ * anchored through the native runtime's paired durable-start clock reading.
+ * Journal wall spans and dispatch-origin numeric metrics cannot supply that
+ * relationship. Missing bridge evidence leaves a request unsplit.
  */
 import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v9';
 
@@ -27,8 +25,11 @@ export interface TrajectorySpan extends TrajectoryTimeRange {
   lane: number;
   label: string;
   error: boolean;
-  /** Fraction of the span spent before the first model output, when known. */
-  ttftFraction?: number;
+  /** Positions in the duration domain, authorized by native phase evidence. */
+  dispatchAt?: number;
+  firstOutputAt?: number;
+  lastOutputAt?: number;
+  providerTerminalAt?: number;
   /** Exact recorded start in epoch milliseconds, when known. */
   startedAt?: number;
   /** Exact recorded duration in milliseconds, when known. */
@@ -103,6 +104,7 @@ function timingOf(record: TraceRecord) {
     durationMs: count(record.timing.duration_ms),
     ttftMs: count(generation?.ttft_ms),
     generationMs: count(generation?.generation_ms),
+    timeline: generation?.timeline,
   };
 }
 
@@ -134,7 +136,6 @@ export function trajectoryTimeline(
         error: isError(record),
         start: spans.length,
         end: spans.length + 1,
-        ...ttftFraction(timing),
         ...(timing.startedAt === undefined ? {} : { startedAt: timing.startedAt }),
         ...(timing.durationMs === undefined ? {} : { durationMs: timing.durationMs }),
         ...(timing.ttftMs === undefined ? {} : { ttftMs: timing.ttftMs }),
@@ -158,8 +159,8 @@ export function trajectoryTimeline(
       start: timing.startedAt,
       // An in-flight or unterminated record is a marker, not a span: its end
       // equals its start, so nothing on screen claims a duration it lacks.
-      end: timing.startedAt + (timing.durationMs ?? 0),
-      ...ttftFraction(timing),
+      end: timing.startedAt + (count(timing.timeline?.terminal_ms) ?? timing.durationMs ?? 0),
+      ...phasePositions(timing.startedAt, timing.timeline),
       startedAt: timing.startedAt,
       ...(timing.durationMs === undefined ? {} : { durationMs: timing.durationMs }),
       ...(timing.ttftMs === undefined ? {} : { ttftMs: timing.ttftMs }),
@@ -175,15 +176,20 @@ export function trajectoryTimeline(
   };
 }
 
-/** The TTFT share of a request's span, when both halves are recorded. */
-function ttftFraction(timing: {
-  ttftMs?: number | undefined;
-  generationMs?: number | undefined;
-}): { ttftFraction?: number } {
-  const { ttftMs, generationMs } = timing;
-  if (ttftMs === undefined || generationMs === undefined) return {};
-  const total = ttftMs + generationMs;
-  return total > 0 ? { ttftFraction: ttftMs / total } : {};
+/** Only the native bridge authorizes positions; metrics alone never do. */
+function phasePositions(start: number, timeline: ReturnType<typeof timingOf>['timeline']):
+  Pick<TrajectorySpan, 'dispatchAt' | 'firstOutputAt' | 'lastOutputAt' | 'providerTerminalAt'> {
+  if (timeline == null) return {};
+  const dispatch = count(timeline.dispatch_ms);
+  const first = count(timeline.first_output_ms);
+  const last = count(timeline.last_output_ms);
+  const terminal = count(timeline.terminal_ms);
+  return {
+    ...(dispatch === undefined ? {} : { dispatchAt: start + dispatch }),
+    ...(first === undefined ? {} : { firstOutputAt: start + first }),
+    ...(last === undefined ? {} : { lastOutputAt: start + last }),
+    ...(terminal === undefined ? {} : { providerTerminalAt: start + terminal }),
+  };
 }
 
 /** Records active at any point inside an inclusive selected interval. */

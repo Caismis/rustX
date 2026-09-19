@@ -200,11 +200,15 @@ function Generation({ generation }: { generation: TraceGeneration }) {
   const rate = generation.output_tokens_per_second ?? undefined;
   return (
     <>
-      <dt>Time to first output</dt>
+      <dt>Request duration (start → provider terminal)</dt>
+      <dd>{formatDuration(count(generation.timeline?.terminal_ms))}</dd>
+      <dt>Request start → dispatch</dt>
+      <dd>{formatDuration(count(generation.timeline?.dispatch_ms))}</dd>
+      <dt>Dispatch → first output (TTFT)</dt>
       <dd>{ttft === undefined ? <Unavailable /> : formatDuration(ttft)}</dd>
-      <dt>Generation</dt>
+      <dt>First output → provider terminal</dt>
       <dd>{decode === undefined ? <Unavailable /> : formatDuration(decode)}</dd>
-      <dt>Provider terminal</dt>
+      <dt>Dispatch → provider terminal</dt>
       <dd>{formatDuration(count(generation.terminal_ms))}</dd>
       <dt>Throughput</dt>
       <dd>{rate === undefined ? <Unavailable /> : `${rate.toFixed(1)} tokens/s`}</dd>
@@ -634,7 +638,7 @@ export function TrajectoryInspector({
             <dd className={css.machine}>{formatInstant(record.timing.started_at)}</dd>
             <dt>Ended</dt>
             <dd className={css.machine}>{formatInstant(record.timing.ended_at)}</dd>
-            <dt>Duration</dt>
+            <dt>{record.kind === 'request' ? 'Journal wall duration' : 'Duration'}</dt>
             <dd>{record.timing.duration_ms == null ? <Unavailable /> : formatDuration(count(record.timing.duration_ms))}</dd>
             {record.request?.generation ? (
               <Generation generation={record.request.generation} />

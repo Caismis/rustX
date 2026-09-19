@@ -640,8 +640,10 @@ async fn run_cancellation_winner_with_late_executor_outcome(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn issue136_cancellation_winner_keeps_the_executor_settled_success() {
-    let (audit, side_effect, model) =
-        run_cancellation_winner_with_late_executor_outcome(success_result("late completion")).await;
+    let (audit, side_effect, model) = Box::pin(run_cancellation_winner_with_late_executor_outcome(
+        success_result("late completion"),
+    ))
+    .await;
 
     let messages = tool_messages(&audit);
     assert_eq!(messages.len(), 1);
@@ -670,8 +672,8 @@ async fn issue136_cancellation_winner_keeps_the_executor_settled_success() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn issue136_cancellation_winner_keeps_the_executor_settled_outcome_unknown() {
-    let (audit, side_effect, model) =
-        run_cancellation_winner_with_late_executor_outcome(ToolExecutionResult {
+    let (audit, side_effect, model) = Box::pin(run_cancellation_winner_with_late_executor_outcome(
+        ToolExecutionResult {
             status: ToolExecutionStatus::OutcomeUnknown {
                 detail: "remote termination could not be confirmed".to_owned(),
             },
@@ -682,8 +684,9 @@ async fn issue136_cancellation_winner_keeps_the_executor_settled_outcome_unknown
             truncation: None,
             workflow: None,
             managed_output: None,
-        })
-        .await;
+        },
+    ))
+    .await;
 
     let messages = tool_messages(&audit);
     assert_eq!(messages.len(), 1);
