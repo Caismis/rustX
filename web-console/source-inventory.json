@@ -530,7 +530,7 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryInspector.tsx",
-      "treatment": "adapted per-kind inspector sections onto native Trace detail; Markdown, JSON tree, code and artifact rendering use the existing audited rustX primitives; refetch detail after authoritative lifecycle repair; preserve the virtualization enable boundary and bounded canonical message batches; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers",
+      "treatment": "adapted per-kind inspector sections onto native Trace detail; Markdown, JSON tree, code and artifact rendering use the existing audited rustX primitives; refetch detail after authoritative lifecycle repair; preserve the virtualization enable boundary and bounded canonical message batches; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; distinguish recorded empty text from unavailable authority",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v9",
@@ -566,7 +566,7 @@
           "upstream_sha256": "a31b4253ba9c7c2490f942768d060c769ff1b5b4fb653ccf67ab54af1e1593b7"
         }
       ],
-      "local_sha256": "2d88d5de2dbc3ec0bd3d42ec3874d29cd4224fa9702159ae10666955df8e8f3b"
+      "local_sha256": "c624c85a24fe173f4f8ea9b0587edc3d40212a25b76df2906e169f79f4a13cc9"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",

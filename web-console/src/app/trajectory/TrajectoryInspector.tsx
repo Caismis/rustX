@@ -62,7 +62,7 @@ function Truncated({ of }: { of: boolean | undefined }) {
 }
 
 function Text({ value, markdown = false }: { value: TraceText; markdown?: boolean }) {
-  if (value.text === '') return <Unavailable />;
+  if (value.text === '') return <span className={css.unavailable}>Empty</span>;
   return (
     <>
       {markdown ? (
