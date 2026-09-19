@@ -319,6 +319,18 @@ async fn spill_allocation_failure_fails_the_invocation_explicitly() {
         !matches!(result.status, ToolExecutionStatus::Success),
         "successful retention must never be reported while full output is lost"
     );
+    let ToolExecutionStatus::Failed { error } = &result.status else {
+        unreachable!()
+    };
+    assert!(error.contains(&results.display().to_string()));
+    assert!(error.contains("cannot allocate the foreground result spill"));
+    let Some(crate::tools::types::ManagedOutputContinuation::Unavailable { diagnostic }) =
+        &result.managed_output
+    else {
+        panic!("allocation did not succeed")
+    };
+    assert!(error.contains(diagnostic));
+    assert!(diagnostic.contains(&results.display().to_string()));
 }
 
 /// A spill WRITE failure after the spill was already allocated (the
@@ -363,10 +375,9 @@ async fn spill_write_failure_after_allocation_fails_the_invocation_explicitly() 
             result.managed_output
         );
     };
-    assert!(
-        diagnostic.contains("capture") || diagnostic.contains("output"),
-        "storage diagnostic: {diagnostic}"
-    );
+    assert!(diagnostic.contains("cannot write the foreground result spill"));
+    assert!(diagnostic.contains("test-forced output write failure"));
+    assert!(error.contains(diagnostic));
     assert!(
         locator.exists(),
         "a partial foreground spill remains retrievable at its stable locator"
@@ -451,8 +462,9 @@ async fn cancellation_owns_the_outcome_and_a_failed_spill_is_never_advertised() 
     };
     assert_eq!(locator, &partial);
     assert!(
-        diagnostic.contains("capture"),
-        "the bounded capture diagnostic is retained: {diagnostic}"
+        diagnostic.contains("cannot write the foreground result spill")
+            && diagnostic.contains("test-forced output write failure"),
+        "the native storage diagnostic is retained: {diagnostic}"
     );
     // The canonical result projection presents the typed continuation once
     // so the model learns the truth from the result.

@@ -773,6 +773,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::ArtifactRead { target, .. }
         | Method::SessionUpload { target, .. }
         | Method::Trace { target, .. }
+        | Method::TraceDetail { target, .. }
         | Method::Transcript { target, .. }
         | Method::Goal { target, .. }
         | Method::BackgroundStatus { target, .. }
@@ -867,6 +868,10 @@ async fn dispatch_runtime(
             before,
             limit,
         } => native_result(authority.trace_page(before, limit)),
+        Method::TraceDetail {
+            target: _,
+            record_id,
+        } => native_result(authority.trace_detail(record_id)),
         Method::Transcript {
             target: _,
             before,
@@ -1003,6 +1008,7 @@ fn native_result(
         }
         RuntimeClientResult::ContextCompacted { context } => MethodResult::Context { context },
         RuntimeClientResult::TracePage { page } => MethodResult::Trace { page },
+        RuntimeClientResult::TraceDetail { detail } => MethodResult::TraceDetail { detail },
         RuntimeClientResult::TranscriptPage { page } => MethodResult::Transcript { page },
         RuntimeClientResult::Goal { view } => MethodResult::Goal { view },
         RuntimeClientResult::BackgroundStatus { execution }

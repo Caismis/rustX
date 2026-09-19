@@ -562,11 +562,14 @@ pub fn read_event_history(
         if page.events.is_empty() {
             break;
         }
+        // Recorded traces compare semantics. Generation timing evidence is a
+        // measurement of one physical generation, so it is normalized out
+        // here and asserted by the regressions that are about timing.
         events.extend(
             page.events
                 .iter()
                 .filter(|envelope| envelope.attempt_id.as_ref() == Some(attempt_id))
-                .map(|envelope| envelope.event.clone()),
+                .map(|envelope| envelope.event.without_generation_evidence()),
         );
         cursor = page.next_sequence;
     }

@@ -36,10 +36,45 @@ repeated output are retry evidence. Tool joins include Attempt, logical Step,
 ToolCall ID and Tool ID; parallel physical completion never changes start order.
 Detached executions, Subagents and Workflows retain their own native identities.
 
-The separate native Runtime Client envelopes also advance from version 34 to 35
-because their mandatory snapshot and invalidation vocabulary changed. App Server
-clients negotiate only App Server version 3. Neither boundary accepts its obsolete
-version.
+Native Runtime Client version 41 and App Server version 9 carry this mandatory
+summary/detail vocabulary. SQLite schema 41 gates the persisted request terminal vocabulary including
+generation evidence. The Event Journal envelope framing is unchanged; this is
+request terminal event data, not a new Trace store.
+
+## Summary and detail
+
+`session/trace` returns `TraceRecord` summaries: stable identity, resolved native
+hierarchy, lifecycle, preview, usage/timing and safe attachment references.
+`session/traceDetail { target, record_id }` returns one `TraceDetail` at an exact
+historical read cut. It uses the same represented-prefix rule as historical
+paging and never drains observations or advances a subscription cursor.
+
+Adopted User batches expose every retained canonical message, with each message's
+identity, role and content preserved in native order.
+
+Request detail reconstructs the provider-neutral ModelRequest through the exact
+immutable RequestSnapshot and its historical Surface revision. It includes the
+effective system prompt, context, frozen Tool definitions, model and limits,
+reasoning configuration and explicitly allowlisted request options. Current
+configuration is never a substitute for a missing historical value.
+
+Tool detail joins the canonical Assistant ToolCall, the separate execution-start
+fact, the owning request's frozen Tool schema, and the canonical ToolMessage.
+Proposal assembly is not execution. Provider completion is not Assistant
+acceptance. Result JSON/text, status, exit code, measured duration and artifacts
+remain owned by their canonical result; Trace only projects them.
+
+Every bound-driven omission of inspectable content marks its containing
+projection partial, including oversized artifact, ToolCall, message, and frozen
+Tool-definition identities. Identities are omitted whole, never shortened into
+another identity. Semantics outside Trace's vocabulary, such as opaque provider
+continuation state, remain intentionally unprojected.
+
+Trace may expose filesystem paths and managed-output locators as recorded
+execution facts. These values are presentation only and confer no filesystem,
+execution, or recovery authority. Native storage diagnostics retain their
+underlying I/O failures and paths; presentation policy does not rewrite them.
+Credentials and opaque provider continuation internals remain excluded.
 
 ## Durable paging and live lifetime
 
@@ -90,7 +125,7 @@ even while actively folding; native resource release does not wait for a reader.
 The closed classification in `runtime::observation` gates Attempt/Turn/request,
 Assistant/Tool message and execution, compaction, Background, Subagent terminal
 and ownership, Workflow run lifecycle, and interaction facts. Other Journal facts
-(Goal, adoption, execution control/progress, workspace and Workflow node/block
+(Goal, execution control/progress, workspace and Workflow node/block
 and value audits) are not consumed by Trace and never independently advance its
 frontier or allocate a cursor. There is no generic `JournalCommitted` publication
 and no separate audit-only Trace stream. A later represented Trace prefix may
@@ -139,26 +174,16 @@ pending cannot leave newly loaded entries stale. Reconnect/reattach/resync and
 explicit latest replace the domain, including retained selection. Notifications
 remain invalidation signals; the browser never folds Journal facts.
 
-Canonical Tool attachments merge Image/File references in `result.content` first,
-then `result.artifacts`, deduplicated by ArtifactId. The first canonical occurrence
-owns image/file typing; filename and path never determine type. Each source is
-visited for at most eight blocks, the combined result contains at most eight
-identities, and omitted blocks set `truncated`. File display metadata, raw text,
-JSON and physical paths remain withheld. The existing artifact carrier is reused.
+Canonical Tool attachments merge Image/File content and result artifact references,
+deduplicated by ArtifactId. Canonical typing, never filename or extension, selects
+the renderer. Managed-output inspection exposes completeness/availability and
+bounded diagnostics, plus the exact recorded continuation locator when present.
 
 ## Durable schema contract
 
-SQLite schema **36** retains the Trace index contract introduced in schema 35. Native Trace historical
-projection requires the fixed Event Journal presentation indexes. Older stores
-are rejected, with no migration, lazy index installation or compatible reader.
-Current-version stores missing or redefining any required index are also rejected.
-The nine indexes cover kind, Attempt, Step, request ID, scoped ToolCall, execution
-ID, Subagent ID, Workflow run ID and interaction ID, each ending in kind/sequence
-where applicable. The finite query seam explicitly selects the appropriate index
-and performs one bounded equality/range seek per allowlisted event kind; tests
-inspect `EXPLAIN QUERY PLAN` for the actual reader SQL in both directions.
-SQLite schema 40, native Runtime Client version 40 and App Server version 8 are
-independent version domains.
+SQLite schema **40** retains the indexed Trace presentation seeks. Older stores
+are rejected without migration. Reads use existing indexed Journal rows and
+immutable native joins, with no Trace persistence table.
 
 ## Truthful timing and bounds
 
@@ -167,23 +192,81 @@ An in-flight or incomplete record has no duration. Request usage comes only from
 the exact request's terminal fact; missing usage stays unavailable. Historical
 model metadata comes from its immutable snapshot, never current configuration.
 
-The projection allowlist excludes provider/MCP credentials, request parameters,
-executor environment, storage/workspace paths, synchronization internals, raw
-Rust Debug values, and raw snapshot/event structs. Arbitrary system prompts,
-context input, Tool schemas, arguments and textual/JSON Tool results are currently
-**withheld in full**, marked `redacted`. The UI shows this policy explicitly; it
-does not substitute current settings or pretend the input is empty. This is a
-field policy, not heuristic secret scanning. Already-authorized canonical
-Assistant text/reasoning is bounded; provider reasoning continuation is omitted.
-Canonical user-authored/model-authored content retains its existing content
-permissions; Trace does not claim to scrub secrets a user explicitly put there.
+The typed inspection allowlist exposes authorized Session/model-visible content:
+system prompt, context, Tool schemas/arguments/results, canonical user/assistant
+content and reasoning. It excludes credentials, authorization headers, process
+or executor secret environment, provider continuation state, internal storage
+objects, synchronization objects and arbitrary Debug
+dumps. Request options use a closed list of sampling/decoding keys; omitted
+options are counted. This is a field contract, not heuristic secret scanning.
 
-Text is at most 2,048 UTF-8 bytes, cut on character boundaries. At most eight
-canonical content blocks contribute per message. Oversized native identities
-(over 512 bytes) are omitted, never shortened into a different identity. Entry
-payloads are capped at 32 KiB encoded JSON, pages at 128 KiB of entries. Explicit
-`truncated` flags distinguish partial content from complete content. Artifact IDs
-reuse the existing read limits, containment checks and object-URL cleanup.
+Bounds are explicit: previews 512 UTF-8 bytes; detail text 16 KiB; 32 content
+blocks per message; 64 request messages and 64 definitions; JSON depth 12,
+1,024 visited nodes and 4 KiB string leaves. Oversized object keys are omitted
+rather than aliased by shortening. Identities over 512 bytes are omitted whole.
+Summary records are at most 8 KiB, page records 128 KiB and one detail 512 KiB
+encoded JSON. Every omitted or shortened value carries a truncation indication.
+
+### Generation clock contract
+
+Every phase boundary drawn in Trajectory must have native evidence in the same
+request timeline domain. The Agent Loop owns that evidence; Trace only projects
+it and the browser only renders it.
+
+| Boundary or metric | Exact meaning |
+| --- | --- |
+| Durable request start | The UTC timestamp supplied to `commit_model_turn_start`, recorded atomically with the immutable Request Snapshot and `ModelRequestStarted` |
+| Dispatch frontier | Monotonic reading immediately before entering the actual adapter dispatch, after durable commit and request reconstruction/verification |
+| First / last output | First / last non-empty provider-independent normalized text, reasoning, refusal or Tool-call output observed by the execution owner |
+| Provider terminal | Observed normalized completion/failure; runtime failures without a provider terminal use the native failure-settlement boundary |
+| Canonical Assistant acceptance | Separate later canonical message commit; provider completion never proves acceptance |
+| Request duration | Paired durable-start origin → provider terminal, including preparation, measured monotonically |
+| TTFT | Adapter dispatch → first output, excluding preparation |
+| Generation duration | First output → provider terminal |
+| Throughput | Reported output tokens / generation seconds; requires usage, first output, terminal and a positive interval |
+
+Inside cancellation/start arbitration, immediately before the start transaction,
+the Agent Loop samples monotonic time and UTC as one deliberate origin pair at
+millisecond precision. That exact UTC value is passed to the transaction. The
+successful commit linearizes the start fact's existence; its supplied timestamp
+is its timing coordinate (not a later transaction-return timestamp). The paired
+monotonic origin is retained only for a fresh successful commit, never for an
+idempotent historical receipt. No provider dispatch moves before that commit;
+cancellation arbitration, snapshot/start identity and atomicity are unchanged.
+
+At dispatch, execution measures `dispatch_after_start_ms` from that retained
+origin. `GenerationEvidence` settles this bridge plus first/last/terminal offsets
+from dispatch in the exact request terminal event. The provider terminal offset
+is captured on observation, so EOF, publication and Journal append delays cannot
+extend generation. Each retry owns a new accumulator. There are no per-delta
+Journal events, absolute timestamp streams, Trace tables or recovery inputs.
+
+`TraceGeneration.timeline` projects dispatch, first/last output and terminal
+as offsets from the paired request start. The duration timeline anchors these
+coordinates at `TraceTiming.started_at`; it does **not** rescale them to the
+independent Journal UTC start/end span. `TraceTiming.duration_ms` remains that
+Journal wall duration, including terminal recording delay and any wall-clock
+adjustment, and is labelled separately in Inspector. No current clock participates
+in reopening or projection. Equal-width sequence mode does not paint duration
+phase boundaries. Missing bridge evidence leaves the wall span unsplit even if
+numeric TTFT/generation metrics exist; missing output never acquires a boundary.
+
+For example, preparation 400 ms + dispatch-origin TTFT 320 ms + generation
+1280 ms yields request-relative dispatch 400 ms, first output 720 ms and terminal
+2000 ms. Multiplying the Journal wall span by `320 / 1600` is prohibited.
+
+**Deliberate Harness deviation:** the pinned Harness `TrajectoryTable.tsx`
+derives TTFT as `firstTokenTime - stepStartTime`. rustX retains its native
+**adapter dispatch → first provider-independent output** contract because its
+durable request-start/reconstruction lifecycle precedes actual dispatch. These
+metric definitions are not identical, even though the overview presentation is
+adapted from Harness.
+
+The browser retains at most eight detail responses. A server lifecycle repair
+invalidates affected payloads and pending detail reads; the selected inspector
+refetches against the new cut. Connection generation, attachment target, Trace
+epoch and pending-read identity fence asynchronous completion. Reattach/resync
+replaces the cache. Selection is presentation state, never native authority.
 
 ## Presentation and deliberate exclusions
 
@@ -201,7 +284,13 @@ Harness Session Controller, event assembly, Host/Remote, Cordis lifecycle,
 provider/workspace authority and dynamic view ownership are excluded. There is
 no TUI Trajectory, server search, telemetry platform, new recovery behavior or
 compatibility mode. This view deliberately omits unaccepted publication bodies,
-raw request/Tool payload inspection and Harness-only semantics lacking native
-facts. Interaction settlement remains in the existing Chat controls.
+Harness-only semantics lacking native facts. Interaction settlement remains in the existing Chat controls.
 
 See [Session-owned workspace uploads](session-uploads.md) for receipt admission, model paths, fork copies and durable cleanup.
+
+The inspector uses entity-specific Summary/Input/Result/Schema/Usage/Timing and
+attachment views, Markdown, the audited Harness JSON tree and code primitives.
+Native Bash command content has a shell contract; Write content has source text
+but no inferred language. Unknown third-party Tool contracts get structured JSON.
+The timing overview supports linked selection, interval focus, zoom and pan.
+Two recorded endpoints define spans; a start alone remains a marker.

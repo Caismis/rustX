@@ -70,7 +70,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 8;
+export const APP_SERVER_PROTOCOL_VERSION = 9;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -138,6 +138,10 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/switchNode": "side_effecting",
   "session/transcript": "read",
   "session/trace": "read",
+  // Inspection detail is a pure historical read: it advances no cursor,
+  // consumes no pending work, and settles nothing, so a lost response is
+  // safely retryable.
+  "session/traceDetail": "read",
   "artifact/read": "read",
   "session/upload": "side_effecting",
   "configuration/sourcesRead": "read",
@@ -343,7 +347,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v8 protocol message");
+      this.#fail("invalid App Server v9 protocol message");
       return;
     }
 

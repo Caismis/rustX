@@ -1,4 +1,4 @@
-import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v8';
+import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v9';
 import { json } from '../../bindings/projection';
 import { SubagentCard, WorkflowCard, workflowKey } from '../components/ActivityCards';
 import { ToolCard } from '../../presentation/agent/ToolCard';

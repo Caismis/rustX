@@ -765,6 +765,7 @@ fn a_known_outcome_terminal_transfers_the_obligation_of_a_later_adopted_turn() {
                     request_id,
                     finish_reason: ModelFinishReason::Stop,
                     usage: None,
+                    generation: None,
                 },
             ))
             .expect("request completed");
@@ -978,6 +979,7 @@ fn completed_model_request_before_assistant_commit_is_not_class_b() {
                     request_id: snapshot.request_id.clone(),
                     finish_reason: rustx::model::ModelFinishReason::Stop,
                     usage: None,
+                    generation: None,
                 },
             ))
             .expect("request completed");
@@ -1112,6 +1114,7 @@ fn failed_model_request_before_terminal_is_not_retried() {
                         generation: None,
                     },
                     usage: None,
+                    generation: None,
                 },
             ))
             .expect("request failed");
@@ -1443,6 +1446,7 @@ fn known_request_with_unknown_tool_outcome_stays_indeterminate() {
                     request_id: snapshot.request_id.clone(),
                     finish_reason: rustx::model::ModelFinishReason::ToolCalls,
                     usage: None,
+                    generation: None,
                 },
             ))
             .expect("request completed");
@@ -2742,6 +2746,7 @@ fn the_recovery_fold_retains_only_unresolved_work() {
                         request_id: snapshot.request_id.clone(),
                         finish_reason: rustx::model::ModelFinishReason::Stop,
                         usage: None,
+                        generation: None,
                     },
                 ))
                 .expect("request completed");
@@ -3477,6 +3482,7 @@ fn adopt_through(
     store
         .adopt_pending_batch(watermark, None)
         .expect("adopt")
+        .items
         .into_iter()
         .map(|item| MessageBlock::User(item.message))
         .collect()

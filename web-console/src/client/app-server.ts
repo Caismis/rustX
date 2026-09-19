@@ -1,9 +1,9 @@
-import { TRACE_LIMIT, TRACE_PAGE_SIZE, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
+import { TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
 import type {
   RuntimeClientSessionDeletionResult, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v8';
+} from '../../../protocol/app-server/v9';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from './uploads';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, type TranscriptCache } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
@@ -125,7 +125,7 @@ function goalRefusal(error: unknown) {
 }
 const READS = new Set<Request1['method']>([
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/tree', 'session/deletePreview',
-  'session/snapshot', 'session/transcript', 'session/trace', 'settings/read', 'settings/model', 'settings/models',
+  'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'settings/read', 'settings/model', 'settings/models',
   'configuration/sourcesRead', 'configuration/effective', 'resources/read', 'background/status', 'subagent/status', 'session/boundaries',
 ]);
 export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conversation_id, ref.interaction_id]);
@@ -221,7 +221,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v8', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v9', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -239,12 +239,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 8, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 9, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 8 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v8 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (hello.protocol_version !== 9 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v9 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
@@ -645,7 +645,7 @@ export class AppServerClient {
       while (this.dirty.has(id) && current()) {
         this.dirty.delete(id);
         const resync = this.resubscribe.delete(id);
-        if (resync) this.setSession(id, { attachment: 'resynchronizing', trace: replaceTrace({ entries: [], next_cursor: null }, this.state.views[id]?.trace), history: replaceTranscript({ entries: [] }, this.state.views[id]?.history) });
+        if (resync) this.setSession(id, { attachment: 'resynchronizing', trace: replaceTrace({ records: [], next_cursor: null }, this.state.views[id]?.trace), history: replaceTranscript({ entries: [] }, this.state.views[id]?.history) });
         const result = await this.request({ method: 'session/snapshot', params: { target, trace_records: traceInterests(this.state.views[id]?.trace) } }, 'snapshot');
         if (!current()) return;
         if (result.snapshot.conversation_id !== target.conversation_id) throw new Error('Mismatched snapshot conversation.');
@@ -689,7 +689,7 @@ export class AppServerClient {
     const generation = this.state.generation;
     const cache = this.state.views[id].trace;
     if (!cache || cache.loading || cache.page.next_cursor == null) return;
-    const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.entries.length);
+    const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
     if (limit < 1) throw new Error('Trace window is full. Return to latest first.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target)
       && this.state.views[id]?.trace?.epoch === cache.epoch;
@@ -710,6 +710,36 @@ export class AppServerClient {
   selectTrace(id: string, record?: string) {
     const trace = this.state.views[id]?.trace;
     if (trace) this.setSession(id, { trace: selectTrace(trace, record) });
+  }
+  /**
+   * Fetches the heavy detail of one record on demand.
+   *
+   * Every relevant identity fences the reply: the connection generation, the
+   * exact attachment target, and the Trace epoch the request was issued in.
+   * A reply that survives all three still belongs to the record it was asked
+   * for; anything else is dropped rather than attached to a newer window.
+   */
+  async loadTraceDetail(id: string, record: string) {
+    const target = this.target(id);
+    const generation = this.state.generation;
+    const cache = this.state.views[id]?.trace;
+    if (!cache) return;
+    const epoch = cache.epoch;
+    const existing = cache.details[record];
+    if (existing && (existing.loading || existing.detail)) return;
+    const pending = beginTraceDetail(cache, record);
+    const current = () => this.current(generation)
+      && sameTarget(this.state.views[id]?.target, target)
+      && this.state.views[id]?.trace?.epoch === epoch
+      && this.state.views[id]?.trace?.details[record] === pending.details[record];
+    this.setSession(id, { trace: pending });
+    try {
+      const result = await this.request({ method: 'session/traceDetail', params: { target, record_id: record } }, 'trace_detail');
+      if (!current()) return;
+      this.setSession(id, { trace: completeTraceDetail(this.state.views[id].trace!, record, epoch, result.detail ?? undefined) });
+    } catch (error) {
+      if (current()) this.setSession(id, { trace: completeTraceDetail(this.state.views[id].trace!, record, epoch, undefined, String(error)) });
+    }
   }
   latestTrace(id: string) {
     const view = this.state.views[id];
@@ -862,7 +892,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v8').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v9').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);

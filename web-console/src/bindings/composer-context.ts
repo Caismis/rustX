@@ -1,4 +1,4 @@
-import type { GoalSnapshot, RuntimeClientSnapshot, TodoTask, UserContentBlock, UserInputBlock } from '../../../protocol/app-server/v8';
+import type { GoalSnapshot, RuntimeClientSnapshot, TodoTask, UserContentBlock, UserInputBlock } from '../../../protocol/app-server/v9';
 
 /** Current composer-context docks read only the replaceable authoritative
  * snapshot. Transcript, Trace and historical Tool results never enter here. */

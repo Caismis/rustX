@@ -469,6 +469,7 @@ fn commit_generation(store: &SqliteConversationStore, generation: &Generation) {
                 request_id,
                 finish_reason: ModelFinishReason::ToolCalls,
                 usage: None,
+                generation: None,
             },
         ))
         .expect("provider outcome");

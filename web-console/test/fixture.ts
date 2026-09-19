@@ -1,5 +1,6 @@
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v8';
+import type { TraceDetail } from '../../protocol/app-server/v9';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v9';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
 
@@ -12,7 +13,7 @@ export function snapshot(id = 'A'): RuntimeClientSnapshot {
   return {
     settings_evidence: 'live_session',
     conversation_id: `conversation-${id}`, shutting_down: false, effective_approval_mode: 'policy',
-    workflows: { revision: '0', runs: [], omitted_runs: 0 }, messages: [], transcript: { entries: [] }, trace_updates: [], trace: { entries: [] },
+    workflows: { revision: '0', runs: [], omitted_runs: 0 }, messages: [], transcript: { entries: [] }, trace_updates: [], trace: { records: [] },
     inbound: {}, capabilities: { revision: '0' }, pending_interactions: [],
   };
 }
@@ -69,10 +70,12 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 8;
+  version = 9;
+  /** Record details this scenario staged, keyed by Trace record identity. */
+  readonly traceDetails = new Map<string, TraceDetail>();
   capabilities = capabilities;
   socketFactory = (_url: string, protocols: string[]) => {
-    if (protocols[0] !== 'rustx.app-server.v8' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    if (protocols[0] !== 'rustx.app-server.v9' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   };
@@ -155,6 +158,9 @@ export class Server {
       case 'settings/read': result = { type: 'settings', revision: '0', settings: { cwd: `/workspace/${id}` } }; break;
       case 'session/snapshot': result = { type: 'snapshot', snapshot: this.snapshots.get(id)!, cursor: String(this.cursor) }; break;
       case 'session/subscribe': result = { type: 'subscribed', after_cursor: request.params.after_cursor }; break;
+      // Inspection detail is served per record, so the fixture answers from
+      // the details its scenario staged and reports absence otherwise.
+      case 'session/traceDetail': result = { type: 'trace_detail', detail: this.traceDetails.get(request.params.record_id) ?? null }; break;
       case 'session/detach': this.targets.get(socket)!.delete(id); result = { type: 'detached' }; break;
       case 'session/switchNode': this.targets.get(socket)!.delete(id); this.loaded.delete(id); result = { type: 'session', session: { id, node_count: 1, active_node: request.params.node_id, active_conversation_id: `conv-${id}`, created_at: '0', updated_at: '0' } }; break;
       case 'turn/start': case 'turn/steer': result = { type: 'inbound_accepted', message_id: 'accepted-user', inbound_sequence: '1' }; break;

@@ -164,6 +164,37 @@
           ]
         },
         {
+          "description": "Heavy inspection detail for one exact Trace record identity.\n\nSeparated from `session/trace` so a page of summaries stays cheap:\nrequest contexts, Tool schemas and Tool results are fetched only for\nthe record a reader selected. Like every Trace read it mutates\nnothing and advances no cursor.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/traceDetail"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "record_id": {
+                  "type": "string",
+                  "maxLength": 256
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "record_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "method": {
@@ -1579,7 +1610,7 @@
       "pattern": "^node_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "TraceCursor": {
-      "description": "Opaque Trace-only exclusive boundary. Valid only in its conversation.",
+      "description": "Opaque Trace-only exclusive boundary, valid only in its conversation.\n\nIt is not a live cursor, a transcript cursor, an Event Journal sequence,\na Request ID, or an artifact ID. Clients order by it and page with it;\nthey never parse it.",
       "type": "string"
     },
     "RuntimeClientTranscriptCursor": {
@@ -4900,6 +4931,30 @@
         {
           "type": "object",
           "properties": {
+            "detail": {
+              "description": "Absent when the identity names no record at the read cut. Boxed\nbecause inspection detail is by far the largest result: keeping it\noff the shared enum keeps every other response cheap to move.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TraceDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "trace_detail"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "page": {
               "$ref": "#/$defs/RuntimeClientTranscriptPage"
             },
@@ -6672,12 +6727,13 @@
       ]
     },
     "TracePage": {
+      "description": "One finite page of bounded summary records, oldest first.",
       "type": "object",
       "properties": {
-        "entries": {
+        "records": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/TraceEntry"
+            "$ref": "#/$defs/TraceRecord"
           }
         },
         "next_cursor": {
@@ -6693,17 +6749,19 @@
       },
       "additionalProperties": false,
       "required": [
-        "entries"
+        "records"
       ]
     },
-    "TraceEntry": {
+    "TraceRecord": {
+      "description": "One bounded pageable ledger record.",
       "type": "object",
       "properties": {
         "id": {
+          "description": "Stable native Trace identity. Selection and detail reads use it, and\nit survives paging, prepending and reconnect for the same record.",
           "type": "string"
         },
         "position": {
-          "description": "Trace order, only for ordering this read model; not an event cursor.",
+          "description": "Ordering boundary of this read model; not an event cursor.",
           "$ref": "#/$defs/TraceCursor"
         },
         "location": {
@@ -6718,10 +6776,21 @@
         "timing": {
           "$ref": "#/$defs/TraceTiming"
         },
+        "preview": {
+          "description": "One-line content preview, so a ledger row carries meaning rather than\nan identity alone.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TracePreview"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "request": {
           "anyOf": [
             {
-              "$ref": "#/$defs/TraceRequest"
+              "$ref": "#/$defs/TraceRequestSummary"
             },
             {
               "type": "null"
@@ -6731,7 +6800,7 @@
         "tool": {
           "anyOf": [
             {
-              "$ref": "#/$defs/TraceTool"
+              "$ref": "#/$defs/TraceToolSummary"
             },
             {
               "type": "null"
@@ -6739,21 +6808,21 @@
           ]
         },
         "calls": {
-          "description": "Accepted canonical `ToolCalls`, in canonical block order. Not start evidence.",
+          "description": "Canonical `ToolCall` proposals of an Assistant record, in block order.",
           "type": "array",
           "items": {
-            "$ref": "#/$defs/TraceTool"
+            "$ref": "#/$defs/TraceToolCall"
           }
         },
         "native_id": {
-          "description": "Exact native detached execution / child / Workflow run / interaction ID.",
+          "description": "Exact native detached execution / Subagent / Workflow / interaction ID.",
           "type": [
             "string",
             "null"
           ]
         },
         "message_id": {
-          "description": "Canonical output only. Publication without acceptance is not copied here.",
+          "description": "Canonical accepted message; publication without acceptance is absent.",
           "anyOf": [
             {
               "$ref": "#/$defs/MessageId"
@@ -6763,23 +6832,15 @@
             }
           ]
         },
-        "output": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TraceText"
-          }
-        },
-        "reasoning": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TraceText"
-          }
-        },
-        "artifacts": {
+        "attachments": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/TraceArtifact"
           }
+        },
+        "has_detail": {
+          "description": "Whether this record has heavy detail available for inspection.",
+          "type": "boolean"
         },
         "truncated": {
           "type": "boolean"
@@ -6794,14 +6855,13 @@
         "state",
         "timing",
         "calls",
-        "output",
-        "reasoning",
-        "artifacts",
+        "attachments",
+        "has_detail",
         "truncated"
       ]
     },
     "TraceLocation": {
-      "description": "Server-resolved grouping. Native `TurnId` is the logical model step within\nan Attempt; actual requests never allocate a new step.",
+      "description": "Server-resolved native grouping of one record.\n\n`TurnId` is the logical model step inside an Attempt. An actual request\nretry never allocates a new step, so retries of one step group together.",
       "type": "object",
       "properties": {
         "attempt_id": {
@@ -6832,21 +6892,32 @@
       "type": "string"
     },
     "TraceKind": {
-      "type": "string",
-      "enum": [
-        "attempt",
-        "step",
-        "request",
-        "assistant",
-        "tool",
-        "compaction",
-        "background",
-        "subagent",
-        "workflow",
-        "interaction"
+      "description": "The closed record vocabulary of the ledger.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "attempt",
+            "step",
+            "request",
+            "assistant",
+            "tool",
+            "compaction",
+            "background",
+            "subagent",
+            "workflow",
+            "interaction"
+          ]
+        },
+        {
+          "description": "Canonical inbound accepted as a turn this conversation owes an answer for.",
+          "type": "string",
+          "const": "user"
+        }
       ]
     },
     "TraceState": {
+      "description": "The closed lifecycle vocabulary.\n\n`Incomplete` is the truthful answer whenever no terminal fact exists and\nno current runtime projection positively proves activity. It is never\nupgraded by the absence of evidence.",
       "type": "string",
       "enum": [
         "incomplete",
@@ -6866,6 +6937,7 @@
       ]
     },
     "TraceTiming": {
+      "description": "Two authoritative instants, or fewer.\n\n`duration_ms` exists exactly when both endpoints do. Receipt time, render\ntime and reconnect time are never endpoints.",
       "type": "object",
       "properties": {
         "started_at": {
@@ -6892,13 +6964,32 @@
         "started_at"
       ]
     },
-    "TraceRequest": {
+    "TracePreview": {
+      "description": "A one-line summary preview of longer content.\n\nWhitespace is collapsed so a multi-paragraph message occupies one ledger\nrow. This is presentation shaping of already-permitted content, not a\nsecond copy of it: the complete value is reached through detail.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "truncated"
+      ]
+    },
+    "TraceRequestSummary": {
+      "description": "Bounded request facts carried by a pageable summary row.\n\nThe historical request input — system prompt, reconstructed context, Tool\ndefinitions — is deliberately absent. It lives in detail so a page of 32\nrequests does not carry 32 complete model contexts.",
       "type": "object",
       "properties": {
         "request_id": {
           "$ref": "#/$defs/RequestId2"
         },
         "retry_number": {
+          "description": "Native actual-request ordinal within the logical step. Zero is the\ninitial request; retry and recovery requests continue the sequence.\nIt is read from the frozen snapshot, never inferred from timestamps.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0,
@@ -6907,8 +6998,12 @@
         "assistant_message_id": {
           "$ref": "#/$defs/MessageId"
         },
+        "model": {
+          "description": "Historical model, from the request's own immutable snapshot.",
+          "type": "string"
+        },
         "previous_failure_kind": {
-          "description": "Previous actual request failure, proven through the native retry ordinal.",
+          "description": "The exact preceding actual request's failure class, when recorded.",
           "anyOf": [
             {
               "$ref": "#/$defs/ModelErrorKind"
@@ -6917,28 +7012,6 @@
               "type": "null"
             }
           ]
-        },
-        "model": {
-          "$ref": "#/$defs/TraceText"
-        },
-        "max_output_tokens": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
-          "maximum": 4294967295
-        },
-        "reasoning_enabled": {
-          "type": "boolean"
-        },
-        "effective_system_prompt": {
-          "description": "Exact request input is internal. These sections are explicitly withheld,\nnever replaced by today's configuration or reconstructed in the browser.",
-          "$ref": "#/$defs/TraceText"
-        },
-        "context_input": {
-          "$ref": "#/$defs/TraceText"
-        },
-        "tool_schema": {
-          "$ref": "#/$defs/TraceText"
         },
         "failure_kind": {
           "anyOf": [
@@ -6959,6 +7032,16 @@
               "type": "null"
             }
           ]
+        },
+        "generation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceGeneration"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
@@ -6966,12 +7049,7 @@
         "request_id",
         "retry_number",
         "assistant_message_id",
-        "model",
-        "max_output_tokens",
-        "reasoning_enabled",
-        "effective_system_prompt",
-        "context_input",
-        "tool_schema"
+        "model"
       ]
     },
     "RequestId2": {
@@ -7043,26 +7121,6 @@
         }
       ]
     },
-    "TraceText": {
-      "type": "object",
-      "properties": {
-        "text": {
-          "type": "string"
-        },
-        "truncated": {
-          "type": "boolean"
-        },
-        "redacted": {
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "text",
-        "truncated",
-        "redacted"
-      ]
-    },
     "ModelUsage": {
       "description": "Normalized token accounting for one generation.\n\nProviders do not expose identical token metrics; this is the stable\ncommon core. Provider SDK usage objects never appear here.",
       "type": "object",
@@ -7132,7 +7190,91 @@
         }
       }
     },
-    "TraceTool": {
+    "TraceGeneration": {
+      "description": "Derived generation metrics for one actual request.\n\nEvery field is `None` unless its authoritative endpoints exist. A missing\nmetric states that rustX did not observe what the metric measures.",
+      "type": "object",
+      "properties": {
+        "timeline": {
+          "description": "Request-relative monotonic phase positions, only with a native clock bridge.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceGenerationTimeline"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ttft_ms": {
+          "description": "Milliseconds from the request's dispatch frontier to its first output.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "generation_ms": {
+          "description": "Milliseconds from the first output to the provider terminal.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "terminal_ms": {
+          "description": "Milliseconds from the dispatch frontier to the provider terminal.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "output_tokens_per_second": {
+          "description": "Output tokens per second, present only when usage and both decode\nendpoints exist and the decode span is measurable.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "terminal_ms"
+      ]
+    },
+    "TraceGenerationTimeline": {
+      "description": "All offsets share the paired durable request-start origin. The browser must\nnot stretch them to fit the independently recorded Journal wall duration.",
+      "type": "object",
+      "properties": {
+        "dispatch_ms": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "first_output_ms": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "last_output_ms": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "terminal_ms": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "dispatch_ms",
+        "terminal_ms"
+      ]
+    },
+    "TraceToolSummary": {
+      "description": "Bounded Tool facts carried by a pageable summary row.",
       "type": "object",
       "properties": {
         "call_id": {
@@ -7141,23 +7283,86 @@
         "tool_id": {
           "$ref": "#/$defs/ToolId"
         },
-        "arguments": {
-          "$ref": "#/$defs/TraceText"
+        "name": {
+          "description": "Recorded model-facing name, when the canonical proposal is loadable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started": {
+          "description": "Whether execution started, as proven by its own durable start fact.",
+          "type": "boolean"
+        },
+        "outcome": {
+          "description": "Typed outcome class, present only once the execution settled.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceToolOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detail": {
+          "description": "Bounded typed error or status detail from the canonical result.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TracePreview"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
       "required": [
         "call_id",
         "tool_id",
-        "arguments"
+        "started"
       ]
     },
     "ToolCallId": {
       "description": "Provider/model-issued opaque correlation string, scoped to a request/publication.\nNot a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.",
       "type": "string"
     },
+    "TraceToolOutcome": {
+      "description": "The closed canonical Tool outcome vocabulary.",
+      "type": "string",
+      "enum": [
+        "success",
+        "failed",
+        "denied",
+        "cancelled",
+        "timed_out",
+        "outcome_unknown"
+      ]
+    },
+    "TraceToolCall": {
+      "description": "One canonical `ToolCall` the model proposed.\n\nA proposal proves that the generation assembled a call. It never proves\nthat execution started: a started Tool record is separate evidence.",
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/ToolCallId"
+        },
+        "tool_id": {
+          "$ref": "#/$defs/ToolId"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "call_id",
+        "tool_id",
+        "name"
+      ]
+    },
     "TraceArtifact": {
-      "description": "Safe reference to the existing native artifact carrier, never a storage path.",
+      "description": "Safe reference to the existing native artifact carrier, never a path.",
       "type": "object",
       "properties": {
         "artifact_id": {
@@ -7165,12 +7370,842 @@
         },
         "image": {
           "type": "boolean"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mime_type": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,
       "required": [
         "artifact_id",
         "image"
+      ]
+    },
+    "TraceDetail": {
+      "description": "Heavy inspection detail for one exact record identity.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Echoes the requested identity so a late reply can be fenced.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/TraceKind"
+        },
+        "request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceRequestDetail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceToolDetail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages": {
+          "description": "Canonical messages in native order (an adoption can contain a batch).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceMessageDetail"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "messages",
+        "truncated"
+      ]
+    },
+    "TraceRequestDetail": {
+      "description": "The exact historical request, reconstructed from frozen native authority.\n\nEvery value comes from this request's own immutable Request Snapshot and\nthe historical Conversation Surface revision it froze. Current model\nconfiguration, the current tool catalog and the current system prompt are\nnever consulted, so a request reopened after the Session was reconfigured\nstill shows what was actually sent.",
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/RequestId2"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "step_id": {
+          "$ref": "#/$defs/TurnId"
+        },
+        "retry_number": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "assistant_message_id": {
+          "$ref": "#/$defs/MessageId"
+        },
+        "model": {
+          "type": "string"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "context_window_tokens": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "reasoning_enabled": {
+          "type": "boolean"
+        },
+        "reasoning_profile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "options": {
+          "description": "Allowlisted provider-neutral sampling options; see the options\nallowlist for exactly which keys may appear.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceRequestOption"
+          }
+        },
+        "omitted_option_count": {
+          "description": "How many configured request parameters were outside the allowlist.\nTheir names are not disclosed; the count keeps the omission visible.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "effective_system_prompt": {
+          "$ref": "#/$defs/TraceText"
+        },
+        "messages": {
+          "description": "The reconstructed provider-neutral request context, in wire order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceRequestMessage"
+          }
+        },
+        "messages_truncated": {
+          "type": "boolean"
+        },
+        "tools": {
+          "description": "The exact historical Tool definitions this request carried.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceToolDefinition"
+          }
+        },
+        "tools_truncated": {
+          "type": "boolean"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceRequestFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceGeneration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "attempt_id",
+        "step_id",
+        "retry_number",
+        "assistant_message_id",
+        "model",
+        "protocol",
+        "max_output_tokens",
+        "context_window_tokens",
+        "reasoning_enabled",
+        "options",
+        "omitted_option_count",
+        "effective_system_prompt",
+        "messages",
+        "messages_truncated",
+        "tools",
+        "tools_truncated"
+      ]
+    },
+    "TraceRequestOption": {
+      "description": "One allowlisted provider-neutral request option.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/TraceJson"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "value"
+      ]
+    },
+    "TraceJson": {
+      "description": "Bounded structured data with an explicit completeness statement.\n\nThe value stays real JSON rather than a rendered string, so the browser\ncan present it with a structured reader instead of a preformatted dump.",
+      "type": "object",
+      "properties": {
+        "value": true,
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "truncated"
+      ]
+    },
+    "TraceText": {
+      "description": "Bounded text with an explicit completeness statement.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "truncated"
+      ]
+    },
+    "TraceRequestMessage": {
+      "description": "One reconstructed provider-neutral request item.",
+      "type": "object",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/TraceMessageRole"
+        },
+        "message_id": {
+          "description": "Canonical Ledger identity; absent exactly for a request-only item.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "description": "Provenance of a canonical User item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceContentBlock"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "blocks",
+        "truncated"
+      ]
+    },
+    "TraceMessageRole": {
+      "description": "The role of one reconstructed request item.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "user",
+            "assistant",
+            "tool"
+          ]
+        },
+        {
+          "description": "A request-only runtime context item with no canonical identity.",
+          "type": "string",
+          "const": "request_only"
+        }
+      ]
+    },
+    "TraceContentBlock": {
+      "description": "The closed projected content vocabulary.\n\nEach variant is a semantic the browser can render with the matching\npresentation primitive: prose as Markdown, structure as a JSON reader,\nsource as code, artifacts through the existing durable carrier.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "$ref": "#/$defs/TraceText"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "$ref": "#/$defs/TraceText"
+            },
+            "type": {
+              "type": "string",
+              "const": "reasoning"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "$ref": "#/$defs/TraceText"
+            },
+            "type": {
+              "type": "string",
+              "const": "refusal"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "$ref": "#/$defs/TraceJson"
+            },
+            "type": {
+              "type": "string",
+              "const": "json"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "call_id": {
+              "$ref": "#/$defs/ToolCallId"
+            },
+            "tool_id": {
+              "$ref": "#/$defs/ToolId"
+            },
+            "name": {
+              "type": "string"
+            },
+            "arguments": {
+              "$ref": "#/$defs/TraceJson"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_call"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "call_id",
+            "tool_id",
+            "name",
+            "arguments"
+          ]
+        },
+        {
+          "description": "A Tool result item inside a reconstructed request context.",
+          "type": "object",
+          "properties": {
+            "call_id": {
+              "$ref": "#/$defs/ToolCallId"
+            },
+            "tool_id": {
+              "$ref": "#/$defs/ToolId"
+            },
+            "outcome": {
+              "$ref": "#/$defs/TraceToolOutcome"
+            },
+            "blocks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/TraceContentBlock"
+              }
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_result"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "call_id",
+            "tool_id",
+            "outcome",
+            "blocks",
+            "truncated"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/TraceArtifact"
+            },
+            "alt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "artifact"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/TraceArtifact"
+            },
+            "type": {
+              "type": "string",
+              "const": "file"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "artifact"
+          ]
+        },
+        {
+          "description": "A Session-owned workspace upload reference.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "upload"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "name"
+          ]
+        }
+      ]
+    },
+    "TraceToolDefinition": {
+      "description": "The historical model-facing Tool definition of one request.",
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "$ref": "#/$defs/ToolId"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "$ref": "#/$defs/TraceText"
+        },
+        "input_schema": {
+          "$ref": "#/$defs/TraceJson"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tool_id",
+        "name",
+        "description",
+        "input_schema"
+      ]
+    },
+    "TraceRequestFailure": {
+      "description": "The terminal failure of one actual request.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ModelErrorKind"
+        },
+        "message": {
+          "$ref": "#/$defs/TraceText"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "message"
+      ]
+    },
+    "TraceToolDetail": {
+      "description": "Heavy Tool inspection detail.",
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/ToolCallId"
+        },
+        "tool_id": {
+          "$ref": "#/$defs/ToolId"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/TraceToolLifecycle"
+        },
+        "arguments": {
+          "description": "Exact structured arguments from the canonical `ToolCall` proposal.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceJson"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "description": "Program source identified by a native Tool contract, when there is one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceToolSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "definition": {
+          "description": "The historical definition this call's own request carried.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceToolDefinition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceToolResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "call_id",
+        "tool_id",
+        "lifecycle"
+      ]
+    },
+    "TraceToolLifecycle": {
+      "description": "How far one Tool call progressed, by its own native evidence.",
+      "oneOf": [
+        {
+          "description": "The model assembled the call. Execution is not implied.",
+          "type": "string",
+          "const": "proposed"
+        },
+        {
+          "description": "A durable start fact exists for this exact call and Tool.",
+          "type": "string",
+          "const": "started"
+        },
+        {
+          "description": "A canonical Tool message was accepted for this exact call.",
+          "type": "string",
+          "const": "settled"
+        }
+      ]
+    },
+    "TraceToolSource": {
+      "description": "Program source carried by an argument field of a native Tool contract.\n\nThis exists only where a rustX native Tool identity states unambiguously\nthat one named argument is a program. It is never inferred from a value's\nshape, a filename, or a file extension.",
+      "type": "object",
+      "properties": {
+        "field": {
+          "description": "The argument field the native contract identifies as program source.",
+          "type": "string"
+        },
+        "text": {
+          "$ref": "#/$defs/TraceText"
+        },
+        "language": {
+          "description": "Highlighting language, present only when the native contract fixes\nit. A tool whose contract does not fix a language leaves this absent\nrather than guessing from the source.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "text"
+      ]
+    },
+    "TraceToolResult": {
+      "description": "The canonical execution result of one Tool call.",
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/TraceToolOutcome"
+        },
+        "detail": {
+          "description": "Typed status detail: the error, denial reason, or cancellation reason.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceContentBlock"
+          }
+        },
+        "blocks_truncated": {
+          "type": "boolean"
+        },
+        "duration_ms": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceArtifact"
+          }
+        },
+        "truncation": {
+          "description": "Tool-owned output truncation recorded by the execution itself.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceToolTruncation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "managed_output": {
+          "description": "Runtime-owned managed-output continuation metadata, when present.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceManagedOutput"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "blocks",
+        "blocks_truncated",
+        "duration_ms",
+        "attachments"
+      ]
+    },
+    "TraceToolTruncation": {
+      "description": "Tool-recorded output truncation, distinct from Trace's own bounds.",
+      "type": "object",
+      "properties": {
+        "truncated": {
+          "type": "boolean"
+        },
+        "original_bytes": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "truncated"
+      ]
+    },
+    "TraceManagedOutput": {
+      "description": "Managed textual-output continuation metadata.\n\nThe recorded locator is an inspectable execution fact. It is presentation\ndata only and confers no filesystem, execution, or recovery authority.",
+      "type": "object",
+      "properties": {
+        "complete": {
+          "description": "Whether the store holds this result's complete textual output, so the\nbounded result content is a preview rather than the whole record.",
+          "type": "boolean"
+        },
+        "available": {
+          "description": "Whether any managed output file exists at all.",
+          "type": "boolean"
+        },
+        "locator": {
+          "description": "Exact native locator, when output storage owns one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diagnostic": {
+          "description": "The bounded advisory output-storage diagnostic, when one was recorded.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "complete",
+        "available"
+      ]
+    },
+    "TraceMessageDetail": {
+      "description": "One canonical accepted message, projected for inspection.",
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "$ref": "#/$defs/MessageId"
+        },
+        "role": {
+          "$ref": "#/$defs/TraceMessageRole"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceContentBlock"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "message_id",
+        "role",
+        "blocks",
+        "truncated"
       ]
     },
     "RuntimeClientTranscriptPage": {
@@ -11684,7 +12719,7 @@
       ]
     },
     "TraceLifecycle": {
-      "description": "Refresh of a loaded record, resolved by the server at the snapshot cut.\nNo browser lifecycle inference or replacement of canonical payloads.",
+      "description": "Refresh of an already loaded record, resolved at the server's snapshot cut.\n\nOnly mutable lifecycle facts travel here. Immutable historical input is\nnever repeated, because it cannot have changed.",
       "type": "object",
       "properties": {
         "id": {
@@ -11706,6 +12741,16 @@
             }
           ]
         },
+        "tool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceToolOutcomeUpdate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "message_id": {
           "anyOf": [
             {
@@ -11716,7 +12761,7 @@
             }
           ]
         },
-        "artifacts": {
+        "attachments": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/TraceArtifact"
@@ -11731,12 +12776,12 @@
         "id",
         "state",
         "timing",
-        "artifacts",
+        "attachments",
         "truncated"
       ]
     },
     "TraceRequestOutcome": {
-      "description": "Mutable request outcome only; immutable historical input is not repeated.",
+      "description": "Mutable request outcome only.",
       "type": "object",
       "properties": {
         "failure_kind": {
@@ -11758,9 +12803,52 @@
               "type": "null"
             }
           ]
+        },
+        "generation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceGeneration"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
+    },
+    "TraceToolOutcomeUpdate": {
+      "description": "Mutable Tool outcome only.",
+      "type": "object",
+      "properties": {
+        "started": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceToolOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TracePreview"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "started"
+      ]
     },
     "RuntimeClientAttempt": {
       "description": "The external attempt view of the Runtime Client projection.\n\nThe view folds attempt lifecycle, turn progress, in-flight agent\noutput, and foreground tool execution into one structured read model.",

@@ -2516,7 +2516,7 @@ mod tests {
             crate::runtime_client::trace::TraceProjection::through(store.as_ref(), through)
                 .page(None, 32)
                 .unwrap()
-                .entries
+                .records
                 .is_empty()
         );
         gate.proceed();
@@ -2530,9 +2530,9 @@ mod tests {
         let trace = crate::runtime_client::trace::TraceProjection::through(store.as_ref(), through)
             .page(None, 32)
             .unwrap();
-        assert_eq!(trace.entries.len(), 1);
+        assert_eq!(trace.records.len(), 1);
         assert_eq!(
-            trace.entries[0].native_id.as_deref(),
+            trace.records[0].native_id.as_deref(),
             Some(ticket.id.as_str())
         );
         coordinator

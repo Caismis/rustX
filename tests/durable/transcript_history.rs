@@ -856,6 +856,7 @@ fn requirement_09_unaccepted_and_incomplete_publications_stay_distinct() {
                 request_id,
                 finish_reason: ModelFinishReason::Stop,
                 usage: None,
+                generation: None,
             },
         ))
         .expect("provider outcome");

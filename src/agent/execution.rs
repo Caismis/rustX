@@ -106,6 +106,7 @@ use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::generation::{GenerationFailure, GenerationGuard, GenerationSafetyPolicy};
+use crate::model::generation_evidence::GenerationTiming;
 use crate::model::session::AttemptModelSnapshot;
 use crate::model::snapshot::{AgentStatusStart, RequestIdentity, RequestSnapshot};
 use crate::model::types::{ModelRequest, ModelUsage};
@@ -535,6 +536,11 @@ pub struct AgentExecution<'a> {
     /// provider outcome fact (P) and the publication stream both name it, so
     /// neither can be attributed to a different request of the same turn.
     last_request_id: Option<RequestId>,
+    /// Generation timing evidence being accumulated for the in-flight actual
+    /// request. Installed at that request's dispatch frontier and taken by
+    /// whichever settlement path records its provider terminal, so exactly
+    /// one terminal fact can carry it and a retry never inherits it.
+    generation_timing: Option<GenerationTiming>,
     /// The bounded publication policy of the attempt.
     publication_policy: CoalescePolicy,
     /// The monotonic clock the publication latency policy reads.
@@ -699,6 +705,7 @@ struct ModelInvocation {
 /// together so publication can never be attributed to a different actual
 /// request generation.
 struct StartedModelTurn {
+    request_start_ms: Option<u64>,
     request: ModelRequest,
     message_id: MessageId,
 }
@@ -1267,6 +1274,7 @@ impl<'a> AgentExecution<'a> {
             last_request_anchor: None,
             last_request_estimated_input: None,
             last_request_id: None,
+            generation_timing: None,
             publication_policy: CoalescePolicy::default(),
             monotonic_clock: runtime_policy.monotonic_clock,
             model_timeout_policy: runtime_policy.model_timeout_policy,
@@ -1844,10 +1852,12 @@ impl<'a> AgentExecution<'a> {
         // This downstream copy is derived only after canonical assembly has
         // validated and retained the event's terminal fact.
         let finish_reason = turn_assembly.finish_reason.clone();
+        let generation = self.settle_generation_evidence();
         self.emit(RuntimeEvent::ModelRequestCompleted {
             request_id,
             finish_reason: finish_reason.clone(),
             usage: reported_usage.clone(),
+            generation,
         });
         if let Some(terminal) = self.durable_failure_terminal_from_state() {
             return Some(terminal);
@@ -2184,6 +2194,8 @@ impl<'a> AgentExecution<'a> {
             .map_err(|error| {
                 self.durable_failure_terminal("a selected inbound batch cannot be adopted", &error)
             })?;
+        let adoption = adopted.adoption;
+        let adopted = adopted.items;
         if adopted.is_empty() {
             return Ok(false);
         }
@@ -2214,6 +2226,13 @@ impl<'a> AgentExecution<'a> {
                     item.transcript_cursor(),
                 );
             }
+        }
+        // The adoption fact is published after its canonical messages, with
+        // its exact Journal sequence. Trace projects it as the ledger's User
+        // record, and the observation queue holds its receipt until exactly
+        // this publication releases it.
+        if let (Some(observer), Some(adoption)) = (self.observer, adoption.as_ref()) {
+            observer.observe_event(&self.request.attempt_id, &adoption.event, adoption.sequence);
         }
         self.pending_fresh_inbound = Some(fresh);
         Ok(true)
@@ -3055,9 +3074,16 @@ impl<'a> AgentExecution<'a> {
                 .iter()
                 .map(|commit| commit.message().clone())
                 .collect();
-            store.commit_model_turn_start(&context, &prepared.snapshot, Utc::now())
+            // Pair the monotonic origin with the exact timestamp this transaction
+            // persists. The cancellation gate still owns start arbitration; no
+            // dispatch can precede commit or reconstruction verification.
+            let request_start_ms = self.monotonic_clock.now_millis();
+            let timestamp = Utc::now();
+            store
+                .commit_model_turn_start(&context, &prepared.snapshot, timestamp)
+                .map(|commit| (commit, request_start_ms))
         });
-        let start_commit = match arbitration {
+        let (start_commit, request_start_ms) = match arbitration {
             Ok(StartAdjudication::CancelledBeforeStart) => {
                 return Err(Terminal::Cancelled {
                     reason: self.cancellation.reason(),
@@ -3157,6 +3183,10 @@ impl<'a> AgentExecution<'a> {
             });
         }
         Ok(StartedModelTurn {
+            // A replay's old timestamp must never be paired with a new clock read.
+            request_start_ms: (start_commit.disposition
+                == ModelTurnStartCommitDisposition::NewlyCommitted)
+                .then_some(request_start_ms),
             request: prepared.request,
             message_id: prepared.snapshot.provisional_message_id,
         })
@@ -3689,6 +3719,7 @@ impl<'a> AgentExecution<'a> {
         started: StartedModelTurn,
     ) -> Result<ModelInvocation, Terminal> {
         let StartedModelTurn {
+            request_start_ms,
             request,
             message_id,
         } = started;
@@ -3698,8 +3729,18 @@ impl<'a> AgentExecution<'a> {
         // Start the response-start clock at the dispatch frontier, immediately
         // after durable reconstruction verification and before entering the
         // adapter's synchronous dispatch method.
-        let deadline =
-            ModelRequestDeadline::new(self.model_timeout_policy, self.monotonic_clock.now_millis());
+        let dispatch_frontier_ms = self.monotonic_clock.now_millis();
+        let deadline = ModelRequestDeadline::new(self.model_timeout_policy, dispatch_frontier_ms);
+        // Generation timing evidence shares the deadline's and the guard's
+        // exact request-local lifetime and origin. Installing it here — after
+        // durable reconstruction verification, before the adapter stream
+        // exists — means time to first output measures generation rather than
+        // request preparation, and a retry cannot inherit the spans of the
+        // generation it replaces.
+        self.generation_timing = Some(GenerationTiming::started_at(
+            dispatch_frontier_ms,
+            request_start_ms,
+        ));
         // The generation guard is request-local execution state exactly like
         // the deadline: one physical generation, one guard, derived from the
         // attempt's own frozen resolved output budget. It is created here,
@@ -4134,7 +4175,16 @@ impl<'a> AgentExecution<'a> {
                     },
                 });
             }
-            deadline.observe(&item, self.monotonic_clock.now_millis());
+            let observed_at_ms = self.monotonic_clock.now_millis();
+            deadline.observe(&item, observed_at_ms);
+            if let (ModelStreamItem::Event(event), Some(timing)) =
+                (&item, self.generation_timing.as_mut())
+            {
+                // Observed before generation-integrity and budget evaluation
+                // so that a generation discarded as degenerate still reports
+                // when the provider actually started producing output.
+                timing.observe(event, observed_at_ms);
+            }
             // Generation integrity and generation budget are evaluated here,
             // *before* the item reaches assembly or publication: a delta that
             // proves the generation is unusable is not part of a message this
@@ -4274,15 +4324,35 @@ impl<'a> AgentExecution<'a> {
         // The stream is consumed or dropped by the caller before this path
         // returns. No late adapter terminal can re-enter the loop and create
         // a second outcome for this RequestId.
+        let generation = self.settle_generation_evidence();
         self.emit(RuntimeEvent::ModelRequestFailed {
             request_id,
             error: error.clone(),
             usage,
+            generation,
         });
         if let Some(terminal) = self.durable_failure_terminal_from_state() {
             return Err(terminal);
         }
         Ok(())
+    }
+
+    /// Settles the in-flight request's generation timing evidence at its
+    /// provider terminal.
+    ///
+    /// Taking the accumulator is what makes the evidence exactly-once: the
+    /// completion and failure paths call this from the same position in
+    /// their own terminal emission, so a request cannot record two spans and
+    /// a second terminal for the same request cannot invent one. A request
+    /// whose terminal is recorded without an installed accumulator — no
+    /// adapter stream was ever created — truthfully reports no evidence.
+    fn settle_generation_evidence(
+        &mut self,
+    ) -> Option<crate::model::generation_evidence::GenerationEvidence> {
+        let terminal_ms = self.monotonic_clock.now_millis();
+        self.generation_timing
+            .take()
+            .map(|timing| timing.settle(terminal_ms))
     }
 
     /// Retains the latest trustworthy provider input measurement for the
@@ -6793,6 +6863,10 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingObserver {
+        start_gap: Option<(
+            Arc<crate::runtime::monotonic::ManualMonotonicClock>,
+            Arc<crate::durable::SqliteConversationStore>,
+        )>,
         events: Mutex<Vec<RuntimeEvent>>,
         committed: Mutex<Vec<MessageBlock>>,
         statuses: Mutex<Vec<AgentStatusObservation>>,
@@ -6827,6 +6901,20 @@ mod tests {
             event: &RuntimeEvent,
             _journal_sequence: u64,
         ) {
+            if matches!(event, RuntimeEvent::ModelRequestStarted { .. })
+                && let Some((clock, store)) = &self.start_gap
+            {
+                assert!(
+                    event_history(store.as_ref())
+                        .iter()
+                        .any(|persisted| persisted == event)
+                );
+                assert_eq!(
+                    crate::runtime::monotonic::MonotonicClock::now_millis(clock.as_ref()),
+                    0
+                );
+                clock.advance(400);
+            }
             self.events
                 .lock()
                 .expect("observer event lock")
@@ -7300,6 +7388,178 @@ mod tests {
         (result, latch, store, adapter)
     }
 
+    /// A committed start, controlled preparation gap, then actual adapter dispatch.
+    /// The stream also delays EOF to prove it cannot move the provider terminal.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn generation_bridge_survives_settlement_and_reopen() {
+        use crate::model::types::ModelUsage;
+        use crate::runtime::monotonic::{ManualMonotonicClock, MonotonicClock};
+        use crate::runtime_client::trace::{TraceKind, TraceProjection};
+        fn events(store: &dyn ConversationStore) -> Vec<RuntimeEvent> {
+            store
+                .read_events(None, 32)
+                .unwrap()
+                .events
+                .into_iter()
+                .map(|e| e.event)
+                .collect()
+        }
+        struct TimedAdapter {
+            clock: Arc<ManualMonotonicClock>,
+            store: Arc<crate::durable::SqliteConversationStore>,
+        }
+        impl ModelAdapter for TimedAdapter {
+            fn protocol(&self) -> ModelProtocol {
+                chat_protocol()
+            }
+            fn stream(
+                &self,
+                _request: ModelRequest,
+                _cancellation: CancellationSignal,
+            ) -> ModelStream {
+                assert_eq!(
+                    self.clock.now_millis(),
+                    400,
+                    "dispatch follows the controlled gap"
+                );
+                assert!(
+                    events(self.store.as_ref())
+                        .iter()
+                        .any(|e| matches!(e, RuntimeEvent::ModelRequestStarted { .. }))
+                );
+                let clock = self.clock.clone();
+                let mut index = 0;
+                Box::pin(futures_util::stream::poll_fn(move |_| {
+                    let item = match index {
+                        0 => Some(ModelEvent::Started),
+                        1 => {
+                            clock.advance(320);
+                            Some(ModelEvent::TextDelta {
+                                block_index: ContentBlockIndex::new(0),
+                                text: "hello".into(),
+                            })
+                        }
+                        2 => {
+                            clock.advance(1_200);
+                            Some(ModelEvent::TextDelta {
+                                block_index: ContentBlockIndex::new(0),
+                                text: " world".into(),
+                            })
+                        }
+                        3 => Some(ModelEvent::UsageUpdate {
+                            usage: ModelUsage {
+                                input_tokens: 40,
+                                output_tokens: 120,
+                                total_tokens: 160,
+                                details: None,
+                            },
+                        }),
+                        4 => {
+                            clock.advance(80);
+                            Some(ModelEvent::Completed {
+                                finish_reason: ModelFinishReason::Stop,
+                                usage: None,
+                            })
+                        }
+                        _ => {
+                            clock.advance(500);
+                            None
+                        }
+                    };
+                    index += 1;
+                    std::task::Poll::Ready(item.map(ModelStreamItem::Event))
+                }))
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("timing.sqlite");
+        let seed = Arc::new(ScriptedAdapter::new(vec![]));
+        let mut request = request(&seed);
+        let id = request.conversation_id.clone();
+        let store =
+            Arc::new(crate::durable::SqliteConversationStore::open(id.clone(), &path).unwrap());
+        let clock = Arc::new(ManualMonotonicClock::new());
+        let adapter = Arc::new(TimedAdapter {
+            clock: clock.clone(),
+            store: store.clone(),
+        });
+        request.model = scripted_session_model(adapter).snapshot();
+        let tool_runtime = tool_runtime_with_store(id.as_str(), Some(store.clone()));
+        let (_dir, coordinator, lease) = capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let observer = RecordingObserver {
+            start_gap: Some((clock.clone(), store.clone())),
+            ..Default::default()
+        };
+        let mut execution = AgentExecution::new(
+            request,
+            lease,
+            &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
+            runtime(&seed),
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .unwrap();
+        execution.install_publication_policy(
+            crate::publication::CoalescePolicy::default(),
+            clock.clone(),
+        );
+        execution.observe(&observer);
+        let result = execution.run().await;
+        assert!(matches!(result.outcome, AttemptOutcome::Completed { .. }));
+        let evidence = events(store.as_ref())
+            .into_iter()
+            .find_map(|event| match event {
+                RuntimeEvent::ModelRequestCompleted { generation, .. } => generation,
+                _ => None,
+            })
+            .expect("settled evidence");
+        assert_eq!(evidence.dispatch_after_start_ms, Some(400));
+        assert_eq!(evidence.first_output_ms, Some(320));
+        assert_eq!(evidence.last_output_ms, Some(1_520));
+        assert_eq!(evidence.terminal_ms, 1_600);
+        assert_eq!(evidence.generation_ms(), Some(1_280));
+        let page = TraceProjection::new(store.as_ref())
+            .unwrap()
+            .page(None, 32)
+            .unwrap();
+        let record = page
+            .records
+            .iter()
+            .find(|r| r.kind == TraceKind::Request)
+            .unwrap();
+        let generation = record.request.as_ref().unwrap().generation.unwrap();
+        let timeline = generation.timeline.unwrap();
+        assert_eq!(timeline.dispatch_ms, 400);
+        assert_eq!(timeline.first_output_ms, Some(720));
+        assert_eq!(timeline.last_output_ms, Some(1_920));
+        assert_eq!(timeline.terminal_ms, 2_000);
+        assert_eq!(generation.output_tokens_per_second, Some(120.0 / 1.28));
+        drop(result);
+        drop(observer);
+        drop(tool_runtime);
+        drop(coordinator);
+        assert_eq!(
+            Arc::strong_count(&store),
+            1,
+            "close every store owner before reopen"
+        );
+        drop(store);
+        clock.advance(100_000);
+        let reopened = crate::durable::SqliteConversationStore::open(id, &path).unwrap();
+        assert_eq!(
+            TraceProjection::new(&reopened)
+                .unwrap()
+                .page(None, 32)
+                .unwrap(),
+            page
+        );
+        assert!(events(&reopened).iter().any(|event| matches!(event,
+            RuntimeEvent::ModelRequestCompleted { generation: Some(value), .. } if *value == evidence)));
+    }
+
     /// The exact expected trace: one completed tool turn, then the generic
     /// pre-next-turn cancellation checkpoint settles the attempt cancelled
     /// before any second model turn.
@@ -7327,6 +7587,7 @@ mod tests {
                 request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 finish_reason: ModelFinishReason::ToolCalls,
                 usage: None,
+                generation: None,
             },
             RuntimeEvent::AssistantMessageCommitted {
                 message_id: MessageId::new("attempt-1-agent-1"),
@@ -7378,7 +7639,14 @@ mod tests {
             if page.events.is_empty() {
                 break;
             }
-            events.extend(page.events.into_iter().map(|envelope| envelope.event));
+            // Recorded traces compare semantics. Generation timing evidence
+            // is a measurement of one physical generation, so it is
+            // normalized out here and asserted by the timing regressions.
+            events.extend(
+                page.events
+                    .into_iter()
+                    .map(|envelope| envelope.event.without_generation_evidence()),
+            );
             cursor = page.next_sequence;
         }
         events

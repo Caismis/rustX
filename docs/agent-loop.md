@@ -2073,3 +2073,36 @@ Request Snapshots and execution facts after their owners commit them. Logical
 Steps and actual request ordinals come from native `RequestIdentity`. Trace is
 never consulted by the Agent Loop, recovery, cancellation, Tool dispatch or
 settlement. Removing the Web Trajectory view removes only presentation.
+
+### Historical generation timing
+
+The Agent Loop deliberately pairs a monotonic reading with the exact UTC value
+supplied to `commit_model_turn_start` inside cancellation/start arbitration,
+immediately before the transaction. Successful commit makes the start fact
+exist; the supplied timestamp defines its timeline origin. Only a newly committed
+start retains that pair. An idempotent receipt never gets a new timing origin.
+The immutable Request Snapshot and start event still commit atomically, and
+provider dispatch still follows commit and durable reconstruction/verification.
+
+Each dispatched request owns `GenerationTiming` from its adapter dispatch
+frontier. It measures `dispatch_after_start_ms` from the retained start origin,
+then first/last non-empty normalized output and provider terminal offsets from
+dispatch. Empty deltas, usage and framing do not count as output. Completion or
+failure observations freeze the terminal offset before stream draining or
+publication; failures without such an observation use native failure settlement.
+The accumulator is taken once and persisted as compact request-owned
+`GenerationEvidence` with that request's terminal fact. Retries own new evidence.
+No per-token Journal, canonical Assistant timing or recovery authority is added.
+
+TTFT is **dispatch → first output**, generation is **first output → provider
+terminal**, and request duration is **paired durable start → provider terminal**.
+Throughput requires output usage and a positive first-output-to-terminal interval.
+Canonical Assistant acceptance remains a distinct later commit. Trace projects
+request-relative phase offsets only when the measured start/dispatch bridge
+exists; the browser never stretches dispatch-origin metrics onto a Journal wall
+span. Missing evidence stays unknown after reopen; current clocks are irrelevant.
+
+This is a deliberate deviation from pinned Harness TTFT (**step start → first
+token**). rustX keeps its stronger dispatch-origin metric because durable start,
+reconstruction and actual dispatch are separate native boundaries. See
+[the exact timing contract](trace.md#generation-clock-contract).

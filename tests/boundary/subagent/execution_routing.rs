@@ -865,7 +865,7 @@ async fn two_concurrent_children_of_one_agent_stay_unambiguously_correlated() {
         .store
         .adopt_pending_batch(batch.watermark, None)
         .expect("adoption");
-    assert_eq!(adopted.len(), 4);
+    assert_eq!(adopted.items.len(), 4);
 
     // Build the provider-neutral model input of the parent's subsequent
     // request through the exact assembly seam the runtime uses.

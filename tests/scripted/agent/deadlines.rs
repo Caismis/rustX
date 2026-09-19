@@ -367,6 +367,7 @@ fn timeout_failures(
                 request_id,
                 error,
                 usage: Some(usage),
+                ..
             } => Some((request_id.clone(), usage.clone(), error.kind.clone())),
             RuntimeEvent::ModelRequestFailed {
                 request_id, error, ..

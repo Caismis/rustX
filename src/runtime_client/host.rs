@@ -1120,9 +1120,51 @@ impl ClientInner {
                 message: "Trace read failed or cursor is invalid".into(),
             })?;
         if self.runtime.is_some() {
-            super::trace::repair_entries(&mut page.entries, &current);
+            super::trace::repair_records(&mut page.records, &current);
         }
         Ok(RuntimeClientResult::TracePage { page })
+    }
+
+    /// Reads the heavy detail of one exact Trace record identity.
+    ///
+    /// Detail is a pure historical read at the same kind of cut a page uses:
+    /// it drains no observation, advances no cursor, consumes no pending
+    /// work and settles nothing. Its lifecycle-bearing summary counterpart
+    /// stays the authority for current state, so no live repair applies here
+    /// — detail carries immutable historical facts only.
+    #[allow(clippy::needless_pass_by_value)] // Attachment dispatch owns request parameters.
+    pub(crate) fn trace_detail(
+        &self,
+        record_id: String,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
+        if record_id.len() > 256 {
+            return Err(RuntimeClientError::InvalidRequest {
+                message: "Trace record identity is too long".into(),
+            });
+        }
+        let (_, _, through) = self
+            .state
+            .lock()
+            .expect("runtime client host lock poisoned")
+            .projection
+            .snapshot_cut()?;
+        let projection = if self.runtime.is_some() {
+            Ok(super::trace::TraceProjection::through(
+                self.store.as_ref(),
+                through,
+            ))
+        } else {
+            super::trace::TraceProjection::new(self.store.as_ref())
+        };
+        let detail = projection
+            .and_then(|projection| projection.detail(&record_id))
+            .map_err(|_| RuntimeClientError::InvalidRequest {
+                message: "Trace detail read failed or the record identity is invalid".into(),
+            })?;
+        Ok(RuntimeClientResult::TraceDetail {
+            detail: detail.map(Box::new),
+        })
     }
 
     /// Reads one bounded durable transcript page. The transcript cursor is
@@ -5940,7 +5982,7 @@ mod tests {
         assert_eq!(
             continuous
                 .trace
-                .entries
+                .records
                 .iter()
                 .filter(|entry| entry.id == id)
                 .count(),
@@ -6009,13 +6051,13 @@ mod tests {
         assert!(
             after
                 .trace
-                .entries
+                .records
                 .iter()
                 .any(|record| record.native_id.as_deref() == Some(execution_id.as_str()))
         );
         let position = after
             .trace
-            .entries
+            .records
             .iter()
             .find(|record| record.native_id.as_deref() == Some(execution_id.as_str()))
             .unwrap()
@@ -6044,7 +6086,7 @@ mod tests {
         };
         assert_eq!(
             historical
-                .entries
+                .records
                 .iter()
                 .find(|entry| entry.native_id.as_deref() == Some(execution_id.as_str()))
                 .unwrap()

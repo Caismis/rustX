@@ -1,4 +1,4 @@
-import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v8';
+import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v9';
 import { conversation, json } from '../../bindings/projection';
 import { Button } from '../../presentation/primitives/Button';
 import { AssistantMessage } from '../../presentation/agent/Message';

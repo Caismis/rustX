@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v8 envelope and method vocabulary.
+//! Rust authority for the App Server v9 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 8;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -105,6 +105,18 @@ pub enum Method {
         target: AttachmentTarget,
         before: Option<crate::runtime_client::trace::TraceCursor>,
         limit: usize,
+    },
+    /// Heavy inspection detail for one exact Trace record identity.
+    ///
+    /// Separated from `session/trace` so a page of summaries stays cheap:
+    /// request contexts, Tool schemas and Tool results are fetched only for
+    /// the record a reader selected. Like every Trace read it mutates
+    /// nothing and advances no cursor.
+    #[serde(rename = "session/traceDetail")]
+    TraceDetail {
+        target: AttachmentTarget,
+        #[schemars(length(max = 256))]
+        record_id: String,
     },
     #[serde(rename = "session/transcript")]
     Transcript {
@@ -406,6 +418,12 @@ pub enum MethodResult {
     },
     Trace {
         page: crate::runtime_client::trace::TracePage,
+    },
+    TraceDetail {
+        /// Absent when the identity names no record at the read cut. Boxed
+        /// because inspection detail is by far the largest result: keeping it
+        /// off the shared enum keeps every other response cheap to move.
+        detail: Option<Box<crate::runtime_client::trace::TraceDetail>>,
     },
     Transcript {
         page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage,

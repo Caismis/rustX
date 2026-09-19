@@ -1,4 +1,4 @@
-import type { RuntimeClientSessionDeletionResult } from '../../../protocol/app-server/v8';
+import type { RuntimeClientSessionDeletionResult } from '../../../protocol/app-server/v9';
 
 /** Product copy must preserve committed, blocked and uncertain deletion outcomes. */
 export function sessionDeletionNotice(result: RuntimeClientSessionDeletionResult): string {

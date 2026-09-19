@@ -201,6 +201,7 @@ async fn text_execution_completes_with_exact_trace() {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
+            generation: None,
         },
         RuntimeEvent::AssistantMessageCommitted {
             message_id: assistant_message_id(1),
@@ -321,6 +322,7 @@ async fn model_failure_before_content_fails_attempt() {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: error.clone(),
             usage: None,
+            generation: None,
         },
         RuntimeEvent::AttemptFailed {
             attempt_id: AttemptId::new("attempt-1"),
@@ -612,6 +614,7 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: None,
+            generation: None,
         },
         RuntimeEvent::AssistantMessageCommitted {
             message_id: assistant_message_id(1),
@@ -639,6 +642,7 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
             request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
+            generation: None,
         },
         RuntimeEvent::AssistantMessageCommitted {
             message_id: assistant_message_id(2),
@@ -805,6 +809,7 @@ fn expected_unknown_tool_trace() -> Vec<RuntimeEvent> {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: None,
+            generation: None,
         },
         RuntimeEvent::AttemptFailed {
             attempt_id: AttemptId::new("attempt-1"),

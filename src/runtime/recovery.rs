@@ -3275,6 +3275,7 @@ mod tests {
                 request_id: RequestId::new("req-0"),
                 finish_reason: ModelFinishReason::Stop,
                 usage: None,
+                generation: None,
             },
             Some(attempt_id),
         )
@@ -3441,6 +3442,7 @@ mod tests {
                         request_id: request_id.clone(),
                         finish_reason: ModelFinishReason::Stop,
                         usage: None,
+                        generation: None,
                     },
                     Some(a),
                 ),

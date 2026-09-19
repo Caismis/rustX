@@ -65,7 +65,9 @@ impl Operation {
         match self {
             Self::Edit => Outcome::Mutation(store.edit_pending(expected, "edited").unwrap()),
             Self::Remove => Outcome::Mutation(store.remove_pending(expected).unwrap()),
-            Self::Claim => Outcome::Claimed(store.adopt_pending_batch(watermark, None).unwrap()),
+            Self::Claim => {
+                Outcome::Claimed(store.adopt_pending_batch(watermark, None).unwrap().items)
+            }
         }
     }
 }

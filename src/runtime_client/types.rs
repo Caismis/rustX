@@ -358,7 +358,13 @@ pub enum RuntimeClientSessionRequest {
 /// Version 40 removes obsolete Session delete/recover mutations. App Server
 /// delegates deletion to the runtime manager; native Session control is not a
 /// second deletion authority. Version 39 clients are rejected without fallback.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 40;
+/// Version 41 replaces the single-level Trace entry with the bounded summary
+/// record / heavy detail split, adds the `User` anchor and request-owned
+/// generation timing evidence, and replaces blanket request/Tool redaction
+/// with the typed inspection allowlist. Version 40 clients are rejected: the
+/// Trace vocabulary changed shape, and Trace still confers no execution
+/// authority in either version.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 41;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1030,8 +1036,13 @@ pub enum RuntimeClientResult {
         cursor: RuntimeClientCursor,
     },
     /// `transcript_page_get` succeeded.
-    /// Bounded read-only Trace page.
+    /// Bounded read-only Trace page of summary records.
     TracePage { page: super::trace::TracePage },
+    /// Heavy inspection detail for one exact Trace record identity, or
+    /// `None` when that identity names no record at the read cut.
+    TraceDetail {
+        detail: Option<Box<super::trace::TraceDetail>>,
+    },
     TranscriptPage {
         /// The bounded durable transcript page.
         page: RuntimeClientTranscriptPage,
@@ -1354,7 +1365,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 40);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 41);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

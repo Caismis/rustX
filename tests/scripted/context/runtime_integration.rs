@@ -713,6 +713,7 @@ async fn proactive_compaction_before_the_next_turn() {
                 total_tokens: 104,
                 details: None,
             }),
+            generation: None,
         },
         RuntimeEvent::AssistantMessageCommitted {
             message_id: assistant_message_id(1),
@@ -748,6 +749,7 @@ async fn proactive_compaction_before_the_next_turn() {
             request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
+            generation: None,
         },
         RuntimeEvent::AssistantMessageCommitted {
             message_id: assistant_message_id(2),
@@ -961,6 +963,7 @@ async fn overflow_compact_and_retry_succeeds() {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: overflow_error(),
             usage: None,
+            generation: None,
         },
         RuntimeEvent::CompactionStarted,
         RuntimeEvent::CompactionCompleted {
@@ -988,6 +991,7 @@ async fn overflow_compact_and_retry_succeeds() {
                 total_tokens: 8,
                 details: None,
             }),
+            generation: None,
         },
         RuntimeEvent::AssistantMessageCommitted {
             message_id: retry_message_id(1),
@@ -2066,6 +2070,7 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: overflow_error(),
             usage: None,
+            generation: None,
         },
         RuntimeEvent::CompactionStarted,
         RuntimeEvent::CompactionFailed {

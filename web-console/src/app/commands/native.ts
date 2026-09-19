@@ -1,4 +1,4 @@
-import type { AttachmentTarget, MethodResult, SessionUserMessageBoundary, UserInputBlock } from '../../../../protocol/app-server/v8';
+import type { AttachmentTarget, MethodResult, SessionUserMessageBoundary, UserInputBlock } from '../../../../protocol/app-server/v9';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 

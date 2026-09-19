@@ -534,6 +534,13 @@ impl RuntimeClientProjection {
             ConversationObservation::ManualCompactionEvent { event } => {
                 self.fold_compaction_event(None, &event)
             }
+            // The adopted turn reaches a client as the committed `UserMessage`
+            // it names, so folding it publishes no client-facing execution
+            // fact. Trace's ledger gains a record, so its bounded
+            // invalidation is the one signal this lane emits.
+            ConversationObservation::InboundAdopted => {
+                vec![RuntimeClientEvent::TraceChanged]
+            }
             ConversationObservation::Committed {
                 attempt_id,
                 block,
@@ -4130,6 +4137,7 @@ mod tests {
                 request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 finish_reason: ModelFinishReason::ToolCalls,
                 usage: None,
+                generation: None,
             }),
             event_observation(RuntimeEvent::ToolExecutionStarted {
                 tool_call_id: ToolCallId::new("call_1"),
@@ -4206,6 +4214,7 @@ mod tests {
                     generation: None,
                 },
                 usage: None,
+                generation: None,
             },
             RuntimeEvent::ModelRetryScheduled {
                 failed_request_id: RequestId::new("request:9:attempt-1:1:1:0"),
@@ -4320,6 +4329,7 @@ mod tests {
                     total_tokens: 12,
                     details: None,
                 }),
+                generation: None,
             },
         );
         let events = collect(&mut projection, RuntimeClientCursor::new(1));
