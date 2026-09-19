@@ -1,6 +1,11 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTimeline.module.css; see PROVENANCE.md. */
 
 .root {
+  /* The containing block for `.earlierHistory` when no timing model exists,
+     so the empty-state boundary spans this overview rather than escaping to
+     an outer positioned ancestor. With a model the boundary sits inside
+     `.canvas`, which is nearer and keeps its own geometry. */
+  position: relative;
   flex: none;
   padding: 6px 12px 8px;
   border-bottom: 0.5px solid var(--dsw-alias-border-l2);

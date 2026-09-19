@@ -477,8 +477,8 @@ already-inventoried `ui-trajectory/src/client/TrajectoryTimeline.tsx`, whose
 change and mapped onto existing rustX theme tokens.
 
 Five review findings were closed. `retry_number` is no longer presented as
-`Request #N` anywhere; it is a native retry / recovery ordinal, and requests are
-named by model plus exact native request identity. The overview gained the
+`Request #N` anywhere; requests are named by model plus exact native request
+identity. The overview gained the
 upstream earlier-history affordance while paging authority stays single: the
 Trace cache owns the cursor, the pending load and `TRACE_LIMIT`, and the marker
 calls the same load the ledger and toolbar call. Ordinary rows now carry compact
@@ -493,3 +493,26 @@ Local SHA-256 and import records were refreshed for the nine changed derived
 files. Upstream hashes, the pinned commit, licensing, classifications and
 exclusions are unchanged. Harness Session/Cordis assembly, client-side turn and
 step inference, and step-relative TTFT remain excluded.
+
+A second review pass closed two further findings.
+
+The native ordinal is no longer named in primary presentation at all. Native
+defines `retry_number` as the actual-request ordinal within a logical Step, so a
+nonzero value proves only that the request was not the first one; it does not say
+whether the repeat was a retry or a recovery. The inspector title is therefore
+`Request · <model>` and the overview span label is `Request · <model> ·
+<request_id>`, which disambiguates by native identity rather than by an
+interpretation the browser is not entitled to make. The ordinal keeps its honest
+home in the inspector's native disclosure, under `Retry / recovery ordinal`.
+Deciding retry against recovery would need an explicit native request cause,
+which the pinned contract does not carry.
+
+The timing overview also became the containing block for its own earlier-history
+marker. Upstream renders that marker inside the positioned canvas, which does not
+exist when no loaded record carries a usable start and the duration projection has
+nothing to place. The marker is absolutely positioned, so in that branch it
+resolved against whatever outer ancestor happened to be positioned. `.root` is now
+`position: relative`, which leaves the normal geometry untouched — `.canvas` is
+still the nearer positioned ancestor for every span, lane and boundary — and gives
+the empty state the same single paging props, the same cursor and the same load
+call as the normal one.

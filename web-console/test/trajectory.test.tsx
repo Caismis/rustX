@@ -511,20 +511,35 @@ it('names a request by model and native identity, never by a request number', ()
   expect(within(inspector).getByText('Retry / recovery ordinal')).toBeDefined();
   expect(within(inspector).getByText('request-0')).toBeDefined();
   expect(within(inspector).getByText(/0 · initial request/)).toBeDefined();
+  // An initial request is never announced as "retry 0" either.
+  expect(within(overview).queryByLabelText(/retry/i)).toBeNull();
 });
 
-it('identifies a retry as a retry rather than as the next request number', () => {
-  const retry = traceRecord(0, { request: { ...traceRecord(0).request!, retry_number: 2 } });
-  renderTrajectory(selectTrace(cacheOf([retry]), retry.id));
+// `retry_number` is the native actual-request ordinal within a logical Step.
+// A nonzero value proves only that this was not the first actual request; it
+// does not say whether the repeat was a retry or a recovery. Primary
+// presentation therefore stays neutral, and the native disclosure carries the
+// ordinal under its own honest name.
+it('a nonzero actual-request ordinal stays retry/recovery-neutral in primary presentation', () => {
+  const repeat = traceRecord(0, { request: { ...traceRecord(0).request!, retry_number: 2 } });
+  renderTrajectory(selectTrace(cacheOf([repeat]), repeat.id));
   const inspector = screen.getByLabelText('Trace record inspector');
-  expect(within(inspector).getByText('Request · historical-model · retry 2')).toBeDefined();
+  const overview = screen.getByLabelText('Timing overview');
+  // The title and the span label are identical to the retry_number = 0 case.
+  expect(within(inspector).getByText('Request · historical-model')).toBeDefined();
   expect(
-    within(screen.getByLabelText('Timing overview')).getByLabelText(
-      'Inspect Request · historical-model · retry 2 · request-0',
-    ),
+    within(overview).getByLabelText('Inspect Request · historical-model · request-0'),
   ).toBeDefined();
+  // No "retry N", no "Request #N", no bare ordinal, anywhere in primary view.
+  expect(within(overview).queryByLabelText(/retry/i)).toBeNull();
+  expect(within(overview).queryByLabelText(/Request #/)).toBeNull();
+  expect(inspector.querySelector('header')!.textContent).not.toMatch(/retry|#|ordinal/i);
+  // The native disclosure is where the ordinal is named for what it is.
   fireEvent.click(within(inspector).getByText(/Native record/));
-  expect(within(inspector).getByText(/2 · retry or recovery within this Step/)).toBeDefined();
+  expect(within(inspector).getByText('Retry / recovery ordinal')).toBeDefined();
+  expect(within(inspector).getByText(/^2 · retry or recovery within this Step$/)).toBeDefined();
+  // The exact native request identity remains inspectable.
+  expect(within(inspector).getByText('request-0')).toBeDefined();
 });
 
 it('the loaded-window request marker names its own scope and is not an identity', () => {
@@ -556,6 +571,34 @@ it('the overview offers earlier history only while an older page may be loaded',
       'Load earlier records into the overview',
     ),
   ).toBeNull();
+});
+
+// Records can load with no usable start, and the duration projection omits
+// each of them rather than invent a point — leaving no model to draw. The earlier-history affordance is the
+// same one — same props, same single paging authority — and it has to stay
+// inside the overview it belongs to. The geometry of that is a browser
+// contract (see test/e2e/trajectory.spec.ts); here we pin the ownership.
+it('the overview keeps its earlier-history boundary when no record has recorded timing', () => {
+  const older = vi.fn();
+  const untimed = [
+    traceRecord(0, { timing: { started_at: '' } }),
+    traceRecord(1, { timing: { started_at: '' } }),
+  ];
+  renderTrajectory(cacheOf(untimed, 'older'), noop, older);
+  fireEvent.click(screen.getByRole('button', { name: 'Duration' }));
+  const overview = screen.getByLabelText('Timing overview');
+  expect(within(overview).getByText('No recorded timing in the loaded window')).toBeDefined();
+  const boundary = within(overview).getByLabelText('Load earlier records into the overview');
+  // It is a child of the overview, not a sibling that floats over the ledger.
+  expect(overview.contains(boundary)).toBe(true);
+  boundary.focus();
+  expect(document.activeElement).toBe(boundary);
+  fireEvent.click(boundary);
+  expect(older).toHaveBeenCalledTimes(1);
+  // The ledger still lists every loaded record: the empty state is the
+  // overview's alone.
+  expect(within(screen.getByRole('table', { name: 'Trace ledger' })).getAllByRole('row').length)
+    .toBeGreaterThanOrEqual(untimed.length);
 });
 
 it('a pending or limit-reached load cannot be requested again from the overview', () => {

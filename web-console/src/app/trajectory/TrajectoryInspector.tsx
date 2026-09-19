@@ -277,9 +277,7 @@ export function TrajectoryInspector({
   const messages = detail?.messages ?? [];
   const title =
     record.kind === 'request' && record.request
-      ? `Request · ${record.request.model}${
-          record.request.retry_number > 0 ? ` · retry ${record.request.retry_number}` : ''
-        }`
+      ? `Request · ${record.request.model}`
       : record.kind === 'tool' && record.tool
         ? `Tool · ${record.tool.name ?? record.tool.tool_id}`
         : cellLabel[record.kind];
