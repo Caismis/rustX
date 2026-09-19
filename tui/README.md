@@ -455,9 +455,37 @@ an IME confirmation as the same bare Enter/Esc bytes as a runtime control, this
 client cannot distinguish them. Tests do **not** claim that impossible distinction;
 IME candidate handling must remain terminal-side.
 
+rustX retains Pi's default **hidden but positioned hardware cursor** to avoid a
+second visible cursor alongside Pi's editor cursor. Pi's `Focusable` propagation
+and `CURSOR_MARKER` position the hardware cursor for IME candidate windows; the
+built-in Editor/Input supply the markers, including focused popup inputs. For a
+terminal/IME requiring a visible cursor, launch with `PI_HARDWARE_CURSOR=1`
+(for example `PI_HARDWARE_CURSOR=1 pnpm --dir tui start`). This enables Pi's
+supported path without inventing composition events.
+
+Physical conformance remains a release acceptance item, not an automated claim:
+
+| IME | Terminal environment to dogfood | Status |
+| --- | --- | --- |
+| Chinese IBus Pinyin | Linux GNOME Terminal, hidden cursor then `PI_HARDWARE_CURSOR=1` | Not run: this development session has IBus installed but no DISPLAY/WAYLAND_DISPLAY or graphical terminal |
+| Japanese IBus Mozc | Linux GNOME Terminal, hidden cursor then `PI_HARDWARE_CURSOR=1` | Not run: no graphical terminal or accessible OS composition session |
+
+For each row, record terminal/IME versions and test Composer, command/history
+inputs and queued-input editing: candidate window follows the caret; composing
+Chinese/Japanese, candidate navigation, Enter confirmation and Esc dismissal do
+not send/steer/queue/interrupt; an intentional Enter after composition does.
+Repeat while an Attempt runs and after resize; separately paste multiline CJK
+with Enter/Tab/Esc. A terminal forwarding candidate keys as ordinary control
+bytes fails this physical item: rustX cannot distinguish their origin. Do not
+mark Issue #373's IME acceptance complete from committed-text tests alone.
+
 Completed Assistant tails use that exact transcript entry's `completed_response`
 usage and native duration, never the current Attempt. Settlement rereads the native
-snapshot. Paging retains whole-conversation statistics rather than summing pages;
+snapshot through a live refresh: fresh overlapping entries win, immutable older
+pages and their cursor survive, and overlays stay open. Unjoinable or unresolved
+older windows fall back to the current native window without resetting overlays.
+Only real resync replaces attachment presentation ownership and re-subscribes.
+Paging retains whole-conversation statistics rather than summing pages;
 missing reports are absent, not zero. Context occupancy uses the native last-request
 reading, and model changes do not relabel its historical capacity. Heavy generation
 diagnostics remain outside ordinary chat.

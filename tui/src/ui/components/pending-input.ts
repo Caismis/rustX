@@ -13,6 +13,9 @@ export function pendingText(item: Pending): string {
 export class PendingInputView implements PopupContent {
   readonly editor: Editor;
   readonly items: Pending[];
+  #focused = false;
+  get focused(): boolean { return this.#focused; }
+  set focused(value: boolean) { this.#focused = value; this.editor.focused = value; }
   #selected = 0;
   #editing = false;
   #busy = false;
@@ -46,7 +49,7 @@ export class PendingInputView implements PopupContent {
     else if (matchesKey(data, "ctrl+d")) void this.mutate();
     else if (matchesKey(data, "enter")) {
       const item = this.items[this.#selected];
-      if (item && item.message.content.every(block => block.type === "text")) { this.#editing = true; this.editor.focused = true; this.editor.setText(pendingText(item)); }
+      if (item && item.message.content.every(block => block.type === "text")) { this.#editing = true; this.editor.focused = this.#focused; this.editor.setText(pendingText(item)); }
       else this.#notice = "Only plain Human text can be edited; attachments can be removed.";
     }
     this.changed();

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { ComposerEditor, composerIntent } from "../src/ui/composer.ts";
 import { PromptHistory } from "../src/ui/components/prompt-history.ts";
 import { PendingInputView } from "../src/ui/components/pending-input.ts";
@@ -229,8 +229,8 @@ test("settlement reads native response statistics instead of summing usage event
   const read = await nextRequest(h, "session/snapshot", 0);
   const statistics = { completed_responses: "2", model_requests: "5", requests_with_usage: "4" };
   h.transport.respond(read.id, { type: "snapshot", snapshot: snapshot({ transcript: { statistics } }), cursor: "2" });
-  const subscribe = await nextRequest(h, "session/subscribe", 0);
-  h.transport.respond(subscribe.id, { type: "subscribed", after_cursor: "2" });
+  await new Promise<void>(resolve => h.session.onState(() => resolve()));
+  assert.equal(h.transport.transportCount("session/subscribe"), 0);
   assert.deepEqual(h.session.state.statistics, statistics); h.client.close();
 });
 
@@ -258,5 +258,16 @@ test("40x15 through 160x50 keep HITL decisions and permission choices actionable
     assert.ok(context.render(columns!).length <= 4);
     assert.ok(context.render(columns!).every(row => visibleWidth(row) <= columns!));
   }
+  h.client.close();
+});
+
+test("queue editor propagates popup focus to Pi IME cursor markers", async () => {
+  const h = await harness(snapshot({ inbound: { pending: [pending("1", "0", "中文入力")] } }));
+  const view = new PendingInputView(terminal(), h.session, () => {}, () => {});
+  const frame = new PopupFrame(view);
+  frame.focused = true; view.handleInput("\r");
+  assert.ok(view.editor.render(80).join("\n").includes(CURSOR_MARKER));
+  frame.focused = false;
+  assert.ok(!view.editor.render(80).join("\n").includes(CURSOR_MARKER));
   h.client.close();
 });

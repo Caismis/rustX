@@ -49,6 +49,8 @@ import type {
 
 /** One committed canonical message, exactly as the runtime committed it. */
 export interface TranscriptCommitted {
+  /** Native entry still has facts that can change outside the current window. */
+  nativeFactsPending?: boolean;
   completedResponse?: import("../protocol/app-server.ts").RuntimeClientTranscriptEntry["completed_response"];
   kind: "committed";
   /** Stable identity for rendering. Never derived from list position. */

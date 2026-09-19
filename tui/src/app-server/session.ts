@@ -19,7 +19,8 @@
  * for exactly one Session. It owns no agent semantics: it starts nothing,
  * settles nothing, and interprets no model, tool or capability value. The
  * server is authoritative; everything held here is a projection that one fresh
- * snapshot rebuilds completely.
+ * snapshot rebuilds completely. Ordinary settlement reads refresh those facts
+ * over the existing subscription, preserving safely joined history and local UI.
  *
  * # Identity and fencing
  *
@@ -81,6 +82,7 @@ import {
 } from "../protocol/app-server.ts";
 import {
   mergeTranscriptPage,
+  refreshFromSnapshot,
   reduce,
   replaceFromSnapshot,
 } from "../presentation/projection.ts";
@@ -118,6 +120,8 @@ export class AppServerSession {
   #serverClosed = false;
   /** Serializes repairs so two resyncs cannot interleave their installs. */
   #repair: Promise<void> = Promise.resolve();
+  #refresh: Promise<void> | undefined;
+  #refreshRequested = false;
 
   private constructor(
     client: AppServerClient,
@@ -623,11 +627,42 @@ export class AppServerSession {
   // -------------------------------------------------------------------------
 
   #enqueueRepair(): void {
+    // Fence reads immediately, even before the serialized repair starts.
+    this.#epoch += 1;
     this.#repair = this.#repair.then(
       () => (this.#released ? undefined : this.resync()),
       () => undefined,
     );
     void this.#repair.catch(() => {});
+  }
+
+  /** Read facts over the existing subscription; never replace presentation ownership. */
+  #enqueueRefresh(): void {
+    this.#refreshRequested = true;
+    if (this.#refresh) return;
+    this.#refresh = this.#refreshLive().finally(() => {
+      this.#refresh = undefined;
+      if (this.#refreshRequested && !this.#released && !this.#serverClosed) this.#enqueueRefresh();
+    });
+    void this.#refresh.catch(() => {});
+  }
+
+  async #refreshLive(): Promise<void> {
+    while (this.#refreshRequested && !this.#released && !this.#serverClosed) {
+      this.#refreshRequested = false;
+      const epoch = this.#epoch;
+      const target = this.#target;
+      const fresh = await this.#client.call("session/snapshot", { target }, "snapshot");
+      if (epoch !== this.#epoch || !sameTarget(target, this.#target)) return;
+      // Events may advance while the read is in flight. Never roll them back.
+      // A subsequent read crosses that exact cursor without replaying any action.
+      if (compareExact(fresh.cursor, this.#state.cursor) < 0) {
+        this.#refreshRequested = true;
+        continue;
+      }
+      this.#state = refreshFromSnapshot(this.#state, fresh.snapshot, fresh.cursor);
+      this.#publish();
+    }
   }
 
   async #subscribe(afterCursor: RuntimeClientCursor): Promise<void> {
@@ -661,7 +696,7 @@ export class AppServerSession {
     this.#state = reduce(this.#state, { cursor, event });
     this.#publish();
     // Completion/statistics are native read facts, not fields to derive from events.
-    if (event.type === "attempt_settled") this.#enqueueRepair();
+    if (event.type === "attempt_settled") this.#enqueueRefresh();
   }
 
   #install(snapshot: RuntimeClientSnapshot, cursor: RuntimeClientCursor): void {

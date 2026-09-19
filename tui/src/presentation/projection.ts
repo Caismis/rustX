@@ -221,6 +221,39 @@ export function replaceFromSnapshot(
   };
 }
 
+/** Refresh native facts without throwing away a safely joined history window.
+ * Fresh facts win by exact durable identity AND cursor. Only immutable entries
+ * strictly before the new window can survive outside it; gaps require replacement.
+ */
+export function refreshFromSnapshot(
+  state: PresentationState,
+  snapshot: RuntimeClientSnapshot,
+  cursor: RuntimeClientCursor,
+): PresentationState {
+  const fresh = replaceFromSnapshot(snapshot, cursor);
+  const incoming = fresh.transcript.filter(isDurableTranscriptEntry);
+  const previous = state.transcript.filter(isDurableTranscriptEntry);
+  if (!incoming.some(entry => previous.some(old => old.key === entry.key && old.cursor === entry.cursor))) return fresh;
+  const first = incoming[0]!;
+  if (compareExact(first.cursor, previous[0]!.cursor) < 0) return fresh;
+  const older: DurableTranscriptEntry[] = [];
+  for (const old of previous) {
+    const match = incoming.find(entry => entry.key === old.key || entry.cursor === old.cursor);
+    if (match) {
+      if (match.key !== old.key || match.cursor !== old.cursor) return fresh;
+    } else {
+      if (compareExact(old.cursor, first.cursor) >= 0 ||
+          (old.kind === "committed" && old.nativeFactsPending)) return fresh;
+      older.push(old);
+    }
+  }
+  return {
+    ...fresh,
+    transcript: orderTranscript([...older, ...fresh.transcript]),
+    transcriptNextCursor: state.transcriptNextCursor,
+  };
+}
+
 /** Merges an older durable page ahead of the currently loaded transcript. */
 export function mergeTranscriptPage(
   state: PresentationState,
@@ -566,6 +599,7 @@ export function reduce(
         cursor: transcriptCursor,
         attemptId: committingAttempt,
         message: event.message,
+        nativeFactsPending: event.message.role === "assistant",
       });
       // A committed `todo` result *is* the list moving, so the panel follows
       // it live without waiting for the next snapshot — the same derivation
@@ -734,6 +768,7 @@ function transcriptEntryFromWire(
         messageId,
         cursor: entry.cursor,
         message: entry.item.message,
+        nativeFactsPending: entry.response_pending === true || (entry.tool_calls ?? []).some(call => call.state.type !== "settled"),
         ...(entry.completed_response == null ? {} : { completedResponse: entry.completed_response }),
       };
     }
