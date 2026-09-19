@@ -429,11 +429,12 @@ fn deletion_tree_and_children_cascade_but_fork_clone_and_external_resources_surv
     let source = lineage_at(&store, &conversation, revision);
     child(dir.path(), &store, 1, false);
     let (tree, _) = catalog
-        .prepare_tree_node_at_user_message(
+        .prepare_tree_node(
             &session,
             &state(),
             &source,
             &MessageId::new("source-user-a"),
+            crate::local_runtime::session::LineageSide::Before,
         )
         .unwrap();
     catalog
@@ -451,7 +452,12 @@ fn deletion_tree_and_children_cascade_but_fork_clone_and_external_resources_surv
         )
         .unwrap();
     let (fork, _) = catalog
-        .prepare_fork_session(&state(), &source, &MessageId::new("source-user-a"))
+        .prepare_fork_session(
+            &state(),
+            &source,
+            &MessageId::new("source-user-a"),
+            crate::local_runtime::session::LineageSide::Before,
+        )
         .unwrap();
     catalog
         .publish_session(
@@ -460,7 +466,8 @@ fn deletion_tree_and_children_cascade_but_fork_clone_and_external_resources_surv
                 source_session: session.clone(),
                 source_node: node,
                 source_surface_revision: revision,
-                source_user_message: MessageId::new("source-user-a"),
+                source_message: MessageId::new("source-user-a"),
+                side: crate::local_runtime::session::LineageSide::Before,
             },
         )
         .unwrap();

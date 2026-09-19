@@ -103,7 +103,9 @@ pub enum SessionNodeOriginView {
         /// Source revision selected for the seed.
         source_surface_revision: SurfaceRevision,
         /// Selected source user message.
-        source_user_message: MessageId,
+        source_message: MessageId,
+        /// Explicit retained side of the boundary.
+        side: crate::local_runtime::session::LineageSide,
     },
 }
 
@@ -364,7 +366,10 @@ pub enum RuntimeClientSessionRequest {
 /// with the typed inspection allowlist. Version 40 clients are rejected: the
 /// Trace vocabulary changed shape, and Trace still confers no execution
 /// authority in either version.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 41;
+/// Version 42 adds completed-response provenance/timing, execution statistics,
+/// native context occupancy and explicit post-response lineage semantics.
+/// Version 41 clients are rejected without a compatibility projection.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 42;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1365,7 +1370,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 41);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 42);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

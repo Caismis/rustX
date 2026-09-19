@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-commands/PopupSelectView.tsx; see PROVENANCE.md. */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v9';
+import type { CompletedResponseView, UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v10';
 import type { AppServerClient } from '../../client/app-server';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { Modal } from '../../presentation/primitives/Modal';
@@ -11,7 +11,7 @@ import css from './Commands.module.css';
 
 type Choice = { kind: 'model'; model: string; profile?: string } | { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
 interface Row { id: string; label: string; detail?: string; choice: Choice }
-export interface CommandRequest { id: Exclude<CommandId, 'new'> | 'retry' | 'tree'; messageId?: string }
+export interface CommandRequest { id: Exclude<CommandId, 'new'> | 'retry' | 'tree'; messageId?: string; response?: CompletedResponseView }
 export function CommandPanel({ request, client, sessionId, current, close, succeeded, opened }: {
   request: CommandRequest; client: AppServerClient; sessionId: string; current: () => boolean;
   close: () => void; succeeded: () => void; opened: (result: { session: SessionSnapshot; content: UserInputBlock[] }) => void;
@@ -32,11 +32,17 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     const action = request.id;
     if (action !== 'fork' && action !== 'branch' && action !== 'retry') throw new Error('Not a historical command.');
     setRows([]);
+    if (request.response) {
+      const selection = await scope.responseSelection(request.response);
+      if (!valid()) return;
+      setRows([{ id: request.response.closing_message_id, label: action === 'retry' ? 'Replay the original input once' : 'Continue after this response', choice: { kind: 'history', action, selection } }]);
+      setNext(null); setActive(0); return;
+    }
     const page = await scope.boundaries(offset);
     if (!valid()) return;
     setRows(page.selections.filter(selection => !request.messageId || selection.boundary.message.id === request.messageId).map(selection => ({ id: selection.boundary.message.id,
       label: selection.boundary.message.content.map(block => block.type === 'text' ? block.text : block.type === 'uploaded_file' ? block.name : `[${block.type}]`).join(' ').slice(0, 240),
-      detail: `${selection.boundary.message.id} · Surface ${selection.boundary.surface_revision}`,
+
       choice: { kind: 'history', action, selection } })));
     setNext(page.nextOffset); setActive(0);
     if (request.messageId && !page.selections.some(item => item.boundary.message.id === request.messageId)) {
@@ -63,7 +69,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
           ])); break;
         }
         case 'fork': case 'branch': case 'retry':
-          setDetail(request.id === 'fork' ? 'Independent Session. Choose the exact User boundary; its prompt returns to the composer.' : request.id === 'retry' ? 'Create a native branch, switch the idle Session to it, and execute the selected prompt once. The original response remains in its original node.' : 'Create a native branch and switch the idle Session to it. The selected prompt returns to the composer.');
+          setDetail(request.response && request.id !== 'retry' ? 'The new lineage includes this completed response and opens with an empty composer.' : request.id === 'fork' ? 'Independent Session. Choose the exact User boundary; its prompt returns to the composer.' : request.id === 'retry' ? 'Create a native branch, switch the idle Session to it, and execute the selected prompt once. The original response remains in its original node.' : 'Create a native branch and switch the idle Session to it. The selected prompt returns to the composer.');
           await loadBoundaries(0); break;
         case 'tools': { const result = await scope.tools(); if (valid()) { setDetail(JSON.stringify(result, null, 2)); succeeded(); } break; }
         case 'compact': setDetail('Compact this Session through the native context owner.'); break;

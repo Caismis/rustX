@@ -1,5 +1,5 @@
 import { connectRemote } from './shell-actions';
-import { connectionAction, closeSettings } from './shell-actions';
+import { connectionAction, closeSettings, showInspector, expectSettled } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { test, expect } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
@@ -51,6 +51,26 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'Load earlier', exact: true })).toHaveCount(0);
     expect(Math.abs(await anchor.evaluate(el => el.getBoundingClientRect().top) - anchorTop)).toBeLessThan(2);
+    // Historical tails retain native identity after paging; pointer reveal also
+    // exposes equivalent keyboard controls without a permanent wide toolbar.
+    await expect(page.getByLabel('Completed response', { exact: true })).toHaveCount(34);
+    const oldTail = page.getByLabel('Completed response', { exact: true }).first();
+    const oldActions = oldTail;
+    await page.getByLabel('Message', { exact: true }).focus();
+    await page.mouse.move(0, 0);
+    await expect(oldActions).toHaveCSS('opacity', '0');
+    await oldTail.getByRole('button', { name: 'Copy', exact: true }).focus();
+    await expect(oldActions).toHaveCSS('opacity', '1');
+    await oldTail.hover();
+    await expect(oldActions).toHaveCSS('opacity', '1');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await oldTail.getByRole('button', { name: 'Lineage', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('button', { name: 'Branch in this Session', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.getByRole('button', { name: 'Close lineage', exact: true }).click();
+    await page.screenshot({ path: 'test-results/response-tail-mobile.png' });
+    await page.setViewportSize({ width: 1440, height: 1000 });
     // WEB-03 uses this same native Session, transcript and provider scenario.
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     const trajectory = page.getByRole('region', { name: 'Trajectory', exact: true });
@@ -140,6 +160,11 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     const canonical = page.getByLabel('Canonical conversation');
     const load = canonical.getByRole('button', { name: 'Load attachment' });
+    // This fixture intentionally refuses image continuation. Wait for the exact
+    // native terminal so transient Tool placement cannot reset expansion.
+    await expectSettled(page);
+    await expect(page.getByLabel('Native diagnostic JSON')).toContainText('unsupported');
+    await page.getByRole('button', { name: 'Close Inspector' }).click();
     await expect(canonical.locator('[data-tool-call-id="chat-image"]')).toHaveCount(1);
     await canonical.locator('[data-tool-call-id="chat-image"]').getByRole('button', { expanded: false }).click();
     await expect(load).toHaveCount(1);
@@ -190,6 +215,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await page.screenshot({ path: 'test-results/chat-history.png', fullPage: true });
     expect(errors).toEqual([]); passed = true;
   } catch (error) {
+    await showInspector(page);
     await test.info().attach('native-image-diagnostics', { body: JSON.stringify({ text: await page.locator('body').innerText(), diagnostics: fixture.diagnostics(), requests: await fixture.control('requests') }), contentType: 'application/json' });
     throw error;
   } finally { await page.close(); await fixture.stop(passed); }

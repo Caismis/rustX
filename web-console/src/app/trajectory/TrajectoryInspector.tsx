@@ -23,7 +23,7 @@ import type {
   TraceRecord,
   TraceText,
   TraceToolDefinition,
-} from '../../../../protocol/app-server/v9';
+} from '../../../../protocol/app-server/v10';
 import { Button } from '../../presentation/primitives/Button';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';

@@ -122,7 +122,7 @@ enabled Goal fails `unsupported_child_scope` before child spawn. Workflow applie
 that same check; root Goal is never implicitly inherited.
 
 `goal_state` is one native singleton record inside the existing conversation
-SQLite database (schema 41; Goal storage introduced in schema 34). Its bounded JSON snapshot stores GoalRef, objective,
+SQLite database (schema 42; Goal storage introduced in schema 34). Its bounded JSON snapshot stores GoalRef, objective,
 phase, blocked reason, origin, autonomous budget/consumed count and the last
 round's ordinary MessageId. Identity is conversation-scoped. Complete is terminal;
 a subsequent create starts a new identity. Revision increases exactly once for
@@ -202,7 +202,7 @@ this observation along with normal request inputs. History may show older
 observations; those never supply current Goal authority. Provider adapters only
 project the existing provider-neutral messages and Tool definitions.
 
-Runtime Client protocol 40 includes the typed `goal` operation (Show/Create/Mutate)
+Runtime Client protocol 42 includes the typed `goal` operation (Show/Create/Mutate)
 and bounded `goal_changed { view: GoalView }` event. `GoalView` carries durable
 state only — `{ current: GoalSnapshot | null }` — so no snapshot and no event can
 represent `Active + disarmed`, and there is no activation-only `goal_changed`.

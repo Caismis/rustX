@@ -86,7 +86,7 @@ mod cfg3_identity_tests;
 /// distinguished from user choices; older development schemas are refused.
 /// Version 7 co-locates live Sessions and pending-only frozen cleanup authority,
 /// with generation-checked publication. Older development schemas are rejected.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 11;
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 12;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;
@@ -127,9 +127,21 @@ pub enum SessionNodeOrigin {
         source_node: SessionNodeId,
         /// Exact source Surface revision selected before materialization.
         source_surface_revision: SurfaceRevision,
-        /// The source user-message boundary restored into the editor.
-        source_user_message: MessageId,
+        /// Exact selected source message; `side` determines the retained prefix.
+        source_message: MessageId,
+        /// Explicit retained side of the selected message.
+        side: LineageSide,
     },
+}
+
+/// Which history prefix a lineage operation retains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LineageSide {
+    /// Exclude the ordinary User input and restore it to the editor (Retry).
+    Before,
+    /// Include the completed Assistant response; leave the editor empty.
+    After,
 }
 
 /// One node in the native Session graph.
@@ -265,7 +277,7 @@ pub struct SessionUserMessageBoundary {
 /// `prepare_*` that uses this snapshot, from the boundary it selected, so a
 /// fact committed after the selected revision is never inherited.
 /// This is a lineage input, not a complete execution snapshot: it excludes
-/// attempt/request identities, Event Journal facts, `RequestSnapshots`,
+/// executable Attempt/request state, Event Journal facts, `RequestSnapshots`,
 /// Pending Inbound, and execution-derived Todo reminder progress or heads.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoricalConversationSnapshot {
@@ -281,6 +293,8 @@ pub struct HistoricalConversationSnapshot {
     /// The source's retained Surface operations through `surface_revision`,
     /// in revision order. Replaying them yields `messages`.
     pub surface_history: Vec<SurfaceOp>,
+    /// Finalized response meaning, including inherited origins; never execution state.
+    pub completed_responses: Vec<crate::durable::response::CompletedResponseProvenance>,
 }
 
 /// A private, already-seeded destination waiting for catalog publication.
@@ -1391,7 +1405,12 @@ impl SessionCatalog {
         source: &HistoricalConversationSnapshot,
     ) -> Result<PreparedLineage, SessionError> {
         let (session_id, node_id, conversation_id) = self.allocate_ids()?;
-        let seed = lineage_cut(&conversation_id, source, None)?;
+        let seed = lineage_cut(
+            &conversation_id,
+            source,
+            None,
+            crate::local_runtime::session::LineageSide::Before,
+        )?;
         self.prepare_session_with_ids(template, session_id, node_id, conversation_id, &seed)
     }
 
@@ -1402,6 +1421,7 @@ impl SessionCatalog {
         template: &SessionPersistentState,
         source: &HistoricalConversationSnapshot,
         message_id: &MessageId,
+        side: LineageSide,
     ) -> Result<
         (
             PreparedLineage,
@@ -1409,24 +1429,33 @@ impl SessionCatalog {
         ),
         SessionError,
     > {
-        let user = active_user_boundary(source, message_id)?;
-        let editor_content = restorable_editor_content(user)?;
+        let editor_content = match side {
+            LineageSide::Before => {
+                restorable_editor_content(active_user_boundary(source, message_id)?)?
+            }
+            LineageSide::After => {
+                if !source.messages.iter().any(|message| matches!(message, MessageBlock::Assistant(assistant) if assistant.id == *message_id)) {
+                    return Err(SessionError::UnknownBoundary { message_id: message_id.clone() });
+                }
+                Vec::new()
+            }
+        };
         let (session_id, node_id, conversation_id) = self.allocate_ids()?;
-        let seed = lineage_cut(&conversation_id, source, Some(message_id))?;
+        let seed = lineage_cut(&conversation_id, source, Some(message_id), side)?;
         let prepared =
             self.prepare_session_with_ids(template, session_id, node_id, conversation_id, &seed)?;
         Ok((prepared, editor_content))
     }
 
-    /// Prepares a tree node with the same user-boundary semantics as `/fork`:
-    /// canonical seed is the exact prefix before the selected user message,
-    /// and the selected prompt is returned separately for editor restoration.
-    pub(crate) fn prepare_tree_node_at_user_message(
+    /// Prepares a tree node at the exact selected cut, with the same prefix
+    /// semantics as independent Fork. Only a pre-input cut restores the editor.
+    pub(crate) fn prepare_tree_node(
         &self,
         session_id: &SessionId,
         template: &SessionPersistentState,
         source: &HistoricalConversationSnapshot,
         message_id: &MessageId,
+        side: LineageSide,
     ) -> Result<
         (
             PreparedLineage,
@@ -1435,8 +1464,17 @@ impl SessionCatalog {
         SessionError,
     > {
         self.snapshot(session_id)?;
-        let user = active_user_boundary(source, message_id)?;
-        let editor_content = restorable_editor_content(user)?;
+        let editor_content = match side {
+            LineageSide::Before => {
+                restorable_editor_content(active_user_boundary(source, message_id)?)?
+            }
+            LineageSide::After => {
+                if !source.messages.iter().any(|message| matches!(message, MessageBlock::Assistant(assistant) if assistant.id == *message_id)) {
+                    return Err(SessionError::UnknownBoundary { message_id: message_id.clone() });
+                }
+                Vec::new()
+            }
+        };
         let mut chosen = None;
         for _ in 0..16 {
             let node_id = SessionNodeId::from_uuid(self.identities.next_uuid())
@@ -1470,7 +1508,7 @@ impl SessionCatalog {
             chosen.ok_or_else(|| SessionError::Catalog {
                 detail: "identity reservation exhausted".into(),
             })?;
-        let seed = lineage_cut(&conversation_id, source, Some(message_id))?;
+        let seed = lineage_cut(&conversation_id, source, Some(message_id), side)?;
         initialize_database(&self.product, &database_path, &conversation_id, &seed)?;
         Ok((
             PreparedLineage {
@@ -2008,10 +2046,10 @@ fn restorable_editor_content(
 ///
 /// The cut is the whole point, and it is taken over the source's *Surface
 /// operation history*, not over its final Surface projection. `boundary` is
-/// the user message the destination stops before — `None` for a clone, which
+/// the message the destination stops before/after — `None` for a clone, which
 /// stops before nothing.
 /// The resulting seed contains only canonical conversation/domain state and
-/// Surface provenance; the destination's new `ConversationId` starts a fresh
+/// Surface and response provenance; the destination's new `ConversationId` starts a fresh
 /// execution epoch rather than inheriting source execution or reminder state.
 ///
 /// One forward replay of the source history decides two things at once:
@@ -2047,6 +2085,7 @@ fn lineage_cut(
     destination: &ConversationId,
     source: &HistoricalConversationSnapshot,
     boundary: Option<&MessageId>,
+    side: LineageSide,
 ) -> Result<LineageSeed, SessionError> {
     let position = |id: &MessageId| {
         source
@@ -2062,7 +2101,7 @@ fn lineage_cut(
     // A clone stops before nothing, so nothing is committed at or after its
     // boundary.
     let cut_at = match boundary {
-        Some(id) => position(id)?,
+        Some(id) => position(id)? + usize::from(side == LineageSide::After),
         None => source.canonical.len(),
     };
 
@@ -2112,7 +2151,12 @@ fn lineage_cut(
         .filter(|message| referenced.contains(&message_id_of(message)))
         .cloned()
         .collect();
-    remap_seed(destination, &canonical, &retained)
+    remap_seed(
+        destination,
+        &canonical,
+        &retained,
+        &source.completed_responses,
+    )
 }
 
 /// The identities a `Replace` retires, in the active order it retires them
@@ -2143,8 +2187,8 @@ fn replaced_span(
 }
 
 /// Reconstructs a destination seed with destination-owned canonical message/occurrence
-/// identities. Provider correlation strings remain unchanged. Runtime lifecycle identities are not present in this input and
-/// therefore cannot leak into the destination.
+/// identities. Provider correlation strings remain unchanged. Response origins
+/// retain their original execution owner as provenance, never destination execution state.
 ///
 /// `canonical` is the destination's whole Ledger cut and `surface_history` is
 /// the operation log that projects it, so the one identity map remaps both:
@@ -2154,6 +2198,7 @@ pub(crate) fn remap_seed(
     destination: &ConversationId,
     canonical: &[MessageBlock],
     surface_history: &[SurfaceOp],
+    completed_responses: &[crate::durable::response::CompletedResponseProvenance],
 ) -> Result<LineageSeed, SessionError> {
     let messages = canonical;
     let mut message_ids = BTreeMap::new();
@@ -2198,9 +2243,24 @@ pub(crate) fn remap_seed(
             }),
         })
         .collect::<Result<Vec<_>, SessionError>>()?;
-    LineageSeed::replayed(canonical, surface_history).map_err(|error| SessionError::Seed {
-        detail: error.to_string(),
-    })
+    let responses = completed_responses
+        .iter()
+        .filter_map(|response| {
+            let closing = message_ids.get(&response.closing_message_id)?;
+            let mut response = response.clone();
+            response.closing_message_id = closing.clone();
+            response.retry_message_id = response
+                .retry_message_id
+                .as_ref()
+                .and_then(|input| message_ids.get(input).cloned());
+            Some(response)
+        })
+        .collect();
+    LineageSeed::replayed(canonical, surface_history)
+        .and_then(|seed| seed.with_completed_responses(responses))
+        .map_err(|error| SessionError::Seed {
+            detail: error.to_string(),
+        })
 }
 
 fn remap_message(
@@ -2503,7 +2563,7 @@ fn initialize_database(
         })?;
     let store = SqliteConversationStore::open(conversation_id.clone(), path)
         .map_err(SessionError::Store)?;
-    // LineageSeed contains canonical meaning and Surface provenance only.
+    // LineageSeed contains canonical meaning, Surface history and immutable response provenance.
     // Execution-recovery residue, including a pending unresolved-output
     // carryover source, belongs exclusively to the source conversation and is
     // initialized as NULL in this new destination store.
@@ -2988,6 +3048,11 @@ model = "provider/model"
         revision: SurfaceRevision,
     ) -> HistoricalConversationSnapshot {
         HistoricalConversationSnapshot {
+            completed_responses: crate::runtime_client::response::lineage_provenance(
+                store,
+                &store.load_canonical().unwrap(),
+            )
+            .unwrap(),
             conversation_id: conversation_id.clone(),
             surface_revision: revision,
             messages: store
@@ -2998,6 +3063,84 @@ model = "provider/model"
                 .load_surface_history(revision)
                 .expect("source Surface operation history"),
         }
+    }
+
+    #[test]
+    fn post_response_fork_and_branch_include_the_response_and_retry_excludes_input() {
+        let (_directory, catalog, _config) = open_catalog();
+        let assistant = |id: &str| {
+            MessageBlock::Assistant(AssistantMessageBlock {
+                id: MessageId::new(id),
+                content: vec![AssistantContentBlock::Text(TextBlock { text: id.into() })],
+            })
+        };
+        let history = vec![
+            user("user-a", "A"),
+            assistant("assistant-a"),
+            user("user-b", "B"),
+            assistant("assistant-b"),
+            user("later", "later"),
+        ];
+        let (conversation, session, _) = append_history(&catalog, &history);
+        let store = store_for(&catalog, &session, &conversation);
+        let source = lineage_at(&store, &conversation, store.load_head().unwrap().revision);
+        let (fork, fork_editor) = catalog
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("assistant-b"),
+                super::LineageSide::After,
+            )
+            .unwrap();
+        let (branch, branch_editor) = catalog
+            .prepare_tree_node(
+                &session,
+                &state(),
+                &source,
+                &MessageId::new("assistant-b"),
+                super::LineageSide::After,
+            )
+            .unwrap();
+        assert!(fork_editor.is_empty());
+        assert!(branch_editor.is_empty());
+        assert_ne!(fork.session_id, session);
+        assert_eq!(branch.session_id, session);
+        for prepared in [&fork, &branch] {
+            let copied = SqliteConversationStore::open_existing(
+                prepared.conversation_id.clone(),
+                &prepared.database_path,
+            )
+            .unwrap();
+            let messages = copied.load_canonical().unwrap();
+            assert_eq!(messages.len(), 4);
+            let MessageBlock::Assistant(last) = &messages[3] else {
+                panic!("Assistant B must be included")
+            };
+            assert_eq!(
+                last.content,
+                match &history[3] {
+                    MessageBlock::Assistant(a) => a.content.clone(),
+                    _ => unreachable!(),
+                }
+            );
+        }
+        let (retry, editor) = catalog
+            .prepare_tree_node(
+                &session,
+                &state(),
+                &source,
+                &MessageId::new("user-b"),
+                super::LineageSide::Before,
+            )
+            .unwrap();
+        assert_eq!(editor, vec![text("B")]);
+        let retried = SqliteConversationStore::open_existing(
+            retry.conversation_id.clone(),
+            &retry.database_path,
+        )
+        .unwrap();
+        assert_eq!(retried.load_canonical().unwrap().len(), 2);
+        assert_eq!(store.load_canonical().unwrap(), history);
     }
 
     /// The one Session lifecycle classification every product path shares:
@@ -3099,11 +3242,12 @@ model = "provider/model"
         let revision = source_store.load_head().expect("source head").revision;
         let source = lineage_at(&source_store, &source_conversation, revision);
         let (prepared, _) = catalog
-            .prepare_tree_node_at_user_message(
+            .prepare_tree_node(
                 &source_session,
                 &state(),
                 &source,
                 &MessageId::new("source-user-a"),
+                crate::local_runtime::session::LineageSide::Before,
             )
             .expect("prepare tree node");
         catalog
@@ -3304,7 +3448,12 @@ model = "provider/model"
         let revision = clone_store.load_head().expect("clone head").revision;
         let source = lineage_at(&clone_store, &clone_node.conversation_id, revision);
         let (fork, _editor) = catalog
-            .prepare_fork_session(&state(), &source, &MessageId::new("only-prompt"))
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("only-prompt"),
+                crate::local_runtime::session::LineageSide::Before,
+            )
             .expect("prepare fork at the first user message");
         let fork_id = fork.session_id.clone();
         let fork_conversation = fork.conversation_id.clone();
@@ -3315,7 +3464,8 @@ model = "provider/model"
                     source_session: clone_session,
                     source_node: clone_node.id.clone(),
                     source_surface_revision: revision,
-                    source_user_message: MessageId::new("only-prompt"),
+                    source_message: MessageId::new("only-prompt"),
+                    side: crate::local_runtime::session::LineageSide::Before,
                 },
             )
             .expect("publish empty fork");
@@ -3728,11 +3878,12 @@ model = "provider/model"
         let revision = source_store.load_head().expect("source head").revision;
         let source = lineage_at(&source_store, &source_conversation, revision);
         let (prepared, _) = catalog
-            .prepare_tree_node_at_user_message(
+            .prepare_tree_node(
                 &source_session,
                 &state(),
                 &source,
                 &MessageId::new("source-user-c"),
+                crate::local_runtime::session::LineageSide::Before,
             )
             .expect("prepare tree node");
         catalog
@@ -3744,7 +3895,8 @@ model = "provider/model"
                     source_session: source_session.clone(),
                     source_node: source_node.clone(),
                     source_surface_revision: revision,
-                    source_user_message: MessageId::new("source-user-c"),
+                    source_message: MessageId::new("source-user-c"),
+                    side: crate::local_runtime::session::LineageSide::Before,
                 },
             )
             .expect("publish tree node");
@@ -4092,17 +4244,28 @@ model = "provider/model"
         crate::conversation::StructuralIndex::build(&source.messages).unwrap();
         let clone = catalog.prepare_clone_session(&state(), &source).unwrap();
         let (early, _) = catalog
-            .prepare_fork_session(&state(), &source, &MessageId::new("user-B"))
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("user-B"),
+                crate::local_runtime::session::LineageSide::Before,
+            )
             .unwrap();
         let (late, _) = catalog
-            .prepare_fork_session(&state(), &source, &MessageId::new("after-B"))
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("after-B"),
+                crate::local_runtime::session::LineageSide::Before,
+            )
             .unwrap();
         let (tree, _) = catalog
-            .prepare_tree_node_at_user_message(
+            .prepare_tree_node(
                 &source_session,
                 &state(),
                 &source,
                 &MessageId::new("after-B"),
+                crate::local_runtime::session::LineageSide::Before,
             )
             .unwrap();
         for (destination, expected) in [(&clone, 2), (&early, 1), (&late, 2), (&tree, 2)] {
@@ -4205,7 +4368,8 @@ model = "provider/model"
                     source_session: source_session.clone(),
                     source_node,
                     source_surface_revision: revision,
-                    source_user_message: MessageId::new("after-B"),
+                    source_message: MessageId::new("after-B"),
+                    side: crate::local_runtime::session::LineageSide::Before,
                 },
             )
             .unwrap();
@@ -4423,7 +4587,12 @@ model = "provider/model"
         );
 
         let (fork, _) = catalog
-            .prepare_fork_session(&state(), &source, &MessageId::new("source-user-c"))
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("source-user-c"),
+                crate::local_runtime::session::LineageSide::Before,
+            )
             .expect("prepare fork");
         catalog.arm_write_fault_before_rename();
         assert!(matches!(
@@ -4433,7 +4602,8 @@ model = "provider/model"
                     source_session,
                     source_node,
                     source_surface_revision: revision,
-                    source_user_message: MessageId::new("source-user-c"),
+                    source_message: MessageId::new("source-user-c"),
+                    side: crate::local_runtime::session::LineageSide::Before,
                 },
             ),
             Err(SessionError::CatalogCommit {
@@ -4500,7 +4670,12 @@ model = "provider/model"
         );
 
         let (prepared_fork, editor_content) = catalog
-            .prepare_fork_session(&state(), &retained, &MessageId::new("source-user-c"))
+            .prepare_fork_session(
+                &state(),
+                &retained,
+                &MessageId::new("source-user-c"),
+                crate::local_runtime::session::LineageSide::Before,
+            )
             .expect("fork retained revision");
         assert_eq!(editor_content, vec![text("C")]);
         let fork_store = store_for(
@@ -4754,7 +4929,12 @@ model = "provider/model"
         let compacted = source_store.load_head().expect("compacted head");
         let source = lineage_at(&source_store, &source_conversation, compacted.revision);
         let (prepared, editor_content) = catalog
-            .prepare_fork_session(&state(), &source, &MessageId::new("source-user-c"))
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("source-user-c"),
+                crate::local_runtime::session::LineageSide::Before,
+            )
             .expect("fork at the surviving boundary");
         assert_eq!(editor_content, vec![text("C")]);
 
@@ -4967,6 +5147,7 @@ model = "provider/model"
                     &state(),
                     &lineage_at(store, conversation, *revision),
                     message_id,
+                    crate::local_runtime::session::LineageSide::Before,
                 )
                 .expect("fork at the reported boundary")
         };
@@ -5054,11 +5235,12 @@ model = "provider/model"
                 .find(|(_, shape, _)| shape == SELECTED_BOUNDARY)
                 .expect("the selected boundary");
             catalog
-                .prepare_tree_node_at_user_message(
+                .prepare_tree_node(
                     session_id,
                     &state(),
                     &lineage_at(store, conversation, revision),
                     &message_id,
+                    crate::local_runtime::session::LineageSide::Before,
                 )
                 .expect("branch at the reported boundary")
         };
@@ -5124,6 +5306,7 @@ model = "provider/model"
                 &current_session_intent,
                 &source,
                 &MessageId::new("source-user-c"),
+                crate::local_runtime::session::LineageSide::Before,
             )
             .expect("prepare fork");
         assert_eq!(
@@ -5172,7 +5355,12 @@ model = "provider/model"
         let source = lineage_at(&source_store, &source_conversation, revision);
 
         let (prepared, editor_content) = catalog
-            .prepare_fork_session(&state(), &source, &MessageId::new("source-user-c"))
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("source-user-c"),
+                crate::local_runtime::session::LineageSide::Before,
+            )
             .expect("prepare fork");
         assert_eq!(editor_content, vec![text("C")]);
         let prefix = store_for(&catalog, &prepared.session_id, &prepared.conversation_id)
@@ -5221,11 +5409,12 @@ model = "provider/model"
         );
 
         let (prepared, _editor) = catalog
-            .prepare_tree_node_at_user_message(
+            .prepare_tree_node(
                 &source_session,
                 &state(),
                 &source,
                 &MessageId::new("source-user-c"),
+                crate::local_runtime::session::LineageSide::Before,
             )
             .expect("prepare tree node");
         let branch_conversation = prepared.conversation_id.clone();
@@ -5238,7 +5427,8 @@ model = "provider/model"
                     source_session: source_session.clone(),
                     source_node,
                     source_surface_revision: revision,
-                    source_user_message: MessageId::new("source-user-c"),
+                    source_message: MessageId::new("source-user-c"),
+                    side: crate::local_runtime::session::LineageSide::Before,
                 },
             )
             .expect("publish tree node");
@@ -5325,11 +5515,12 @@ model = "provider/model"
         let source = lineage_at(&source_store, &source_conversation, revision);
 
         let (prepared_a, _) = catalog
-            .prepare_tree_node_at_user_message(
+            .prepare_tree_node(
                 &source_session,
                 &state(),
                 &source,
                 &MessageId::new("source-user-a"),
+                crate::local_runtime::session::LineageSide::Before,
             )
             .expect("prepare branch A");
         catalog
@@ -5341,16 +5532,18 @@ model = "provider/model"
                     source_session: source_session.clone(),
                     source_node: source_node.clone(),
                     source_surface_revision: revision,
-                    source_user_message: MessageId::new("source-user-a"),
+                    source_message: MessageId::new("source-user-a"),
+                    side: crate::local_runtime::session::LineageSide::Before,
                 },
             )
             .expect("publish branch A");
         let (prepared_b, _) = catalog
-            .prepare_tree_node_at_user_message(
+            .prepare_tree_node(
                 &source_session,
                 &state(),
                 &source,
                 &MessageId::new("source-user-c"),
+                crate::local_runtime::session::LineageSide::Before,
             )
             .expect("prepare branch B");
         catalog
@@ -5362,7 +5555,8 @@ model = "provider/model"
                     source_session: source_session.clone(),
                     source_node: source_node.clone(),
                     source_surface_revision: revision,
-                    source_user_message: MessageId::new("source-user-c"),
+                    source_message: MessageId::new("source-user-c"),
+                    side: crate::local_runtime::session::LineageSide::Before,
                 },
             )
             .expect("publish branch B");

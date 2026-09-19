@@ -1,7 +1,7 @@
-# App Server protocol v9
+# App Server protocol v10
 
-App Server v9 identifies one complete mandatory vocabulary, including exact
-`session/summary` and bounded historical Trace detail. v8 and all earlier initialization and WebSocket admission
+App Server v10 identifies one complete mandatory vocabulary, including exact
+`session/summary` and bounded historical Trace detail. v9 and all earlier initialization and WebSocket admission
 versions are rejected; there is no downgrade or compatibility path.
 
 The App Server protocol is rustX's public client boundary for the TUI,
@@ -107,13 +107,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v9",
+  "rustx.app-server.v10",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v9` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v10` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -130,7 +130,7 @@ The [local Web launcher](../web-console/CONNECTION.md) implements delivery throu
 a separate browser launch-token exchange and a process-ephemeral browser proof in
 origin-scoped sessionStorage (not a Cookie). A dedicated header authenticates
 same-origin carrier APIs. Its bootstrap returns the exact native
-endpoint/token; the browser then connects directly using the v9 subprotocols above.
+endpoint/token; the browser then connects directly using the v10 subprotocols above.
 The browser launch credential is never a valid substitute for the native credential.
 Remote Web attachment is explicit Settings configuration. Neither browser login
 nor remote attachment grants Product Host Workspace filesystem authority.
@@ -227,7 +227,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v9; pipeline individual requests instead. This limitation is
+supported in v10; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -237,7 +237,7 @@ explicitly rejected as an invalid request before any action occurs.
 | `initialize`, `server/info` | Connection negotiation and server capabilities |
 | `session/list`, `session/read`, `session/summary`, `session/name`, `session/tree` | Durable controller; bounded pages / exact identity reads; no runtime composition |
 | `session/create` | Durable creation from explicit Session selections |
-| `session/fork`, `session/branch` | Exact native Surface revision and optional user-message boundary; fork without a boundary clones the revision into an independent Session |
+| `session/fork`, `session/branch` | Exact native Surface revision, message boundary, and explicit `side`: `before` restores ordinary User input; `after` includes a durably completed Assistant response with an empty editor. Fork without a boundary clones the revision into an independent Session |
 | `session/deletePreview`, `session/delete`, `session/recoverDeletion` | Native revision-confirmed deletion/recovery; no client-supplied cleanup workset |
 | `session/attach`, `session/detach` | Load/reuse a runtime and acquire/release its external control attachment |
 | `session/switchNode` | Switch to a selected branch; manager owns retirement and composition |
@@ -316,7 +316,7 @@ fenced. Attachment cleanup does not grant durable deletion authority.
 
 ## Attachment and observation lifetime
 
-Protocol v9 admits at most one writable external controller per resident
+Protocol v10 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -395,8 +395,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v9.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v9.ts`: TypeScript generated from that schema using pinned
+- `v10.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v10.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -661,7 +661,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v9; no compatibility path is provided.
+This remains mandatory protocol v10; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -689,9 +689,9 @@ Complete = terminal
 
 The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
-`Active + disarmed`. Native Runtime Client version 41 carries this vocabulary;
+`Active + disarmed`. Native Runtime Client version 42 carries this vocabulary;
 version 38 clients are rejected by strict negotiation. This remains mandatory
-App Server protocol v9, with no compatibility field and no activation mode.
+App Server protocol v10, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
 `Paused` and `Blocked` offer Resume, and there is no separate Play/arm control
@@ -706,7 +706,7 @@ boundary.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v9 includes `inbound/edit { target, expected, text }` and
+Protocol v10 includes `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and controller attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -847,7 +847,7 @@ resolves missing results against exact canonical Assistant blocks; synthesized
 results carry that occurrence before commit. Canonical history alone therefore
 contains every call/result relationship, without source execution events.
 
-SQLite schema **40** retains `canonical_tool_calls` only as a derived index. Its
+SQLite schema **42** retains `canonical_tool_calls` only as a derived index. Its
 primary key is `(assistant_message_id, block_index)`; Assistant/call and result
 MessageId uniqueness constraints prevent duplicate provider IDs within one
 Assistant and duplicate settlement. Tool commits validate the exact indexed
@@ -883,11 +883,11 @@ independent Root metadata scalars through the same revision/CAS, validation,
 serialization and Save-versus-Reload boundary as `instructions`. `null` removes
 the authored unit in that scope. Clients never write whole config documents.
 
-## Breaking v9 Session lifecycle transition
+## Breaking v10 Session lifecycle transition
 
-Initialization requires exactly v9 and WebSocket requires `rustx.app-server.v9`.
-The previous version is rejected without fallback. Rust DTOs generate `v9.ts`,
-`v9.schema.json`, and the serialized fixtures; only the current version is kept.
+Initialization requires exactly v10 and WebSocket requires `rustx.app-server.v10`.
+The previous version is rejected without fallback. Rust DTOs generate `v10.ts`,
+`v10.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -916,11 +916,11 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
-explicit recovery action. App Server v9 and native Runtime Client v41 are unchanged.
+explicit recovery action. App Server v10 and native Runtime Client v42 are unchanged.
 
 ## Rich historical Trace inspection (#364)
 
-Protocol v9 replaces TraceEntry with bounded TraceRecord summaries and adds
+Protocol v10 replaces TraceEntry with bounded TraceRecord summaries and adds
 `session/traceDetail { target, record_id } -> { type: "trace_detail", detail }`.
 Detail is nullable when no allowlisted record exists at the captured read cut.
 List payloads never carry complete request contexts or Tool results. Inspection

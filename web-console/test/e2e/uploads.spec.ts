@@ -63,7 +63,7 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     await page.reload(); await connect();
     await expect(canonical.getByText('acceptance.txt', { exact: true })).toBeVisible();
     await expect(canonical.getByText('pixel.png', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Fork', exact: true }).click();
+    await message.fill('/fork'); await message.press('Enter');
     await page.getByRole('dialog', { name: '/fork', exact: true }).getByRole('option', { name: /Use my uploaded files/ }).click();
     await expect(message).toHaveValue('Use my uploaded files');
     const destination = await id(); expect(destination).not.toBe(source);

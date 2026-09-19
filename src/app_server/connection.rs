@@ -499,13 +499,16 @@ impl AppServerConnection {
                 node_id,
                 surface_revision,
                 boundary,
+                side,
             } => self
                 .sessions
-                .fork_session(
+                .copy_lineage(
                     &session_id,
                     node_id.as_ref(),
                     surface_revision,
                     boundary.as_ref(),
+                    false,
+                    side,
                 )
                 .await
                 .map(transition)
@@ -515,9 +518,17 @@ impl AppServerConnection {
                 node_id,
                 surface_revision,
                 boundary,
+                side,
             } => self
                 .sessions
-                .branch_session_node(&session_id, &node_id, surface_revision, &boundary)
+                .copy_lineage(
+                    &session_id,
+                    Some(&node_id),
+                    surface_revision,
+                    Some(&boundary),
+                    true,
+                    side,
+                )
                 .await
                 .map(transition)
                 .map_err(session_error),

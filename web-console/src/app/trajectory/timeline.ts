@@ -7,7 +7,7 @@
  * Journal wall spans and dispatch-origin numeric metrics cannot supply that
  * relationship. Missing bridge evidence leaves a request unsplit.
  */
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v9';
+import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v10';
 
 /** Horizontal projection of the overview's domain. */
 export type TrajectoryTimelineMode = 'sequence' | 'duration';

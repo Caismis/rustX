@@ -202,6 +202,7 @@ export type Request1 =
         node_id?: SessionNodeId | null;
         surface_revision: SurfaceRevision;
         boundary?: MessageId | null;
+        side: LineageSide;
       };
     }
   | {
@@ -211,6 +212,7 @@ export type Request1 =
         node_id: SessionNodeId;
         surface_revision: SurfaceRevision;
         boundary: MessageId;
+        side: LineageSide;
       };
     }
   | {
@@ -477,6 +479,10 @@ export type SurfaceRevision = string;
  * Identifies a committed canonical message block.
  */
 export type MessageId = string;
+/**
+ * Which history prefix a lineage operation retains.
+ */
+export type LineageSide = 'before' | 'after';
 /**
  * The external cursor of the Runtime Client observation stream.
  *
@@ -4358,6 +4364,10 @@ export interface CapabilitySourceView {
  */
 export interface RuntimeClientContextView {
   /**
+   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   */
+  last_request_occupancy?: ContextOccupancy | null;
+  /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
    */
@@ -4372,6 +4382,24 @@ export interface RuntimeClientContextView {
    * The latest committed compaction metadata, when compaction occurred.
    */
   latest_compaction?: RuntimeClientCompactionView | null;
+}
+/**
+ * The last provider-measured request context for this Conversation.
+ * It is explicitly a request reading, not an estimate of unsent composer text.
+ */
+export interface ContextOccupancy {
+  /**
+   * Exact normalized effective request input, including cache reads.
+   */
+  input_tokens: number;
+  /**
+   * Capacity frozen in the same request's native model snapshot.
+   */
+  context_window_tokens: number;
+  /**
+   * Provider-facing historical model, never substituted from current config.
+   */
+  model: string;
 }
 /**
  * Public metadata for one committed compaction.
@@ -4887,6 +4915,10 @@ export interface TraceMessageDetail {
  */
 export interface RuntimeClientTranscriptPage {
   /**
+   * Native whole-conversation totals, independent of this page.
+   */
+  statistics?: ConversationStatistics | null;
+  /**
    * Items in chronological order within this page.
    */
   entries?: RuntimeClientTranscriptEntry[];
@@ -4896,9 +4928,31 @@ export interface RuntimeClientTranscriptPage {
   next_cursor?: RuntimeClientTranscriptCursor | null;
 }
 /**
+ * Whole-conversation execution totals, independent of any transcript window.
+ * Forked Conversations start a fresh execution epoch, as native lineage does.
+ */
+export interface ConversationStatistics {
+  completed_responses: string;
+  model_requests: string;
+  /**
+   * Known reported usage. Coverage is explicit; missing reports are not zero.
+   */
+  requests_with_usage: string;
+  reported_usage?: ModelUsage | null;
+}
+/**
  * One derived transcript item and its stable durable cursor.
  */
 export interface RuntimeClientTranscriptEntry {
+  /**
+   * The native Attempt has not yet settled this accepted Assistant candidate.
+   * A client retaining this row outside a refresh must reread it, not freeze absence.
+   */
+  response_pending?: boolean;
+  /**
+   * Exact completed-response evidence, never inferred by clients.
+   */
+  completed_response?: CompletedResponseView | null;
   /**
    * Canonical calls in block order with their native committed results.
    * A missing result means no committed result, never success or cancellation.
@@ -5066,6 +5120,74 @@ export interface RuntimeClientTranscriptEntry {
             };
         type: 'interaction_settled';
       };
+}
+/**
+ * Derived response view over local execution or inherited lineage provenance.
+ * Canonical content remains in the Message Ledger.
+ */
+export interface CompletedResponseView {
+  closing_message_id: MessageId;
+  origin: ResponseOrigin;
+  /**
+   * Durable completion timestamp; never a browser receipt time.
+   */
+  completed_at: string;
+  /**
+   * The identity of one exact historical Conversation Surface state.
+   *
+   * A revision is a monotonic counter in its own identity domain. The empty
+   * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
+   * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
+   * is precisely "the Surface after the first `n` accepted operations".
+   *
+   * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
+   * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
+   * or a `CapabilityRevision`: none of those identify a Surface state, and
+   * none of them may be substituted for one.
+   */
+  surface_revision: string;
+  /**
+   * Exact adopted ordinary input, when this Attempt has a replayable input.
+   */
+  retry_message_id?: MessageId | null;
+  /**
+   * All actual requests in the Attempt, only when every usage is known.
+   */
+  usage?: ModelUsage | null;
+  timing?: CompletedResponseTiming | null;
+}
+/**
+ * Original execution owner, including for inherited historical responses.
+ */
+export interface ResponseOrigin {
+  conversation_id: ConversationId;
+  attempt_id: AttemptId;
+  /**
+   * Identifies a committed canonical message block.
+   */
+  closing_message_id: string;
+}
+/**
+ * Historical product timing derived from native lifecycle and generation evidence.
+ * Missing evidence stays absent; these are not destination execution facts.
+ */
+export interface CompletedResponseTiming {
+  /**
+   * Authoritative successful Attempt completion minus its start timestamp.
+   */
+  total_duration_ms?: number | null;
+  /**
+   * First actual request's adapter-dispatch-to-first-output duration.
+   */
+  ttft_ms?: number | null;
+  /**
+   * Sum of output-producing requests' first-output-to-provider-terminal spans.
+   */
+  generation_ms?: number | null;
+  /**
+   * Fully covered output usage divided by fully covered positive generation work.
+   */
+  output_tokens_per_second?: number | null;
 }
 /**
  * The foreground tool execution read model of one logical tool call.
@@ -6513,7 +6635,11 @@ export interface SessionNode {
         /**
          * Identifies a committed canonical message block.
          */
-        source_user_message: string;
+        source_message: string;
+        /**
+         * Which history prefix a lineage operation retains.
+         */
+        side: 'before' | 'after';
         type: 'fork';
       };
 }
@@ -6959,6 +7085,10 @@ export interface RuntimeDurabilityFailure {
  * One bounded newest-or-older page of derived transcript history.
  */
 export interface RuntimeClientTranscriptPage1 {
+  /**
+   * Native whole-conversation totals, independent of this page.
+   */
+  statistics?: ConversationStatistics | null;
   /**
    * Items in chronological order within this page.
    */
@@ -7817,6 +7947,10 @@ export interface RuntimeClientTodoStatusTask {
  */
 export interface RuntimeClientContextView1 {
   /**
+   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   */
+  last_request_occupancy?: ContextOccupancy | null;
+  /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
    */
@@ -8664,6 +8798,10 @@ export interface RuntimeClientTranscriptInteractionSettled {
  * The context diagnostics carried by the Runtime Client snapshot.
  */
 export interface RuntimeClientContextView2 {
+  /**
+   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   */
+  last_request_occupancy?: ContextOccupancy | null;
   /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.

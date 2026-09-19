@@ -650,10 +650,10 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let connection = AppServerConnection::new(f.host.clone());
         let before = connection.handle_json(r#"{"jsonrpc":"2.0","id":0,"method":"server/info","params":{}}"#).await.unwrap();
         assert!(matches!(before, Response::Failure(Failure { error: RpcError { data: Some(ErrorData::NotInitialized), .. }, .. })));
-        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":8,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
+        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":9,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 9, requested: 8 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 10, requested: 9 })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -1906,6 +1906,7 @@ async fn restored_destination_receipts_admit_a_turn_after_source_deletion() {
             &connection,
             1100,
             Method::SessionFork {
+                side: crate::local_runtime::session::LineageSide::Before,
                 session_id: source.id.clone(),
                 node_id: None,
                 surface_revision: revision,
@@ -2883,4 +2884,100 @@ async fn another_connection_deletes_an_attached_idle_session_and_closes_its_rout
         f.close().await;
     })
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // One native source proves both lineage destinations and Retry through the public protocol.
+async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_retry() {
+    Box::pin(bounded(async {
+        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+        use crate::local_runtime::session::LineageSide;
+        use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
+        use crate::message::TextBlock;
+        use crate::model::finish::ModelFinishReason;
+        use crate::runtime::identity::{AttemptId, EventId, MessageId};
+        let f = Fixture::new().await;
+        let source = &f.sessions[0];
+        let controller = f.manager.session_controller();
+        let access = controller.acquire_session(&source.id, None).await.unwrap();
+        let store = SqliteConversationStore::open(source.active_conversation_id.clone(), &access.database_path).unwrap();
+        let event = |attempt: &str, kind| RuntimeEventEnvelope {
+            schema_version: 1, event_id: EventId::new(format!("lineage-event-{}", store.presentation_frontier().unwrap() + 1)), sequence: 0,
+            conversation_id: source.active_conversation_id.clone(), attempt_id: Some(AttemptId::new(attempt)), turn_id: None,
+            timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(), event: kind,
+        };
+        for (input, output, attempt) in [("user-a", "assistant-a", "a"), ("user-b", "assistant-b", "b")] {
+            store.append_canonical(&MessageBlock::User(UserMessageBlock { id: MessageId::new(input), source: UserSource::Human,
+                kind: InboundKind::Message, timestamp: None, content: vec![UserContentBlock::Text(TextBlock { text: input.into() })] })).unwrap();
+            store.append_event(event(attempt, RuntimeEvent::AttemptStarted { attempt_id: AttemptId::new(attempt) })).unwrap();
+            crate::runtime_client::response::tests::request(&store, attempt, 0, Some(crate::model::ModelUsage { input_tokens: 100, output_tokens: 20, total_tokens: 120, details: None }));
+            store.append_canonical_with_event(&MessageBlock::Assistant(AssistantMessageBlock { id: MessageId::new(output),
+                content: vec![AssistantContentBlock::Text(TextBlock { text: output.into() })] }),
+                event(attempt, RuntimeEvent::AssistantMessageCommitted { message_id: MessageId::new(output) })).unwrap();
+            store.append_event(event(attempt, RuntimeEvent::AttemptCompleted { attempt_id: AttemptId::new(attempt), finish_reason: ModelFinishReason::Stop })).unwrap();
+        }
+        let revision = store.message_append_revision(&MessageId::new("assistant-b")).unwrap().unwrap();
+        let original = store.load_canonical().unwrap();
+        drop(access);
+        let connection = AppServerConnection::new(f.host.clone()); initialize(&connection).await;
+        for (index, fork) in [false, true].into_iter().enumerate() {
+            let method = if fork { Method::SessionFork { session_id: source.id.clone(), node_id: Some(source.active_node.clone()), surface_revision: revision, boundary: Some(MessageId::new("assistant-b")), side: LineageSide::After } }
+                else { Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: revision, boundary: MessageId::new("assistant-b"), side: LineageSide::After } };
+            let MethodResult::SessionTransition { session, editor_content, .. } = call(&connection, 4000 + i64::try_from(index).unwrap(), method).await else { panic!("lineage transition") };
+            assert_eq!(session.id == source.id, !fork);
+            assert!(editor_content.is_none_or(|content| content.is_empty()));
+            let destination = controller.acquire_session(&session.id, Some(&session.active_node)).await.unwrap();
+            let copied = SqliteConversationStore::open_existing(session.active_conversation_id, &destination.database_path).unwrap();
+            let messages = copied.load_canonical().unwrap(); assert_eq!(messages.len(), 4);
+            assert!(matches!(&messages[3], MessageBlock::Assistant(a) if a.content == match &original[3] { MessageBlock::Assistant(a) => a.content.clone(), _ => unreachable!() }));
+            let mut projected = crate::runtime_client::snapshot::transcript_page_view(copied.load_transcript_page(None, 64).unwrap()).unwrap();
+            crate::runtime_client::response::decorate(&copied, &mut projected).unwrap();
+            let tail = projected.entries.last().unwrap().completed_response.clone().unwrap();
+            assert_eq!(tail.closing_message_id, crate::conversation::message_id_of(&messages[3]));
+            assert_eq!(tail.retry_message_id, Some(crate::conversation::message_id_of(&messages[2])));
+            assert_eq!(tail.origin.conversation_id, source.active_conversation_id);
+            assert_eq!(tail.usage.as_ref().unwrap().total_tokens, 120);
+            assert_eq!(tail.timing.as_ref().unwrap().generation_ms, Some(1280));
+            assert_eq!(projected.entries.iter().filter(|entry| entry.completed_response.is_some()).count(), 2);
+            assert_eq!(projected.statistics.unwrap(), crate::runtime_client::response::ConversationStatistics::default());
+            assert!(copied.read_events(None, 128).unwrap().events.is_empty());
+            let child_id = session.id.clone(); let child_node = session.active_node.clone();
+            drop(copied); drop(destination);
+            let MethodResult::Attached { target: child_target, snapshot: attached, .. } = call(&connection, 4198, Method::SessionAttach { session_id: child_id.clone(), node_id: Some(child_node.clone()) }).await else { panic!("attach inherited lineage") };
+            assert_eq!(attached.transcript.entries.last().unwrap().completed_response.as_ref(), Some(&tail));
+            call(&connection, 4199, Method::SessionDetach { target: child_target }).await;
+            // Both independent and in-Session children remain native anchors on another copy.
+            for again_fork in [false, true] {
+                let method = if again_fork { Method::SessionFork { session_id: child_id.clone(), node_id: Some(child_node.clone()), surface_revision: tail.surface_revision, boundary: Some(tail.closing_message_id.clone()), side: LineageSide::After } }
+                    else { Method::SessionBranch { session_id: child_id.clone(), node_id: child_node.clone(), surface_revision: tail.surface_revision, boundary: tail.closing_message_id.clone(), side: LineageSide::After } };
+                let MethodResult::SessionTransition { editor_content, .. } = call(&connection, 4200, method).await else { panic!("inherited continuation") };
+                assert!(editor_content.is_none_or(|content| content.is_empty()));
+            }
+            let MethodResult::SessionTransition { session: retry, editor_content: Some(input), .. } = call(&connection, 4201, Method::SessionBranch { session_id: child_id.clone(), node_id: child_node.clone(), surface_revision: tail.surface_revision, boundary: tail.retry_message_id.clone().unwrap(), side: LineageSide::Before }).await else { panic!("inherited retry") };
+            assert_eq!(input, vec![UserInputBlock::Text(TextBlock { text: "user-b".into() })]);
+            let retry_access = controller.acquire_session(&retry.id, Some(&retry.active_node)).await.unwrap();
+            let retry_store = SqliteConversationStore::open_existing(retry.active_conversation_id, &retry_access.database_path).unwrap();
+            assert_eq!(retry_store.load_canonical().unwrap().len(), 2);
+            let child = controller.acquire_session(&child_id, Some(&child_node)).await.unwrap();
+            let reopened = SqliteConversationStore::open_existing(child.node.conversation_id.clone(), &child.database_path).unwrap();
+            assert_eq!(reopened.load_canonical().unwrap(), messages);
+            let mut reopened_page = crate::runtime_client::snapshot::transcript_page_view(reopened.load_transcript_page(None, 64).unwrap()).unwrap();
+            crate::runtime_client::response::decorate(&reopened, &mut reopened_page).unwrap();
+            assert_eq!(reopened_page.entries.last().unwrap().completed_response.as_ref(), Some(&tail));
+            rejected(&connection, Method::SessionBranch { session_id: child_id, node_id: child_node, surface_revision: crate::conversation::SurfaceRevision::new(tail.surface_revision.get() + 1), boundary: tail.closing_message_id, side: LineageSide::After }).await;
+
+        }
+        let MethodResult::SessionTransition { session, editor_content: Some(input), .. } = call(&connection, 4010, Method::SessionBranch {
+            session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: revision, boundary: MessageId::new("user-b"), side: LineageSide::Before,
+        }).await else { panic!("retry cut") };
+        assert_eq!(input, vec![UserInputBlock::Text(TextBlock { text: "user-b".into() })]);
+        let destination = controller.acquire_session(&session.id, Some(&session.active_node)).await.unwrap();
+        let retry = SqliteConversationStore::open_existing(session.active_conversation_id, &destination.database_path).unwrap();
+        assert_eq!(retry.load_canonical().unwrap().len(), 2);
+        rejected(&connection, Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: crate::conversation::SurfaceRevision::new(revision.get() + 1), boundary: MessageId::new("assistant-b"), side: LineageSide::After }).await;
+        rejected(&connection, Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: revision, boundary: MessageId::new("user-b"), side: LineageSide::After }).await;
+        assert_eq!(store.load_canonical().unwrap(), original);
+        drop(destination); drop(retry); drop(store); f.close().await;
+    })).await;
 }

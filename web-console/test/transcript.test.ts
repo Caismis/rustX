@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v9';
+import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v10';
 import { Server, snapshot } from './fixture';
 import { prependTranscript, refreshTranscript, replaceTranscript, HISTORY_LIMIT } from '../src/client/transcript';
 const entry = (n: number): RuntimeClientTranscriptEntry => ({ cursor: String(n), item: { type: 'message', message: { id: `m${n}`, role: 'assistant', content: [{ type: 'text', text: `Message ${n}` }] } } });
@@ -77,7 +77,7 @@ it('fresh native Tool projections replace overlaps; unresolved old projections f
   const rebased = refreshTranscript(first, { entries: [entry(9), entry(10)], next_cursor: '9' });
   expect(rebased.page.entries).toEqual([entry(9), entry(10)]);
   expect(rebased.epoch).toBeGreaterThan(first.epoch);
-  expect(rebased.error).toContain('reread unresolved native Tools');
+  expect(rebased.error).toContain('reread unresolved native responses or Tools');
   const settled = structuredClone(call);
   settled.tool_calls![0].state = { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: 1 } };
   const repaired = refreshTranscript(first, { entries: [settled, entry(9)], next_cursor: '8' });

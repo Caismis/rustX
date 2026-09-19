@@ -138,7 +138,7 @@ it('sidebar Fork uses the exact native boundary and late completion cannot undo 
   server.handlers.set('session/tree', () => ({ type: 'tree', nodes: [{ id: 'node-A', conversation_id: 'conversation-A', ordinal: '1', origin: { type: 'new' } }] }));
   server.handlers.set('session/fork', request => {
     if (request.method !== 'session/fork') throw new Error('wrong request');
-    expect(request.params).toEqual({ session_id: 'A', node_id: 'node-A', surface_revision: '37', boundary: 'user-cut' });
+    expect(request.params).toEqual({ side: 'before', session_id: 'A', node_id: 'node-A', surface_revision: '37', boundary: 'user-cut' });
     server.snapshots.set('fork-child', snapshot('fork-child'));
     return { type: 'session_transition', session: { id: 'fork-child', active_node: 'node-child', active_conversation_id: 'conversation-fork-child', node_count: 1, created_at: '0', updated_at: '0' } };
   });

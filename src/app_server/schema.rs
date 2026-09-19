@@ -215,6 +215,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             node_id: None,
             surface_revision: crate::conversation::surface::SurfaceRevision::new(EXACT),
             boundary: None,
+            side: crate::local_runtime::session::LineageSide::Before,
         },
         Method::InboundEdit {
             target: target.clone(),
@@ -499,8 +500,17 @@ mod tests {
     #[test]
     fn committed_rust_artifacts_are_current() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server");
+        let mut generations: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| {
+                name.starts_with('v') && name.as_bytes().get(1).is_some_and(u8::is_ascii_digit)
+            })
+            .collect();
+        generations.sort();
+        assert_eq!(generations, ["v10.schema.json", "v10.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v9.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v10.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

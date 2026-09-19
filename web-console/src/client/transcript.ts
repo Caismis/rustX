@@ -1,4 +1,4 @@
-import type { RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v9';
+import type { RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v10';
 
 export const HISTORY_LIMIT = 512;
 export const HISTORY_MAX_BYTES = 8 * 1024 * 1024;
@@ -32,15 +32,15 @@ export function refreshTranscript(previous: TranscriptCache | undefined, page: R
   // the fresh page. Rebase rather than freeze a formerly assembled/running call
   // after its authoritative terminal record has moved beyond this window.
   const fresh = new Set((page.entries ?? []).map(entryIdentity));
-  if ((previous.page.entries ?? []).some(entry => !fresh.has(entryIdentity(entry)) && entry.tool_calls?.some(tool => tool.state.type !== 'settled'))) {
-    return { ...replaceTranscript(page, previous), error: 'History was refreshed to reread unresolved native Tools. Load earlier for their current results.' };
+  if ((previous.page.entries ?? []).some(entry => !fresh.has(entryIdentity(entry)) && (entry.response_pending || entry.tool_calls?.some(tool => tool.state.type !== 'settled')))) {
+    return { ...replaceTranscript(page, previous), error: 'History was refreshed to reread unresolved native responses or Tools. Load earlier for their current results.' };
   }
   const entries = merge(previous.page.entries ?? [], page.entries ?? []);
   if (entries.length > HISTORY_LIMIT || JSON.stringify(entries).length * 2 > HISTORY_MAX_BYTES) return { ...replaceTranscript(page, previous), error: 'History read window reached its bound and was replaced with the current page.' };
-  return { ...previous, page: { entries, next_cursor: previous.page.next_cursor } };
+  return { ...previous, page: { ...page, entries, next_cursor: previous.page.next_cursor } };
 }
 export function prependTranscript(cache: TranscriptCache, page: RuntimeClientTranscriptPage): TranscriptCache {
   const entries = merge(page.entries ?? [], cache.page.entries ?? []);
   if (entries.length > HISTORY_LIMIT || JSON.stringify(entries).length * 2 > HISTORY_MAX_BYTES) throw new Error('History window is full. Return to latest to load another window.');
-  return { ...cache, loading: false, error: undefined, page: { entries, next_cursor: page.next_cursor } };
+  return { ...cache, loading: false, error: undefined, page: { ...cache.page, entries, next_cursor: page.next_cursor } };
 }

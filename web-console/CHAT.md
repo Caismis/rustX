@@ -68,22 +68,41 @@ restores the same anchor after image/Markdown/layout growth. Only a reader at th
 bottom follows new output; programmatic scroll delivery and shrink clamps do not
 reassign that ownership. No timeout or sleep determines layout correctness.
 
-## Historical Fork, Branch and Retry (WEB-05)
+## Completed-response tails and historical lineage (WEB-14)
 
-User-message rows offer Fork, Branch and Retry / Regenerate. Command discovery also
-opens Fork/Branch boundary selection. `session/boundaries` supplies the exact User
-MessageId and Surface revision; `session/tree` resolves the **attached Conversation**
-to its native node, never to the Session's potentially different default node.
-The frozen selection includes Session, attachment/incarnation, node, revision and
-message. No stale-revision error triggers refresh-and-retry. Native immutable older
-revisions remain valid cuts; unknown revisions and invalid boundaries fail visibly.
+Ordinary User rows expose Copy and their persisted timestamp when present. They
+have no primary Fork/Branch/Retry toolbar. Final Assistant content has at most one
+completed-response tail, tied to the native destination `closing_message_id` and explicit original execution `origin`.
+For local responses, the Runtime Client joins canonical acceptance with a successful Attempt terminal;
+provider completion and intermediate tool/model requests do not create tails.
 
-Fork creates an independent Session. Branch creates an in-Session node. Both native
-cuts end **before** the selected User message and return its `editor_content` as an
-uncommitted draft. The UI opens only the acknowledged destination and restores its
-native text/upload receipts. Independent Fork upload copying is entirely #319's
-native responsibility, including editor-boundary uploads before publication.
-In-Session branches share Session-owned uploads; the browser copies no files.
+Branch/Fork/Clone preserve finalized historical responses through immutable native
+bootstrap provenance. `CompletedResponseProvenance` carries the destination
+closing/Retry addresses, original execution owner, completion time, and exact
+optional usage. The same identity map remaps messages, Surface operations, and
+these addresses; a missing retained Retry input removes Retry. The origin remains
+unchanged across deeper copies and is never a destination execution identity.
+No source events, requests, recovery pointers, or live execution state are copied.
+SQLite schema 42 stores this provenance atomically in the existing bootstrap row,
+checks it on repeated initialization, and refuses obsolete stores without migration.
+The native `After` validator accepts local evidence and inherited provenance through
+one shared projection, while still requiring the exact destination append revision.
+
+The tail's lineage menu exposes Branch in this Session and Fork to new Session.
+Both use `side: after` and the immutable Surface revision that first appended the
+closing response. The resulting prefix includes that Assistant response and the
+composer is empty. The native owner validates the exact response/revision pair
+and durable completion. Compaction and later appends do not change that historical
+cut. Unknown revisions and mismatched boundaries fail visibly, without refreshing
+or replaying the mutation. `session/tree` resolves the attached Conversation's
+node, never the Session's mutable default. Independent Fork still copies native
+uploads in the inherited prefix before publication; in-Session Branch shares the
+Session's upload ownership.
+
+Command discovery retains explicit pre-input boundary selection for native draft
+restoration. Retry uses `side: before`, the input in the final request's frozen
+Surface, and native returned editor content. These are distinct from the tail's
+post-response continuation cut.
 
 Retry is `session/branch` → authoritative destination identity → unload the idle
 source runtime → attach the exact new node → `turn/start` with the returned
@@ -162,8 +181,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v8 (`rustx.app-server.v8` and generated
-`protocol/app-server/v8.ts` / `v8.schema.json`). v7 and earlier initialization and
+The mandatory App Server vocabulary is v10 (`rustx.app-server.v10` and generated
+`protocol/app-server/v10.ts` / `v10.schema.json`). v7 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -205,3 +224,56 @@ MessageId and block index). The native derived index supplies cross-page results
 Chat never correlates historical results by provider `ToolCallId`. Lineage copies
 remap the occurrence owner and retain the provider correlation ID. See the
 [Agent protocol contract](../docs/app-server-protocol.md#agent-read-projections-346).
+
+
+## Response usage and conversation statistics
+
+`RuntimeClientTranscriptEntry.completed_response` is a derived, client-neutral
+read model. The journal read is bounded to the native published snapshot frontier.
+Inherited bootstrap provenance joins the same projection without execution events.
+Only requested page identities retain summaries; canonical content remains in the
+Ledger. Request usage is summed across the exact Attempt only when all actual
+requests reported usage. Optional cache/reasoning buckets survive only when every
+included report supplies them. Missing facts remain absent, including timing.
+
+`RuntimeClientTranscriptPage.statistics` reports whole-Conversation execution totals
+from the durable journal, with explicit request/report coverage. The composer reads
+these native totals from the newest snapshot. Older page responses never replace
+newer totals. Compaction does not erase journal usage. Fork/Branch create fresh
+Conversation execution epochs, as established by native lineage. Inherited tails
+retain their own historical usage while destination cumulative execution totals
+start from zero; these two quantities are deliberately separate.
+
+The Context owner exposes the last provider-measured request occupancy paired with
+that exact request snapshot's model capacity. It is labeled **Last request context**,
+excludes unsent input, and disappears after compaction or a newer unmeasured request.
+No Web tokenization or browser-clock timing is used.
+
+#364 merged as `3063ebd6`. Its native `GenerationEvidence` is the single request
+clock contract consumed independently by Trace and completed-response projections.
+Chat never reads Trace. `Ran for` is successful Attempt completion minus Attempt
+start, including tools and retries. Details distinguish first-request TTFT from
+dispatch (never Attempt-start latency), summed first-output-to-terminal model
+work, and output speed over fully covered positive generation spans. Unknown
+endpoints/usage remain absent; zero measured generation is zero with no rate.
+Known no-output requests add no decode span; missing request evidence invalidates
+exact aggregate generation. Failed requests with evidence remain included.
+
+Immutable bootstrap provenance preserves response timing and usage through
+Branch/Fork/reopen/deeper lineage without copying source execution records.
+Destination execution totals remain destination-local. Mandatory versions are
+App Server v10, Runtime Client v42, SQLite v42, and Session catalog v12, with no
+old protocol artifacts or compatibility readers.
+
+Projection cost is currently O(J + R): indexed 128-event batches over the captured
+Journal prefix plus R inherited response summaries from bootstrap. The finite
+read cut is a correctness boundary, not an O(1) performance claim. Lineage validation
+and copying share one fold rather than scanning the Journal twice. #364 uses
+bounded indexed Trace reads and supplies no shared incremental response accumulator.
+A future native checkpoint/index can remove repeated folds; React must not cache
+execution authority to solve this cost.
+
+Presentation follows Harness `ddefc45f`: compact 28px icon actions, 8px gaps,
+hover/focus reveal for older rows, always visible actions on no-hover devices,
+36px narrow-layout action targets, existing accessible Tooltip/Modal primitives,
+and separate code-block copying. No additional icon library is introduced.

@@ -1050,6 +1050,16 @@ impl ClientInner {
         if let Some(hook) = self.trace_cut_hook.lock().unwrap().take() {
             hook();
         }
+        super::response::decorate_through(self.store.as_ref(), &mut snapshot.transcript, through)
+            .map_err(|error| RuntimeClientError::RuntimeFailure {
+            message: error.to_string(),
+        })?;
+        snapshot.context.last_request_occupancy =
+            crate::context::occupancy::read(self.store.as_ref(), through).map_err(|error| {
+                RuntimeClientError::RuntimeFailure {
+                    message: error.to_string(),
+                }
+            })?;
         snapshot.trace = super::trace::TraceProjection::through(self.store.as_ref(), through)
             .page(None, super::trace::TRACE_PAGE_LIMIT)
             .map_err(|_| RuntimeClientError::RuntimeFailure {
@@ -1188,10 +1198,16 @@ impl ClientInner {
             .map_err(|error| RuntimeClientError::RuntimeFailure {
                 message: format!("durable transcript page failed: {error}"),
             })?;
-        let page =
+        let mut page =
             transcript_page_view(page).map_err(|message| RuntimeClientError::RuntimeFailure {
                 message: format!("durable transcript page is invalid: {message}"),
             })?;
+        let (_, _, through) = self.lock_snapshot_state()?.projection.snapshot_cut()?;
+        super::response::decorate_through(self.store.as_ref(), &mut page, through).map_err(
+            |error| RuntimeClientError::RuntimeFailure {
+                message: error.to_string(),
+            },
+        )?;
         Ok(RuntimeClientResult::TranscriptPage { page })
     }
 
@@ -1788,9 +1804,11 @@ fn durable_projection(
     // the configuration document on disk today, from built-in defaults, or
     // from the Agent Status observations this journal replay does install —
     // historical evidence stays honest about what it cannot know.
-    projection.set_transcript_page(
-        transcript_page_view(transcript).map_err(HostConstructionError::Durable)?,
-    );
+    let mut transcript =
+        transcript_page_view(transcript).map_err(HostConstructionError::Durable)?;
+    super::response::decorate(store, &mut transcript)
+        .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
+    projection.set_transcript_page(transcript);
 
     let mut after_sequence = None;
     loop {

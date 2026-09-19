@@ -123,7 +123,7 @@ describe("native Session selectors", () => {
       id: "node_1779f59f-4df2-71f6-b81a-eb08fb52a5d8",
       parent: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
       conversation_id: "conv_1eef1854-fea7-788b-9e49-ca0ec811fb0c",
-      ordinal: "2", origin: { type: "fork", source_session: "ses_84097828-fc31-78c8-9292-10df48901a85", source_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048", source_surface_revision: "4", source_user_message: "user-c" },
+      ordinal: "2", origin: { type: "fork", source_session: "ses_84097828-fc31-78c8-9292-10df48901a85", source_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048", source_surface_revision: "4", side: "before", source_message: "user-c" },
     };
     const session = sessionView({
       node_count: 2,
