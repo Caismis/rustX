@@ -399,7 +399,7 @@ class RustX:
     def settled(self, target):
         result = self.request("session/snapshot", {"target": target})
         attempt = result["snapshot"].get("attempt")
-        return bool(attempt) and attempt.get("phase", {}).get("type") == "terminal"
+        return bool(attempt) and attempt.get("phase", {}).get("type") == "settled"
 
     def close(self):
         if self.proc.poll() is None:
