@@ -142,6 +142,9 @@ impl TraceProjection<'_> {
             let InboundKind::Context(kind) = &user.kind else {
                 return Err(context_invariant(frozen, id));
             };
+            let Some((source, context_kind)) = context_semantics(&user.source, kind) else {
+                return Err(context_invariant(frozen, id));
+            };
             if !identity_fits(id.as_str()) {
                 // An identity is omitted whole rather than shortened into
                 // one that refers to nothing.
@@ -150,12 +153,9 @@ impl TraceProjection<'_> {
             }
             let (attachments, attachments_truncated) =
                 user_artifacts(&user.content, TRACE_SUMMARY_CONTEXT_ARTIFACTS);
-            let Some(source) = context_source(&user.source) else {
-                return Err(context_invariant(frozen, id));
-            };
             additions.push(TraceContextPresentation {
                 message_id: id.clone(),
-                context_kind: context_family(kind),
+                context_kind,
                 source,
                 preview: message_preview(&message),
                 attachments,
@@ -183,28 +183,31 @@ impl TraceProjection<'_> {
     }
 }
 
-/// The exact native producer of one admitted Context fact.
-///
-/// The canonical message's own `UserSource` is the provenance authority, and
-/// it is the *only* one consulted: the assembly generation, the contributor
-/// list, the context family, message order and the current extension
-/// registry are all incapable of naming the owner of a historical fact.
-///
-/// `None` is a provenance request Context cannot have. Context Assembly
-/// derives only `Runtime` and `Extension`, and the durable start transition
-/// admits nothing else, so a snapshot identity carrying another namespace is
-/// a contract violation — reported through the invariant error model rather
-/// than broadened into the wire vocabulary.
-fn context_source(source: &UserSource) -> Option<TraceContextSource> {
-    match source {
-        UserSource::Runtime => Some(TraceContextSource::Runtime),
-        UserSource::Extension { contributor } => Some(TraceContextSource::CertifiedExtension {
-            contributor: contributor.clone(),
-        }),
-        UserSource::Human
-        | UserSource::Agent { .. }
-        | UserSource::Fleet
-        | UserSource::ExternalSystem => None,
+/// Canonical provenance and family form one native Context Assembly relationship.
+/// Keep exact extension identity; an impossible pair is a durable invariant
+/// violation, never a new presentation source or a coerced family.
+fn context_semantics(
+    source: &UserSource,
+    kind: &ContextKind,
+) -> Option<(TraceContextSource, TraceContextKind)> {
+    match (source, kind) {
+        (UserSource::Runtime, ContextKind::GoalStatus(_)) => {
+            Some((TraceContextSource::Runtime, TraceContextKind::GoalStatus))
+        }
+        (UserSource::Runtime, ContextKind::RuntimeToolObservation) => Some((
+            TraceContextSource::Runtime,
+            TraceContextKind::RuntimeToolObservation,
+        )),
+        (UserSource::Runtime, ContextKind::AgentStatus(_)) => {
+            Some((TraceContextSource::Runtime, TraceContextKind::AgentStatus))
+        }
+        (UserSource::Extension { contributor }, ContextKind::ExtensionEnvironment) => Some((
+            TraceContextSource::CertifiedExtension {
+                contributor: contributor.clone(),
+            },
+            TraceContextKind::ExtensionEnvironment,
+        )),
+        _ => None,
     }
 }
 
@@ -252,20 +255,6 @@ pub(super) fn system_prompt_state(
             TraceSystemPromptState::Unchanged
         }
         PreviousPrompt::Frozen(_) => TraceSystemPromptState::Changed,
-    }
-}
-
-/// The bounded presentation family of one admitted context fact.
-///
-/// Only the family crosses. The frozen `GoalSnapshot` and the Agent Status
-/// generation metadata stay inside the runtime: neither is needed to present
-/// that a Context fact of that family was introduced.
-const fn context_family(kind: &ContextKind) -> TraceContextKind {
-    match kind {
-        ContextKind::GoalStatus(_) => TraceContextKind::GoalStatus,
-        ContextKind::RuntimeToolObservation => TraceContextKind::RuntimeToolObservation,
-        ContextKind::ExtensionEnvironment => TraceContextKind::ExtensionEnvironment,
-        ContextKind::AgentStatus(_) => TraceContextKind::AgentStatus,
     }
 }
 

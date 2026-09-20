@@ -2410,6 +2410,13 @@ fn request_with(
     let mut prepared = prepared_request(store, retry, None, identity_of(turn, retry));
     prompt.clone_into(&mut prepared.effective_system_prompt);
     prepared.request_context_ids = context.iter().map(|message| message.id().clone()).collect();
+    prepared.agent_status = context
+        .iter()
+        .find(|message| message.is_agent_status())
+        .map(|message| crate::model::AgentStatusStart {
+            message_id: message.id().clone(),
+            emissions: vec![],
+        });
     commit_request(store, prepared, context)
 }
 
@@ -3394,4 +3401,117 @@ fn two_certified_extensions_stay_distinguishable_by_exact_contributor_identity()
         additions,
         "reopening the durable store reproduces the same typed provenance"
     );
+}
+
+fn agent_status_context_kind() -> ContextKind {
+    ContextKind::AgentStatus(
+        crate::message::types::AgentStatusGenerationMetadata::new(
+            timestamp(1),
+            [crate::message::types::AgentStatusModuleId::Time],
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn all_context_assembly_semantic_pairs_project_from_durable_request_start() {
+    let store = store("conv_5a2c7e93-4b16-7d80-9f35-8e07b2c4d169");
+    start(&store);
+    let context = [
+        runtime_context("goal", goal_status("ship"), "goal"),
+        runtime_context("tool", ContextKind::RuntimeToolObservation, "tool"),
+        runtime_context("status", agent_status_context_kind(), "status"),
+        extension_context("extension", "vendor-a.environment", "extension"),
+    ];
+    let frozen = request_with(&store, "1", 0, "prompt", &context);
+    let additions = context_of(&page(&store), 0);
+    assert_eq!(
+        additions
+            .iter()
+            .map(|item| item.message_id.clone())
+            .collect::<Vec<_>>(),
+        frozen.request_context_ids
+    );
+    assert_eq!(
+        additions
+            .iter()
+            .map(|item| (item.source.clone(), item.context_kind))
+            .collect::<Vec<_>>(),
+        vec![
+            (TraceContextSource::Runtime, TraceContextKind::GoalStatus),
+            (
+                TraceContextSource::Runtime,
+                TraceContextKind::RuntimeToolObservation
+            ),
+            (TraceContextSource::Runtime, TraceContextKind::AgentStatus),
+            (
+                extension_source("vendor-a.environment"),
+                TraceContextKind::ExtensionEnvironment
+            ),
+        ]
+    );
+}
+
+fn assert_context_pair_rejected(source: UserSource, kind: ContextKind) {
+    let store = store("conv_5a2c7e93-4b16-7d80-9f35-8e07b2c4d169");
+    start(&store);
+    let message = context_message("contradictory-context", source, kind, "context");
+    // This is the real durable start, not a fixture that validates semantic pairs.
+    let frozen = request_with(&store, "1", 0, "prompt", std::slice::from_ref(&message));
+    assert_eq!(
+        store
+            .load_request_snapshot(&frozen.request_id)
+            .unwrap()
+            .request_context_ids,
+        vec![message.id().clone()]
+    );
+    assert_eq!(
+        store.load_messages(&frozen.request_context_ids).unwrap(),
+        vec![message]
+    );
+    assert!(
+        matches!(TraceProjection::new(&store).unwrap().page(None, 32),
+        Err(ConversationStoreError::InvalidReference(detail))
+            if detail.contains("contradictory-context") && detail.contains("not an admitted Context fact"))
+    );
+}
+
+#[test]
+fn runtime_extension_environment_is_rejected_after_durable_request_start() {
+    assert_context_pair_rejected(UserSource::Runtime, ContextKind::ExtensionEnvironment);
+}
+
+fn certified_source() -> UserSource {
+    UserSource::Extension {
+        contributor: CertifiedExtensionIdentity::new("vendor-a.environment").unwrap(),
+    }
+}
+
+#[test]
+fn extension_runtime_tool_observation_is_rejected_after_durable_request_start() {
+    assert_context_pair_rejected(certified_source(), ContextKind::RuntimeToolObservation);
+}
+
+#[test]
+fn extension_goal_status_is_rejected_after_durable_request_start() {
+    assert_context_pair_rejected(certified_source(), goal_status("ship"));
+}
+
+#[test]
+fn extension_agent_status_is_rejected_after_durable_request_start() {
+    assert_context_pair_rejected(certified_source(), agent_status_context_kind());
+}
+
+#[test]
+fn non_admitted_context_provenance_is_rejected_after_durable_request_start() {
+    for source in [
+        UserSource::Human,
+        UserSource::Agent {
+            agent_id: crate::runtime::identity::AgentId::new("agent-a"),
+        },
+        UserSource::Fleet,
+        UserSource::ExternalSystem,
+    ] {
+        assert_context_pair_rejected(source, ContextKind::RuntimeToolObservation);
+    }
 }

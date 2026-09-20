@@ -62,7 +62,7 @@ async fn initialize(client: &impl AppServerConformanceDriver) {
         client,
         0,
         Method::Initialize(InitializeParams {
-            protocol_version: 12,
+            protocol_version: 13,
             client: ClientIdentity {
                 name: "transport".into(),
                 version: "1".into(),
@@ -292,7 +292,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         let mut request = "ws://localhost/".into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v12, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v13, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -640,7 +640,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         let mut request = url.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v12, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v13, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );

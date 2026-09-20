@@ -247,7 +247,7 @@ are absent, while authored secret-looking text and temperature remain present.
 
 `SessionArchivePrepareError` contains only closed semantic reasons, never raw
 OS/provider strings or implementation paths. Missing/unreadable descendants and
-required unavailable/unsettled artifacts become v12
+required unavailable/unsettled artifacts become current-protocol
 `archive_preparation_failed { reason: descendant_unavailable | artifact_unavailable }`.
 Other reasons distinguish unavailable Conversation history, corrupt authority,
 storage/cut failure and cancellation. Unknown Session and capacity conditions use
@@ -284,7 +284,7 @@ headless App Server/TUI consumers. There is no compression setting or new UI scr
 PR #369 merged while these review repairs were in progress. Its main commit
 `908399021b649ab7603498f43bdc5673f94c9352` already uses App Server v10,
 SQLite 42 and catalog 12. The rebased archive PR therefore advances the complete
-mandatory App Server vocabulary to v12, without a compatibility alias. This is
+mandatory App Server vocabulary to v11, without a compatibility alias. This is
 not an archive-format change: archive v1 remains unpublished and is corrected in
 place. No SQLite/catalog schema increment is introduced by archive export.
 

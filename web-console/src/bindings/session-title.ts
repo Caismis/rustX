@@ -1,4 +1,4 @@
-import type { SessionSummary } from '../../../protocol/app-server/v12';
+import type { SessionSummary } from '../../../protocol/app-server/v13';
 
 /** Native catalog metadata, never a browser-generated title or protocol identity. */
 export function sessionDisplayTitle(summary?: Pick<SessionSummary, 'name' | 'preview'>): string {

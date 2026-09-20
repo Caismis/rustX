@@ -125,8 +125,8 @@ another Session's root.
 
 ## Protocol and schema boundaries
 
-App Server v12 is the one mandatory vocabulary; its WebSocket subprotocol is
-`rustx.app-server.v12`. `session/upload` replaces the old user carrier. `artifact/read`
+App Server v13 is the one mandatory vocabulary; its WebSocket subprotocol is
+`rustx.app-server.v13`. `session/upload` replaces the old user carrier. `artifact/read`
 remains for Tool-managed artifact presentation only. Session catalog schema 12,
 SQLite schema 42 and native Runtime Client version 43 reject older development
 contracts without migrations or compatibility modes.

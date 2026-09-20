@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ModelCatalogView, SourceSettings } from '../../../../protocol/app-server/v12';
+import type { ModelCatalogView, SourceSettings } from '../../../../protocol/app-server/v13';
 import { AppServerClient, isOutcomeUncertain, sameTarget, type SessionView } from '../../client/app-server';
 import { ModelSelect } from '../../presentation/agent/ModelSelect';
 import { PermissionSelect } from '../../presentation/agent/PermissionSelect';

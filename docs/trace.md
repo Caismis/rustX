@@ -36,7 +36,7 @@ repeated output are retry evidence. Tool joins include Attempt, logical Step,
 ToolCall ID and Tool ID; parallel physical completion never changes start order.
 Detached executions, Subagents and Workflows retain their own native identities.
 
-Native Runtime Client version 43 and App Server version 12 carry this mandatory
+Native Runtime Client version 43 and App Server version 13 carry this mandatory
 summary/detail vocabulary. SQLite schema 42 gates the persisted request terminal vocabulary including
 generation evidence. The Event Journal envelope framing is unchanged; this is
 request terminal event data, not a new Trace store.
@@ -96,8 +96,9 @@ to the Message Ledger by keyed reads. Each referenced message is validated as a
 canonical `InboundKind::Context` User fact; an identity the Ledger does not hold
 as one is an invariant violation reported through the repository's ordinary
 reconstruction error model, never silently dropped or downgraded into an
-ordinary User message. The durable start transition already refuses to commit
-such a pairing, so the case is unreachable through real transitions.
+ordinary User message. The durable start transition checks structural Context
+identity/order, but does not prove Context Assembly provenance/family semantics.
+Trace therefore validates that semantic relationship independently.
 
 `TraceContextKind` is a closed presentation family — `goal_status`,
 `runtime_tool_observation`, `extension_environment`, `agent_status`. The
@@ -114,12 +115,23 @@ message's own `UserSource` and from nothing else — not the assembly
 generation, the contributor list, the context family, message order, text or
 the current extension registry.
 
-Request-scoped Context is admitted only through Context Assembly, which
-derives exactly those two provenances, so the wire vocabulary is closed at
-two cases. A snapshot identity whose canonical message carried any other
-`UserSource` namespace is a contract violation reported through the same
-invariant error model as a non-Context identity, never a reason to widen the
-DTO. The extension identity is bounded by its own contract (128 bytes),
+Trace projects source and family jointly from the canonical `UserSource` and
+`ContextKind`. The complete Context Assembly matrix is:
+
+| Canonical source | Canonical kind | Trace source | Trace kind |
+| --- | --- | --- | --- |
+| Runtime | GoalStatus | Runtime | GoalStatus |
+| Runtime | RuntimeToolObservation | Runtime | RuntimeToolObservation |
+| Runtime | AgentStatus | Runtime | AgentStatus |
+| Extension { contributor } | ExtensionEnvironment | CertifiedExtension { exact contributor } | ExtensionEnvironment |
+
+Every other pair is `ConversationStoreError::InvalidReference`, including runtime
+ExtensionEnvironment and extension GoalStatus, RuntimeToolObservation or
+AgentStatus. A contradictory hidden canonical Context can be committed by a
+low-level composition; it must never become a contradictory presentation claim.
+There is no coercion, new wire variant, or Web-side semantic validation.
+
+The extension identity is bounded by its own contract (128 bytes),
 strictly below the Trace identity bound, so exact provenance always fits a
 summary row whole and is never shortened into a different identity.
 

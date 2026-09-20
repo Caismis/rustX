@@ -2,7 +2,7 @@
 
 The TUI is a projection/control client of App Server protocol 12. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v12.ts`](../protocol/app-server/v12.ts).
+[`protocol/app-server/v13.ts`](../protocol/app-server/v13.ts).
 
 `/settings` renders native effective/source/provenance/generation facts. `/reload`
 calls the single `configuration/reload` operation and reports success, failure or
@@ -19,7 +19,7 @@ it does not replay Save, Reload or other prior side effects.
 See [configuration](configuration.md) and [development](../DEVELOPMENT.md) for launch
 commands, and [the protocol](app-server-protocol.md) for transport/attachment semantics.
 
-## Durable Session lifecycle (v12)
+## Durable Session lifecycle (v13)
 
 `/resume` opens a durable Session and implicitly ensures a compatible runtime.
 Closing a view only detaches. No manual unload command or ordinary residency
@@ -41,4 +41,4 @@ generations fence late reads and paging. Reconnect/resync remembers only the
 selected SubagentId and reconstructs through `subagent/transcript` on the current
 parent AttachmentTarget, displaying explicit unavailable history when needed.
 No child Session/Composer or HITL owner is created. See the
-[protocol contract](app-server-protocol.md#read-only-native-subagent-conversations-v12).
+[protocol contract](app-server-protocol.md#read-only-native-subagent-conversations-v13).

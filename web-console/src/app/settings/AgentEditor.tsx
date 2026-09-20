@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AgentProfileDocument, ModelLayer, SourceScope, SourceSettings, AgentStatusExtensionDocument } from '../../../../protocol/app-server/v12';
+import type { AgentProfileDocument, ModelLayer, SourceScope, SourceSettings, AgentStatusExtensionDocument } from '../../../../protocol/app-server/v13';
 import { Button } from '../../presentation/primitives/Button';
 import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';
 import css from '../../presentation/settings/SettingsContent.module.css';
