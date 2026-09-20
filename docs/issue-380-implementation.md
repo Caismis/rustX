@@ -34,7 +34,8 @@ from adopting without vetoing a successfully prepared new default for new Sessio
 execution policy updates also update that available binding's policy component.
 New Sessions obtain their initial binding from this authority; they resolve their
 default against the available catalog at creation. Preparing or failed desired
-inputs cannot replace an existing available binding. An existing Session's resolved
+units cannot replace their corresponding available components; independently
+validated units can advance the complete composition. An existing Session's resolved
 model and adopted context remain unchanged when availability advances.
 
 The coordinator's maps have distinct authorities:
