@@ -941,6 +941,99 @@ async fn t08_model_capture_ignores_unrelated_resource_directories_t09_same_selec
     fixture.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t03_t05_mixed_instructions_publication_rejects_rebound_project_path() {
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let id = &fixture.sessions[0].id;
+        let workspace = &fixture.workspaces[0];
+        let old_path = workspace.join("old.md");
+        let new_path = workspace.join("new.md");
+        std::fs::write(&old_path, "I1 project content").unwrap();
+        std::fs::write(&new_path, "I2 project content").unwrap();
+        let skill = workspace.join(".agents/skills/retained");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: retained\ndescription: Retained guidance\n---\nC1 skill guidance\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            "[agent]\ninstructions='I1'\n[agent.agents_md]\nfiles=['old.md']\n",
+        )
+        .unwrap();
+        fixture.manager.load(id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(id).unwrap();
+        let before = runtime.runtime_resources();
+        let old = before.configuration().unwrap();
+        assert_eq!(old.config.agent.agents_md.files, vec![old_path.clone()]);
+        assert!(!before.capability().skills().packages().is_empty());
+
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            "[agent]\ninstructions='I2'\n[agent.agents_md]\nfiles=['new.md']\n[agent.tools]\nbuiltin=['read']\n",
+        )
+        .unwrap();
+        let probe = fixture.manager.probe(&fixture.sessions[0].active_conversation_id);
+        probe.fail_configuration_once.store(true, Ordering::SeqCst);
+        probe.before_configuration_publish.arm();
+        fixture.manager.reconcile_configuration(id).await.unwrap();
+        // This gate is after C2 construction/failure and independent I2
+        // preparation, but before make_available's physical-authority fence.
+        probe.before_configuration_publish.entered().await;
+        let preparing = fixture.manager.configuration_application(id).unwrap();
+        assert!(matches!(
+            &preparing.units[&ApplyUnit::Capabilities],
+            UnitApplication::Failed { diagnostic }
+                if diagnostic.contains("after resource construction")
+        ), "{preparing:?}");
+        assert!(matches!(preparing.units[&ApplyUnit::Instructions], UnitApplication::Preparing));
+        let outside = fixture.workspaces[1].join("outside.md");
+        std::fs::write(&outside, "outside Workspace").unwrap();
+        std::fs::remove_file(&new_path).unwrap();
+        std::os::unix::fs::symlink(&outside, &new_path).unwrap();
+        probe.before_configuration_publish.release();
+        let rejected = settled(&fixture, 0).await;
+        assert!(matches!(
+            &rejected.units[&ApplyUnit::Instructions],
+            UnitApplication::Failed { diagnostic }
+                if diagnostic.contains("new.md") && diagnostic.contains("outside workspace boundary")
+        ), "{rejected:?}");
+        assert!(rejected.candidate.is_none());
+        assert!(Arc::ptr_eq(&before, &runtime.runtime_resources()));
+
+        // Keep the escaping link in place: admission can succeed only using
+        // the previous available C1+I1, including old.md's physical authority.
+        let second = fixture.manager.create_session(SessionPersistentState {
+            cwd: workspace.clone(),
+            model: None,
+        }).await.unwrap().session.id;
+        let retained = fixture.manager.sessions.configuration_bindings.lock().unwrap()[&second].clone();
+        assert_eq!(retained.config.agent.instructions, "I1");
+        assert_eq!(retained.config.agent.agents_md.files, vec![old_path]);
+        assert_eq!(retained.effective.agent, old.effective.agent);
+        assert_eq!(retained.effective.context, old.effective.context);
+        assert_eq!(retained.root_agent_project_files, before.root_profile().unwrap().project_instructions.files);
+        assert_eq!(retained.component_revisions, old.component_revisions);
+        assert_eq!(retained.source_revisions, old.source_revisions);
+        retained.validate_resource_authority().unwrap();
+        fixture.manager.load(&second, None).await.unwrap();
+        let loaded = fixture.manager.configuration_runtime(&second).unwrap().runtime_resources();
+        assert_eq!(loaded.root_profile().unwrap().project_instructions.files,
+            before.root_profile().unwrap().project_instructions.files);
+        assert_eq!(loaded.configuration().unwrap().config.agent.instructions, "I1");
+        assert_eq!(loaded.capability().tool_registry().model_definitions(),
+            before.capability().tool_registry().model_definitions());
+        assert_eq!(loaded.capability().skills().packages(), before.capability().skills().packages());
+        let after = runtime.runtime_resources();
+        assert!(Arc::ptr_eq(before.capability().tool_registry(), after.capability().tool_registry()));
+        assert!(Arc::ptr_eq(before.capability().skills(), after.capability().skills()));
+        assert_eq!(before.capability().revision(), after.capability().revision());
+        fixture.close().await;
+    }).await;
+}
+
 #[tokio::test]
 async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adopted() {
     let fixture = Fixture::new().await;
@@ -964,17 +1057,27 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         toml::to_string(&initial).unwrap(),
     )
     .unwrap();
+    std::fs::write(
+        fixture.workspaces[0].join("old.md"),
+        "Workspace I1 project input",
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.workspaces[0].join("rustx.toml"),
+        "[agent.agents_md]\nfiles=['old.md']\n",
+    )
+    .unwrap();
     fixture.manager.load(id, None).await.unwrap();
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     let before = runtime.runtime_resources();
     let (source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
     let mut document: toml::Value =
         toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
-    let project_file = fixture.workspaces[0].join("root-context.md");
+    let project_file = fixture.workspaces[0].join("new.md");
     std::fs::write(&project_file, "Workspace I2 project input").unwrap();
     std::fs::write(
         fixture.workspaces[0].join("rustx.toml"),
-        "approval_mode='full_access'\n[subagents]\nmax_concurrent=3\n[agent]\ninstructions='independent instructions P2'\n[agent.agents_md]\nfiles=['root-context.md']\n",
+        "approval_mode='full_access'\n[subagents]\nmax_concurrent=3\n[agent]\ninstructions='independent instructions P2'\n[agent.agents_md]\nfiles=['new.md']\n",
     )
     .unwrap();
     document["agent"]["tools"]["builtin"] = toml::Value::try_from(vec!["read"]).unwrap();
@@ -1077,16 +1180,12 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         c1i2.provenance["agent.agents_md"],
         crate::local_runtime::configuration::Origin::Workspace { .. }
     ));
-    // The composed descriptor must retain the I2 Workspace path boundary,
-    // rather than the empty validation-path set from C1+I1.
-    let outside = fixture.workspaces[1].join("outside-context.md");
-    std::fs::write(&outside, "outside workspace").unwrap();
-    std::fs::remove_file(&project_file).unwrap();
-    std::os::unix::fs::symlink(&outside, &project_file).unwrap();
-    assert!(c1i2.validate_resource_authority().is_err());
-    std::fs::remove_file(&project_file).unwrap();
-    std::fs::write(&project_file, "Workspace I2 project input").unwrap();
     c1i2.validate_resource_authority().unwrap();
+    assert!(
+        c1i2.root_agent_project_files
+            .iter()
+            .any(|file| file.path == project_file && file.content == "Workspace I2 project input")
+    );
 
     assert_eq!(
         c1i2.config.approval_mode,
@@ -1194,6 +1293,21 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
     assert_eq!(
         second_resources.capability().skills().packages(),
         before.capability().skills().packages()
+    );
+    assert_eq!(
+        second_resources
+            .root_profile()
+            .unwrap()
+            .project_instructions
+            .files,
+        c1i2.root_agent_project_files
+    );
+    assert_eq!(
+        second_resources
+            .configuration()
+            .unwrap()
+            .component_revisions,
+        c1i2.component_revisions
     );
     // Retry the same authored C2; S1/S2 retain their explicit compositions.
     fixture.manager.reconcile_configuration(id).await.unwrap();
