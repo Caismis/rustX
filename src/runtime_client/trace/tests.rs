@@ -5,7 +5,10 @@
 //! sleeps or races: ordering is established by committing facts in order, and
 //! read cuts are captured explicitly at the point the assertion is about.
 
-use super::bounds::{TRACE_DETAIL_TEXT_BYTES, TraceText};
+use super::bounds::{
+    TRACE_DETAIL_TEXT_BYTES, TRACE_PREVIEW_BYTES, TRACE_SUMMARY_CONTEXT,
+    TRACE_SUMMARY_CONTEXT_BYTES, TraceText,
+};
 use super::record::{bound_record, generation_metrics};
 use super::*;
 use crate::context::assembly::ContextGeneration;
@@ -13,8 +16,9 @@ use crate::durable::SqliteConversationStore;
 use crate::events::types::RuntimeEvent as E;
 use crate::message::content::TextBlock;
 use crate::message::types::{
-    AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
-    ToolCallOccurrenceRef, ToolMessageBlock, UserContentBlock,
+    AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, ContextKind, InboundKind,
+    MessageBlock, ToolCallOccurrenceRef, ToolMessageBlock, UserContentBlock, UserMessageBlock,
+    UserSource,
 };
 use crate::model::error::{ModelError, ModelErrorKind, ModelRetryDisposition};
 use crate::model::finish::ModelFinishReason;
@@ -25,8 +29,8 @@ use crate::model::{
     ModelCapabilities, ModelCompat, ModelProtocol, RequestIdentity, RequestSnapshot,
 };
 use crate::runtime::identity::{
-    ArtifactId, AttemptId, CapabilityRevision, ConversationId, EventId, MessageId, RequestId,
-    ToolCallId, ToolId, TurnId,
+    ArtifactId, AttemptId, CapabilityRevision, CertifiedExtensionIdentity, ConversationId, EventId,
+    MessageId, RequestId, ToolCallId, ToolId, TurnId,
 };
 use crate::tools::types::{
     ModelToolDefinition, ToolCall, ToolExecutionResult, ToolExecutionStatus, ToolResultContent,
@@ -111,6 +115,14 @@ fn append(store: &dyn ConversationStore, kind: E, seconds: i64) {
     }
 }
 
+/// Appends one fact inside an explicitly named logical Step, so a regression
+/// can open a second Step instead of reusing the fixture's default one.
+fn append_in_step(store: &dyn ConversationStore, kind: E, seconds: i64, turn: &str) {
+    let mut envelope = event(store, kind, seconds);
+    envelope.turn_id = Some(TurnId::new(turn));
+    store.append_event(envelope).unwrap();
+}
+
 fn start(store: &dyn ConversationStore) {
     append(
         store,
@@ -146,6 +158,18 @@ fn request_with_tools(
 }
 
 fn request_with_identity(
+    store: &dyn ConversationStore,
+    retry: u32,
+    tools: Option<Vec<ModelToolDefinition>>,
+    identity: RequestIdentity,
+) -> RequestSnapshot {
+    commit_request(store, prepared_request(store, retry, tools, identity), &[])
+}
+
+/// Builds one frozen snapshot without committing it, so a regression can
+/// state the exact immutable authority it is about — the frozen prompt or
+/// the frozen request-scoped context identities — before the start commit.
+fn prepared_request(
     store: &dyn ConversationStore,
     retry: u32,
     tools: Option<Vec<ModelToolDefinition>>,
@@ -212,8 +236,25 @@ fn request_with_identity(
             },
         ),
     );
+    snapshot
+}
+
+/// Commits one prepared request through the real durable start transition.
+///
+/// The store validates that `context` is exactly the ordered request-scoped
+/// context the snapshot froze, so a fixture cannot manufacture a disagreement
+/// between the two authorities this issue's Context path depends on.
+fn commit_request(
+    store: &dyn ConversationStore,
+    snapshot: RequestSnapshot,
+    context: &[MessageBlock],
+) -> RequestSnapshot {
     store
-        .commit_model_turn_start(&[], &snapshot, timestamp(2 + i64::from(retry) * 2))
+        .commit_model_turn_start(
+            context,
+            &snapshot,
+            timestamp(2 + i64::from(snapshot.identity.retry_number) * 2),
+        )
         .unwrap();
     snapshot
 }
@@ -1150,7 +1191,21 @@ fn a_request_without_generation_evidence_reports_no_metrics() {
 fn summary_pages_carry_no_heavy_request_or_tool_payload() {
     let store = store("conv_8b336994-4dd2-73fa-839e-32d1aeb1f763");
     start(&store);
-    let frozen = request(&store, 0);
+    // A prompt far larger than any summary bound, so "the page carries a
+    // bounded preview" and "the page carries the prompt" stay distinguishable.
+    let heavy_prompt = format!("{SYSTEM_PROMPT} {}", "P".repeat(40_000));
+    let mut prepared = prepared_request(
+        &store,
+        0,
+        None,
+        RequestIdentity {
+            attempt_id: AttemptId::new("attempt-a"),
+            turn: TurnId::new("1"),
+            retry_number: 0,
+        },
+    );
+    prepared.effective_system_prompt.clone_from(&heavy_prompt);
+    let frozen = commit_request(&store, prepared, &[]);
     let call = bash_call("call-heavy");
     propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 4);
     completion(&store, &frozen, None, None, 4);
@@ -1190,9 +1245,20 @@ fn summary_pages_carry_no_heavy_request_or_tool_payload() {
         wire.len()
     );
     assert!(
-        !wire.contains(SYSTEM_PROMPT),
-        "the system prompt is detail-only"
+        !wire.contains(&heavy_prompt),
+        "the complete system prompt is detail-only"
     );
+    let system = record_of(&projected, TraceKind::Request)
+        .request
+        .as_ref()
+        .unwrap()
+        .system_prompt
+        .clone();
+    let preview = system
+        .preview
+        .expect("an introduced prompt carries a preview");
+    assert!(preview.truncated && preview.text.len() <= TRACE_PREVIEW_BYTES);
+    assert!(heavy_prompt.starts_with(&preview.text));
     assert!(
         !wire.contains(TOOL_DESCRIPTION),
         "the Tool catalog is detail-only"
@@ -2253,5 +2319,1199 @@ fn mandatory_request_identities_bound_the_entire_request_detail() {
                 .unwrap()
                 .contains(snapshot.request_id.as_str())
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Request-relative presentation facts (#372)
+//
+// Three relationships that a browser must never discover for itself. Every
+// scenario below establishes the relationship through the same durable
+// transitions production uses, then asserts what the server resolved — never
+// what a client could have inferred from the rows it happened to load.
+// ---------------------------------------------------------------------------
+
+/// Builds one canonical admitted Context fact, as Context Assembly commits
+/// it: the provenance is stated explicitly, because provenance is exactly
+/// what the Context presentation contract is about. A fixture that stamped
+/// every fact `Runtime` could not tell a native fact apart from an
+/// extension's, which is the distinction Trace has to preserve.
+fn context_message(id: &str, source: UserSource, kind: ContextKind, text: &str) -> MessageBlock {
+    MessageBlock::User(UserMessageBlock {
+        id: MessageId::new(id),
+        content: vec![UserContentBlock::Text(TextBlock { text: text.into() })],
+        source,
+        kind: InboundKind::Context(kind),
+        timestamp: None,
+    })
+}
+
+/// One native runtime-owned Context fact. Context Assembly assigns
+/// `UserSource::Runtime` to every native contributor lane.
+fn runtime_context(id: &str, kind: ContextKind, text: &str) -> MessageBlock {
+    context_message(id, UserSource::Runtime, kind, text)
+}
+
+/// One certified extension's Context fact, with the exact contributor
+/// identity rustX assigns at admission. The extension lane always produces
+/// `ContextKind::ExtensionEnvironment`, so the family alone can never
+/// identify which extension produced the fact.
+fn extension_context(id: &str, extension: &str, text: &str) -> MessageBlock {
+    context_message(
+        id,
+        UserSource::Extension {
+            contributor: CertifiedExtensionIdentity::new(extension).expect("extension identity"),
+        },
+        ContextKind::ExtensionEnvironment,
+        text,
+    )
+}
+
+/// The exact certified-extension provenance of one projected Context fact.
+fn extension_source(extension: &str) -> TraceContextSource {
+    TraceContextSource::CertifiedExtension {
+        contributor: CertifiedExtensionIdentity::new(extension).expect("extension identity"),
+    }
+}
+
+fn goal_status(objective: &str) -> ContextKind {
+    ContextKind::GoalStatus(Box::new(crate::goal::GoalSnapshot {
+        reference: crate::goal::GoalRef {
+            id: "goal-1".into(),
+            revision: 3,
+        },
+        objective: objective.to_owned(),
+        phase: crate::goal::GoalPhase::Active,
+        blocked_reason: None,
+        autonomous_round_budget: 8,
+        autonomous_rounds_consumed: 2,
+        origin: crate::goal::GoalOrigin::RuntimeControl,
+        last_round_message_id: None,
+    }))
+}
+
+fn identity_of(turn: &str, retry: u32) -> RequestIdentity {
+    RequestIdentity {
+        attempt_id: AttemptId::new("attempt-a"),
+        turn: TurnId::new(turn),
+        retry_number: retry,
+    }
+}
+
+/// Commits one actual request with an exact frozen prompt and exact frozen
+/// request-scoped context identities.
+fn request_with(
+    store: &dyn ConversationStore,
+    turn: &str,
+    retry: u32,
+    prompt: &str,
+    context: &[MessageBlock],
+) -> RequestSnapshot {
+    let mut prepared = prepared_request(store, retry, None, identity_of(turn, retry));
+    prompt.clone_into(&mut prepared.effective_system_prompt);
+    prepared.request_context_ids = context.iter().map(|message| message.id().clone()).collect();
+    prepared.agent_status = context
+        .iter()
+        .find(|message| message.is_agent_status())
+        .map(|message| crate::model::AgentStatusStart {
+            message_id: message.id().clone(),
+            emissions: vec![],
+        });
+    commit_request(store, prepared, context)
+}
+
+fn system_of(page: &TracePage, index: usize) -> TraceSystemPromptPresentation {
+    page.records
+        .iter()
+        .filter(|record| record.kind == TraceKind::Request)
+        .nth(index)
+        .expect("a request record")
+        .request
+        .as_ref()
+        .expect("a request summary")
+        .system_prompt
+        .clone()
+}
+
+fn context_of(page: &TracePage, index: usize) -> Vec<TraceContextPresentation> {
+    page.records
+        .iter()
+        .filter(|record| record.kind == TraceKind::Request)
+        .nth(index)
+        .expect("a request record")
+        .request
+        .as_ref()
+        .expect("a request summary")
+        .context_additions
+        .clone()
+}
+
+/// §13.1–3: the classification is resolved against the nearest preceding
+/// actual request, by exact historical value equality of two frozen prompts.
+#[test]
+fn system_prompt_state_follows_the_previous_actual_request() {
+    let store = store("conv_5f1d0f60-2f4e-7a11-9b02-6b8cf1a0d301");
+    start(&store);
+    let first = request_with(&store, "1", 0, "prompt-A", &[]);
+    completion(&store, &first, None, None, 4);
+    let second = request_with(&store, "1", 1, "prompt-A", &[]);
+    completion(&store, &second, None, None, 6);
+    let third = request_with(&store, "1", 2, "prompt-B", &[]);
+    completion(&store, &third, None, None, 8);
+
+    let projected = page(&store);
+    assert_eq!(
+        system_of(&projected, 0).state,
+        TraceSystemPromptState::Initial
+    );
+    assert_eq!(
+        system_of(&projected, 1).state,
+        TraceSystemPromptState::Unchanged
+    );
+    assert_eq!(
+        system_of(&projected, 2).state,
+        TraceSystemPromptState::Changed
+    );
+    // `Unchanged` does not repeat a preview the preceding row already carries.
+    assert!(system_of(&projected, 1).preview.is_none());
+    assert_eq!(
+        system_of(&projected, 0).preview.unwrap().text,
+        "prompt-A",
+        "the request that introduced the prompt previews it"
+    );
+    assert_eq!(system_of(&projected, 2).preview.unwrap().text, "prompt-B");
+}
+
+/// §13.7: a fresh logical Step opens at `retry_number == 0`, which is not
+/// evidence that no earlier actual request exists.
+#[test]
+fn a_fresh_step_at_retry_zero_is_still_compared_with_the_previous_request() {
+    let store = store("conv_61ab8f2c-9d7a-7c41-8f13-2a9c0e5f1b22");
+    start(&store);
+    let first = request_with(&store, "1", 0, "prompt-A", &[]);
+    completion(&store, &first, None, None, 4);
+    append(&store, E::TurnCompleted, 5);
+    append_in_step(&store, E::TurnStarted, 6, "2");
+    let second = request_with(&store, "2", 0, "prompt-B", &[]);
+    append_in_step(
+        &store,
+        E::ModelRequestCompleted {
+            request_id: second.request_id.clone(),
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+            generation: None,
+        },
+        9,
+        "2",
+    );
+
+    let projected = page(&store);
+    assert_eq!(second.identity.retry_number, 0);
+    assert_eq!(
+        system_of(&projected, 1).state,
+        TraceSystemPromptState::Changed,
+        "a new Step's initial request still has a previous actual request"
+    );
+}
+
+/// §13.4: page boundaries are a client's view, not native authority. A page
+/// that starts after the predecessor reports exactly what a whole page does.
+#[test]
+fn a_page_boundary_cannot_turn_changed_into_initial() {
+    let store = store("conv_7c4f2b80-1e55-7d20-8a64-0cb4e2d7f911");
+    start(&store);
+    let first = request_with(&store, "1", 0, "prompt-A", &[]);
+    completion(&store, &first, None, None, 4);
+    let second = request_with(&store, "1", 1, "prompt-B", &[]);
+    completion(&store, &second, None, None, 6);
+
+    let whole = page(&store);
+    let read = TraceProjection::new(&store).unwrap();
+    // One record at a time, so the newest page contains no predecessor row.
+    let newest = read.page(None, 1).unwrap();
+    assert_eq!(newest.records.len(), 1);
+    let only = newest.records[0]
+        .request
+        .as_ref()
+        .expect("the newest row is the second request");
+    assert_eq!(only.request_id, second.request_id);
+    assert_eq!(
+        only.system_prompt.state,
+        TraceSystemPromptState::Changed,
+        "the predecessor is outside this page, not outside history"
+    );
+    assert_eq!(only.system_prompt, system_of(&whole, 1));
+}
+
+/// §13.5–6: the classification is a historical fact. Reopening the durable
+/// store reproduces it, and later requests with other prompts — the shape a
+/// reconfigured Session produces — never rewrite an older row.
+#[test]
+fn historical_system_classification_survives_reopen_and_later_requests() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("conversation.sqlite");
+    let id = ConversationId::new("conv_9b2e77c4-53a0-7ef1-8d26-41ba7c0e5d38");
+    let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    store.initialize(&[]).unwrap();
+    start(&store);
+    let first = request_with(&store, "1", 0, "prompt-A", &[]);
+    completion(&store, &first, None, None, 4);
+    let second = request_with(&store, "1", 1, "prompt-B", &[]);
+    completion(&store, &second, None, None, 6);
+    let historical = page(&store);
+
+    // A later request froze a third prompt, exactly as a reconfigured System
+    // contributor generation would. It is a new row, not a rewrite.
+    let third = request_with(&store, "1", 2, "prompt-C", &[]);
+    completion(&store, &third, None, None, 8);
+    let extended = page(&store);
+    assert_eq!(system_of(&extended, 0), system_of(&historical, 0));
+    assert_eq!(system_of(&extended, 1), system_of(&historical, 1));
+    assert_eq!(
+        system_of(&extended, 2).state,
+        TraceSystemPromptState::Changed
+    );
+
+    drop(store);
+    let reopened = SqliteConversationStore::open(id, &path).unwrap();
+    assert_eq!(page(&reopened).records, extended.records);
+}
+
+/// §13.8, 13.10–12: identity, order, provenance and semantic family all come
+/// from the immutable snapshot and keyed Ledger reads.
+#[test]
+fn canonical_context_is_projected_from_the_frozen_request_identities() {
+    let store = store("conv_2d90c1af-6b34-7a05-8e77-9f1c4b6a2e50");
+    start(&store);
+    let context = [
+        runtime_context("ctx-goal", goal_status("ship the release"), "Goal: active"),
+        runtime_context(
+            "ctx-observation",
+            ContextKind::RuntimeToolObservation,
+            "The tool batch settled.",
+        ),
+        extension_context(
+            "ctx-environment",
+            "vendor.observability",
+            "Environment facts.",
+        ),
+    ];
+    let frozen = request_with(&store, "1", 0, "prompt-A", &context);
+    completion(&store, &frozen, None, None, 8);
+
+    let additions = context_of(&page(&store), 0);
+    assert_eq!(
+        additions
+            .iter()
+            .map(|addition| addition.message_id.as_str().to_owned())
+            .collect::<Vec<_>>(),
+        vec!["ctx-goal", "ctx-observation", "ctx-environment"],
+        "the frozen snapshot order is preserved exactly"
+    );
+    assert_eq!(
+        additions
+            .iter()
+            .map(|addition| addition.context_kind)
+            .collect::<Vec<_>>(),
+        vec![
+            TraceContextKind::GoalStatus,
+            TraceContextKind::RuntimeToolObservation,
+            TraceContextKind::ExtensionEnvironment,
+        ]
+    );
+    assert_eq!(
+        additions
+            .iter()
+            .map(|addition| addition.source.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            TraceContextSource::Runtime,
+            TraceContextSource::Runtime,
+            extension_source("vendor.observability"),
+        ],
+        "provenance is the canonical message's own UserSource, not the family"
+    );
+    for addition in &additions {
+        assert!(!addition.truncated);
+        assert!(addition.attachments.is_empty());
+    }
+    assert_eq!(additions[0].preview.as_ref().unwrap().text, "Goal: active");
+    // The internal ContextKind payload stays inside the runtime: a family
+    // name crosses, a complete GoalSnapshot does not.
+    let wire = serde_json::to_string(&page(&store)).unwrap();
+    assert!(!wire.contains("ship the release"));
+    assert!(!wire.contains("autonomous_round_budget"));
+}
+
+/// §13.9: the Context Engine admits request context once, at the first
+/// successful start. Retry and recovery requests reuse it, so their own
+/// snapshots list none and Trace re-emits nothing. No Trace-local "already
+/// displayed" state exists to get this right or wrong.
+#[test]
+fn retry_and_recovery_requests_introduce_no_duplicate_context() {
+    let store = store("conv_4e77b013-8c2a-7f39-9d54-3b6a1c8e70df");
+    start(&store);
+    let introduced = [runtime_context(
+        "ctx-observation",
+        ContextKind::RuntimeToolObservation,
+        "The tool batch settled.",
+    )];
+    let first = request_with(&store, "1", 0, "prompt-A", &introduced);
+    failure(&store, &first, ModelErrorKind::Transport);
+    let retry = request_with(&store, "1", 1, "prompt-A", &[]);
+    failure(&store, &retry, ModelErrorKind::ContextWindowExceeded);
+    let recovery = request_with(&store, "1", 2, "prompt-A", &[]);
+    completion(&store, &recovery, None, None, 10);
+
+    let projected = page(&store);
+    assert_eq!(context_of(&projected, 0).len(), 1);
+    assert!(context_of(&projected, 1).is_empty());
+    assert!(context_of(&projected, 2).is_empty());
+    assert_eq!(
+        serde_json::to_string(&projected)
+            .unwrap()
+            .matches("ctx-observation")
+            .count(),
+        1,
+        "the identity appears at exactly one request boundary"
+    );
+}
+
+/// §13.13–14: Trace states what the authorities recorded. Compaction is not
+/// a Context-removal fact, and request-only input has no canonical identity
+/// to promote into one.
+#[test]
+fn compaction_and_request_only_input_never_become_context_facts() {
+    use crate::model::input::{
+        CarryoverBlockKind, CarryoverOmissionCounts, RenderedCarryoverRecord,
+        RenderedCarryoverText, RenderedUnresolvedOutputCarryover, RequestOnlyInsertionAnchor,
+        UnresolvedOutputSettlement,
+    };
+    let store = store("conv_8a15d3e9-70cb-7c62-8b90-5e24f7c1a063");
+    start(&store);
+    let introduced = [extension_context(
+        "ctx-environment",
+        "vendor.observability",
+        "Environment facts.",
+    )];
+    let first = request_with(&store, "1", 0, "prompt-A", &introduced);
+    completion(&store, &first, None, None, 4);
+    append(&store, E::CompactionStarted, 5);
+
+    // A request whose only extra input is request-only carryover: it has no
+    // canonical MessageId, so it is request detail and nothing else.
+    let stream = crate::runtime::identity::PublicationStreamId::new("stream-1");
+    let mut prepared = prepared_request(&store, 1, None, identity_of("1", 1));
+    "prompt-A".clone_into(&mut prepared.effective_system_prompt);
+    prepared.unresolved_output_carryover_source = Some(stream.clone());
+    prepared.unresolved_output_carryover = Some(RenderedUnresolvedOutputCarryover {
+        source_stream_id: stream,
+        source_settlement: UnresolvedOutputSettlement::Incomplete,
+        records: vec![RenderedCarryoverRecord::Text(RenderedCarryoverText {
+            kind: CarryoverBlockKind::Text,
+            text: Some("unresolved-output-carryover".to_owned()),
+            omitted_prefix_bytes: 0,
+            omitted_detail_bytes: 0,
+        })],
+        omitted_blocks: CarryoverOmissionCounts::default(),
+    });
+    prepared.unresolved_output_carryover_anchor = Some(RequestOnlyInsertionAnchor::AfterCanonical);
+    let second = commit_request(&store, prepared, &[]);
+    completion(&store, &second, None, None, 9);
+
+    let projected = page(&store);
+    assert_eq!(context_of(&projected, 0).len(), 1);
+    assert!(
+        context_of(&projected, 1).is_empty(),
+        "request-only carryover is never canonical Context presentation"
+    );
+    // It is still reachable where it belongs: as a request-only item of the
+    // heavy request detail, with no canonical identity attached to it.
+    let detail = detail_of(
+        &store,
+        &projected
+            .records
+            .iter()
+            .filter(|record| record.kind == TraceKind::Request)
+            .nth(1)
+            .unwrap()
+            .id,
+    );
+    let carryover = detail
+        .request
+        .as_ref()
+        .unwrap()
+        .messages
+        .iter()
+        .find(|message| message.role == TraceMessageRole::RequestOnly)
+        .expect("the request-only item remains request detail");
+    assert!(carryover.message_id.is_none());
+    // Compaction contributes a record, never a Context fact of its own.
+    let compaction = record_of(&projected, TraceKind::Compaction);
+    assert!(compaction.request.is_none());
+    assert_eq!(
+        serde_json::to_string(&projected)
+            .unwrap()
+            .matches("ctx-environment")
+            .count(),
+        1
+    );
+}
+
+/// §13.15–16: a Context presentation is reproducible and bounded. An
+/// adversarial payload shortens the list deterministically, in native order,
+/// and never invents or shortens an identity.
+#[test]
+fn context_presentation_is_reproducible_and_bounded() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("conversation.sqlite");
+    let id = ConversationId::new("conv_ce31f6a8-2b74-7d09-8a15-6c0fb3e94d27");
+    let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    store.initialize(&[]).unwrap();
+    start(&store);
+    let context: Vec<MessageBlock> = (0..(TRACE_SUMMARY_CONTEXT + 8))
+        .map(|index| {
+            extension_context(
+                &format!("ctx-{index:03}"),
+                "vendor.observability",
+                &"E".repeat(8_000),
+            )
+        })
+        .collect();
+    let frozen = request_with(&store, "1", 0, "prompt-A", &context);
+    completion(&store, &frozen, None, None, 8);
+
+    let projected = page(&store);
+    let record = record_of(&projected, TraceKind::Request);
+    let summary = record.request.as_ref().unwrap();
+    assert!(summary.context_truncated);
+    assert!(!summary.context_additions.is_empty());
+    assert!(
+        serde_json::to_vec(&summary.context_additions)
+            .unwrap()
+            .len()
+            <= TRACE_SUMMARY_CONTEXT_BYTES
+    );
+    assert!(serde_json::to_vec(record).unwrap().len() <= TRACE_RECORD_BYTES);
+    assert!(serde_json::to_vec(&projected).unwrap().len() <= TRACE_PAGE_BYTES);
+    // A deterministic prefix in frozen order: never a sampled or reordered
+    // subset, and never a synthetic replacement identity.
+    for (index, addition) in summary.context_additions.iter().enumerate() {
+        assert_eq!(addition.message_id.as_str(), format!("ctx-{index:03}"));
+    }
+    drop(store);
+    let reopened = SqliteConversationStore::open(id, &path).unwrap();
+    assert_eq!(page(&reopened).records, projected.records);
+}
+
+/// An identity longer than the Trace identity bound is omitted whole. It is
+/// never shortened into a different identity that refers to nothing.
+#[test]
+fn an_oversized_context_identity_is_omitted_whole() {
+    let store = store("conv_0f6b52d7-9a48-7bc3-8e01-74d3fa26c519");
+    start(&store);
+    let oversized = "x".repeat(super::bounds::TRACE_IDENTITY_BYTES + 1);
+    let context = [
+        extension_context(&oversized, "vendor.observability", "Oversized."),
+        extension_context("ctx-kept", "vendor.observability", "Kept."),
+    ];
+    let frozen = request_with(&store, "1", 0, "prompt-A", &context);
+    completion(&store, &frozen, None, None, 8);
+
+    let projected = page(&store);
+    let summary = record_of(&projected, TraceKind::Request)
+        .request
+        .as_ref()
+        .unwrap()
+        .clone();
+    assert!(summary.context_truncated);
+    assert_eq!(summary.context_additions.len(), 1);
+    assert_eq!(summary.context_additions[0].message_id.as_str(), "ctx-kept");
+    assert!(
+        !serde_json::to_string(&projected)
+            .unwrap()
+            .contains(&oversized[..64])
+    );
+}
+
+/// Request-scoped context that is not an admitted Context fact never becomes
+/// durable in the first place: the start transition rejects it, so no Trace
+/// read can encounter one. Trace keeps its own typed guard for the same
+/// invariant rather than downgrading such a message into an ordinary User
+/// message, but the durable authority is what makes the case unreachable.
+#[test]
+fn request_scoped_context_that_is_not_an_admitted_context_fact_never_commits() {
+    let store = store("conv_36c0a4e1-8f27-7d5a-9b34-1e78cd05f2a6");
+    start(&store);
+    let ordinary = MessageBlock::User(UserMessageBlock {
+        id: MessageId::new("not-context"),
+        content: vec![UserContentBlock::Text(TextBlock {
+            text: "An ordinary inbound message.".into(),
+        })],
+        source: UserSource::Human,
+        kind: InboundKind::Message,
+        timestamp: None,
+    });
+    let mut prepared = prepared_request(&store, 0, None, identity_of("1", 0));
+    prepared.request_context_ids = vec![MessageId::new("not-context")];
+    let error = store
+        .commit_model_turn_start(std::slice::from_ref(&ordinary), &prepared, timestamp(2))
+        .expect_err("the durable start transition rejects it");
+    assert!(matches!(
+        error,
+        ConversationStoreError::InvalidReference(ref detail)
+            if detail.contains("hidden Context-kind User message")
+    ));
+    // Nothing committed, so the conversation still has no request at all.
+    assert!(
+        !page(&store)
+            .records
+            .iter()
+            .any(|record| record.kind == TraceKind::Request)
+    );
+}
+
+/// §13.17–20: Background, Subagent and Workflow records carry the exact
+/// outer `ToolCallId` their own native start fact froze. Reused Tool, Agent
+/// and Workflow names cannot cross-correlate them.
+#[test]
+fn tool_owned_domains_carry_their_exact_originating_tool_call() {
+    let store = store("conv_a7f34b28-5c91-7e06-8d42-3fb8c0e17d54");
+    start(&store);
+    append(
+        &store,
+        E::BackgroundExecutionCommitted {
+            execution_id: crate::runtime::identity::ToolExecutionId::new(
+                "exec_6600d36f-a2f9-7057-8735-85a8c316b8af",
+            ),
+            tool_call_id: ToolCallId::new("call-background"),
+            tool_id: ToolId::new("tool-shared"),
+            tool_name: "shared".into(),
+        },
+        2,
+    );
+    let subagent =
+        crate::runtime::identity::SubagentId::new("sub_1f0a7d4c-5b28-7e19-8a63-90cf2d8b4e17");
+    let mut ownership = event(
+        &store,
+        E::SubagentOwnershipCommitted {
+            subagent_id: subagent.clone(),
+            child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
+            child_conversation_id: ConversationId::new("conv_1d5e2a90-7b41-7c38-8a02-64f0be93c175"),
+            tool_call_id: ToolCallId::new("call-subagent"),
+            agent: "shared".into(),
+            definition_digest: "digest".into(),
+            profile_digest: "profile".into(),
+            ownership: crate::events::types::SubagentOwnershipKind::Normal,
+            workspace: crate::runtime::workspace::WorkspaceSnapshot {
+                borrowed_from: None,
+                logical_workspace: std::path::PathBuf::from("/workspace"),
+                isolation: crate::runtime::workspace::WorkspaceIsolation::Shared,
+            },
+        },
+        3,
+    );
+    // The durable contract derives this event's canonical identity from the
+    // subagent it opens; ownership is not an ordinary standalone fact.
+    ownership.event_id = EventId::new(format!("subagent-committed-event:{subagent}"));
+    store.append_event(ownership).unwrap();
+    append(
+        &store,
+        E::WorkflowStarted {
+            tool_call_id: ToolCallId::new("call-workflow"),
+            workflow_id: crate::runtime::workflow::WorkflowId::parse("shared").unwrap(),
+            run_id: crate::runtime::workflow::WorkflowRunId {
+                conversation_id: store.conversation_id().clone(),
+                attempt_id: AttemptId::new("attempt-a"),
+                invocation: 1,
+            },
+        },
+        4,
+    );
+
+    let projected = page(&store);
+    let correlated = |kind| {
+        record_of(&projected, kind)
+            .originating_tool_call_id
+            .clone()
+            .map(|id| id.as_str().to_owned())
+    };
+    assert_eq!(
+        correlated(TraceKind::Background).as_deref(),
+        Some("call-background")
+    );
+    assert_eq!(
+        correlated(TraceKind::Subagent).as_deref(),
+        Some("call-subagent")
+    );
+    assert_eq!(
+        correlated(TraceKind::Workflow).as_deref(),
+        Some("call-workflow")
+    );
+    // Every other kind carries none: the relation exists only where a native
+    // start fact recorded it.
+    for record in &projected.records {
+        if !matches!(
+            record.kind,
+            TraceKind::Background | TraceKind::Subagent | TraceKind::Workflow
+        ) {
+            assert!(record.originating_tool_call_id.is_none());
+        }
+    }
+}
+
+/// §13.21–22: the correlation is a frozen native fact, so it survives both a
+/// page that excludes the parent Tool row and a lifecycle refresh — and a
+/// lifecycle refresh never carries immutable presentation data at all.
+#[test]
+fn tool_correlation_survives_paging_and_lifecycle_refresh() {
+    let store = store("conv_b0925de4-4a13-7f87-8c56-2d7e9a0b1f64");
+    start(&store);
+    let frozen = request_with(
+        &store,
+        "1",
+        0,
+        "prompt-A",
+        &[extension_context(
+            "ctx-environment",
+            "vendor.observability",
+            "Environment facts.",
+        )],
+    );
+    let call = bash_call("call-parent");
+    propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 4);
+    completion(&store, &frozen, None, None, 4);
+    append(
+        &store,
+        E::ToolExecutionStarted {
+            tool_call_id: call.id.clone(),
+            tool_id: call.tool_id.clone(),
+        },
+        5,
+    );
+    append(
+        &store,
+        E::BackgroundExecutionCommitted {
+            execution_id: crate::runtime::identity::ToolExecutionId::new(
+                "exec_6600d36f-a2f9-7057-8735-85a8c316b8af",
+            ),
+            tool_call_id: call.id.clone(),
+            tool_id: call.tool_id.clone(),
+            tool_name: "bash".into(),
+        },
+        6,
+    );
+
+    let read = TraceProjection::new(&store).unwrap();
+    let newest = read.page(None, 1).unwrap();
+    let background = &newest.records[0];
+    assert_eq!(background.kind, TraceKind::Background);
+    assert!(
+        !newest
+            .records
+            .iter()
+            .any(|record| record.kind == TraceKind::Tool),
+        "the parent Tool row is outside this page"
+    );
+    assert_eq!(
+        background
+            .originating_tool_call_id
+            .as_ref()
+            .map(ToString::to_string),
+        Some("call-parent".to_owned())
+    );
+
+    // Lifecycle refresh carries mutable lifecycle facts only.
+    let updates = read
+        .refresh(
+            &page(&store)
+                .records
+                .iter()
+                .map(|record| record.position.clone())
+                .collect::<Vec<_>>(),
+            None,
+        )
+        .unwrap();
+    let wire = serde_json::to_string(&updates).unwrap();
+    for immutable in [
+        "originating_tool_call_id",
+        "system_prompt",
+        "context_additions",
+        "ctx-environment",
+    ] {
+        assert!(
+            !wire.contains(immutable),
+            "a lifecycle update must not repeat {immutable}"
+        );
+    }
+    assert_eq!(
+        page(&store)
+            .records
+            .iter()
+            .find(|record| record.kind == TraceKind::Background)
+            .and_then(|record| record.originating_tool_call_id.clone())
+            .map(|id| id.as_str().to_owned()),
+        Some("call-parent".to_owned()),
+        "a refresh changes no immutable relation"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Read-responsibility ownership (#372 revision)
+//
+// Immutable historical presentation and mutable lifecycle repair are separate
+// responsibilities. The regressions below prove that as an implementation
+// property — deterministic counters around the two immutable relationship
+// paths — rather than inferring it from how long a refresh took.
+// ---------------------------------------------------------------------------
+
+/// A current-runtime snapshot with no running attempt, so live repair is
+/// exercised without refining any durable state.
+fn quiet_snapshot(
+    store: &dyn ConversationStore,
+) -> crate::runtime_client::snapshot::RuntimeClientSnapshot {
+    use crate::runtime_client::projection::RuntimeClientProjection;
+    use crate::runtime_client::snapshot::CapabilityView;
+    RuntimeClientProjection::new(
+        store.conversation_id().clone(),
+        vec![],
+        CapabilityView {
+            revision: CapabilityRevision::new(1),
+            tools: vec![],
+            available_tools: vec![],
+            skills: vec![],
+            sources: vec![],
+        },
+        None,
+        16,
+    )
+    .snapshot()
+    .unwrap()
+    .0
+}
+
+/// Commits one actual request that owns both immutable relationships: a
+/// System Prompt to classify against its predecessor, and canonical Context
+/// of its own.
+fn related_request(store: &dyn ConversationStore, retry: u32, prompt: &str) -> RequestSnapshot {
+    let context = [
+        runtime_context(
+            &format!("ctx-{retry}-observation"),
+            ContextKind::RuntimeToolObservation,
+            "The tool batch settled.",
+        ),
+        extension_context(
+            &format!("ctx-{retry}-environment"),
+            "vendor.observability",
+            "Environment facts.",
+        ),
+    ];
+    let frozen = request_with(store, "1", retry, prompt, &context);
+    completion(store, &frozen, None, None, 3 + i64::from(retry) * 2);
+    frozen
+}
+
+/// A lifecycle refresh resolves no immutable relationship.
+///
+/// Building a summary page runs both relationship paths; refreshing the same
+/// record runs neither. This is not a performance note: a refresh may cover
+/// `TRACE_RECORD_LIMIT` records, and an error reached only while resolving a
+/// request's Context presentation must not be able to make that record's
+/// lifecycle repair unavailable. A path that is never entered cannot fail.
+#[test]
+fn a_lifecycle_refresh_resolves_no_immutable_presentation_relationship() {
+    use super::summary::probe;
+    let store = store("conv_7c1a0b52-3d68-7e41-9a07-2f5b8d6e04c3");
+    start(&store);
+    related_request(&store, 0, "prompt-A");
+    let frozen = related_request(&store, 1, "prompt-B");
+    let projection = TraceProjection::new(&store).unwrap();
+
+    // 1. A summary page resolves both relationships, exactly as it must.
+    probe::reset();
+    let page = projection.page(None, TRACE_PAGE_LIMIT).unwrap();
+    let (system, context) = probe::counts();
+    assert_eq!(system, 2, "each request row classifies its own predecessor");
+    assert_eq!(context, 2, "each request row joins its own frozen Context");
+    let record = page
+        .records
+        .iter()
+        .filter(|record| record.kind == TraceKind::Request)
+        .nth(1)
+        .expect("the second request row");
+    let summary = record.request.as_ref().expect("a request summary");
+    assert_eq!(summary.system_prompt.state, TraceSystemPromptState::Changed);
+    assert_eq!(summary.context_additions.len(), 2);
+
+    // 2. The same record's lifecycle resolves neither.
+    probe::reset();
+    let updates = projection
+        .refresh(
+            std::slice::from_ref(&record.position),
+            Some(&quiet_snapshot(&store)),
+        )
+        .unwrap();
+    assert_eq!(
+        probe::counts(),
+        (0, 0),
+        "lifecycle refresh entered an immutable presentation path"
+    );
+
+    // 3. And the lifecycle it produced is still correct.
+    assert_eq!(updates.len(), 1);
+    let update = &updates[0];
+    assert_eq!(update.id, record.id);
+    assert_eq!(update.state, TraceState::Completed);
+    assert_eq!(update.timing, record.timing);
+    assert!(
+        update
+            .request
+            .as_ref()
+            .expect("a request outcome")
+            .failure_kind
+            .is_none()
+    );
+    let wire = serde_json::to_string(update).unwrap();
+    for immutable in [
+        "system_prompt",
+        "context_additions",
+        "certified_extension",
+        frozen.effective_system_prompt.as_str(),
+    ] {
+        assert!(!wire.contains(immutable), "lifecycle carried {immutable}");
+    }
+}
+
+/// The relationship paths stay unentered for every retained cursor, so a
+/// larger interest set cannot reintroduce O(N) immutable reconstruction.
+#[test]
+fn refreshing_many_request_cursors_reconstructs_no_immutable_presentation() {
+    use super::summary::probe;
+    let store = store("conv_3b8e46d1-5f70-7c29-8d63-4a1e9c70b528");
+    start(&store);
+    for retry in 0..12 {
+        related_request(&store, retry, &format!("prompt-{retry}"));
+    }
+    let projection = TraceProjection::new(&store).unwrap();
+    let cursors: Vec<TraceCursor> = projection
+        .page(None, TRACE_PAGE_LIMIT)
+        .unwrap()
+        .records
+        .iter()
+        .filter(|record| record.kind == TraceKind::Request)
+        .map(|record| record.position.clone())
+        .collect();
+    assert_eq!(cursors.len(), 12);
+
+    probe::reset();
+    let updates = projection
+        .refresh(&cursors, Some(&quiet_snapshot(&store)))
+        .unwrap();
+    assert_eq!(updates.len(), 12);
+    assert_eq!(
+        probe::counts(),
+        (0, 0),
+        "a wider interest set reintroduced immutable reconstruction"
+    );
+    // The 512-record interest bound still governs the refreshed set.
+    assert!(
+        projection
+            .refresh(
+                &vec![cursors[0].clone(); TRACE_RECORD_LIMIT + 1],
+                Some(&quiet_snapshot(&store))
+            )
+            .is_err()
+    );
+}
+
+/// A lifecycle update states exactly the mutable facts of the summary row it
+/// refreshes — no more, and nothing different.
+#[test]
+fn a_lifecycle_update_restates_its_summary_rows_mutable_facts_exactly() {
+    let store = store("conv_9d47f0ba-1c35-7b84-8e20-6f3a5d1c9e74");
+    start(&store);
+    let frozen = related_request(&store, 0, "prompt-A");
+    let call = bash_call("call-lifecycle");
+    propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 5);
+    append(
+        &store,
+        E::ToolExecutionStarted {
+            tool_call_id: call.id.clone(),
+            tool_id: call.tool_id.clone(),
+        },
+        6,
+    );
+    settle_tool_call(
+        &store,
+        frozen.provisional_message_id.as_str(),
+        "lifecycle-result",
+        &call,
+        ToolExecutionResult {
+            status: ToolExecutionStatus::Success,
+            content: vec![ToolResultContent::Text(TextBlock {
+                text: "done".into(),
+            })],
+            duration_ms: 12,
+            exit_code: Some(0),
+            artifacts: vec![],
+            truncation: None,
+            workflow: None,
+            managed_output: None,
+        },
+        7,
+    );
+
+    let projection = TraceProjection::new(&store).unwrap();
+    let page = projection.page(None, TRACE_PAGE_LIMIT).unwrap();
+    let cursors: Vec<TraceCursor> = page
+        .records
+        .iter()
+        .map(|record| record.position.clone())
+        .collect();
+    let updates = projection
+        .refresh(&cursors, Some(&quiet_snapshot(&store)))
+        .unwrap();
+
+    assert_eq!(updates.len(), page.records.len());
+    for (record, update) in page.records.iter().zip(&updates) {
+        assert_eq!(update.id, record.id);
+        assert_eq!(update.state, record.state);
+        assert_eq!(update.timing, record.timing);
+        assert_eq!(update.message_id, record.message_id);
+        assert_eq!(update.attachments, record.attachments);
+        assert_eq!(update.truncated, record.truncated);
+        assert_eq!(
+            update.request.as_ref().map(|outcome| (
+                outcome.failure_kind.clone(),
+                outcome.usage.clone(),
+                outcome.generation
+            )),
+            record.request.as_ref().map(|summary| (
+                summary.failure_kind.clone(),
+                summary.usage.clone(),
+                summary.generation
+            ))
+        );
+        assert_eq!(
+            update.tool.as_ref().map(|outcome| (
+                outcome.started,
+                outcome.outcome,
+                outcome.detail.clone()
+            )),
+            record.tool.as_ref().map(|summary| (
+                summary.started,
+                summary.outcome,
+                summary.detail.clone()
+            ))
+        );
+    }
+    assert!(
+        updates
+            .iter()
+            .any(|update| update.tool.is_some() && update.request.is_none()),
+        "the Tool row's own outcome still travels"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Exact canonical Context provenance (#372 revision)
+// ---------------------------------------------------------------------------
+
+/// Provenance is the canonical message's own `UserSource`, kept exact.
+///
+/// Two certified extensions contribute the same context family in the same
+/// request. The family, the assembly generation, the contributor list and the
+/// message order are all identical between them, so nothing but the frozen
+/// `UserSource` can tell them apart — and Trace must.
+#[test]
+fn two_certified_extensions_stay_distinguishable_by_exact_contributor_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("conversation.sqlite");
+    let id = ConversationId::new("conv_5a2c7e93-4b16-7d80-9f35-8e07b2c4d169");
+    let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    store.initialize(&[]).unwrap();
+    start(&store);
+    let context = [
+        runtime_context(
+            "ctx-observation",
+            ContextKind::RuntimeToolObservation,
+            "The tool batch settled.",
+        ),
+        extension_context("ctx-extension-a", "vendor-a.environment", "Facts from A."),
+        extension_context("ctx-extension-b", "vendor-b.environment", "Facts from B."),
+    ];
+    let frozen = request_with(&store, "1", 0, "prompt-A", &context);
+    completion(&store, &frozen, None, None, 8);
+
+    let additions = context_of(&page(&store), 0);
+    assert_eq!(
+        additions
+            .iter()
+            .map(|addition| addition.message_id.as_str().to_owned())
+            .collect::<Vec<_>>(),
+        vec!["ctx-observation", "ctx-extension-a", "ctx-extension-b"],
+        "native order is exactly request_context_ids"
+    );
+    assert_eq!(
+        additions
+            .iter()
+            .map(|addition| addition.context_kind)
+            .collect::<Vec<_>>(),
+        vec![
+            TraceContextKind::RuntimeToolObservation,
+            TraceContextKind::ExtensionEnvironment,
+            TraceContextKind::ExtensionEnvironment,
+        ]
+    );
+    assert_eq!(additions[0].source, TraceContextSource::Runtime);
+    assert_eq!(
+        additions[1].source,
+        extension_source("vendor-a.environment")
+    );
+    assert_eq!(
+        additions[2].source,
+        extension_source("vendor-b.environment")
+    );
+    assert_ne!(
+        additions[1].source, additions[2].source,
+        "two extensions of one family must not collapse to one provenance"
+    );
+    // The exact identity is on the wire, not a coarse namespace standing in
+    // for it, and the internal Context payload still never crosses.
+    let wire = serde_json::to_string(&page(&store)).unwrap();
+    assert!(wire.contains("vendor-a.environment"));
+    assert!(wire.contains("vendor-b.environment"));
+    assert!(!wire.contains("agent_status_metadata"));
+    // Exact extension identity is bounded by its own contract, well inside
+    // the Trace identity and summary byte bounds.
+    let projected = page(&store);
+    let record = record_of(&projected, TraceKind::Request);
+    assert!(
+        serde_json::to_vec(&record.request.as_ref().unwrap().context_additions)
+            .unwrap()
+            .len()
+            <= TRACE_SUMMARY_CONTEXT_BYTES
+    );
+    assert!(serde_json::to_vec(record).unwrap().len() <= TRACE_RECORD_BYTES);
+
+    drop(store);
+    let reopened = SqliteConversationStore::open(id, &path).unwrap();
+    assert_eq!(
+        context_of(&page(&reopened), 0),
+        additions,
+        "reopening the durable store reproduces the same typed provenance"
+    );
+}
+
+fn agent_status_context_kind() -> ContextKind {
+    ContextKind::AgentStatus(
+        crate::message::types::AgentStatusGenerationMetadata::new(
+            timestamp(1),
+            [crate::message::types::AgentStatusModuleId::Time],
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn all_context_assembly_semantic_pairs_project_from_durable_request_start() {
+    let store = store("conv_5a2c7e93-4b16-7d80-9f35-8e07b2c4d169");
+    start(&store);
+    let context = [
+        runtime_context("goal", goal_status("ship"), "goal"),
+        runtime_context("tool", ContextKind::RuntimeToolObservation, "tool"),
+        runtime_context("status", agent_status_context_kind(), "status"),
+        extension_context("extension", "vendor-a.environment", "extension"),
+    ];
+    let frozen = request_with(&store, "1", 0, "prompt", &context);
+    let additions = context_of(&page(&store), 0);
+    assert_eq!(
+        additions
+            .iter()
+            .map(|item| item.message_id.clone())
+            .collect::<Vec<_>>(),
+        frozen.request_context_ids
+    );
+    assert_eq!(
+        additions
+            .iter()
+            .map(|item| (item.source.clone(), item.context_kind))
+            .collect::<Vec<_>>(),
+        vec![
+            (TraceContextSource::Runtime, TraceContextKind::GoalStatus),
+            (
+                TraceContextSource::Runtime,
+                TraceContextKind::RuntimeToolObservation
+            ),
+            (TraceContextSource::Runtime, TraceContextKind::AgentStatus),
+            (
+                extension_source("vendor-a.environment"),
+                TraceContextKind::ExtensionEnvironment
+            ),
+        ]
+    );
+}
+
+fn assert_context_pair_rejected(source: UserSource, kind: ContextKind) {
+    let store = store("conv_5a2c7e93-4b16-7d80-9f35-8e07b2c4d169");
+    start(&store);
+    let message = context_message("contradictory-context", source, kind, "context");
+    // This is the real durable start, not a fixture that validates semantic pairs.
+    let frozen = request_with(&store, "1", 0, "prompt", std::slice::from_ref(&message));
+    assert_eq!(
+        store
+            .load_request_snapshot(&frozen.request_id)
+            .unwrap()
+            .request_context_ids,
+        vec![message.id().clone()]
+    );
+    assert_eq!(
+        store.load_messages(&frozen.request_context_ids).unwrap(),
+        vec![message]
+    );
+    assert!(
+        matches!(TraceProjection::new(&store).unwrap().page(None, 32),
+        Err(ConversationStoreError::InvalidReference(detail))
+            if detail.contains("contradictory-context") && detail.contains("not an admitted Context fact"))
+    );
+}
+
+#[test]
+fn runtime_extension_environment_is_rejected_after_durable_request_start() {
+    assert_context_pair_rejected(UserSource::Runtime, ContextKind::ExtensionEnvironment);
+}
+
+fn certified_source() -> UserSource {
+    UserSource::Extension {
+        contributor: CertifiedExtensionIdentity::new("vendor-a.environment").unwrap(),
+    }
+}
+
+#[test]
+fn extension_runtime_tool_observation_is_rejected_after_durable_request_start() {
+    assert_context_pair_rejected(certified_source(), ContextKind::RuntimeToolObservation);
+}
+
+#[test]
+fn extension_goal_status_is_rejected_after_durable_request_start() {
+    assert_context_pair_rejected(certified_source(), goal_status("ship"));
+}
+
+#[test]
+fn extension_agent_status_is_rejected_after_durable_request_start() {
+    assert_context_pair_rejected(certified_source(), agent_status_context_kind());
+}
+
+#[test]
+fn non_admitted_context_provenance_is_rejected_after_durable_request_start() {
+    for source in [
+        UserSource::Human,
+        UserSource::Agent {
+            agent_id: crate::runtime::identity::AgentId::new("agent-a"),
+        },
+        UserSource::Fleet,
+        UserSource::ExternalSystem,
+    ] {
+        assert_context_pair_rejected(source, ContextKind::RuntimeToolObservation);
     }
 }

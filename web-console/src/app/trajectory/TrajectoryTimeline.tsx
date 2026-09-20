@@ -11,7 +11,7 @@
  * A record with one timestamp renders as a start marker, never as a span.
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
-import type { TraceRecord } from '../../../../protocol/app-server/v12';
+import type { TraceRecord } from '../../../../protocol/app-server/v13';
 import {
   TRAJECTORY_LANES,
   formatDuration,

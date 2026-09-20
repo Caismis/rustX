@@ -1,4 +1,4 @@
-import type { RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v12';
+import type { RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v13';
 
 export const HISTORY_LIMIT = 512;
 export const HISTORY_MAX_BYTES = 8 * 1024 * 1024;

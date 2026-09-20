@@ -8,7 +8,7 @@
  * searchable text actually changed, so a live lifecycle repair does not
  * reindex the window.
  */
-import type { TraceRecord } from '../../../../protocol/app-server/v12';
+import type { TraceRecord } from '../../../../protocol/app-server/v13';
 import type { TrajectoryRow } from './layout';
 
 interface SearchEntry {
@@ -35,7 +35,18 @@ function sourcesOf(row: TrajectoryRow): readonly string[] {
     record.tool?.outcome ?? '',
     record.tool?.detail?.text ?? '',
     record.native_id ?? '',
+    record.originating_tool_call_id ?? '',
     record.message_id ?? '',
+    // Bounded semantic labels and identities from the server-resolved
+    // relationships. Search indexes what the server already decided; it
+    // never becomes the authority for any of these relations.
+    record.request?.system_prompt.state ?? '',
+    ...(record.request?.context_additions ?? []).map(
+      addition =>
+        `${addition.context_kind} ${addition.source.type} ${
+          addition.source.type === 'certified_extension' ? addition.source.contributor : ''
+        } ${addition.message_id}`,
+    ),
     ...record.calls.map(call => `${call.name} ${call.tool_id} ${call.call_id}`),
   ];
 }

@@ -1,4 +1,4 @@
-import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v12';
+import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v13';
 
 /** One bounded summary record, as the server pages them. */
 export const traceRecord = (n: number, overrides: Partial<TraceRecord> = {}): TraceRecord => ({
@@ -18,10 +18,14 @@ export const traceRecord = (n: number, overrides: Partial<TraceRecord> = {}): Tr
     failure_kind: null,
     usage: null,
     generation: null,
+    system_prompt: { state: 'unchanged', preview: null },
+    context_additions: [],
+    context_truncated: false,
   },
   tool: null,
   calls: [],
   native_id: null,
+  originating_tool_call_id: null,
   message_id: null,
   attachments: [],
   has_detail: true,

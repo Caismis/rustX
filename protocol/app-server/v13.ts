@@ -1175,6 +1175,32 @@ export type ModelErrorKind =
   | 'generation_degenerated'
   | 'generation_budget_exceeded';
 /**
+ * How one actual request's frozen System Prompt relates to its predecessor.
+ *
+ * The relationship is request-relative and resolved from native durable
+ * authority, never from the records a client happens to have loaded. A page
+ * that begins in the middle of history therefore reports exactly what a page
+ * containing the predecessor would.
+ */
+export type TraceSystemPromptState = 'initial' | 'changed' | 'unchanged' | 'previous_unavailable';
+/**
+ * The closed presentation family of one admitted model-visible context fact.
+ *
+ * This is a presentation vocabulary, not the internal `ContextKind` payload:
+ * a complete `GoalSnapshot` or Agent Status generation metadata never enters
+ * a pageable summary through it.
+ */
+export type TraceContextKind =
+  'goal_status' | 'runtime_tool_observation' | 'extension_environment' | 'agent_status';
+/**
+ * The stable logical key of one certified extension.
+ *
+ * Package/content attestation is intentionally not part of this type.  A
+ * package may be upgraded while preserving its logical ordering identity;
+ * the assembly generation records the attestation separately.
+ */
+export type CertifiedExtensionIdentity = string;
+/**
  * Provider/model-issued opaque correlation string, scoped to a request/publication.
  * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
  */
@@ -4545,6 +4571,14 @@ export interface TraceRecord {
    */
   native_id?: string | null;
   /**
+   * The exact outer `ToolCall` this Tool-owned domain record belongs to,
+   * copied from the native start fact. It is presentation and navigation
+   * correlation only: it confers no lifecycle, ownership, settlement or
+   * cancellation authority, and it is never resolved from a Tool name, a
+   * timestamp, row adjacency or the loaded page.
+   */
+  originating_tool_call_id?: ToolCallId | null;
+  /**
    * Canonical accepted message; publication without acceptance is absent.
    */
   message_id?: MessageId | null;
@@ -4614,6 +4648,17 @@ export interface TraceRequestSummary {
   failure_kind?: ModelErrorKind | null;
   usage?: ModelUsage | null;
   generation?: TraceGeneration | null;
+  system_prompt: TraceSystemPromptPresentation;
+  /**
+   * Canonical request Context this exact request introduced, in the order
+   * frozen by `RequestSnapshot.request_context_ids`. A retry or recovery
+   * request reuses admitted context and therefore introduces none.
+   */
+  context_additions: TraceContextPresentation[];
+  /**
+   * Whether the Context list was shortened by the Trace summary bound.
+   */
+  context_truncated: boolean;
 }
 /**
  * Normalized token accounting for one generation.
@@ -4692,6 +4737,57 @@ export interface TraceGenerationTimeline {
   terminal_ms: string;
 }
 /**
+ * Request-relative System Prompt presentation, resolved natively so the
+ * browser never compares request details to discover a prompt change.
+ */
+export interface TraceSystemPromptPresentation {
+  state: TraceSystemPromptState;
+  /**
+   * One-line preview of the prompt this request introduced. Absent for
+   * `Unchanged`, where the preceding request's row already carries it.
+   * A present but empty preview records an empty historical prompt.
+   */
+  preview?: TracePreview | null;
+}
+/**
+ * One canonical request Context fact introduced by one actual request.
+ *
+ * Identity and order come from the immutable `RequestSnapshot`; content
+ * comes from keyed Message Ledger reads. Neither the browser nor Trace
+ * itself decides which request introduced a Context fact: the request that
+ * committed the identity atomically with its own start did.
+ */
+export interface TraceContextPresentation {
+  message_id: MessageId;
+  context_kind: TraceContextKind;
+  /**
+   * The exact native producer, copied from the canonical message's own
+   * `UserSource`. It is never inferred from the context family, the
+   * contributor list, the assembly generation, message order, text, or
+   * the current extension registry.
+   */
+  source:
+    | {
+        type: 'runtime';
+      }
+    | {
+        contributor: CertifiedExtensionIdentity;
+        type: 'certified_extension';
+      };
+  preview?: TracePreview | null;
+  attachments: TraceArtifact[];
+  truncated: boolean;
+}
+/**
+ * Safe reference to the existing native artifact carrier, never a path.
+ */
+export interface TraceArtifact {
+  artifact_id: ArtifactId;
+  image: boolean;
+  name?: string | null;
+  mime_type?: string | null;
+}
+/**
  * Bounded Tool facts carried by a pageable summary row.
  */
 export interface TraceToolSummary {
@@ -4724,15 +4820,6 @@ export interface TraceToolCall {
   call_id: ToolCallId;
   tool_id: ToolId;
   name: string;
-}
-/**
- * Safe reference to the existing native artifact carrier, never a path.
- */
-export interface TraceArtifact {
-  artifact_id: ArtifactId;
-  image: boolean;
-  name?: string | null;
-  mime_type?: string | null;
 }
 /**
  * Heavy inspection detail for one exact record identity.
@@ -5508,7 +5595,11 @@ export interface UserMessageBlock {
     | {
         extension: {
           /**
-           * The rustX-derived logical extension identity.
+           * The stable logical key of one certified extension.
+           *
+           * Package/content attestation is intentionally not part of this type.  A
+           * package may be upgraded while preserving its logical ordering identity;
+           * the assembly generation records the attestation separately.
            */
           contributor: string;
         };
@@ -6753,7 +6844,11 @@ export interface UserMessageBlock1 {
     | {
         extension: {
           /**
-           * The rustX-derived logical extension identity.
+           * The stable logical key of one certified extension.
+           *
+           * Package/content attestation is intentionally not part of this type.  A
+           * package may be upgraded while preserving its logical ordering identity;
+           * the assembly generation records the attestation separately.
            */
           contributor: string;
         };
@@ -7619,7 +7714,11 @@ export interface UserMessageBlock2 {
     | {
         extension: {
           /**
-           * The rustX-derived logical extension identity.
+           * The stable logical key of one certified extension.
+           *
+           * Package/content attestation is intentionally not part of this type.  A
+           * package may be upgraded while preserving its logical ordering identity;
+           * the assembly generation records the attestation separately.
            */
           contributor: string;
         };
@@ -9164,7 +9263,11 @@ export interface UserMessageBlock3 {
     | {
         extension: {
           /**
-           * The rustX-derived logical extension identity.
+           * The stable logical key of one certified extension.
+           *
+           * Package/content attestation is intentionally not part of this type.  A
+           * package may be upgraded while preserving its logical ordering identity;
+           * the assembly generation records the attestation separately.
            */
           contributor: string;
         };

@@ -493,6 +493,13 @@ impl NativeContextContributor {
 pub struct CertifiedExtensionIdentity(String);
 
 impl CertifiedExtensionIdentity {
+    /// Longest logical key this identity admits.
+    ///
+    /// The bound is part of the identity contract, so every consumer that
+    /// carries an extension identity — including bounded presentation
+    /// projections — can prove it fits without a bound of its own.
+    pub const MAX_BYTES: usize = 128;
+
     /// Validates and canonicalizes a configured logical extension key.
     ///
     /// # Errors
@@ -505,8 +512,11 @@ impl CertifiedExtensionIdentity {
         if value.is_empty() {
             return Err("extension logical identity must not be empty".to_owned());
         }
-        if value.len() > 128 {
-            return Err("extension logical identity must be at most 128 bytes".to_owned());
+        if value.len() > Self::MAX_BYTES {
+            return Err(format!(
+                "extension logical identity must be at most {} bytes",
+                Self::MAX_BYTES
+            ));
         }
         if !value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._/-".contains(&byte)

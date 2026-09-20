@@ -36,10 +36,169 @@ repeated output are retry evidence. Tool joins include Attempt, logical Step,
 ToolCall ID and Tool ID; parallel physical completion never changes start order.
 Detached executions, Subagents and Workflows retain their own native identities.
 
-Native Runtime Client version 42 and App Server version 10 carry this mandatory
+Native Runtime Client version 43 and App Server version 13 carry this mandatory
 summary/detail vocabulary. SQLite schema 42 gates the persisted request terminal vocabulary including
 generation evidence. The Event Journal envelope framing is unchanged; this is
 request terminal event data, not a new Trace store.
+
+## Server-resolved presentation relationships
+
+Some facts a reader needs are relationships *between* records, not facts about
+one record. Trace resolves them from native authority and ships them as
+explicit bounded presentation facts. The browser renders these relationships;
+it never discovers them from adjacency, names, timestamps, DOM state or the
+currently loaded history window. None of them introduces a RuntimeEvent, a
+Trace table, or a second history or cache authority.
+
+### System Prompt state is a request-relative native fact
+
+`TraceRequestSummary.system_prompt` carries a closed state — `initial`,
+`changed`, `unchanged`, `previous_unavailable` — plus a bounded preview of the
+prompt the request introduced. `unchanged` carries no preview, because the
+preceding request's row already does.
+
+The predecessor is resolved by **native durable actual-request ordering**: one
+bounded, indexed, `limit = 1` seek for the nearest preceding
+`ModelRequestStarted` before this request's own anchor, constrained to the same
+captured read cut. It is never a Journal scan. The predecessor may belong to
+the previous retry, a recovery request, a previous logical Step or a previous
+Attempt; `retry_number == 0` is **not** evidence that no previous actual
+request exists.
+
+The comparison is exact historical value equality between the two requests'
+frozen `RequestSnapshot.effective_system_prompt` values. Current
+configuration, the current System Prompt assembly, current Agent state and
+`system_sections` names are never consulted, so reconfiguring a Session cannot
+rewrite an older row's classification.
+
+`initial` therefore means native authority proved there is no earlier actual
+request in this conversation. **Page boundaries cannot change the
+classification**: a page that begins in the middle of history reports exactly
+what a page containing the predecessor reports. `previous_unavailable` is the
+honest third answer for a predecessor whose frozen state the projection cannot
+establish at the captured cut; it never hides a durable read failure, which is
+propagated as an error under the existing durable contract.
+
+The complete prompt stays in `TraceRequestDetail.effective_system_prompt`
+under the existing bounded detail contract. A pageable summary carries only
+state and a preview, so a page of 32 requests never carries 32 prompts.
+
+### Context introduction comes from immutable request identity
+
+Canonical Context additions are a request-relative presentation relationship,
+not a new execution event. There is no `TraceKind::Context`, no `ContextAdded`
+RuntimeEvent and no fake Journal anchor.
+
+`TraceRequestSummary.context_additions` is projected from
+`RequestSnapshot.request_context_ids` — the exact ordered request-scoped
+canonical context facts committed atomically with that request's start — joined
+to the Message Ledger by keyed reads. Each referenced message is validated as a
+canonical `InboundKind::Context` User fact; an identity the Ledger does not hold
+as one is an invariant violation reported through the repository's ordinary
+reconstruction error model, never silently dropped or downgraded into an
+ordinary User message. The durable start transition checks structural Context
+identity/order, but does not prove Context Assembly provenance/family semantics.
+Trace therefore validates that semantic relationship independently.
+
+`TraceContextKind` is a closed presentation family — `goal_status`,
+`runtime_tool_observation`, `extension_environment`, `agent_status`. The
+internal `ContextKind` payload does not cross: a complete `GoalSnapshot` or
+Agent Status generation metadata never enters a summary.
+
+`TraceContextPresentation.source` is a closed typed provenance —
+`runtime`, or `certified_extension` carrying the **exact**
+`CertifiedExtensionIdentity` the canonical message froze. The family alone
+cannot name a producer: every certified extension publishes
+`extension_environment`, so two extensions would otherwise collapse into one
+indistinguishable provenance. Provenance is copied from the canonical
+message's own `UserSource` and from nothing else — not the assembly
+generation, the contributor list, the context family, message order, text or
+the current extension registry.
+
+Trace projects source and family jointly from the canonical `UserSource` and
+`ContextKind`. The complete Context Assembly matrix is:
+
+| Canonical source | Canonical kind | Trace source | Trace kind |
+| --- | --- | --- | --- |
+| Runtime | GoalStatus | Runtime | GoalStatus |
+| Runtime | RuntimeToolObservation | Runtime | RuntimeToolObservation |
+| Runtime | AgentStatus | Runtime | AgentStatus |
+| Extension { contributor } | ExtensionEnvironment | CertifiedExtension { exact contributor } | ExtensionEnvironment |
+
+Every other pair is `ConversationStoreError::InvalidReference`, including runtime
+ExtensionEnvironment and extension GoalStatus, RuntimeToolObservation or
+AgentStatus. A contradictory hidden canonical Context can be committed by a
+low-level composition; it must never become a contradictory presentation claim.
+There is no coercion, new wire variant, or Web-side semantic validation.
+
+The extension identity is bounded by its own contract (128 bytes),
+strictly below the Trace identity bound, so exact provenance always fits a
+summary row whole and is never shortened into a different identity.
+
+Order is exactly the frozen `request_context_ids` order. Nothing reorders by
+timestamp, family, contributor, display name or client preference.
+
+Because the Context Engine admits request context once, at the first successful
+request start, and retries and recovery reuse admitted context rather than
+admitting duplicates, the request that committed the identities is the one that
+exposes them and later requests of the same Step expose none. Trace keeps no
+"already displayed Context IDs" state machine; the immutable snapshot
+identities are the authority.
+
+`ModelInputMessage::RequestOnly`, including unresolved-output carryover, has no
+canonical `MessageId`. It stays request detail with the `request_only` role and
+is never labelled canonical Context presentation.
+
+### Tool-owned domains keep their exact originating ToolCall
+
+`TraceRecord.originating_tool_call_id` carries the exact `ToolCallId` copied
+from `BackgroundExecutionCommitted`, `SubagentOwnershipCommitted` and
+`WorkflowStarted`. One typed field serves all three; other record kinds carry
+none.
+
+The relation is never resolved from a Tool name, Agent name, Workflow name,
+`native_id`, timestamp, row adjacency, Attempt/Step proximity or browser order,
+so reused names cannot cross-correlate records. It remains present and exact
+when the parent Tool row is outside the loaded page. It is presentation and
+navigation correlation only: it changes no Tool lifecycle, ownership,
+settlement or cancellation, and no Background, Subagent or Workflow lifecycle.
+
+rustX has no native nested Tool-call execution path with parent/child call
+identities, so there is no `TraceKind::Subtool`, no nested-Tool trait and no
+generic Subtool framework. Subagent and Workflow are not Subtool.
+
+### What stays out of lifecycle, and what the browser may not do
+
+`TraceLifecycle` carries mutable lifecycle facts only. It never repeats or
+mutates the immutable System Prompt or Context presentation payloads, and it
+never carries `originating_tool_call_id`: these cannot have changed.
+
+The projection owns that separation, not just the wire shape. Trace has two
+read responsibilities, and neither is allowed to depend on the other:
+
+```text
+anchor      native identity, own grouping, own durable terminal    shared
+  summary     + bounded preview + the relationships above          session/trace
+  lifecycle   + current runtime evidence                           refresh
+```
+
+A lifecycle refresh resolves only the facts a `TraceLifecycle` transmits. It
+performs no System Prompt predecessor lookup, reads no predecessor
+`RequestSnapshot`, joins no canonical Context out of the Message Ledger, and
+resolves no recorded Tool name. A refresh may cover up to 512 records, so
+this is a correctness rule and not only a cost one: an error reached solely
+while resolving a request's immutable Context presentation must not be able
+to make that record's lifecycle repair unavailable, and a path that is never
+entered cannot fail. Deterministic regressions assert this as an
+implementation property — counters around both relationship paths, zero after
+a refresh — rather than inferring it from timing.
+
+Web renders these relationships and owns none of them. It must not compare
+request details to decide whether the System Prompt changed, must not diff
+request messages to decide Context introduction, and must not use adjacency or
+names to correlate a domain record with a Tool call. Loaded-window search may
+index the bounded semantic labels and identities these DTOs carry, but search
+is never relationship authority.
 
 ## Summary and detail
 
@@ -202,7 +361,14 @@ options are counted. This is a field contract, not heuristic secret scanning.
 
 Bounds are explicit: previews 512 UTF-8 bytes; detail text 16 KiB; 32 content
 blocks per message; 64 request messages and 64 definitions; JSON depth 12,
-1,024 visited nodes and 4 KiB string leaves. Oversized object keys are omitted
+1,024 visited nodes and 4 KiB string leaves. One request summary carries at
+most 16 Context presentation facts, 4 artifact references each, and 4 KiB
+encoded for the whole list. Trace owns that encoded bound: an upstream Context
+Assembly limit constrains how much context a request may carry and says nothing
+about the bytes that context becomes once identities, previews and artifact
+references are projected. Truncation retains a deterministic prefix in frozen
+order, surfaces `context_truncated`, and releases an entry's content before its
+identity, so an adversarial fact can never erase the identity it names. Oversized object keys are omitted
 rather than aliased by shortening. Identities over 512 bytes are omitted whole.
 Summary records are at most 8 KiB, page records 128 KiB and one detail 512 KiB
 encoded JSON. Every omitted or shortened value carries a truncation indication.

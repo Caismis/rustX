@@ -17,13 +17,16 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type {
   TraceArtifact,
   TraceContentBlock,
+  TraceContextKind,
+  TraceContextPresentation,
   TraceDetail,
   TraceGeneration,
   TraceJson,
   TraceRecord,
+  TraceSystemPromptPresentation,
   TraceText,
   TraceToolDefinition,
-} from '../../../../protocol/app-server/v12';
+} from '../../../../protocol/app-server/v13';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Button } from '../../presentation/primitives/Button';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
@@ -220,6 +223,124 @@ function Generation({ generation }: { generation: TraceGeneration }) {
   );
 }
 
+/**
+ * What the server's System Prompt classification means, in words.
+ *
+ * Each sentence states the native authority behind the classification,
+ * because the difference that matters to a reader is *what was compared*:
+ * the nearest preceding actual request, not the previous row on screen.
+ */
+const SYSTEM_PROMPT_STATE: Record<
+  TraceSystemPromptPresentation['state'],
+  { label: string; note: string }
+> = {
+  initial: {
+    label: 'Initial',
+    note: 'No earlier actual request exists in this conversation.',
+  },
+  changed: {
+    label: 'Changed',
+    note: 'The nearest preceding actual request froze a different prompt.',
+  },
+  unchanged: {
+    label: 'Unchanged',
+    note: 'The nearest preceding actual request froze the identical prompt.',
+  },
+  previous_unavailable: {
+    label: 'Previous unavailable',
+    note: 'A preceding request exists, but its frozen prompt could not be established at this read cut.',
+  },
+};
+
+/** Display names for the closed Context presentation families. */
+const CONTEXT_KIND: Record<TraceContextKind, string> = {
+  goal_status: 'Goal status',
+  runtime_tool_observation: 'Runtime tool observation',
+  extension_environment: 'Extension environment',
+  agent_status: 'Agent status',
+};
+
+/**
+ * The exact native producer the server copied from the canonical message.
+ *
+ * Two certified extensions publish the same Context family, so the family
+ * cannot name the producer and this renders the contributor identity the
+ * server sent. No name is derived from the Context kind, and no extension
+ * catalog is consulted: this is display of a resolved fact, not inference.
+ */
+function contextSource(source: TraceContextPresentation['source']): string {
+  return source.type === 'runtime' ? 'Runtime' : `Extension ${source.contributor}`;
+}
+
+/**
+ * The System Prompt relationship the server resolved for this request.
+ *
+ * Nothing here compares request details. The classification, and the page
+ * independence that makes it trustworthy, are native facts; this renders
+ * them and names the complete prompt's own home.
+ */
+function SystemPrompt({ system }: { system: TraceSystemPromptPresentation }) {
+  const { label, note } = SYSTEM_PROMPT_STATE[system.state];
+  return (
+    <>
+      <dt>System prompt</dt>
+      <dd>
+        {label}
+        <p className={css.note}>{note}</p>
+        {system.preview && (
+          <>
+            <p className={css.machine}>{system.preview.text}</p>
+            <Truncated of={system.preview.truncated} />
+          </>
+        )}
+      </dd>
+    </>
+  );
+}
+
+/**
+ * Canonical Context this request introduced, in the server's frozen order.
+ *
+ * The order is `RequestSnapshot.request_context_ids`, so it is rendered as
+ * given: no sort by time, family, provenance or label happens here.
+ */
+function ContextAdditions({
+  additions,
+  truncated,
+}: {
+  additions: readonly TraceContextPresentation[];
+  truncated: boolean;
+}) {
+  return (
+    <>
+      <h3 className={css.sectionLabelHeading}>Context introduced by this request</h3>
+      <p className={css.note}>
+        The canonical context facts this actual request committed with its own start. A retry or
+        recovery request reuses admitted context and introduces none.
+      </p>
+      {additions.length === 0 && (
+        <p className={css.unavailable}>This request introduced no canonical context</p>
+      )}
+      {additions.map(addition => (
+        <section key={addition.message_id} className={css.requestMessage}>
+          <h4 className={css.blockLabel}>
+            {CONTEXT_KIND[addition.context_kind]} · {contextSource(addition.source)}
+            <span className={css.machine}> {addition.message_id}</span>
+          </h4>
+          {addition.preview && <p className={css.preview}>{addition.preview.text}</p>}
+          {addition.attachments.length > 0 && <Attachments artifacts={addition.attachments} />}
+          <Truncated of={addition.truncated} />
+        </section>
+      ))}
+      {truncated && (
+        <p className={css.truncated}>
+          Further context facts omitted at the summary bound; the first, in native order, are shown.
+        </p>
+      )}
+    </>
+  );
+}
+
 /** The sections available for one record, given what the server projected. */
 function sectionsOf(record: TraceRecord, detail: TraceDetail | undefined): string[] {
   const request = detail?.request ?? undefined;
@@ -228,7 +349,11 @@ function sectionsOf(record: TraceRecord, detail: TraceDetail | undefined): strin
   return [
     'Summary',
     ...(messages.length > 0 ? ['Content', 'Raw'] : []),
-    ...(request ? ['Prompt', 'Context', ...(request.tools.length ? ['Tools'] : []), 'Options'] : []),
+    ...(request ? ['Prompt'] : []),
+    // Context opens from the summary alone: the introduced facts are native,
+    // so a reader does not wait for heavy detail to see them.
+    ...(record.request ? ['Context'] : []),
+    ...(request ? ['Context', ...(request.tools.length ? ['Tools'] : []), 'Options'] : []),
     ...(tool ? ['Input'] : []),
     ...(tool?.source ? ['Code'] : []),
     ...(messages.some(message => message.blocks.some(block => block.type === 'reasoning')) ? ['Thinking'] : []),
@@ -365,6 +490,23 @@ export function TrajectoryInspector({
                 <dd>{record.request.previous_failure_kind ?? <Unavailable />}</dd>
                 <dt>Failure class</dt>
                 <dd>{record.request.failure_kind ?? 'None recorded'}</dd>
+                <SystemPrompt system={record.request.system_prompt} />
+                <dt>Context introduced</dt>
+                <dd>
+                  {record.request.context_additions.length}
+                  {record.request.context_truncated ? ' (bounded)' : ''}
+                </dd>
+              </>
+            )}
+            {record.originating_tool_call_id && (
+              <>
+                <dt>Originating ToolCall</dt>
+                <dd className={css.machine}>{record.originating_tool_call_id}</dd>
+                <dd className={css.note}>
+                  Server-resolved navigation correlation from this domain's own start fact. It
+                  remains exact when the parent Tool row is outside the loaded window, and it
+                  confers no lifecycle, ownership or settlement authority.
+                </dd>
               </>
             )}
             {record.tool && (
@@ -458,6 +600,13 @@ export function TrajectoryInspector({
         {active === 'Prompt' && request && (<><h3 className={css.sectionLabelHeading}>Effective system prompt</h3><Text value={request.effective_system_prompt} markdown /></>)}
 
         {active === 'Thinking' && messages.map(message => <section key={message.message_id}>{message.blocks.filter(block => block.type === 'reasoning').map((block, index) => <Text key={index} value={block.text} markdown />)}</section>)}
+
+        {active === 'Context' && record.request && (
+          <ContextAdditions
+            additions={record.request.context_additions}
+            truncated={record.request.context_truncated}
+          />
+        )}
 
         {active === 'Context' && request && (
           <>

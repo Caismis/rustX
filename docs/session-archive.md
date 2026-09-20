@@ -247,7 +247,7 @@ are absent, while authored secret-looking text and temperature remain present.
 
 `SessionArchivePrepareError` contains only closed semantic reasons, never raw
 OS/provider strings or implementation paths. Missing/unreadable descendants and
-required unavailable/unsettled artifacts become v12
+required unavailable/unsettled artifacts become current-protocol
 `archive_preparation_failed { reason: descendant_unavailable | artifact_unavailable }`.
 Other reasons distinguish unavailable Conversation history, corrupt authority,
 storage/cut failure and cancellation. Unknown Session and capacity conditions use
