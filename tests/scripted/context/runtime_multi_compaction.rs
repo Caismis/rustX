@@ -1173,7 +1173,7 @@ async fn session_summary_mode_freezes_the_attempt_summary_model_against_mid_atte
     host.model_set(SessionModelConfig::of(
         ModelRef::parse("fixture/model-b").expect("valid reference"),
     ))
-    .expect("the update is valid");
+    .expect_err("active Attempt refuses model adoption");
 
     release.send_replace(true);
     receive_until(&subscription, settled).await;
@@ -1203,6 +1203,10 @@ async fn session_summary_mode_freezes_the_attempt_summary_model_against_mid_atte
         "the overflow retry stays inside the frozen attempt snapshot"
     );
 
+    host.model_set(SessionModelConfig::of(
+        ModelRef::parse("fixture/model-b").unwrap(),
+    ))
+    .expect("idle model adoption");
     // The update is live for future attempts only.
     let view = fixture.runtime.model_view();
     assert_eq!(

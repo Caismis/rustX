@@ -42,14 +42,8 @@ client/runtime/workspace authority; the provenance gate enforces this direction.
 - Composer retains native Send/Queue/Steer, IME/focus, typed commands, uploads,
   Todo/Goal/Queue and lineage. Stop acknowledgement does not settle an attempt;
   an acknowledged Stop remains fenced even if its subsequent snapshot read fails.
-- Model menus and `/model` expose exact native references/defaults/advertised
-  profiles. Live selection uses actual v6 `settings/setModel`; durable
-  `settings/selectModel` remains a distinct revision-CAS authoring operation.
-  Acknowledgement/lost-response guards fence dependent Send until authority is read.
-- Permission uses existing CFG3 source-unit CAS and explicit Reload. The bounded
-  native `SourceSettings.prospective_approval_mode` projection supplies desired
-  policy. Loaded effective and active frozen policy remain separate native facts.
-  Save is not publication; Apply saved policy is disabled while an attempt runs.
+- Historical model and permission publication checks are superseded by issue #380.
+  See [current configuration contracts](../docs/configuration.md).
 - Existing generation, AttachmentTarget/incarnation, replay-gap, late-socket and
   navigation fences remain. Disconnect does not cancel work or settle interactions.
 

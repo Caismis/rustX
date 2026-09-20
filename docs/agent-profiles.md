@@ -79,6 +79,6 @@ admitted child's finite demand through the existing source lifecycle owner.
 An Attempt pins one immutable generation. Child resolution consumes that Attempt's
 resource/catalog/model snapshot, then freezes exact Tool definitions, source
 bindings, Skill bytes and versions, model decision and policies. It does not read
-current files or current Root defaults. Subsequent Save or Reload cannot mutate
+current files or current Root defaults. Subsequent configuration publication cannot mutate
 that child. Cold composition rereads current sources and validates deliberate
 Session model intent; materialized Agent profiles are not Session persistence.

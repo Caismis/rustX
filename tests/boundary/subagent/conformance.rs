@@ -319,13 +319,6 @@ fn test_spawn_plan(runtime_root: &std::path::Path) -> SubagentSpawnPlan {
         product_root: crate::runtime::local_storage::ProductRoot::create(runtime_root)
             .expect("product root"),
         // The frozen policies every child launch inherits (Issues #138/#204).
-        model_timeout_policy: inherited_policy(),
-        tool_deadline_policy: inherited_tool_deadline_policy(),
-        context: rustx::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
     }
 }
 
@@ -737,6 +730,7 @@ async fn launch_wired_child_full(
         .registry
         .prepare(
             &SubagentStartSpec {
+                execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                 resolved: resolved_child_spec("conformance"),
                 approval_mode: rustx::runtime::ApprovalMode::Policy,
                 task: task.to_owned(),
@@ -1121,9 +1115,26 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
         &AgentId::new("agent-parent"),
         &resolved_child_spec("conformance"),
         rustx::runtime::ApprovalMode::Policy,
+        rustx::runtime::subagent::InheritedExecutionPolicy {
+            model_timeout: inherited_policy(),
+            tool_deadline: inherited_tool_deadline_policy(),
+            context: rustx::context::SessionContextPolicy {
+                reserve_tokens: 123,
+                keep_recent_tokens: 456,
+                summary_output_cap: Some(789),
+            },
+        },
         &physical_root,
         &workspace,
         &rustx::runtime::subagent::SubagentTerminalMode::Normal,
+    );
+    assert_eq!(
+        spec.context,
+        rustx::context::SessionContextPolicy {
+            reserve_tokens: 123,
+            keep_recent_tokens: 456,
+            summary_output_cap: Some(789),
+        }
     );
     assert_eq!(spec.model_timeout_policy, inherited_policy());
     assert_ne!(
@@ -5937,109 +5948,6 @@ async fn accepted_steers_are_observed_in_their_durable_acceptance_order() {
             "the ordinary continuation turn observed {message}"
         );
     }
-}
-
-/// A steer never reconstructs the child from current runtime resources.
-///
-/// The parent's runtime resource generation is reloaded *while the child is
-/// running* and between two steers; the child nevertheless keeps running
-/// under exactly the launch authority frozen at its start — the same frozen
-/// definition digest and named agent on the parent side, and, on the child
-/// side, byte-identical system authority and tool exposure across the turn
-/// before the reload and the turn after it — while still observing both
-/// steers. `SubagentRegistry::steer` cannot do otherwise: it accepts only a
-/// `SubagentId` and a message, so there is no resolver, no definition, and
-/// no launch specification anywhere on the path.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn steering_preserves_the_child_frozen_launch_authority_across_a_resource_reload() {
-    let dir = tempfile::tempdir().expect("temp root");
-    let parent = parent_runtime_plane(
-        &dir,
-        "conv_7cbdc3d8-1447-76d3-95da-044b6a29356e",
-        Vec::new(),
-    )
-    .await;
-    let (release, released) = support::fake::model_release();
-    let child = child_fixture(
-        &dir,
-        &ConversationId::new("conv_8134db98-8ecf-70b3-81e4-d6b626eadce4"),
-        vec![
-            parking_answer_script("working", released),
-            answer_script("done under the original authority"),
-        ],
-        ToolRegistry::new(),
-        Vec::new(),
-    )
-    .await;
-    let wired = launch_wired_child(&parent.plane, &child, "the delegated task").await;
-    await_model_parks(&child.model, 1).await;
-    let frozen = parent
-        .plane
-        .registry
-        .snapshot(&wired.accepted.subagent_id)
-        .expect("the running child record");
-
-    parent
-        .plane
-        .registry
-        .steer(&wired.accepted.subagent_id, "before the reload")
-        .await
-        .expect("accepted");
-
-    // Owned child work makes full configuration publication deterministically busy.
-    let before = parent.runtime.runtime_resources();
-    assert!(matches!(
-        parent.runtime.reload_configuration().await,
-        Err(rustx::runtime::RuntimeResourceReloadError::Busy {
-            reason: rustx::runtime::RuntimeResourceReloadBusyReason::OwnedWork
-        })
-    ));
-    assert!(Arc::ptr_eq(&before, &parent.runtime.runtime_resources()));
-
-    parent
-        .plane
-        .registry
-        .steer(&wired.accepted.subagent_id, "after the reload")
-        .await
-        .expect("the reload does not disturb the running child's steerability");
-
-    release.send(true).expect("release the parked child model");
-    await_serve(wired.serve).await;
-    let settled = parent
-        .plane
-        .registry
-        .wait_until_settled(&wired.accepted.subagent_id)
-        .await
-        .expect("terminal settlement");
-
-    // The child's frozen launch authority is byte-identical before and
-    // after the reload.
-    assert_eq!(settled.agent, frozen.agent);
-    assert_eq!(settled.definition_digest, frozen.definition_digest);
-    assert_eq!(settled.child_agent_id, frozen.child_agent_id);
-    assert_eq!(settled.child_conversation_id, frozen.child_conversation_id);
-    assert_eq!(settled.profile, frozen.profile);
-
-    let requests = child.model.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(
-        requests[0].effective_system_prompt, requests[1].effective_system_prompt,
-        "the reload never re-authors the running child's frozen system authority"
-    );
-    assert_eq!(
-        requests[0].tools, requests[1].tools,
-        "a steer never widens, narrows, or substitutes the child's frozen tools"
-    );
-    assert_eq!(
-        requests[0].model(),
-        requests[1].model(),
-        "a steer never re-resolves the child's frozen model"
-    );
-    assert!(
-        request_carries_user_text(&requests[1], "before the reload")
-            && request_carries_user_text(&requests[1], "after the reload"),
-        "both steers still reached the existing child conversation"
-    );
 }
 
 /// Steering a child that has already settled is refused, and the settled

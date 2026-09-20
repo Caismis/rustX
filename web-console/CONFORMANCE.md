@@ -69,9 +69,9 @@ what a screenshot happens to show.
 | Commands / lineage | `commands.spec.ts`: fuzzy identity, typed model selection, unknown refusal, Retry branch, original history, exact Fork boundary/upload copies; `uploads.spec.ts` source deletion independence | `commands.test.tsx`: stale cuts, response-loss native reread without replay, pending-inbound admission boundary, obsolete navigation epochs; native fork/cut tests retain immutable historical revisions (old does not necessarily mean invalid) |
 | Host / routing | `workspaces.spec.ts`: independent Hosts/processes, exact-root routing, native Workspace settings | Host navigation authorization is separate from configuration; no Workspace trust gate |
 | Provider/model | `settings.spec.ts`: independent User/Workspace add/edit/delete and complete replacement; `recovery.spec.ts`: CAS and response loss | `cfg3_catalog` credential isolation, semantic overlay and source CAS tests; Settings components |
-| MCP | `integrations.spec.ts`: inert definitions, complete Workspace shadow, CAS and explicit Reload | Native MCP definition/source-demand tests; no browser connection manager |
+| MCP | `integrations.spec.ts`: inert definitions, complete Workspace shadow, CAS and explicit Session adoption | Native MCP definition/source-demand tests; no browser connection manager |
 | Skills / Agents / Workflows / Plugins | `workflow.spec.ts`: inventory and separate allowlists; `integrations.spec.ts`: complete named-Agent editor and default-off Plugins | Native frozen-child, Skill visibility and Workflow demand tests; full Skill/Python/Workflow source editors are out of scope |
-| Configuration lifecycle | `console.spec.ts`: busy/frozen Attempt; `settings.spec.ts`: Save/pending/Reload/failure; `recovery.spec.ts`: lost replies without replay | One immutable generation; native candidate/publication gates, source CAS and current-file cold composition |
+| Configuration lifecycle | `console.spec.ts`: busy/frozen Attempt; `settings.spec.ts`: automatic application/adoption/failure; `recovery.spec.ts`: lost replies without replay | One immutable generation; native candidate/publication gates, source CAS and retained Session bindings |
 | Accessibility / responsive | `accessibility.spec.ts`: real keyboard-only connection→Workspace→Session→composer→command→Trajectory→Settings→MCP at 390/820/1280/1600, Escape restoration, focus, reduced motion; existing foundation, composer and inspector tests | Shared horizontal tab keyboard behavior, labelled panels, Harness modal/menu/hover-card contracts. Chromium coverage; not a WCAG certification or other-browser result |
 | Browser lifetime | `chat.spec.ts`: direct object-URL registry counts through repeated decode/lightbox/reconnect/unmount; `console.spec.ts`: 34 controller releases; `recovery.spec.ts`: scoped drafts across User/Workspace and Workspace A/B | Exact bounded log counters (`diagnostics.test.ts`), cache capacities, URL caps/disposal, stale socket/attachment/page callbacks, listener unsubscribe closures and remount tests. No noisy RSS thresholds |
 | Provenance / license | Existing build artifact gate and `check:provenance`; optional `--reference` audit | Per-file immutable original/local hashes and separately pinned current/historical inspections; pinned SHA, notices for 100 production packages, presentation import boundary. See PROVENANCE.md |
@@ -90,7 +90,8 @@ admitted demand drives MCP/Python preparation. Current Todo/Goal/Queue state bel
 to its conversation/domain owner, outside configuration.
 
 Web owns drafts/forms; Effective is a native read-only projection. Save commits
-source bytes by CAS; Reload publishes one coherent generation. Named-Agent and MCP
+source bytes by CAS and transfers reconciliation to the native coordinator. Complete
+cache-preserving units apply automatically; prepared context changes need explicit Session adoption. Named-Agent and MCP
 editors are structured; full Skill/Python/Workflow source editors are not required.
 
 ## Synchronization and fault injection
@@ -148,7 +149,7 @@ Agent references; the real-server suite runs the same production entry path.
 | One Stop request; native terminal phase; disconnect inert | `agent.test.tsx`, `client.test.ts` |
 | Queue/Steer native mailbox semantics, IME/uploads/typed commands | `composer-context.test.tsx`, `commands.test.tsx`, real `composer.spec.ts` |
 | Native model/catalog/profile, no inferred options, uncertain mutation Send fence | `agent.test.tsx`, `commands.test.tsx` |
-| Desired source CAS versus active frozen policy and explicit Reload | `agent.test.tsx`, native `agent_permission_projection_uses_native_resolution_and_source_cas`, CFG3 tests |
+| Desired source CAS versus active frozen policy and automatic application | `agent.test.tsx`, native `agent_permission_projection_uses_native_resolution_and_source_cas`, CFG3 tests |
 | Light/dark/narrow and shared shell | pinned `agent.spec.ts`, `shell.spec.ts`, `foundation.spec.ts`; keyboard real-server acceptance |
 
 

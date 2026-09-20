@@ -96,7 +96,7 @@ test("Welcome consumes native origins, complete tools, extensions and admitted d
 });
 
 function sources() {
-  return { prospective_approval_mode: "full_access" as const, absent_resource_revision: "absent", resource_revisions: {}, loaded: { generation: "1", pending_reload: true, changed_sources: ["workspace"] }, user: { path: "/user", revision: "u" }, workspace: { path: "/workspace", revision: "exact-cas" }, user_resource_root: "/ur", workspace_resource_root: "/wr", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, workspace_mcp: { path: "/wm", revision: "wm" }, agents: [] };
+  return { prospective_approval_mode: "full_access" as const, absent_resource_revision: "absent", resource_revisions: {}, loaded: { generation: "1", changed_sources: ["workspace"] }, user: { path: "/user", revision: "u" }, workspace: { path: "/workspace", revision: "exact-cas" }, user_resource_root: "/ur", workspace_resource_root: "/wr", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, workspace_mcp: { path: "/wm", revision: "wm" }, agents: [] };
 }
 
 test("permissions write exact Workspace revision, reread, and keep frozen/effective policy", async () => {
@@ -110,9 +110,9 @@ test("permissions write exact Workspace revision, reread, and keep frozen/effect
   h.transport.respond(read.id, { type: "source_settings", session_revision: "1", projection: sources() });
   await saving;
   assert.equal(h.session.state.effectiveApprovalMode, "policy");
-  assert.match(view.render(160).join("\n"), /Current: policy[\s\S]*frozen[\s\S]*Desired: full access[\s\S]*pending publication/i);
+  assert.match(view.render(160).join("\n"), /Current: policy[\s\S]*frozen[\s\S]*Desired: full access/i);
   assert.equal(h.transport.transportCount("configuration/sourceWrite"), 1);
-  assert.equal(h.transport.transportCount("configuration/reload"), 0);
+  assert.equal(h.transport.transportCount("session/adoptConfiguration"), 0);
   h.client.close();
 });
 
@@ -205,22 +205,22 @@ test("exact historical completed_response drives tails and whole-conversation st
   assert.match(transcriptString(replaceFromSnapshot(native, "20")), /120 tok · 18.0s/);
 });
 
-test("permission publication is explicit and only native reread updates Effective", async () => {
+test("T12/T16 native application notifications reject reorder and adoption sends the inspected identity", async () => {
   const h = await harness();
-  const applying = h.session.publishPermissions();
-  const reload = await nextRequest(h, "configuration/reload", 0);
-  assert.deepEqual(reload.params, { target: h.target });
-  assert.equal(h.session.state.effectiveApprovalMode, "policy");
-  h.transport.respond(reload.id, { type: "configuration_reloaded", resource_revision: "2", capability_revision: "2" });
-  const read = await nextRequest(h, "session/snapshot", 0);
-  h.transport.respond(read.id, { type: "snapshot", snapshot: snapshot({ effective_approval_mode: "full_access" }), cursor: "2" });
-  const subscribe = await nextRequest(h, "session/subscribe", 0);
-  h.transport.respond(subscribe.id, { type: "subscribed", after_cursor: "2" });
-  const source = await nextRequest(h, "configuration/sourcesRead", 0);
-  h.transport.respond(source.id, { type: "source_settings", session_revision: "1", projection: sources() });
-  await applying;
-  assert.equal(h.session.state.effectiveApprovalMode, "full_access");
-  assert.equal(h.transport.transportCount("configuration/reload"), 1); h.client.close();
+  const candidate = { identity: { input_revision: "input", attempt: "4" }, expected_binding: "2", impact: "prefix_changed" as const };
+  const application = { scope: h.session.sessionId, version: "9007199254740993", desired: candidate.identity,
+    units: { execution_policy: { status: "applied" as const }, instructions: { status: "ready" as const, impact: "prefix_changed" as const } }, candidate };
+  h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application } });
+  h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application: { ...application, version: "9", candidate: null } } });
+  assert.deepEqual(h.session.application, application);
+  const adopting = h.session.adoptConfiguration(candidate);
+  const request = await nextRequest(h, "session/adoptConfiguration", 0);
+  assert.deepEqual(request.params, { session_id: h.session.sessionId, candidate: candidate.identity, expected_binding: candidate.expected_binding });
+  h.transport.respond(request.id, { type: "configuration_application", application: { ...application, version: "9007199254740994", candidate: null } });
+  await adopting;
+  assert.equal(h.session.application?.candidate, null);
+  assert.equal(h.transport.transportCount("session/adoptConfiguration"), 1);
+  h.client.close();
 });
 
 test("settlement reads native response statistics instead of summing usage events", async () => {
@@ -291,4 +291,20 @@ test("queued edit submits exact pre-submit whitespace and trailing newlines with
     assert.equal(h.transport.transportCount("session/snapshot"), 0);
     h.client.close();
   }
+});
+
+test("T03/T16 permissions render native mixed application state", async () => {
+  const h = await harness();
+  const application: import("../src/protocol/app-server.ts").ConfigurationApplication = {
+    scope: h.session.sessionId, version: "9", desired: { input_revision: "input", attempt: "2" },
+    units: { execution_policy: { status: "applied" }, capabilities: { status: "preparing" }, provider: { status: "failed", diagnostic: "failed" }, process_bindings: { status: "process_restart" } },
+    candidate: { identity: { input_revision: "input", attempt: "2" }, expected_binding: "1", impact: "prefix_changed" },
+  };
+  const view = new PermissionsView(h.session, { ...sources(), application }, () => {}, () => {});
+  view.setBodyHeight(30);
+  const rendered = plain(view.render(160).join("\n"));
+  for (const text of ["Preparing configuration", "Applied for future independent Attempts", "Context changes await adoption", "Application failed", "Process restart required"]) assert.ok(rendered.includes(text), text);
+  assert.equal(h.transport.transportCount("configuration/reconcile"), 0);
+  assert.equal(h.transport.transportCount("session/adoptConfiguration"), 0);
+  h.client.close();
 });

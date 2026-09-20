@@ -2,6 +2,7 @@
 //! No provider, Session runtime, or external source is prepared here.
 //! Source content is reread per call; admitted configurations own their capture.
 
+pub mod application;
 pub mod settings;
 
 use crate::bounded_file::read_bounded;
@@ -218,11 +219,13 @@ pub enum Origin {
 /// Validated Session configuration authority consumed by the existing native composition owner.
 #[derive(Debug, Clone)]
 pub struct AdmittedSessionConfig {
+    pub(crate) binding_revision: u64,
     pub(crate) credentials: crate::credentials::CredentialSnapshot,
     prospective: Box<ProspectiveSessionConfig>,
 }
 
 /// Shared authority, source overlay and path capture, before domain validation.
+#[derive(Clone)]
 struct LayerCapture {
     revisions: BTreeMap<PathBuf, String>,
     locations: SessionLocations,
@@ -250,6 +253,7 @@ pub(crate) struct SourceCapture {
 /// Admission adds credentials; native composition owns external preparation.
 #[derive(Clone)]
 pub struct ProspectiveSessionConfig {
+    pub(crate) component_revisions: BTreeMap<application::ApplyUnit, String>,
     pub(crate) source_revisions: BTreeMap<PathBuf, String>,
     pub(crate) effective: RuntimeLayer,
     pub(crate) root_agent_project_files: Vec<crate::runtime::resources::ProjectContextFile>,
@@ -274,7 +278,303 @@ pub struct ProspectiveSessionConfig {
     project_resources: Vec<PathBuf>,
 }
 
+/// Captured authority for the two independent policy units, including when
+/// resource resolution fails. Both source and runtime composition consume it.
+#[derive(Clone)]
+pub(crate) struct IndependentPolicy {
+    pub(crate) config: CurrentRuntimeConfig,
+    effective: RuntimeLayer,
+    provenance: BTreeMap<String, Origin>,
+    revision: String,
+}
+impl std::ops::Deref for IndependentPolicy {
+    type Target = CurrentRuntimeConfig;
+    fn deref(&self) -> &Self::Target {
+        &self.config
+    }
+}
+
+/// Fixed unit ownership, shared by source and runtime projections. Replacing
+/// the owned keys also removes provenance for fields no longer authored.
+pub(crate) fn copy_unit_provenance(
+    target: &mut BTreeMap<String, Origin>,
+    source: &BTreeMap<String, Origin>,
+    unit: application::ApplyUnit,
+) {
+    use application::ApplyUnit;
+    let prefixes: &[&str] = match unit {
+        ApplyUnit::ExecutionPolicy => &[
+            "approval_mode",
+            "model_timeout_policy",
+            "tool_deadline_policy",
+        ],
+        ApplyUnit::SharedCapacity => &["subagents"],
+        ApplyUnit::Instructions => &["agent.instructions", "agent.agents_md", "context"],
+        ApplyUnit::Provider => &["agent.model", "models", "providers"],
+        ApplyUnit::Capabilities | ApplyUnit::ProcessBindings => unreachable!("not a composed unit"),
+    };
+    let owned = |key: &str| {
+        prefixes.iter().any(|prefix| {
+            key == *prefix
+                || key
+                    .strip_prefix(prefix)
+                    .is_some_and(|suffix| suffix.starts_with('.'))
+        })
+    };
+    target.retain(|key, _| !owned(key));
+    target.extend(
+        source
+            .iter()
+            .filter(|(key, _)| owned(key))
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+}
+impl IndependentPolicy {
+    pub(crate) fn compose_execution_policy<P>(
+        &self,
+        config: &mut CurrentRuntimeConfig,
+        effective: &mut RuntimeLayer<P>,
+        provenance: &mut BTreeMap<String, Origin>,
+        revisions: &mut BTreeMap<application::ApplyUnit, String>,
+    ) {
+        let unchanged = config.approval_mode == self.config.approval_mode
+            && config.model_timeout_policy == self.config.model_timeout_policy
+            && config.tool_deadline_policy == self.config.tool_deadline_policy
+            && effective.approval_mode == self.effective.approval_mode
+            && effective.model_timeout_policy == self.effective.model_timeout_policy
+            && effective.tool_deadline_policy == self.effective.tool_deadline_policy;
+        let old_provenance = provenance.clone();
+        config.approval_mode = self.config.approval_mode;
+        config.model_timeout_policy = self.config.model_timeout_policy;
+        config.tool_deadline_policy = self.config.tool_deadline_policy;
+        effective.approval_mode = self.effective.approval_mode;
+        effective
+            .model_timeout_policy
+            .clone_from(&self.effective.model_timeout_policy);
+        effective
+            .tool_deadline_policy
+            .clone_from(&self.effective.tool_deadline_policy);
+        copy_unit_provenance(
+            provenance,
+            &self.provenance,
+            application::ApplyUnit::ExecutionPolicy,
+        );
+        if !unchanged || *provenance != old_provenance {
+            revisions.insert(
+                application::ApplyUnit::ExecutionPolicy,
+                self.revision.clone(),
+            );
+        }
+    }
+    pub(crate) fn compose_shared_capacity<P>(
+        &self,
+        config: &mut CurrentRuntimeConfig,
+        effective: &mut RuntimeLayer<P>,
+        provenance: &mut BTreeMap<String, Origin>,
+        revisions: &mut BTreeMap<application::ApplyUnit, String>,
+    ) {
+        let unchanged = config.subagents == self.config.subagents
+            && effective.subagents == self.effective.subagents;
+        let old_provenance = provenance.clone();
+        config.subagents = self.config.subagents.clone();
+        effective.subagents.clone_from(&self.effective.subagents);
+        copy_unit_provenance(
+            provenance,
+            &self.provenance,
+            application::ApplyUnit::SharedCapacity,
+        );
+        if !unchanged || *provenance != old_provenance {
+            revisions.insert(
+                application::ApplyUnit::SharedCapacity,
+                self.revision.clone(),
+            );
+        }
+    }
+}
+
 impl ProspectiveSessionConfig {
+    pub(crate) fn compose_execution_policy(&mut self, desired: &IndependentPolicy) {
+        desired.compose_execution_policy(
+            std::sync::Arc::make_mut(&mut self.config),
+            &mut self.effective,
+            &mut self.provenance,
+            &mut self.component_revisions,
+        );
+    }
+
+    pub(crate) fn compose_shared_capacity(&mut self, desired: &IndependentPolicy) {
+        desired.compose_shared_capacity(
+            std::sync::Arc::make_mut(&mut self.config),
+            &mut self.effective,
+            &mut self.provenance,
+            &mut self.component_revisions,
+        );
+    }
+
+    /// The physical/profile closure admitted by Root selection and Workflow
+    /// Agent nodes (including nested nodes and invocation overrides). Unrelated
+    /// catalog entries remain inert.
+    fn admitted_agent_dependencies(
+        &self,
+    ) -> std::collections::BTreeSet<crate::runtime::subagent::SubagentName> {
+        let mut names: std::collections::BTreeSet<_> =
+            self.config.agent.agents.iter().cloned().collect();
+        for id in &self.config.agent.workflows {
+            if let Some(entry) = self.workflows.entries().get(id) {
+                names.extend(
+                    entry
+                        .source
+                        .agent_nodes()
+                        .iter()
+                        .map(|node| node.profile.clone()),
+                );
+            }
+        }
+        names
+    }
+
+    /// Compare independently prepared capability inputs, excluding context and
+    /// provider units. Authored revisions and shadowed/unselected metadata are
+    /// not effective resource identities.
+    pub(crate) fn same_capabilities(&self, other: &Self) -> bool {
+        let normalized = |source: &Self| {
+            let mut config = source.config.as_ref().clone();
+            config.approval_mode = crate::runtime::ApprovalMode::default();
+            config.model_timeout_policy = super::config::ModelTimeoutPolicyDocument::default();
+            config.tool_deadline_policy = super::config::ToolDeadlinePolicyDocument::default();
+            config.subagents = super::config::SubagentsDocument::default();
+            config.context = super::config::ContextPolicyDocument::default();
+            config.agent.instructions.clear();
+            config.agent.model = None;
+            config.agent.agents_md = super::config::AgentProjectInstructionsDocument::default();
+            // Inert definitions are not resource demand.
+            let demand = super::composition::admitted_source_demand(
+                &config,
+                &source.subagents,
+                &source.workflows,
+                source.managed_python.clone(),
+            );
+            config.mcp_servers.retain(|id, _| {
+                demand
+                    .sources
+                    .contains(&crate::capabilities::ToolSourceId::Mcp(id.clone()))
+            });
+            (config, demand.sources)
+        };
+        let (a, demand_a) = normalized(self);
+        let (b, demand_b) = normalized(other);
+        if a != b || demand_a != demand_b {
+            return false;
+        }
+        let agents = self.admitted_agent_dependencies();
+        if agents != other.admitted_agent_dependencies()
+            || agents
+                .iter()
+                .any(|name| self.subagents.get(name) != other.subagents.get(name))
+        {
+            return false;
+        }
+        if a.agent.workflows.iter().any(|id| {
+            let view = |source: &Self| {
+                source
+                    .workflows
+                    .entries()
+                    .get(id)
+                    .map(|entry| entry.source.tool_identity())
+            };
+            view(self) != view(other)
+        }) {
+            return false;
+        }
+        if demand_a.iter().any(|id| {
+            self.managed_python.packages().get(id) != other.managed_python.packages().get(id)
+        }) {
+            return false;
+        }
+        // Skill dependencies are materialized as a shared environment, so even
+        // non-advertised discovered packages participate in this closure today.
+        self.skill_discovery.packages == other.skill_discovery.packages
+    }
+
+    pub(crate) fn same_context(&self, other: &Self) -> bool {
+        self.config.agent.instructions == other.config.agent.instructions
+            && self.config.agent.agents_md == other.config.agent.agents_md
+            && self.config.context == other.config.context
+            && self.project_context_files == other.project_context_files
+            && self.root_agent_project_files == other.root_agent_project_files
+    }
+
+    pub(crate) fn same_provider(&self, other: &Self) -> bool {
+        let selection = self.session_model();
+        selection == other.session_model()
+            && self.models.same_binding(&other.models, &selection.model)
+            && selection
+                .summary_selection()
+                .is_none_or(|summary| self.models.same_binding(&other.models, &summary.model))
+            && self.admitted_agent_dependencies() == other.admitted_agent_dependencies()
+            && self.admitted_agent_dependencies().iter().all(|name| {
+                let model = |source: &Self| {
+                    source
+                        .subagents
+                        .get(name)
+                        .and_then(|definition| definition.profile().model.clone())
+                };
+                let selected = model(self);
+                selected == model(other)
+                    && selected.as_ref().is_none_or(|model| {
+                        self.models.same_binding(&other.models, &model.model)
+                            && model.summary_selection().is_none_or(|summary| {
+                                self.models.same_binding(&other.models, &summary.model)
+                            })
+                    })
+            })
+    }
+
+    pub(crate) fn retaining_context_from(mut self, adopted: &Self) -> Self {
+        let config = std::sync::Arc::make_mut(&mut self.config);
+        config
+            .agent
+            .instructions
+            .clone_from(&adopted.config.agent.instructions);
+        config
+            .agent
+            .agents_md
+            .clone_from(&adopted.config.agent.agents_md);
+        config.context = adopted.config.context;
+        self.project_context_files
+            .clone_from(&adopted.project_context_files);
+        self.root_agent_project_files
+            .clone_from(&adopted.root_agent_project_files);
+        // These paths are exclusively the Workspace-authored agents_md inputs
+        // retained for physical-authority validation after path rebasing.
+        self.project_resources
+            .clone_from(&adopted.project_resources);
+        let context = self.effective.agent.get_or_insert_with(Default::default);
+        context.instructions = adopted
+            .effective
+            .agent
+            .as_ref()
+            .and_then(|agent| agent.instructions.clone());
+        context.agents_md = adopted
+            .effective
+            .agent
+            .as_ref()
+            .and_then(|agent| agent.agents_md.clone());
+        self.effective
+            .context
+            .clone_from(&adopted.effective.context);
+        copy_unit_provenance(
+            &mut self.provenance,
+            &adopted.provenance,
+            application::ApplyUnit::Instructions,
+        );
+        self.component_revisions.insert(
+            application::ApplyUnit::Instructions,
+            adopted.component_revisions[&application::ApplyUnit::Instructions].clone(),
+        );
+        self
+    }
+
     /// Capture process credentials after coherent User and Workspace resolution.
     /// # Errors
     /// Rejects changed physical resource authority before credential capture.
@@ -284,6 +584,7 @@ impl ProspectiveSessionConfig {
     ) -> Result<AdmittedSessionConfig, String> {
         self.validate_resource_authority()?;
         Ok(AdmittedSessionConfig {
+            binding_revision: 1,
             credentials: credentials(),
             prospective: Box::new(self),
         })
@@ -294,10 +595,11 @@ impl ProspectiveSessionConfig {
         if std::fs::canonicalize(&self.workspace).as_ref().ok() != Some(&self.workspace) {
             return Err("Workspace physical binding changed after capture".into());
         }
+        let agents = self.admitted_agent_dependencies();
         for role in self
             .role_sources
             .values()
-            .filter(|role| self.config.agent.agents.contains(&role.identity))
+            .filter(|role| agents.contains(&role.identity))
         {
             let boundary = if role.layer == "workspace" {
                 &self.workspace
@@ -365,19 +667,27 @@ impl ProspectiveSessionConfig {
     pub fn identity(&self) -> &str {
         &self.identity
     }
+}
 
-    /// Cold resolution and explicit reload share the same complete capture path.
-    /// Process bindings are copied from admission; Session model intent is applied
-    /// separately at the runtime publication boundary.
-    pub(crate) fn reload_configuration(&self) -> Result<ProspectiveSessionConfig, String> {
-        let mut sources = self.sources.clone();
-        sources.runtime_root.clone_from(&self.runtime_root);
-        UserConfigManager::new(sources)?
-            .resolve_session(&SessionConfigInput {
-                cwd: self.workspace.clone(),
-                model: None,
-            })
-            .map_err(|error| error.to_string())
+impl AdmittedSessionConfig {
+    pub(crate) fn with_model(&self, model: crate::model::session::SessionModelConfig) -> Self {
+        let mut retained = self.clone();
+        retained.prospective.input.model = Some(model);
+        retained.binding_revision = retained
+            .binding_revision
+            .checked_add(1)
+            .expect("Session binding revision exhausted");
+        retained
+    }
+    pub(crate) fn with_execution_policy(&self, desired: &IndependentPolicy) -> Self {
+        let mut retained = self.clone();
+        retained.prospective.compose_execution_policy(desired);
+        retained
+    }
+    pub(crate) fn with_shared_capacity(&self, desired: &IndependentPolicy) -> Self {
+        let mut retained = self.clone();
+        retained.prospective.compose_shared_capacity(desired);
+        retained
     }
 }
 
@@ -401,6 +711,74 @@ impl std::ops::Deref for ProspectiveSessionConfig {
     clippy::unnecessary_debug_formatting
 )] // derived paths always have parents; debug escapes diagnostic paths
 impl UserConfigManager {
+    /// Capture policies independently of fallible context/resource preparation.
+    /// Both consume the same immutable source overlay. Policy publication never
+    /// borrows a second read merely because another closure fails.
+    pub(crate) fn capture_application(
+        &self,
+        request: &SessionConfigInput,
+    ) -> Result<application::CapturedApplication, String> {
+        self.capture_application_at_boundary(request, || {})
+    }
+
+    pub(super) fn capture_application_at_boundary(
+        &self,
+        request: &SessionConfigInput,
+        after_layers: impl FnOnce(),
+    ) -> Result<application::CapturedApplication, String> {
+        let layers = self
+            .capture_layers(request, None)
+            .map_err(|error| error.to_string())?;
+        after_layers();
+        let policy = layers
+            .merged
+            .clone()
+            .resolve()
+            .map_err(|error| error.clone())?;
+        policy.timeout_policy().map_err(|error| error.to_string())?;
+        policy
+            .tool_deadline_policy()
+            .map_err(|error| error.to_string())?;
+        let revisions = layers.revisions.clone();
+        let mut policy_origins = layers.provenance.clone();
+        RuntimeLayer::record_default_origins(&policy, &mut policy_origins);
+        let policy_effective = layers.merged.clone();
+        let process = layers.merged.app_server.clone().unwrap_or_default();
+        process.validate()?;
+        let context = self
+            .resolve_captured_layers(layers)
+            .and_then(Self::resolve_runtime_configuration)
+            .and_then(|capture| self.resolve_resources(request, capture))
+            .map_err(|error| error.diagnostic.reason);
+        for (path, expected) in &revisions {
+            let actual = read_layer_revision(path, false, path != &self.sources.config_path)
+                .map_err(|error| error.to_string())?
+                .1;
+            if &actual != expected {
+                return Err("configuration changed during capture; rescan to retry".into());
+            }
+        }
+        let manifest = context
+            .as_ref()
+            .map_or(&revisions, |capture| &capture.source_revisions);
+        let revision = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(manifest).expect("input manifest"))
+        );
+        let policy = IndependentPolicy {
+            config: policy,
+            effective: policy_effective,
+            provenance: policy_origins,
+            revision: revision.clone(),
+        };
+        Ok(application::CapturedApplication {
+            policy,
+            process,
+            revision,
+            context,
+        })
+    }
+
     /// Resolve current canonical sources for exactly this Session context.
     /// No credentials or external preparation are acquired here.
     ///
@@ -415,13 +793,39 @@ impl UserConfigManager {
         self.resolve_resources(request, resolved)
     }
 
-    pub(crate) fn resolve_model_configuration(
+    pub(crate) fn capture_session_model(
         &self,
-        request: &SessionConfigInput,
-    ) -> Result<SourceCapture, LaunchFailure> {
-        #[cfg(test)]
-        self.test_hooks.reach("validation_started");
-        self.resolve_model_candidate(request, None)
+        adopted: &AdmittedSessionConfig,
+        selection: crate::model::session::SessionModelConfig,
+    ) -> Result<ProspectiveSessionConfig, String> {
+        let mut input = adopted.input.clone();
+        input.model = Some(selection);
+        let source = self
+            .capture_layers(&input, None)
+            .map_err(|error| error.to_string())?;
+        for (path, expected) in &source.revisions {
+            let actual = read_layer_revision(path, false, path != &self.sources.config_path)
+                .map_err(|error| error.to_string())?
+                .1;
+            if &actual != expected {
+                return Err("model inputs changed during capture; retry".into());
+            }
+        }
+        let mut candidate = adopted.prospective.as_ref().clone();
+        candidate.input = input;
+        candidate.models = ModelCatalog::from_document(
+            crate::model::authoring::Catalog {
+                schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
+                providers: source.merged.providers.clone().unwrap_or_default(),
+                models: source.merged.models.clone().unwrap_or_default(),
+            }
+            .into(),
+        )
+        .map_err(|error| error.to_string())?;
+        candidate.effective.models = source.merged.models;
+        candidate.effective.providers = source.merged.providers;
+        candidate.source_revisions.extend(source.revisions);
+        Ok(candidate)
     }
 
     fn resolve_model_candidate(
@@ -510,7 +914,10 @@ impl UserConfigManager {
             return Err("runtime_root must be disjoint from the workspace".into());
         }
 
-        let mut merged = RuntimeLayer::default();
+        let mut merged = RuntimeLayer {
+            app_server: user.app_server.clone(),
+            ..RuntimeLayer::default()
+        };
         let mut provenance = BTreeMap::new();
         let mut project_resources = Vec::new();
         for (mut layer, origin) in [
@@ -552,6 +959,13 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         candidate: Option<(&Path, &[u8])>,
     ) -> Result<SourceCapture, LaunchFailure> {
+        self.resolve_captured_layers(self.capture_layers(request, candidate)?)
+    }
+
+    fn resolve_captured_layers(
+        &self,
+        capture: LayerCapture,
+    ) -> Result<SourceCapture, LaunchFailure> {
         let LayerCapture {
             mut revisions,
             locations,
@@ -559,7 +973,7 @@ impl UserConfigManager {
             merged,
             mut provenance,
             project_resources,
-        } = self.capture_layers(request, candidate)?;
+        } = capture;
         for root in [
             self.sources.home_directory.join("rustx/.agents"),
             locations.workspace.join(".agents"),
@@ -735,7 +1149,7 @@ impl UserConfigManager {
             &locations.workspace,
         );
         // Capture authority once, including host path aliases and missing leaves.
-        // Reload reuses this physical identity; validators must not rebind it.
+        // Configuration preparation retains this physical identity; validators must not rebind it.
         let agent_root = normalize_missing(&host.home_directory.join("rustx/.agents/agents"))?;
         let project_context_files = {
             crate::runtime::load_project_context_files(&locations.workspace)
@@ -989,16 +1403,70 @@ impl UserConfigManager {
                     Some(root),
                     "resources",
                     "authored resources changed during candidate construction",
-                    "retry reload after source edits settle",
+                    "rescan after source edits settle",
                     "candidate discarded".into(),
                 ));
             }
+        }
+        for file in project_context_files
+            .iter()
+            .chain(root_agent_project_files.iter())
+            .chain(
+                subagents
+                    .definitions()
+                    .flat_map(|definition| definition.profile().project_instructions.files.iter()),
+            )
+        {
+            let bytes = read_bounded(&file.path)?;
+            let text = std::str::from_utf8(&bytes)
+                .map_err(|_| LaunchFailure::from("instruction text is not UTF-8"))?;
+            if text.trim_start_matches('\u{feff}') != file.content {
+                return Err("instruction input changed during capture; rescan to retry".into());
+            }
+            revisions.insert(file.path.clone(), super::settings::revision(Some(&bytes)));
+        }
+        for (path, expected) in &revisions {
+            if path == &host.home_directory.join("rustx/.agents")
+                || path == &locations.workspace.join(".agents")
+            {
+                continue;
+            }
+            let bytes = match read_bounded(path) {
+                Ok(bytes) => Some(bytes),
+                Err(_) if !path.exists() => None,
+                Err(error) => return Err(error.into()),
+            };
+            if super::settings::revision(bytes.as_deref()) != *expected {
+                return Err("configuration inputs changed during capture; rescan to retry".into());
+            }
+        }
+        if crate::runtime::load_project_context_files(&locations.workspace)
+            .map_err(LaunchFailure::resource)?
+            != project_context_files
+        {
+            return Err(
+                "project instruction discovery changed during capture; rescan to retry".into(),
+            );
         }
         diagnostics.sort();
         diagnostics.dedup();
         diagnostics.truncate(256);
         inspection.resource_diagnostics = diagnostics;
+        let revision = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&revisions).expect("source manifest"))
+        );
         Ok(ProspectiveSessionConfig {
+            component_revisions: [
+                application::ApplyUnit::ExecutionPolicy,
+                application::ApplyUnit::SharedCapacity,
+                application::ApplyUnit::Capabilities,
+                application::ApplyUnit::Instructions,
+                application::ApplyUnit::Provider,
+            ]
+            .into_iter()
+            .map(|unit| (unit, revision.clone()))
+            .collect(),
             source_revisions: revisions,
             effective,
             root_agent_project_files,
@@ -1104,8 +1572,8 @@ pub(super) fn parse_layer(
             Some(path.into()),
             "app_server",
             "App Server process policy cannot be authored by a Workspace",
-            "author app_server in the bound User rustx.toml and restart the process",
-            "process policy is captured before Session composition and is not reloadable".into(),
+            "author app_server in the bound User rustx.toml",
+            "process policy belongs to the User scope; native application distinguishes live limits from restart bindings".into(),
         ));
     }
     if let Some(version) = layer.schema_version

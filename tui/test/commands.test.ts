@@ -148,7 +148,7 @@ describe("command registry", () => {
         "/todos",
         "/status",
         "/compact",
-        "/reload",
+        "/configuration",
         "/debug",
         "/show-reasoning",
         "/expand",
@@ -1181,51 +1181,17 @@ describe("CommandDispatcher", () => {
     assert.equal(h.transport.log.requests.length, before);
   });
 
-  it("runs /reload through one canonical App Server operation", async () => {
+  it("T16 rescans only through native reconciliation", async () => {
     const h = await harness();
-    const reloading = h.dispatcher.submit("/reload");
-    const reload = await nextRequest(h, "configuration/reload");
-    h.transport.respond(reload.id, {
-      type: "configuration_reloaded",
-      resource_revision: "2",
-      capability_revision: "4",
-    });
-    assert.deepEqual(await reloading, {
-      kind: "transient",
-      level: "info",
-      text: "configuration reloaded to generation 2 (capabilities 4)",
-    });
-  });
-
-  it("rejects /reload arguments without reaching the server", async () => {
-    const h = await harness();
-    const before = h.transport.log.requests.length;
-    const outcome = await h.dispatcher.submit("/reload now");
-    assert.equal(outcome.kind, "transient");
-    if (outcome.kind === "transient") {
-      assert.equal(outcome.level, "error");
-      assert.match(outcome.text, /usage: \/reload/);
-    }
-    assert.equal(h.transport.log.requests.length, before);
-  });
-
-  it("presents a typed refusal from /reload", async () => {
-    const h = await harness();
-    const reloading = h.dispatcher.submit("/reload");
-    const reload = await nextRequest(h, "configuration/reload");
-    h.transport.respondError(reload.id, {
-      code: -32000,
-      message: "runtime resources are busy: attempt",
-      data: { kind: "invalid_state" },
-    });
-    const outcome = await reloading;
-    assert.equal(outcome.kind, "transient");
-    if (outcome.kind === "transient") {
-      assert.equal(outcome.level, "error");
-      assert.match(outcome.text, /busy/);
-    }
-    // A typed refusal is an answer, so the connection stays usable.
-    assert.equal(h.client.closed, undefined);
+    const operation = h.dispatcher.submit("/configuration rescan");
+    const read = await nextRequest(h, "configuration/sourcesRead");
+    h.transport.respond(read.id, { type: "source_settings", session_revision: "1", projection: {
+      absent_resource_revision: "absent", resource_revisions: {}, user: { path: "/user", revision: "u" }, workspace: { path: "/workspace", revision: "w" },
+      user_resource_root: "/ur", workspace_resource_root: "/wr", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, workspace_mcp: { path: "/wm", revision: "wm" }, agents: [],
+    } });
+    const reconcile = await nextRequest(h, "configuration/reconcile");
+    h.transport.respond(reconcile.id, { type: "configuration_application", application: { scope: h.session.sessionId, version: "2", desired: { input_revision: "u", attempt: "1" }, units: { execution_policy: { status: "applied" } } } });
+    assert.deepEqual(await operation, { kind: "transient", level: "info", text: "Native reconciliation started. Use /configuration to inspect application." });
   });
 
   it("renders bounded /debug diagnostics without any credential", async () => {

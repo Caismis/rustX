@@ -332,14 +332,6 @@ export type Request1 =
       };
     }
   | {
-      method: 'settings/selectModel';
-      params: {
-        session_id: SessionId;
-        expected_revision: string;
-        selection?: SessionModelConfig | null;
-      };
-    }
-  | {
       method: 'configuration/effective';
       params: {
         target: AttachmentTarget;
@@ -366,17 +358,17 @@ export type Request1 =
       };
     }
   | {
-      method: 'settings/replace';
+      method: 'configuration/reconcile';
       params: {
         session_id: SessionId;
-        expected_revision: string;
-        settings: SessionPersistentState;
       };
     }
   | {
-      method: 'configuration/reload';
+      method: 'session/adoptConfiguration';
       params: {
-        target: AttachmentTarget;
+        session_id: SessionId;
+        candidate: ApplicationIdentity;
+        expected_binding: string;
       };
     };
 export type SessionId = string;
@@ -1018,6 +1010,7 @@ export type MethodResult =
       type: 'deletion';
     }
   | {
+      configuration?: ConfigurationApplication | null;
       target: AttachmentTarget;
       snapshot: RuntimeClientSnapshot;
       cursor: RuntimeClientCursor;
@@ -1049,6 +1042,10 @@ export type MethodResult =
       type: 'interaction_settled';
     }
   | {
+      application: ConfigurationApplication;
+      type: 'configuration_application';
+    }
+  | {
       projection: EffectiveConfiguration;
       type: 'effective_configuration';
     }
@@ -1066,15 +1063,6 @@ export type MethodResult =
       revision: string;
       settings: SessionPersistentState;
       type: 'settings';
-    }
-  | {
-      revision: string;
-      type: 'settings_replaced';
-    }
-  | {
-      resource_revision: string;
-      capability_revision: CapabilityRevision;
-      type: 'configuration_reloaded';
     };
 /**
  * Typed pending mutation disposition; uncertainty requires authoritative reread.
@@ -1725,6 +1713,25 @@ export type RuntimeClientSessionDeletionBlocker =
   | {
       kind: 'invalid_ownership';
     };
+export type UnitApplication =
+  | {
+      status: 'applied';
+    }
+  | {
+      status: 'preparing';
+    }
+  | {
+      impact: CacheImpact;
+      status: 'ready';
+    }
+  | {
+      diagnostic: string;
+      status: 'failed';
+    }
+  | {
+      status: 'process_restart';
+    };
+export type CacheImpact = 'preserved' | 'prefix_changed' | 'cache_namespace_changed' | 'unproven';
 /**
  * Which native evidence is available for the canonical settings sections.
  */
@@ -2309,27 +2316,14 @@ export type Origin =
       base: string;
       kind: 'process';
     };
-/**
- * A monotonic revision counter for the capability set observed by an attempt.
- *
- * A running attempt snapshots one immutable `CapabilityRevision` when it
- * starts and keeps it for its entire lifetime. The revision is a counter,
- * not a provider-specific string: every capability mutation atomically swaps
- * the whole capability set and increments the revision.
- */
-export type CapabilityRevision = string;
 export type ErrorData =
+  | {
+      rejection: AdoptionError;
+      kind: 'configuration_adoption';
+    }
   | {
       reason: SessionArchivePrepareError;
       kind: 'archive_preparation_failed';
-    }
-  | {
-      reason: RuntimeResourceReloadBusyReason;
-      kind: 'configuration_busy';
-    }
-  | {
-      diagnostic: string;
-      kind: 'configuration_failed';
     }
   | {
       subagent_id: SubagentId;
@@ -2414,6 +2408,20 @@ export type ErrorData =
   | {
       kind: 'operation_failed';
     };
+export type AdoptionError =
+  | {
+      status: 'busy';
+    }
+  | {
+      status: 'not_ready';
+    }
+  | {
+      status: 'conflict';
+    }
+  | {
+      diagnostic: string;
+      status: 'failed';
+    };
 export type SessionArchivePrepareError =
   | 'unknown_session'
   | 'busy'
@@ -2423,15 +2431,16 @@ export type SessionArchivePrepareError =
   | 'corrupt_authority'
   | 'storage'
   | 'cancelled';
-/**
- * The semantic owner preventing a quiescent reload.
- */
-export type RuntimeResourceReloadBusyReason =
-  'owned_work' | 'attempt' | 'interaction' | 'compaction' | 'reload';
 export type Notification = {
   jsonrpc: JsonRpcVersion;
 } & Notification1;
 export type Notification1 =
+  | {
+      method: 'configuration/changed';
+      params: {
+        application: ConfigurationApplication;
+      };
+    }
   | {
       method: 'session/event';
       params: {
@@ -3838,6 +3847,16 @@ export interface TodoExtensionDocument1 {
  */
 export interface GoalExtensionDocument1 {
   enabled?: boolean;
+}
+/**
+ * Source attempt identity is independent of both content and execution version.
+ */
+export interface ApplicationIdentity {
+  /**
+   * None means immutable input capture failed; no source revision is fabricated.
+   */
+  input_revision?: string | null;
+  attempt: string;
 }
 export interface Success {
   jsonrpc: JsonRpcVersion;
@@ -6345,7 +6364,7 @@ export interface RuntimeClientSubagent {
    * The deterministic definition digest frozen at start (Issue #144).
    *
    * A client observing an already-running child sees the definition it
-   * actually started with, so a later configuration reload that redefines the
+   * actually started with, so a later configuration adoption that redefines the
    * same agent name can never be mistaken for a change to that child.
    */
   definition_digest: string;
@@ -6895,6 +6914,25 @@ export interface RuntimeClientSessionDeletePreview {
   owned_node_count: number;
   owned_conversation_count: number;
   owned_child_count: number;
+}
+export interface ConfigurationApplication {
+  scope: string;
+  version: string;
+  desired: ApplicationIdentity;
+  units: {
+    capabilities?: UnitApplication;
+    execution_policy?: UnitApplication;
+    instructions?: UnitApplication;
+    process_bindings?: UnitApplication;
+    provider?: UnitApplication;
+    shared_capacity?: UnitApplication;
+  };
+  candidate?: AvailableConfiguration | null;
+}
+export interface AvailableConfiguration {
+  identity: ApplicationIdentity;
+  expected_binding: string;
+  impact: CacheImpact;
 }
 /**
  * The authoritative Runtime Client snapshot of one conversation runtime.
@@ -8161,7 +8199,7 @@ export interface CapabilityView1 {
  * into the generation.
  *
  * This is deliberately separate from [`CapabilityView`]: a
- * resource-only reload advances the resource revision while the
+ * resource publication advances the resource revision while the
  * capability revision stays put. Nothing here is conversation content
  * — a project context file is request input the runtime assembles into
  * the Effective System Prompt, never a canonical Ledger message.
@@ -8373,6 +8411,9 @@ export interface TodoTask {
  * Redacted, immutable facts read at the runtime configuration publication lock.
  */
 export interface EffectiveConfiguration {
+  process_bindings?: AppServerPolicy | null;
+  application?: ConfigurationApplication | null;
+  adopted_binding: string;
   source_revisions: {
     [k: string]: string;
   };
@@ -8619,12 +8660,17 @@ export interface ToolDefinition {
       };
 }
 export interface AdmittedConfiguration {
+  approval_mode: ApprovalMode;
+  model_timeout?: ModelTimeoutPolicyDocument | null;
+  tool_deadline?: ToolDeadlinePolicyDocument | null;
   attempt: AttemptId;
   generation: RuntimeResourceRevision;
   model: SessionModelView;
   resources: CapabilityInspection1;
 }
 export interface SourceSettings {
+  process_bindings?: AppServerPolicy | null;
+  application?: ConfigurationApplication | null;
   /**
    * Native current-file approval resolution. None when prospective configuration is invalid.
    */
@@ -8653,7 +8699,6 @@ export interface SourceSettings {
 }
 export interface LoadedSources {
   generation: RuntimeResourceRevision;
-  pending_reload: boolean;
   changed_sources: string[];
 }
 export interface SourceView {
@@ -9387,7 +9432,7 @@ export interface RuntimeClientSubagent1 {
    * The deterministic definition digest frozen at start (Issue #144).
    *
    * A client observing an already-running child sees the definition it
-   * actually started with, so a later configuration reload that redefines the
+   * actually started with, so a later configuration adoption that redefines the
    * same agent name can never be mistaken for a change to that child.
    */
   definition_digest: string;
@@ -9521,7 +9566,7 @@ export interface CapabilityView3 {
   sources?: CapabilitySourceView[];
 }
 /**
- * The active runtime resource projection after the reload.
+ * The active runtime resource projection after the commit.
  */
 export interface RuntimeClientResourcesView1 {
   inspection: CapabilityInspection;

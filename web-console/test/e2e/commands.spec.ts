@@ -123,9 +123,9 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
     await expect(message).toBeEnabled();
-    // Live settings are Conversation-owned. A new cold lineage uses the native
-    // Session/launch configuration, never a browser copy of the old live values.
-    await expect(facts).toContainText('fixture/console-model');
+    // Model selection belongs to Session identity and is inherited by its Fork;
+    // cold lineage replacement does not select the global default again.
+    await expect(facts).toContainText('fixture/second-model');
     await expect(facts).toContainText('policy');
     // A reopened inherited Assistant remains a valid native continuation anchor.
     await expect(page.getByLabel('Completed response', { exact: true })).toHaveCount(1);

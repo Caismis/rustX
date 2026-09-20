@@ -612,7 +612,7 @@ pub enum RuntimeEvent {
         /// The deterministic definition digest frozen at start (Issue
         /// #144).
         ///
-        /// Name alone is not identity: a later configuration reload may redefine
+        /// Name alone is not identity: a later configuration publication may redefine
         /// the same agent name, and this durable digest is what keeps an
         /// already-committed child bound to the definition it actually
         /// started with.

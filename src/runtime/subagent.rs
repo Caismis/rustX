@@ -263,6 +263,26 @@ pub struct AttemptSubagentContext {
     pub(crate) native: Option<Arc<crate::tools::invocation::NativeInvocationServices>>,
 }
 
+/// Execution policies captured by the parent Attempt. Child preparation may
+/// run after publication, so the registry must never supply these values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InheritedExecutionPolicy {
+    pub model_timeout: crate::model::ModelTimeoutPolicy,
+    pub tool_deadline: crate::tools::deadline::ToolExecutionDeadlinePolicy,
+    pub context: crate::context::SessionContextPolicy,
+}
+
+#[cfg(test)]
+impl Default for InheritedExecutionPolicy {
+    fn default() -> Self {
+        Self {
+            model_timeout: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
+            context: crate::local_runtime::config::ContextPolicyDocument::default().to_policy(),
+        }
+    }
+}
+
 struct AttemptSubagentContextInner {
     capability: crate::capabilities::CapabilityCoordinator,
     attempt_id: crate::runtime::identity::AttemptId,
@@ -270,6 +290,7 @@ struct AttemptSubagentContextInner {
     model: crate::model::session::SessionModelConfig,
     models: crate::model::invocation::ModelBindingRegistry,
     approval_mode: ApprovalMode,
+    policy: InheritedExecutionPolicy,
 }
 
 impl core::fmt::Debug for AttemptSubagentContext {
@@ -283,6 +304,14 @@ impl core::fmt::Debug for AttemptSubagentContext {
 }
 
 impl AttemptSubagentContext {
+    #[cfg(test)]
+    pub(crate) fn with_test_policy(mut self, policy: InheritedExecutionPolicy) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("unique test context")
+            .policy = policy;
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn test_context(
         attempt_id: crate::runtime::identity::AttemptId,
@@ -323,6 +352,7 @@ impl AttemptSubagentContext {
             model,
             models,
             approval_mode,
+            InheritedExecutionPolicy::default(),
         )
     }
 
@@ -340,6 +370,7 @@ impl AttemptSubagentContext {
         model: crate::model::session::SessionModelConfig,
         models: crate::model::invocation::ModelBindingRegistry,
         approval_mode: ApprovalMode,
+        policy: InheritedExecutionPolicy,
     ) -> Self {
         Self {
             inner: Arc::new(AttemptSubagentContextInner {
@@ -349,6 +380,7 @@ impl AttemptSubagentContext {
                 model,
                 models,
                 approval_mode,
+                policy,
             }),
             native: None,
         }
@@ -374,6 +406,12 @@ impl AttemptSubagentContext {
     #[must_use]
     pub fn approval_mode(&self) -> ApprovalMode {
         self.inner.approval_mode
+    }
+
+    /// The immutable parent policy inherited by every derived child.
+    #[must_use]
+    pub fn execution_policy(&self) -> InheritedExecutionPolicy {
+        self.inner.policy
     }
 
     /// Resolves one named agent, with an optional **model-generated**
@@ -481,6 +519,7 @@ impl AttemptSubagentContext {
                 model: self.inner.model.clone(),
                 models: self.inner.models.clone(),
                 approval_mode: self.inner.approval_mode,
+                policy: self.inner.policy,
             }),
             native: self.native.clone(),
         }

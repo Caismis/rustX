@@ -129,7 +129,7 @@ impl core::fmt::Display for CapabilityCommitError {
             ),
             Self::RuntimePublicationRequired => write!(
                 f,
-                "a live conversation runtime owns capability publication; use its configuration reload boundary"
+                "a live conversation runtime owns capability publication; use its configuration publication boundary"
             ),
             Self::StaleMcpCandidate { server_id } => write!(
                 f,

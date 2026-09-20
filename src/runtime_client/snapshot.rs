@@ -182,7 +182,7 @@ pub struct RuntimeClientSnapshot {
     /// into the generation.
     ///
     /// This is deliberately separate from [`CapabilityView`]: a
-    /// resource-only reload advances the resource revision while the
+    /// resource publication advances the resource revision while the
     /// capability revision stays put. Nothing here is conversation content
     /// — a project context file is request input the runtime assembles into
     /// the Effective System Prompt, never a canonical Ledger message.
@@ -919,7 +919,7 @@ pub struct RuntimeClientSubagent {
     /// The deterministic definition digest frozen at start (Issue #144).
     ///
     /// A client observing an already-running child sees the definition it
-    /// actually started with, so a later configuration reload that redefines the
+    /// actually started with, so a later configuration adoption that redefines the
     /// same agent name can never be mistaken for a change to that child.
     pub definition_digest: String,
     /// The deterministic **effective execution profile** digest frozen at

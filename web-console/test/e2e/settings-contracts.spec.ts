@@ -47,8 +47,8 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
       const form = settings.getByRole('form', { name: owner === 'Root' ? 'Root model' : 'Agent optional', exact: true });
       const save = async () => {
         await form.getByRole('button', { name: owner === 'Root' ? 'Save Root model' : 'Save Agent optional', exact: true }).click();
-        await expect(settings.getByText(/Source saved. Use Reload/)).toBeVisible();
-        await expect(form.getByRole('status')).toHaveText('Source saved. Reload separately to publish configuration.');
+        await expect(settings.getByText(/Source saved. Native application/)).toBeVisible();
+        await expect(form.getByRole('status')).toHaveText('Saved. Native application proceeds automatically.');
       };
       await form.getByRole('combobox', { name: 'Summary model', exact: true }).selectOption('summary-b');
       if (owner === 'Agent') {
@@ -104,14 +104,13 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
         await form.getByLabel('Working directory').fill(fixture.workspaceA);
       }
       await form.getByRole('button', { name: `Save MCP implicit-${transport}`, exact: true }).click();
-      await expect(settings.getByText(/Source saved. Use Reload/)).toBeVisible();
-      await expect(form.getByRole('status')).toHaveText('Source saved. Reload separately to publish configuration.');
+      await expect(settings.getByText(/Source saved. Native application/)).toBeVisible();
+      await expect(form.getByRole('status')).toHaveText('Saved. Native application proceeds automatically.');
     }
     const mcp = readFileSync(mcpFile, 'utf8');
     expect(mcp).toContain('fixture-header-secret'); expect(mcp).toContain('fixture-env-secret');
     expect(mcp).not.toMatch(/^type\s*=/m);
-    await settings.getByRole('button', { name: 'Reload', exact: true }).click();
-    await expect(settings.getByText(/Configuration published:/)).toBeVisible();
+    await expect(settings.getByText(/Applicable changes are applied/)).toBeVisible();
     expect(errors).toEqual([]);
   } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
 });

@@ -30,7 +30,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v13. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v14. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -152,14 +152,14 @@ local. See [the complete client architecture](../docs/tui-app-server.md).
 Root Tool/Skill/Plugin/Agent/Workflow capability selection is authored in
 `rustx.toml`; named Agents own independent complete profiles. `/settings` shows
 native effective/source/provenance/generation facts. `/model` changes Session
-intent. `/reload` calls the single full configuration reload operation. File
+intent. `/configuration` inspects native application and explicit adoption. File
 saves alone leave the loaded generation unchanged.
 
 ## Startup sequence
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v13)
+  -> initialize (App Server protocol v14)
   -> session/create or choose a durable Session
   -> session/attach (authoritative snapshot, cursor, subscription)
   -> interactive
@@ -369,7 +369,7 @@ runtime's own Agent Status rendering; `/compact` invokes one
 never a credential; the human-input surface sends one finite typed response
 per explicit action to one runtime-owned interaction, routed by its exact
 `InteractionRef`. Global approval policy is authored in `rustx.toml` and published
-by configuration reload. The TUI never
+by native configuration application. The TUI never
 edits displayed Tool arguments, suppresses pending prompts, auto-answers them,
 or keeps a local outcome.
 
@@ -440,14 +440,12 @@ and running Subagent instances. No resource directory or configuration file is
 read to reconstruct effective capabilities.
 
 `/permissions` reads native configuration sources. Arrows select Tool policy or
-Full access; Enter writes Workspace `unit: approval` using the exact observed
-source revision, then rereads sources. Current, prospective/desired, saved
-pending publication, and running-attempt frozen policy remain distinct. Ctrl+P
-inside this surface explicitly publishes through `configuration/reload`; native
-busy constraints remain final. Writes never optimistically change Effective.
-After a rejected or uncertain mutation, close and reopen to inspect authority;
-the surface does not replay the write. On narrow terminals, PgDn pages through
-policy details and PgUp returns to the choices.
+Full access; Enter submits a typed Workspace approval CAS and rereads authority.
+Saved policy applies automatically to future independent Attempts. Current policy,
+desired policy and a running Attempt's captured policy remain distinct. Native
+application state also reports preparation, context awaiting adoption, failure and
+process restart. `/configuration` exposes inspected-candidate adoption, rescan and
+retry. Uncertain mutations are never replayed. PgDn/PgUp pages policy details.
 
 To add a file while preserving prompt text, press Ctrl+P and enter
 `/attach <local-path>`. The direct slash command also works on an empty Composer.
@@ -652,7 +650,7 @@ receive result content only; the common card owns native lifecycle metadata.
 
 Global approval policy follows the published CFG3 generation. `/settings` reads
 native effective policy and provenance. Edit User or Workspace `rustx.toml`, save,
-then use `/reload` to publish at the native safe boundary. Tool approval prompts
+the native coordinator applies independent policy automatically. Tool approval prompts
 remain runtime-owned interactions; answering one does not change global policy.
 
 The picker, confirmation and footer read native effective/pending facts. During a
@@ -980,7 +978,7 @@ or `/save-default user approval <revision>` saves effective approval. These Rust
 writes affect future launches and leave the live Session unchanged. Stale revisions
 are rejected; reread and review before retrying. `/model` does not save defaults.
 
-`/reload` requires quiescence and publishes resources only, not startup settings.
+`/configuration` reports native application; explicit context adoption requires an idle Session.
 See [the complete source/lifetime matrix and write guarantee](../docs/effective-settings.md).
 
 ### Delete historical Sessions inside `/resume`

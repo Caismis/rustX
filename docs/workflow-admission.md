@@ -16,7 +16,7 @@ admission calculates its finite demand, resolves sources and credentials, and
 uses the existing lifecycle owner to prepare exact capabilities. The admitted
 program freezes Tool definitions and global policies, child profiles, model
 bindings, Skill versions and its runtime generation. It never rereads files while
-running. Later Save or Reload cannot alter admitted execution.
+running. Later configuration publication cannot alter admitted execution.
 
 Workflow retains its existing language and progression/value/budget/settlement
 owners. The outer Tool is foreground-only and sequential. Cancellation, native

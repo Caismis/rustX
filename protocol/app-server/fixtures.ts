@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v13.js';
+import type {ProtocolMessage} from './v14.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -73,7 +73,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 13,
+      "protocol_version": 14,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -90,7 +90,7 @@ export const fixtures = [
     "id": 7,
     "result": {
       "type": "initialized",
-      "protocol_version": 13,
+      "protocol_version": 14,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,
@@ -378,17 +378,17 @@ export const fixtures = [
     "jsonrpc": "2.0",
     "id": "exact-u64",
     "result": {
-      "type": "settings_replaced",
-      "revision": "9007199254740993"
-    }
-  },
-  {
-    "jsonrpc": "2.0",
-    "id": "exact-u64",
-    "result": {
-      "type": "configuration_reloaded",
-      "resource_revision": "9007199254740993",
-      "capability_revision": "9007199254740993"
+      "type": "configuration_application",
+      "application": {
+        "scope": "session-fixture",
+        "version": "9007199254740993",
+        "desired": {
+          "input_revision": "input",
+          "attempt": "9007199254740993"
+        },
+        "units": {},
+        "candidate": null
+      }
     }
   },
   {

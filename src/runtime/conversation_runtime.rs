@@ -633,7 +633,7 @@ pub struct RuntimeConversationConfig {
     /// The complete immutable process-local resource generation initially
     /// active for this runtime.
     pub resources: Arc<RuntimeResourceSnapshot>,
-    /// The runtime-owned loader used only by explicit reload.
+    /// The resource preparer invoked off-side by native configuration coordination.
     pub resource_loader: Arc<dyn RuntimeResourceLoader>,
     /// The runtime clock stamping submitted inbound messages; the system
     /// clock is used when omitted.
@@ -810,6 +810,7 @@ struct AdmissionDurabilityCycle {
 /// owner).
 #[allow(clippy::struct_excessive_bools)] // Independent admission, lifecycle, and maintenance facts share one lock.
 struct CoordinatorState {
+    binding_revision: u64,
     explicit_model: bool,
     /// The session's authoritative mutable model state.
     ///
@@ -824,9 +825,6 @@ struct CoordinatorState {
     /// authority; this latch is the coordinator's admission authority and is
     /// published under the same lock that serializes activation.
     mcp_settlement_failure: Option<String>,
-    /// A narrow gate held while an off-side reload candidate is prepared.
-    /// Attempt admission observes this under the same coordinator lock.
-    resource_reload_in_progress: bool,
     /// The effective mode frozen for the currently admitted attempt boundary.
     effective_approval_mode: ApprovalMode,
     /// The latest requested runtime control mode.
@@ -965,15 +963,6 @@ impl WakeGate {
         }
     }
 
-    /// Installs the test-only worker-exit signal.
-    #[cfg(test)]
-    pub(crate) fn install_worker_exit_probe(&self, sender: std::sync::mpsc::Sender<()>) {
-        *self
-            .worker_exit
-            .lock()
-            .expect("worker exit probe lock poisoned") = Some(sender);
-    }
-
     /// Fires the test-only worker-exit signal, once.
     #[cfg(test)]
     pub(crate) fn signal_worker_exit(&self) {
@@ -1004,7 +993,6 @@ pub(crate) enum IdleBusyReason {
     LifecycleOwner,
     Foreground,
     Recovery,
-    Capability,
     Durability,
     AutonomousExtension,
     Inbound,
@@ -1295,6 +1283,7 @@ impl Drop for GateRelease {
 
 /// The shared state of one conversation runtime.
 pub(crate) struct RuntimeInner {
+    configuration_owner: Arc<()>,
     conversation_id: ConversationId,
     agent_id: AgentId,
     context: ConversationContextConfig,
@@ -1305,7 +1294,7 @@ pub(crate) struct RuntimeInner {
     store: Arc<dyn ConversationStore>,
     capability: CapabilityCoordinator,
     /// The sole live capability-publication authority. Ordinary clones of
-    /// `capability` cannot advance a claimed runtime; reload must present
+    /// `capability` cannot advance a claimed runtime; configuration publication must present
     /// this token so capability and resource snapshots share one boundary.
     capability_publication: crate::capabilities::RuntimeCapabilityPublication,
     resource_loader: Arc<dyn RuntimeResourceLoader>,
@@ -1390,37 +1379,6 @@ pub(crate) struct RuntimeInner {
     test_pre_tool_policy: Mutex<Option<Arc<dyn crate::agent::PreToolPolicy>>>,
 }
 
-/// Cancellation-safe ownership of the narrow resource-reload admission gate.
-/// If the async reload caller disappears while candidate preparation is
-/// parked, dropping this guard reopens admission without publishing anything.
-struct ResourceReloadGateGuard {
-    inner: Arc<RuntimeInner>,
-    armed: bool,
-}
-
-impl ResourceReloadGateGuard {
-    fn new(inner: Arc<RuntimeInner>) -> Self {
-        Self { inner, armed: true }
-    }
-
-    fn clear(&mut self, state: &mut CoordinatorState) {
-        state.resource_reload_in_progress = false;
-        self.armed = false;
-    }
-}
-
-impl Drop for ResourceReloadGateGuard {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        let mut state = self.inner.lock_state();
-        state.resource_reload_in_progress = false;
-        drop(state);
-        self.inner.wake.notify.notify_one();
-    }
-}
-
 /// Releasing the last semantic owner of a conversation runtime closes its
 /// observation fan-out (if one was installed) and its admission wake gate.
 /// The admission worker's terminal condition is the closed wake gate.
@@ -1462,9 +1420,6 @@ impl RuntimeInner {
         let epoch = self.lifecycle.idle_epoch().ok_or(Busy::LifecycleOwner)?;
         if state.current_attempt.is_some() || state.manual_compaction.is_some() {
             return Err(Busy::Foreground);
-        }
-        if state.resource_reload_in_progress {
-            return Err(Busy::Capability);
         }
         if state.recovered_continuation.is_some() {
             return Err(Busy::Recovery);
@@ -2137,7 +2092,7 @@ impl RuntimeInner {
         let shutting_down = false;
         let model = state.model.view();
         // The resource generation is part of the same freeze as every other
-        // seeded fact: a client attaching before the first reload still sees
+        // seeded fact: a client attaching before the first configuration application still sees
         // exactly which project instruction files the runtime loaded.
         let resources = Arc::clone(&state.resources);
         let approval_mode = state.effective_approval_mode;
@@ -2338,6 +2293,7 @@ impl RuntimeInner {
     /// cancellation trigger (the same handle `cancel_current_attempt`
     /// requests cancellation on).
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)] // one ordered ownership transaction
     async fn run_attempt(
         self: &Arc<Self>,
         attempt_id: AttemptId,
@@ -2394,6 +2350,15 @@ impl RuntimeInner {
                         model_config,
                         models,
                         approval_mode,
+                        crate::runtime::subagent::InheritedExecutionPolicy {
+                            model_timeout: model_timeout_policy,
+                            tool_deadline: tool_deadline_policy,
+                            context: resources
+                                .configuration()
+                                .map_or(self.context.policy, |generation| {
+                                    generation.config.context_policy()
+                                }),
+                        },
                     )
                 }),
             workflow_output: self.workflow_output.clone(),
@@ -2728,7 +2693,6 @@ impl RuntimeInner {
         if !self.lifecycle.is_running()
             || state.current_attempt.is_some()
             || state.manual_compaction.is_some()
-            || state.resource_reload_in_progress
         {
             return;
         }
@@ -3029,6 +2993,15 @@ impl RuntimeInner {
         }
         state.current_attempt = Some(CurrentAttempt {
             configuration: crate::local_runtime::configuration::settings::AdmittedConfiguration {
+                approval_mode: state.effective_approval_mode,
+                model_timeout: state
+                    .resources
+                    .configuration()
+                    .map(|generation| generation.config.model_timeout_policy),
+                tool_deadline: state
+                    .resources
+                    .configuration()
+                    .map(|generation| generation.config.tool_deadline_policy),
                 attempt: attempt_id.clone(),
                 generation: state.resources.revision(),
                 model: state.model.view(),
@@ -3608,6 +3581,7 @@ impl ConversationRuntime {
         // installation.
         let durability_gate = Arc::new(DurabilityGate::new());
         let inner = Arc::new(RuntimeInner {
+            configuration_owner: Arc::new(()),
             conversation_id,
             agent_id: config.agent_id,
             context: config.context,
@@ -3631,11 +3605,11 @@ impl ConversationRuntime {
             recovery,
             executor,
             state: Mutex::new(CoordinatorState {
+                binding_revision: 1,
                 explicit_model: config.explicit_model,
                 model: config.model,
                 resources: config.resources,
                 mcp_settlement_failure: None,
-                resource_reload_in_progress: false,
                 effective_approval_mode: config.approval_mode,
                 conversation: Some(conversation),
                 current_attempt: None,
@@ -3783,6 +3757,16 @@ impl ConversationRuntime {
             .lock()
             .expect("coordinator probe lock poisoned") = Some(probe);
         Ok(runtime)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_configuration_admission_gate(&self, gate: Arc<Gate>) {
+        self.inner
+            .probe
+            .lock()
+            .expect("probe")
+            .get_or_insert_with(Default::default)
+            .admission_gate = Some(gate);
     }
 
     #[cfg(test)]
@@ -4210,217 +4194,349 @@ impl ConversationRuntime {
         self.submit_sourced_inbound(UserSource::Human, content)
     }
 
-    /// Atomically reloads the complete process-local runtime resource and
-    /// capability generation for future attempts.
-    ///
-    /// The coordinator lock first establishes a narrow admission gate, then
-    /// candidate discovery and asynchronous capability preparation run
-    /// off-side. The same lock is reacquired for the capability commit and
-    /// resource-snapshot publication, so no attempt can be admitted between
-    /// those two writes. A failure clears the gate and retains the complete
-    /// previous pair.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed lifecycle or busy refusal when the runtime is not
-    /// quiescent, or a bounded preparation/publication failure while retaining
-    /// the complete previous generation.
-    #[allow(clippy::too_many_lines)]
-    pub async fn reload_configuration(
+    /// Prepare a source binding for its explicit selection without holding
+    /// execution admission. Availability uses the captured default; rebinding
+    /// to an existing Session is a separate preparation step.
+    pub(crate) async fn prepare_configuration(
         &self,
-    ) -> Result<RuntimeResourceReloaded, RuntimeResourceReloadError> {
-        let _reload_admission = {
-            let mut state = self.inner.lock_state();
-            match self.inner.lifecycle.state() {
-                ConversationLifecycleState::Inactive => {
-                    return Err(RuntimeResourceReloadError::Inactive);
-                }
-                ConversationLifecycleState::Draining | ConversationLifecycleState::Quiescent => {
-                    return Err(RuntimeResourceReloadError::Shutdown);
-                }
-                ConversationLifecycleState::Running => {}
+        capture: crate::local_runtime::configuration::ProspectiveSessionConfig,
+        selection: crate::model::session::SessionModelConfig,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
+    ) -> Result<crate::local_runtime::configuration::application::PreparedConfiguration, String>
+    {
+        let (baseline, old, old_model) = {
+            let state = self.inner.lock_state();
+            (
+                state.binding_revision,
+                state.resources.clone(),
+                state.model.clone(),
+            )
+        };
+        let prepared = self
+            .inner
+            .resource_loader
+            .prepare(&self.inner.capability, Some(capture), cancellation)
+            .await
+            .map_err(|error| error.message)?;
+        let (capability, resources) = prepared.into_parts();
+        let generation = resources
+            .configuration
+            .as_ref()
+            .ok_or("candidate has no configuration")?;
+        let model = SessionModelState::new(generation.models.clone(), selection)
+            .map_err(|error| error.to_string())?;
+        validate_context_policy(&generation.config.context_policy(), &model.snapshot())
+            .map_err(|error| error.message)?;
+        let preview = Arc::new(RuntimeResourceSnapshot::from_prepared(
+            old.revision().next(),
+            resources.clone(),
+            capability.configuration_snapshot(old.capability()),
+        ));
+        let mut impact = match (old.request_shape(&old_model), preview.request_shape(&model)) {
+            (Ok(old_shape), Ok(candidate)) => old_shape.compare(&candidate),
+            (Err(error), _) | (_, Err(error)) => {
+                #[cfg(test)]
+                eprintln!("configuration shape unavailable: {error}");
+                let _ = error;
+                crate::model::request_shape::CacheImpact::Unproven
             }
-            if state.resource_reload_in_progress {
-                return Err(RuntimeResourceReloadError::Busy {
-                    reason: RuntimeResourceReloadBusyReason::Reload,
-                });
+        };
+        if old
+            .configuration()
+            .map(|configuration| configuration.config.context)
+            != preview
+                .configuration()
+                .map(|configuration| configuration.config.context)
+            && impact == crate::model::request_shape::CacheImpact::Preserved
+        {
+            impact = crate::model::request_shape::CacheImpact::Unproven;
+        }
+        Ok(
+            crate::local_runtime::configuration::application::PreparedConfiguration {
+                selection_only: false,
+                owner: self.inner.configuration_owner.clone(),
+                baseline,
+                preview,
+                model,
+                capability: Some(capability),
+                resources: Some(resources),
+                impact,
+            },
+        )
+    }
+
+    pub(crate) fn complete_candidate_context(
+        &self,
+        candidate: &mut crate::local_runtime::configuration::application::PreparedConfiguration,
+        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
+        models: crate::model::invocation::ModelBindingRegistry,
+    ) -> Result<(), String> {
+        let model = SessionModelState::new(models.clone(), capture.session_model().clone())
+            .map_err(|error| error.to_string())?;
+        validate_context_policy(&capture.config.context_policy(), &model.snapshot())
+            .map_err(|error| error.message)?;
+        if let Some(capability) = &mut candidate.capability {
+            capability.set_context_profile(capture);
+        }
+        if let Some(resources) = &mut candidate.resources {
+            resources.set_context_binding(capture, models.clone());
+        }
+        candidate.preview = Arc::new(candidate.preview.with_context_binding(capture, models)?);
+        candidate.model = model;
+        let state = self.inner.lock_state();
+        candidate.impact = match (
+            state.resources.request_shape(&state.model),
+            candidate.preview.request_shape(&candidate.model),
+        ) {
+            (Ok(old), Ok(new)) => old.compare(&new),
+            (Err(error), _) | (_, Err(error)) => {
+                #[cfg(test)]
+                eprintln!("configuration shape unavailable: {error}");
+                let _ = error;
+                crate::model::request_shape::CacheImpact::Unproven
             }
-            if !self.inner.interaction.pending_snapshot().is_empty() {
-                return Err(RuntimeResourceReloadError::Busy {
-                    reason: RuntimeResourceReloadBusyReason::Interaction,
-                });
+        };
+        if state
+            .resources
+            .configuration()
+            .map(|config| config.config.context)
+            != candidate
+                .preview
+                .configuration()
+                .map(|config| config.config.context)
+            && candidate.impact == crate::model::request_shape::CacheImpact::Preserved
+        {
+            candidate.impact = crate::model::request_shape::CacheImpact::Unproven;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare_context_configuration(
+        &self,
+        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
+        models: crate::model::invocation::ModelBindingRegistry,
+        selection: Option<crate::model::session::SessionModelConfig>,
+    ) -> Result<crate::local_runtime::configuration::application::PreparedConfiguration, String>
+    {
+        let (baseline, old, old_model) = {
+            let state = self.inner.lock_state();
+            (
+                state.binding_revision,
+                state.resources.clone(),
+                state.model.clone(),
+            )
+        };
+        let model = SessionModelState::new(
+            models.clone(),
+            selection.unwrap_or_else(|| old_model.config().clone()),
+        )
+        .map_err(|error| error.to_string())?;
+        validate_context_policy(&capture.config.context_policy(), &model.snapshot())
+            .map_err(|error| error.message)?;
+        let preview = Arc::new(old.with_context_binding(capture, models)?);
+        let mut impact = match (old.request_shape(&old_model), preview.request_shape(&model)) {
+            (Ok(old_shape), Ok(candidate)) => old_shape.compare(&candidate),
+            (Err(error), _) | (_, Err(error)) => {
+                #[cfg(test)]
+                eprintln!("configuration shape unavailable: {error}");
+                let _ = error;
+                crate::model::request_shape::CacheImpact::Unproven
             }
-            if state.current_attempt.is_some() {
-                return Err(RuntimeResourceReloadError::Busy {
-                    reason: RuntimeResourceReloadBusyReason::Attempt,
-                });
-            }
-            if state.manual_compaction.is_some() {
-                return Err(RuntimeResourceReloadError::Busy {
-                    reason: RuntimeResourceReloadBusyReason::Compaction,
-                });
-            }
-            if self.inner.tool_runtime.background().configuration_busy()
+        };
+        if old.configuration().map(|config| config.config.context)
+            != preview.configuration().map(|config| config.config.context)
+            && impact == crate::model::request_shape::CacheImpact::Preserved
+        {
+            impact = crate::model::request_shape::CacheImpact::Unproven;
+        }
+        Ok(
+            crate::local_runtime::configuration::application::PreparedConfiguration {
+                selection_only: false,
+                owner: self.inner.configuration_owner.clone(),
+                baseline,
+                preview,
+                model,
+                capability: None,
+                resources: None,
+                impact,
+            },
+        )
+    }
+
+    pub(crate) fn configuration_allocation_matches(
+        &self,
+        candidate: &crate::local_runtime::configuration::application::PreparedConfiguration,
+    ) -> bool {
+        Arc::ptr_eq(&candidate.owner, &self.inner.configuration_owner)
+    }
+
+    /// Publish readiness while holding the same binding fence as model changes
+    /// and Attempt admission. The caller holds the source/application fence.
+    pub(crate) fn with_configuration_baseline(
+        &self,
+        candidate: &crate::local_runtime::configuration::application::PreparedConfiguration,
+        publish: impl FnOnce(),
+    ) -> bool {
+        let state = self.inner.lock_state();
+        if !self.inner.lifecycle.is_running()
+            || state.binding_revision != candidate.baseline
+            || !Arc::ptr_eq(&candidate.owner, &self.inner.configuration_owner)
+        {
+            return false;
+        }
+        publish();
+        true
+    }
+
+    /// Final commit primitive used by the native configuration owner. It holds
+    /// the source fence around this call; this gate is also Attempt admission's
+    /// gate. A refusal leaves the ready candidate available to inspect/retry.
+    pub(crate) fn adopt_configuration(
+        &self,
+        prepared: &mut Option<
+            crate::local_runtime::configuration::application::PreparedConfiguration,
+        >,
+        expected_binding: u64,
+        explicit: bool,
+        retain: impl FnOnce() -> Result<
+            (),
+            crate::local_runtime::configuration::application::AdoptionError,
+        >,
+    ) -> Result<u64, crate::local_runtime::configuration::application::AdoptionError> {
+        use crate::local_runtime::configuration::application::AdoptionError;
+        let mut state = self.inner.lock_state();
+        if explicit
+            && (self.inner.idle_epoch_locked(&state).is_err()
+                || self.inner.tool_runtime.background().configuration_busy()
                 || self
                     .inner
                     .subagents
                     .as_ref()
-                    .is_some_and(crate::runtime::subagent::SubagentRegistry::configuration_busy)
-            {
-                return Err(RuntimeResourceReloadError::Busy {
-                    reason: RuntimeResourceReloadBusyReason::OwnedWork,
+                    .is_some_and(crate::runtime::subagent::SubagentRegistry::configuration_busy))
+        {
+            return Err(AdoptionError::Busy);
+        }
+        let candidate = prepared.as_ref().ok_or(AdoptionError::NotReady)?;
+        if !self.inner.lifecycle.is_running()
+            || state.binding_revision != expected_binding
+            || candidate.baseline != expected_binding
+            || !Arc::ptr_eq(&candidate.owner, &self.inner.configuration_owner)
+            || (!explicit
+                && candidate.impact != crate::model::request_shape::CacheImpact::Preserved)
+        {
+            return Err(AdoptionError::Conflict);
+        }
+        let candidate = prepared.take().expect("checked candidate");
+        let revision = if candidate.selection_only {
+            state.resources.revision()
+        } else {
+            state.resources.revision().next()
+        };
+        let (resources, availability) = if let Some(capability) = candidate.capability {
+            let committed = self
+                .inner
+                .capability
+                .commit_runtime(&self.inner.capability_publication, capability)
+                .map_err(|error| AdoptionError::Failed {
+                    diagnostic: error.to_string(),
+                })?;
+            (
+                Arc::new(RuntimeResourceSnapshot::from_prepared(
+                    revision,
+                    candidate.resources.expect("capability resource closure"),
+                    committed.snapshot,
+                )),
+                committed.availability,
+            )
+        } else {
+            (
+                Arc::new(candidate.preview.as_ref().clone().with_revision(revision)),
+                candidate.preview.capability_availability().clone(),
+            )
+        };
+        retain()?;
+        state.model = candidate.model;
+        state.effective_approval_mode = resources
+            .configuration()
+            .map_or(state.effective_approval_mode, |generation| {
+                generation.config.approval_mode
+            });
+        state.resources = resources.clone();
+        state.binding_revision = state
+            .binding_revision
+            .checked_add(1)
+            .expect("Session binding revision exhausted");
+        if candidate.selection_only {
+            state.explicit_model = true;
+            self.inner
+                .observe(ConversationObservation::SessionModelChanged {
+                    model: Box::new(state.model.view()),
                 });
-            }
-            state.resource_reload_in_progress = true;
-            let Ok(admission) = self.inner.lifecycle.try_enter_running() else {
-                state.resource_reload_in_progress = false;
-                return Err(RuntimeResourceReloadError::Shutdown);
-            };
-            admission
-        };
-        let mut reload_gate = ResourceReloadGateGuard::new(Arc::clone(&self.inner));
+        } else {
+            self.inner.observe(ConversationObservation::Resources {
+                model: Box::new(state.model.view()),
+                approval_mode: state.effective_approval_mode,
+                snapshot: resources,
+                availability,
+            });
+        }
+        Ok(state.binding_revision)
+    }
 
-        let prepared = self
-            .inner
-            .resource_loader
-            .prepare(&self.inner.capability)
-            .await;
-        // FND-06: the reload build/publish boundary. A candidate generation
-        // is fully built here and nothing of it is published yet.
-        crate::runtime::process_death::reach("reload:prepared");
+    pub(crate) fn apply_shared_capacity(
+        &self,
+        desired: &crate::local_runtime::configuration::IndependentPolicy,
+    ) {
+        if let Some(subagents) = &self.inner.subagents {
+            subagents.publish_configuration(desired);
+        }
+        let mut state = self.inner.lock_state();
+        if let Some(resources) = state.resources.with_shared_capacity(desired) {
+            state.resources = Arc::new(resources);
+        }
+    }
 
-        let outcome = {
-            let mut state = self.inner.lock_state();
-            if self.inner.lifecycle.is_running() {
-                match prepared {
-                    Err(error) => {
-                        reload_gate.clear(&mut state);
-                        Err(RuntimeResourceReloadError::Failed {
-                            message: error.message,
-                        })
-                    }
-                    Ok(prepared) => {
-                        let (capability_candidate, resource_data) = prepared.into_parts();
-                        // Resolve every fallible Session/model consequence before
-                        // capability publication. Explicit intent is read under
-                        // this same coordinator transaction.
-                        let next_model = if let Some(generation) = &resource_data.configuration {
-                            let selection = if state.explicit_model {
-                                state.model.config().clone()
-                            } else {
-                                generation.config.initial_model().clone()
-                            };
-                            match SessionModelState::new(generation.models.clone(), selection)
-                                .map_err(|error| error.to_string())
-                                .and_then(|model| {
-                                    validate_context_policy(
-                                        &generation.config.context_policy(),
-                                        &model.snapshot(),
-                                    )
-                                    .map_err(|error| error.message)?;
-                                    Ok(model)
-                                }) {
-                                Ok(model) => Some(model),
-                                Err(message) => {
-                                    reload_gate.clear(&mut state);
-                                    return Err(RuntimeResourceReloadError::Failed { message });
-                                }
-                            }
-                        } else {
-                            None
-                        };
-
-                        match self.inner.capability.commit_runtime(
-                            &self.inner.capability_publication,
-                            capability_candidate,
-                        ) {
-                            Err(error) => {
-                                reload_gate.clear(&mut state);
-                                Err(RuntimeResourceReloadError::Failed {
-                                    message:
-                                        crate::runtime::resources::RuntimeResourceLoadError::new(
-                                            format!("cannot publish capability resources: {error}"),
-                                        )
-                                        .message,
-                                })
-                            }
-                            Ok(capability) => {
-                                let crate::capabilities::CommittedCapability {
-                                    snapshot: capability,
-                                    availability,
-                                } = capability;
-                                let revision = state.resources.revision().next();
-                                let resources = Arc::new(RuntimeResourceSnapshot::from_prepared(
-                                    revision,
-                                    resource_data,
-                                    capability,
-                                ));
-                                let capability_revision = resources.capability_revision();
-                                if let Some(model) = next_model {
-                                    state.model = model;
-                                }
-                                if let Some(generation) = resources.configuration() {
-                                    if let Some(subagents) = &self.inner.subagents {
-                                        subagents.publish_configuration(&generation.config);
-                                    }
-                                    state.effective_approval_mode = generation.config.approval_mode;
-                                }
-                                state.resources = Arc::clone(&resources);
-                                // One observation carries the whole
-                                // generation: the resource snapshot and the
-                                // capability generation it was built
-                                // against. `commit_runtime` fired no
-                                // capability observation of its own,
-                                // precisely so this is the only one.
-                                //
-                                // Ordering the two writes under this lock
-                                // is not enough on its own. The consumer of
-                                // this queue folds on its own task under
-                                // its own lock and never takes this one, so
-                                // two enqueued observations are two folds
-                                // and a subscriber can be woken between
-                                // them — long enough to publish new tools
-                                // beside project instruction files the same
-                                // reload retired. A single observation
-                                // removes the window rather than narrowing
-                                // it.
-                                //
-                                // Both halves are still needed: a reload
-                                // that only rewrites project instruction
-                                // files advances the resource revision and
-                                // leaves the capability revision untouched,
-                                // so neither half implies the other.
-                                self.inner.observe(ConversationObservation::Resources {
-                                    model: Box::new(state.model.view()),
-                                    approval_mode: state.effective_approval_mode,
-                                    snapshot: resources,
-                                    availability,
-                                });
-                                // FND-06: the complete new generation is
-                                // published and the admission gate is about
-                                // to reopen.
-                                crate::runtime::process_death::reach("reload:published");
-                                reload_gate.clear(&mut state);
-                                Ok(RuntimeResourceReloaded {
-                                    resource_revision: revision,
-                                    capability_revision,
-                                })
-                            }
-                        }
-                    }
-                }
-            } else {
-                reload_gate.clear(&mut state);
-                Err(RuntimeResourceReloadError::Shutdown)
-            }
-        };
-        self.inner.wake.notify.notify_one();
-        // Publication is already committed. Physical retirement failures have a
-        // separate runtime-health owner which fences admission and publishes
-        // its drain diagnostic; they cannot turn a committed reload into a
-        // failed candidate or imply that the previous generation is current.
+    pub(crate) async fn settle_configuration_resources(&self) {
+        // Retirement only collects generations whose immutable leases are gone.
+        // Physical failure is reported by the existing native health owner.
         let _ = self.inner.capability.settle_ready_mcp_runtimes().await;
-        outcome
+    }
+
+    pub(crate) fn restore_configuration_binding(&self, revision: u64) {
+        let mut state = self.inner.lock_state();
+        assert_eq!(
+            self.inner.lifecycle.state(),
+            ConversationLifecycleState::Inactive
+        );
+        state.binding_revision = revision;
+    }
+
+    /// Publish independent policy without changing the adopted context or any
+    /// admitted Attempt. The native configuration owner holds its input fence
+    /// across this call; this lock orders the swap against Attempt capture.
+    pub(crate) fn apply_execution_policy(
+        &self,
+        desired: &crate::local_runtime::configuration::IndependentPolicy,
+    ) -> Result<bool, String> {
+        desired.timeout_policy().map_err(|e| e.to_string())?;
+        desired.tool_deadline_policy().map_err(|e| e.to_string())?;
+        let mut state = self.inner.lock_state();
+        if !self.inner.lifecycle.is_running() {
+            return Err("runtime is not running".into());
+        }
+        let Some(resources) = state.resources.with_execution_policy(desired) else {
+            return Ok(false);
+        };
+        let resources = Arc::new(resources);
+        state.effective_approval_mode = desired.approval_mode;
+        state.resources = resources.clone();
+        self.inner.observe(ConversationObservation::Resources {
+            model: Box::new(state.model.view()),
+            approval_mode: state.effective_approval_mode,
+            availability: resources.capability_availability().clone(),
+            snapshot: resources,
+        });
+        Ok(true)
     }
 
     /// Read configuration, Session intent and admitted work in one coherent cut.
@@ -4434,6 +4550,9 @@ impl ConversationRuntime {
         let config = &generation.config;
         Some(
             crate::local_runtime::configuration::settings::EffectiveConfiguration {
+                process_bindings: None,
+                application: None,
+                adopted_binding: state.binding_revision,
                 source_revisions: generation.source_revisions.clone(),
                 generation: resources.revision(),
                 document: generation.effective.clone(),
@@ -4507,10 +4626,7 @@ impl ConversationRuntime {
                     message: failure.diagnostic,
                 });
             }
-            if state.current_attempt.is_some()
-                || state.manual_compaction.is_some()
-                || state.resource_reload_in_progress
-            {
+            if state.current_attempt.is_some() || state.manual_compaction.is_some() {
                 return Err(ManualCompactionError::Busy);
             }
             let model = state.model.snapshot();
@@ -5223,42 +5339,58 @@ impl ConversationRuntime {
         config: SessionModelConfig,
         persist: impl FnOnce(SessionModelConfig) -> Result<(), ModelUpdateError>,
     ) -> Result<SessionModelView, ModelUpdateError> {
-        let mut state = self.inner.lock_state();
-        if !self.inner.lifecycle.is_running() {
-            return Err(ModelUpdateError::Inactive);
-        }
-        if let Some(failure) = self.inner.durability_gate.failure() {
-            return Err(ModelUpdateError::DurabilityFailed {
-                message: failure.diagnostic,
-            });
-        }
-        // Resolve into a scratch copy first: `SessionModelState::apply` is
-        // itself transactional, and the context-policy check runs against the
-        // *candidate* snapshot before anything is published.
-        let mut candidate = state.model.clone();
+        use crate::local_runtime::configuration::application::{
+            AdoptionError, PreparedConfiguration,
+        };
+        let (baseline, resources, mut candidate) = {
+            let state = self.inner.lock_state();
+            if !self.inner.lifecycle.is_running() {
+                return Err(ModelUpdateError::Inactive);
+            }
+            if let Some(failure) = self.inner.durability_gate.failure() {
+                return Err(ModelUpdateError::DurabilityFailed {
+                    message: failure.diagnostic,
+                });
+            }
+            (
+                state.binding_revision,
+                state.resources.clone(),
+                state.model.clone(),
+            )
+        };
         candidate
             .apply(config.clone())
             .map_err(|error| invalid_model(&error))?;
-        let context_policy = state
-            .resources
+        let policy = resources
             .configuration()
             .map_or(self.inner.context.policy, |generation| {
                 generation.config.context_policy()
             });
-        validate_context_policy(&context_policy, &candidate.snapshot()).map_err(|error| {
-            ModelUpdateError::InvalidConfiguration(format!(
-                "the selected model cannot run under the session context policy: {}",
-                error.message
-            ))
-        })?;
-        persist(config)?;
+        validate_context_policy(&policy, &candidate.snapshot())
+            .map_err(|error| ModelUpdateError::InvalidConfiguration(error.message))?;
         let view = candidate.view();
-        state.model = candidate;
-        state.explicit_model = true;
-        self.inner
-            .observe(ConversationObservation::SessionModelChanged {
-                model: Box::new(view.clone()),
-            });
+        let mut prepared = Some(PreparedConfiguration {
+            selection_only: true,
+            owner: self.inner.configuration_owner.clone(),
+            baseline,
+            preview: resources,
+            model: candidate,
+            capability: None,
+            resources: None,
+            impact: crate::model::request_shape::CacheImpact::Unproven,
+        });
+        let mut persistence_error = None;
+        let outcome = self.adopt_configuration(&mut prepared, baseline, true, || {
+            persist(config).map_err(|error| {
+                persistence_error = Some(error);
+                AdoptionError::Failed {
+                    diagnostic: "Session model persistence failed".into(),
+                }
+            })
+        });
+        outcome.map_err(|rejection| {
+            persistence_error.unwrap_or(ModelUpdateError::ConfigurationAdoption { rejection })
+        })?;
         Ok(view)
     }
 
@@ -5287,6 +5419,11 @@ impl ConversationRuntime {
             .is_some()
     }
 
+    #[cfg(test)]
+    pub(crate) async fn wait_for_configuration_admissions(&self) {
+        self.inner.lifecycle.wait_for_no_admissions().await;
+    }
+
     pub(crate) fn idle_epoch(&self) -> Result<u64, IdleBusyReason> {
         self.inner.idle_epoch_locked(&self.inner.lock_state())
     }
@@ -5302,7 +5439,6 @@ impl ConversationRuntime {
         if state.current_attempt.is_some()
             || state.manual_compaction.is_some()
             || state.conversation.is_none()
-            || state.resource_reload_in_progress
             || state.recovered_continuation.is_some()
             || !self.inner.durability_gate.healthy_for_idle_claim()
             || state.mcp_settlement_failure.is_some()
@@ -5970,94 +6106,6 @@ pub(crate) enum ParentGuidanceSeal {
     },
 }
 
-/// A successful complete runtime resource/capability publication.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeResourceReloaded {
-    /// The newly published process-local resource revision.
-    pub resource_revision: crate::runtime::identity::RuntimeResourceRevision,
-    /// The compatible capability revision published with it.
-    pub capability_revision: crate::runtime::identity::CapabilityRevision,
-}
-
-/// The semantic owner preventing a quiescent reload.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeResourceReloadBusyReason {
-    /// Accepted background or child work still owns the previous generation.
-    OwnedWork,
-    /// An admitted attempt owns the conversation.
-    Attempt,
-    /// A pending Questionnaire/Approval interaction owns the session.
-    Interaction,
-    /// Manual context compaction owns the conversation.
-    Compaction,
-    /// Another configuration reload already owns the narrow admission gate.
-    Reload,
-}
-
-impl RuntimeResourceReloadBusyReason {
-    /// Stable Runtime Client diagnostic category.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::OwnedWork => "owned_work",
-            Self::Attempt => "attempt",
-            Self::Interaction => "interaction",
-            Self::Compaction => "compaction",
-            Self::Reload => "reload",
-        }
-    }
-}
-
-impl core::fmt::Display for RuntimeResourceReloadBusyReason {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str(match self {
-            Self::Attempt => "an attempt is active",
-            Self::Interaction => "a Questionnaire or Approval interaction is pending",
-            Self::Compaction => "manual context compaction is active",
-            Self::Reload => "another configuration reload is active",
-            Self::OwnedWork => "background or child work is active",
-        })
-    }
-}
-
-/// An explicit runtime configuration reload refusal or failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuntimeResourceReloadError {
-    /// The runtime is not activated.
-    Inactive,
-    /// Runtime drain has begun.
-    Shutdown,
-    /// The runtime is not semantically quiescent for reload.
-    Busy {
-        /// The live owner that made reload ineligible.
-        reason: RuntimeResourceReloadBusyReason,
-    },
-    /// Candidate preparation or publication failed. The old complete
-    /// generation remains active.
-    Failed {
-        /// Bounded diagnostic.
-        message: String,
-    },
-}
-
-impl core::fmt::Display for RuntimeResourceReloadError {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Inactive => formatter.write_str("the runtime is inactive"),
-            Self::Shutdown => formatter.write_str("the runtime is shutting down"),
-            Self::Busy { reason } => write!(formatter, "runtime resources are busy: {reason}"),
-            Self::Failed { message } => {
-                write!(formatter, "runtime configuration reload failed: {message}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for RuntimeResourceReloadError {}
-
 /// A cancellation request failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CancelAttemptError {
@@ -6136,6 +6184,10 @@ impl std::error::Error for ManualCompactionError {}
 /// A session model update failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelUpdateError {
+    /// Explicit model selection uses the same idle and baseline fences as adoption.
+    ConfigurationAdoption {
+        rejection: crate::local_runtime::configuration::application::AdoptionError,
+    },
     /// The runtime has not been activated: a live semantic mutation of an
     /// inert conversation is refused and consumes nothing.
     Inactive,
@@ -6237,7 +6289,7 @@ fn invalid_model(error: &ModelInvocationError) -> ModelUpdateError {
 /// # Errors
 ///
 /// Returns the engine configuration error.
-fn validate_context_policy(
+pub(crate) fn validate_context_policy(
     policy: &SessionContextPolicy,
     model: &AttemptModelSnapshot,
 ) -> Result<(), crate::context::ContextError> {
@@ -6602,12 +6654,6 @@ impl ConversationRuntime {
         Arc::downgrade(&self.inner)
     }
 
-    /// Installs the deterministic admission-worker exit signal, for
-    /// lifetime tests.
-    pub(crate) fn install_worker_exit_probe(&self, sender: std::sync::mpsc::Sender<()>) {
-        self.inner.wake.install_worker_exit_probe(sender);
-    }
-
     /// Installs one test-only pre-tool policy for the next runtime-created
     /// attempt. Production derives the policy from the admitted effective
     /// `ApprovalMode`; this hook exists solely to exercise the real
@@ -6636,15 +6682,6 @@ mod tests {
         activation.profile.extensions =
             crate::scripted_suites::common::plugin_document(runtime.extensions());
         activation.profile.skills = Some(crate::runtime::agent_profile::AgentSkillSelection::All);
-        activation
-    }
-
-    fn headless_activation() -> crate::capabilities::AgentActivation {
-        let mut activation = crate::capabilities::AgentActivation::default();
-        activation.profile.extensions = crate::scripted_suites::common::plugin_document(
-            &crate::extensions::NativeAgentExtensions::with_todo()
-                .and_agent_status(crate::context::AgentStatusConfig::default()),
-        );
         activation
     }
 
@@ -6683,9 +6720,7 @@ mod tests {
         ConversationRuntimeError, CoordinatorProbe, Gate, InboundAdmissionError,
         ManualCompactionError, ModelUpdateError, PendingObservations, RuntimeConversationConfig,
     };
-    use crate::agent::{
-        AgentCancellation, LifecycleError, PreToolDecision, PreToolPolicy, PreToolView,
-    };
+    use crate::agent::{LifecycleError, PreToolDecision, PreToolPolicy, PreToolView};
     use crate::context::{
         AgentStatusEngine, ClosureTokenEstimator, ContextError, ContextErrorKind,
         DefaultTokenEstimator, TokenEstimator,
@@ -6705,8 +6740,8 @@ mod tests {
         AgentId, AttemptId, ConversationId, SubagentId, ToolCallId, ToolId, TurnId,
     };
     use crate::runtime::interaction::{
-        ApprovalDecision, ApprovalFacts, InteractionOutcome, InteractionResponse,
-        InteractionSettleGate, InteractionWaitCancellationGate,
+        ApprovalDecision, InteractionOutcome, InteractionResponse, InteractionSettleGate,
+        InteractionWaitCancellationGate,
     };
     use crate::runtime::observation::ConversationObservation;
     use crate::runtime::request_history::RequestHistory;
@@ -6727,41 +6762,9 @@ mod tests {
     use crate::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
     use crate::tools::types::{
         ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionStatus,
-        ToolInvocation, ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
+        ToolInvocation, ToolOrigin, ToolReplayPolicy,
     };
     use futures_util::future::BoxFuture;
-
-    struct ParkedMcpBackgroundExecutor {
-        started: Arc<tokio::sync::Notify>,
-        release: Arc<tokio::sync::Notify>,
-    }
-
-    impl ToolExecutor for ParkedMcpBackgroundExecutor {
-        fn start<'a>(
-            &'a self,
-            _invocation: ToolInvocation,
-            context: ToolExecutionContext<'a>,
-        ) -> crate::tools::executor::ToolExecutionHandle<'a> {
-            crate::tools::executor::ToolExecutionHandle::settled_by_operation(
-                Box::pin(async move {
-                    self.started.notify_one();
-                    self.release.notified().await;
-                    success_result("background settled")
-                }),
-                context.cancellation.clone(),
-            )
-        }
-
-        fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
-            crate::tools::deadline::ToolProgressCapability::None
-        }
-    }
-
-    struct NoProgressForMcp;
-
-    impl crate::tools::executor::ProgressReporter for NoProgressForMcp {
-        fn report(&self, _progress: crate::tools::types::ToolProgress) {}
-    }
 
     /// Adopts one accepted inbound item with the durable answer obligation the
     /// adoption transaction requires.
@@ -6821,28 +6824,8 @@ mod tests {
             }
         }
 
-        fn fail(&self, message: &str) {
-            *self.project_files.lock().expect("project files") =
-                Err(crate::runtime::RuntimeResourceLoadError::new(message));
-        }
-
         fn set_capability_inputs(&self, inputs: crate::capabilities::CapabilityResourceInputs) {
             *self.capability_inputs.lock().expect("capability inputs") = Some(inputs);
-        }
-
-        fn set_context_assembly(&self, assembly: crate::context::ContextAssembly) {
-            *self.context_assembly.lock().expect("context assembly") = assembly;
-        }
-
-        fn set_workflow_catalog(&self, catalog: crate::runtime::WorkflowCatalog) {
-            *self.workflow_catalog.lock().expect("workflow catalog") = catalog;
-        }
-
-        fn set_candidate_close_probe(&self, probe: Arc<crate::tools::mcp::test_sync::CloseProbe>) {
-            *self
-                .candidate_close_probe
-                .lock()
-                .expect("candidate close probe") = Some(probe);
         }
 
         fn prepare_count(&self) -> u64 {
@@ -6855,6 +6838,8 @@ mod tests {
         fn prepare<'a>(
             &'a self,
             capability: &'a crate::capabilities::CapabilityCoordinator,
+            _capture: Option<crate::local_runtime::configuration::ProspectiveSessionConfig>,
+            _preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
         ) -> BoxFuture<
             'a,
             Result<
@@ -6906,34 +6891,6 @@ mod tests {
                     candidate,
                 )
                 .with_workflow_catalog(workflow_catalog))
-            })
-        }
-    }
-
-    struct GatedResourceLoader {
-        inner: Arc<MutableResourceLoader>,
-        entered: tokio::sync::watch::Sender<bool>,
-        release: tokio::sync::watch::Receiver<bool>,
-    }
-
-    impl crate::runtime::RuntimeResourceLoader for GatedResourceLoader {
-        fn prepare<'a>(
-            &'a self,
-            capability: &'a crate::capabilities::CapabilityCoordinator,
-        ) -> BoxFuture<
-            'a,
-            Result<
-                crate::runtime::PreparedRuntimeResources,
-                crate::runtime::RuntimeResourceLoadError,
-            >,
-        > {
-            Box::pin(async move {
-                let _ = self.entered.send(true);
-                let mut release = self.release.clone();
-                release.wait_for(|released| *released).await.map_err(|_| {
-                    crate::runtime::RuntimeResourceLoadError::new("reload gate closed")
-                })?;
-                self.inner.prepare(capability).await
             })
         }
     }
@@ -7412,14 +7369,6 @@ mod tests {
                         &dir.path().join("subagents"),
                     )
                     .expect("product root"),
-                    model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
-                    tool_deadline_policy:
-                        crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-                    context: crate::context::SessionContextPolicy {
-                        reserve_tokens: 0,
-                        keep_recent_tokens: 0,
-                        summary_output_cap: None,
-                    },
                 },
                 workspace: crate::runtime::workspace::WorkspaceManager::new(
                     &workspace,
@@ -7539,14 +7488,6 @@ mod tests {
                         &dir.path().join("subagents"),
                     )
                     .expect("product root"),
-                    model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
-                    tool_deadline_policy:
-                        crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-                    context: crate::context::SessionContextPolicy {
-                        reserve_tokens: 0,
-                        keep_recent_tokens: 0,
-                        summary_output_cap: None,
-                    },
                 },
                 workspace: crate::runtime::workspace::WorkspaceManager::new(
                     &workspace,
@@ -7679,6 +7620,8 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
+                            execution_policy:
+                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
                             approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "pre-constructed".to_owned(),
@@ -7805,6 +7748,8 @@ mod tests {
             let prepared = commit_registry
                 .prepare(
                     &crate::runtime::subagent::SubagentStartSpec {
+                        execution_policy:
+                            crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("explore"),
                         approval_mode: crate::runtime::ApprovalMode::Policy,
                         task: "transfer race".to_owned(),
@@ -7943,6 +7888,7 @@ mod tests {
         let error = subagents
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
+                    execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: test_resolved_subagent("explore"),
                     approval_mode: crate::runtime::ApprovalMode::Policy,
                     task: "refused after claim".to_owned(),
@@ -8396,104 +8342,6 @@ mod tests {
                 crate::runtime::identity::MessageId::new("recent"),
             ],
             "the frozen catalog makes the one-message candidate fail, so planning retires two"
-        );
-    }
-
-    /// The durable commit is not the live maintenance-settlement point. While
-    /// the task-local committed state is parked before coordinator restore,
-    /// Runtime Client must still report compaction in progress and a second
-    /// manual request must remain busy. Completion becomes observable only
-    /// after the state and maintenance slot return together.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn manual_compaction_completion_publishes_after_coordinator_restore() {
-        let gate = Arc::new(super::Gate::default());
-        gate.arm();
-        let dir = tempfile::tempdir().expect("temp dir");
-        let (runtime, _) = headless_runtime_with_options(
-            &dir,
-            vec![text_turn_script("settled summary")],
-            None,
-            Some(CoordinatorProbe {
-                manual_compaction_settlement_gate: Some(gate.clone()),
-                ..CoordinatorProbe::default()
-            }),
-            HeadlessRuntimeOptions {
-                initial_messages: vec![seed_user("old", &"old history ".repeat(512))],
-                ..HeadlessRuntimeOptions::default()
-            },
-        )
-        .await;
-        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-            runtime: runtime.clone(),
-            replay_limit: None,
-        })
-        .expect("host");
-        runtime.activate();
-
-        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
-        let runtime_for_compaction = runtime.clone();
-        tokio::spawn(async move {
-            let _ = done_tx.send(runtime_for_compaction.compact_context().await);
-        });
-        let wait_gate = gate.clone();
-        within_liveness_guard("manual compaction pre-settlement gate", async move {
-            tokio::task::spawn_blocking(move || wait_gate.wait_entered())
-                .await
-                .expect("gate wait task");
-        })
-        .await;
-
-        assert!(
-            runtime.has_manual_compaction(),
-            "the coordinator still owns the live maintenance slot"
-        );
-        assert!(
-            runtime.coordinator_ledger().is_none(),
-            "the checked-out conversation has not returned to the coordinator"
-        );
-        assert_eq!(
-            runtime.compact_context().await,
-            Err(ManualCompactionError::Busy)
-        );
-        assert!(matches!(
-            runtime.reload_configuration().await,
-            Err(super::RuntimeResourceReloadError::Busy {
-                reason: super::RuntimeResourceReloadBusyReason::Compaction
-            })
-        ));
-        let (during, _) = host.snapshot().expect("snapshot during settlement park");
-        assert!(during.context.compaction_in_progress);
-        assert_eq!(during.context.compaction_count, 0);
-        assert!(
-            runtime
-                .tool_runtime()
-                .durable_store()
-                .read_events(None, 128)
-                .expect("event journal")
-                .events
-                .iter()
-                .any(|event| matches!(event.event, RuntimeEvent::CompactionCompleted { .. })),
-            "the durable compaction fact already committed before live settlement"
-        );
-
-        gate.release();
-        let outcome = within_liveness_guard("manual compaction settlement", done_rx)
-            .await
-            .expect("completion channel")
-            .expect("manual compaction succeeds");
-        assert!(!runtime.has_manual_compaction());
-        assert!(runtime.coordinator_ledger().is_some());
-        let (after, _) = host.snapshot().expect("snapshot after settlement");
-        assert!(!after.context.compaction_in_progress);
-        assert_eq!(after.context.compaction_count, 1);
-        assert_eq!(
-            after
-                .context
-                .latest_compaction
-                .as_ref()
-                .expect("latest compaction")
-                .summary_message_id,
-            outcome.summary_message_id
         );
     }
 
@@ -9041,193 +8889,6 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn reload_changes_only_future_requests_and_preserves_historical_snapshots() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("workspace/AGENTS.md");
-        let old_files = vec![project_file(&path, "old project authority")];
-        let loader = Arc::new(MutableResourceLoader::new(vec![project_file(
-            &path,
-            "new project authority",
-        )]));
-        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
-        let (runtime, model) = headless_runtime_with_options(
-            &dir,
-            vec![one_turn_script(), one_turn_script()],
-            None,
-            None,
-            HeadlessRuntimeOptions {
-                project_context_files: old_files,
-                resource_loader: Some(loader_trait),
-                ..HeadlessRuntimeOptions::default()
-            },
-        )
-        .await;
-        runtime.activate();
-
-        runtime
-            .submit_inbound(text_content("first"))
-            .expect("first inbound");
-        let _ = await_settled_ledger(&runtime).await;
-        assert!(
-            model.requests()[0]
-                .effective_system_prompt
-                .contains("old project authority")
-        );
-        let historical = request_snapshots(&runtime.request_history());
-        assert!(
-            historical[0]
-                .effective_system_prompt
-                .contains("old project authority")
-        );
-        assert_eq!(
-            loader.prepare_count(),
-            0,
-            "ordinary request admission never rediscovers runtime resources"
-        );
-
-        let reloaded = runtime.reload_configuration().await.expect("reload");
-        assert_eq!(reloaded.resource_revision.get(), 2);
-        assert_eq!(loader.prepare_count(), 1);
-        runtime
-            .submit_inbound(text_content("second"))
-            .expect("second inbound");
-        let ledger = await_settled_ledger(&runtime).await;
-        assert!(
-            model.requests()[1]
-                .effective_system_prompt
-                .contains("new project authority")
-        );
-        assert!(
-            !ledger.iter().any(|message| serde_json::to_string(message)
-                .expect("message JSON")
-                .contains("project authority")),
-            "project instructions never enter canonical history"
-        );
-        let snapshots = request_snapshots(&runtime.request_history());
-        assert!(
-            snapshots[0]
-                .effective_system_prompt
-                .contains("old project authority")
-        );
-        assert!(
-            snapshots[1]
-                .effective_system_prompt
-                .contains("new project authority")
-        );
-        assert_eq!(snapshots[0].runtime_resource_revision.get(), 1);
-        assert_eq!(snapshots[1].runtime_resource_revision.get(), 2);
-    }
-
-    /// The Workflow catalog participates in the same complete resource
-    /// generation as project and capability resources. A successful reload
-    /// replaces it atomically, while a failed candidate leaves the previous
-    /// valid Workflow generation visible.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn reload_publishes_workflow_catalog_and_retains_it_on_candidate_failure() {
-        let empty_object = || {
-            serde_json::json!({
-                "type": "object",
-                "properties": {},
-                "required": [],
-                "additionalProperties": false
-            })
-        };
-        let make_program = |description: &str| {
-            crate::runtime::WorkflowProgram::compile(
-                crate::runtime::WorkflowId::parse("reload_workflow").expect("workflow id"),
-                crate::runtime::WorkflowDefinition {
-                    workspace: None,
-
-                    timeout_ms: 600_000,
-                    description: description.to_owned(),
-                    block: crate::runtime::WorkflowBlock {
-                        input: empty_object(),
-                        output: empty_object(),
-                        entry: "done".to_owned(),
-                        nodes: std::collections::BTreeMap::from([(
-                            "done".to_owned(),
-                            crate::runtime::WorkflowNodeDefinition::Return {
-                                output: crate::runtime::WorkflowValue::Literal {
-                                    value: serde_json::json!({}),
-                                },
-                            },
-                        )]),
-                        edges: Vec::new(),
-                    },
-                },
-            )
-            .expect("workflow program")
-        };
-        let old_program = make_program("old generation");
-        let old_id = old_program.id().clone();
-        let old_catalog =
-            crate::runtime::WorkflowCatalog::new([old_program]).expect("old workflow catalog");
-        let new_program = make_program("new generation");
-        let new_catalog =
-            crate::runtime::WorkflowCatalog::new([new_program]).expect("new workflow catalog");
-        let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
-        loader.set_workflow_catalog(old_catalog.clone());
-        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
-        let dir = tempfile::tempdir().expect("temp dir");
-        let (runtime, _model) = headless_runtime_with_options(
-            &dir,
-            Vec::new(),
-            None,
-            None,
-            HeadlessRuntimeOptions {
-                workflow_catalog: old_catalog,
-                resource_loader: Some(loader_trait),
-                ..HeadlessRuntimeOptions::default()
-            },
-        )
-        .await;
-        runtime.activate();
-        assert_eq!(runtime.runtime_resources().revision().get(), 1);
-        assert_eq!(
-            runtime
-                .runtime_resources()
-                .workflows()
-                .get(&old_id)
-                .expect("initial Workflow generation")
-                .description(),
-            "old generation"
-        );
-
-        loader.set_workflow_catalog(new_catalog);
-        let reloaded = runtime
-            .reload_configuration()
-            .await
-            .expect("Workflow reload");
-        assert_eq!(reloaded.resource_revision.get(), 2);
-        assert_eq!(
-            runtime
-                .runtime_resources()
-                .workflows()
-                .get(&old_id)
-                .expect("reloaded Workflow generation")
-                .description(),
-            "new generation"
-        );
-
-        loader.fail("candidate Workflow generation is invalid");
-        assert!(matches!(
-            runtime.reload_configuration().await,
-            Err(super::RuntimeResourceReloadError::Failed { .. })
-        ));
-        assert_eq!(runtime.runtime_resources().revision().get(), 2);
-        assert_eq!(
-            runtime
-                .runtime_resources()
-                .workflows()
-                .get(&old_id)
-                .expect("previous valid Workflow generation")
-                .description(),
-            "new generation"
-        );
-        runtime.shutdown().await.expect("runtime shutdown");
-    }
-
     /// A cold reopen publishes current resource authority for a new attempt,
     /// while the old compaction summary and old `RequestSnapshot` remain exact
     /// historical values. Reopen does not synthesize a resource-change fact.
@@ -9550,347 +9211,8 @@ mod tests {
         assert_eq!(
             loader.prepare_count(),
             0,
-            "no reload occurred during compaction"
+            "no configuration application occurred during compaction"
         );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[allow(clippy::too_many_lines)]
-    async fn reload_publishes_project_skill_and_tool_authority_as_one_generation() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let workspace = dir.path().join("workspace");
-        let project_path = workspace.join("AGENTS.md");
-        let skill = workspace.join(".agents/skills/reload-proof");
-        std::fs::create_dir_all(&skill).expect("skill package");
-        let skill_markdown = skill.join("SKILL.md");
-        std::fs::write(
-            &skill_markdown,
-            "---\nname: reload-proof\ndescription: Candidate catalog metadata.\n---\n\nOriginal body.\n",
-        )
-        .expect("SKILL.md");
-
-        let loader = Arc::new(MutableResourceLoader::new(vec![project_file(
-            &project_path,
-            "candidate project authority",
-        )]));
-        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
-        let (runtime, model) = headless_runtime_with_options(
-            &dir,
-            vec![one_turn_script(), one_turn_script(), one_turn_script()],
-            None,
-            None,
-            HeadlessRuntimeOptions {
-                project_context_files: vec![project_file(
-                    &project_path,
-                    "initial project authority",
-                )],
-                resource_loader: Some(loader_trait),
-                ..HeadlessRuntimeOptions::default()
-            },
-        )
-        .await;
-
-        let definition = ToolDefinition {
-            id: ToolId::new("tool-reload-proof"),
-            name: "reload_proof".to_owned(),
-            description: "Tool published with the candidate generation.".to_owned(),
-            input_schema: serde_json::json!({"type": "object", "properties": {}}),
-            execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::default(),
-            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
-            replay_policy: ToolReplayPolicy::Never,
-            origin: ToolOrigin::Builtin,
-        };
-        let tool = FakeTool::new(definition, success_result("unused"));
-        let mut registry = ToolRegistry::new();
-        tool.register(&mut registry);
-        loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
-            source_demand: crate::capabilities::source::ToolSourceDemand::default(),
-            base_tool_registry: Arc::new(with_native_read(registry)),
-            agent_activation: {
-                let mut activation = fixture_activation(runtime.tool_runtime());
-                activation.profile.tools.builtin = vec!["reload_proof".into(), "read".into()];
-                activation
-            },
-            skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
-                skill.parent().unwrap(),
-            ),
-            mcp_servers: std::collections::BTreeMap::new(),
-            base_environment: runtime.tool_runtime().environment().clone(),
-        });
-        let mut candidate_assembly = crate::context::ContextAssembly::new();
-        let extension = candidate_assembly
-            .register_extension(
-                "reload.extension",
-                Some("candidate-v1".to_owned()),
-                Arc::new(|_: &crate::context::ContributorInputSnapshot| {
-                    Ok(Vec::<crate::context::ContextProposal>::new())
-                }),
-            )
-            .expect("extension");
-        candidate_assembly
-            .register_extension_system_section(&extension, "candidate extension authority")
-            .expect("extension section");
-        loader.set_context_assembly(candidate_assembly);
-        runtime.activate();
-
-        runtime
-            .submit_inbound(text_content("before reload"))
-            .expect("first inbound");
-        let _ = await_settled_ledger(&runtime).await;
-        let before = &model.requests()[0];
-        assert!(
-            before
-                .effective_system_prompt
-                .contains("initial project authority")
-        );
-        assert!(!before.effective_system_prompt.contains("reload-proof"));
-        assert!(
-            !before
-                .effective_system_prompt
-                .contains("candidate extension authority")
-        );
-        assert!(before.tools.iter().all(|tool| tool.name != "reload_proof"));
-        assert_eq!(loader.prepare_count(), 0);
-
-        let reloaded = runtime.reload_configuration().await.expect("reload");
-        assert_eq!(reloaded.resource_revision.get(), 2);
-        assert_eq!(loader.prepare_count(), 1);
-        runtime
-            .submit_inbound(text_content("after reload"))
-            .expect("second inbound");
-        let _ = await_settled_ledger(&runtime).await;
-        let after = &model.requests()[1];
-        assert!(
-            after
-                .effective_system_prompt
-                .contains("candidate project authority")
-        );
-        assert!(
-            after
-                .effective_system_prompt
-                .contains("Candidate catalog metadata.")
-        );
-        assert!(
-            after
-                .effective_system_prompt
-                .contains("candidate extension authority")
-        );
-        assert!(!after.effective_system_prompt.contains("Original body."));
-        assert!(after.tools.iter().any(|tool| tool.name == "reload_proof"));
-
-        std::fs::write(
-            &skill_markdown,
-            "---\nname: reload-proof\ndescription: Changed metadata before another reload.\n---\n\nCurrent body visible to Read.\n",
-        )
-        .expect("edit SKILL.md");
-        let mut next_assembly = crate::context::ContextAssembly::new();
-        let extension = next_assembly
-            .register_extension(
-                "reload.extension",
-                Some("candidate-v2".to_owned()),
-                Arc::new(|_: &crate::context::ContributorInputSnapshot| {
-                    Ok(Vec::<crate::context::ContextProposal>::new())
-                }),
-            )
-            .expect("next extension");
-        next_assembly
-            .register_extension_system_section(&extension, "unpublished extension authority")
-            .expect("next extension section");
-        loader.set_context_assembly(next_assembly);
-        runtime
-            .submit_inbound(text_content("after external edit"))
-            .expect("third inbound");
-        let ledger = await_settled_ledger(&runtime).await;
-        let after_external_edit = &model.requests()[2];
-        assert_eq!(
-            after.effective_system_prompt, after_external_edit.effective_system_prompt,
-            "Skill frontmatter and project authority remain frozen before reload"
-        );
-        assert_eq!(after.tools, after_external_edit.tools);
-        assert_eq!(loader.prepare_count(), 1);
-        assert!(ledger.iter().all(|message| {
-            let json = serde_json::to_string(message).expect("message JSON");
-            !json.contains("candidate project authority")
-                && !json.contains("Candidate catalog metadata.")
-        }));
-
-        let snapshots = request_snapshots(&runtime.request_history());
-        assert_eq!(snapshots.len(), 3);
-        assert_eq!(snapshots[0].runtime_resource_revision.get(), 1);
-        assert_eq!(snapshots[1].runtime_resource_revision.get(), 2);
-        assert_eq!(snapshots[2].runtime_resource_revision.get(), 2);
-        assert!(
-            snapshots[1]
-                .effective_system_prompt
-                .contains("Candidate catalog metadata.")
-        );
-        assert!(
-            snapshots[1]
-                .tool_definitions
-                .iter()
-                .any(|tool| tool.name == "reload_proof")
-        );
-        assert_eq!(snapshots[1].tool_definitions, snapshots[2].tool_definitions);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn reload_failure_retains_the_complete_old_generation() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("workspace/AGENTS.md");
-        let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
-        loader.fail("candidate rejected");
-        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
-        let (runtime, _) = headless_runtime_with_options(
-            &dir,
-            Vec::new(),
-            None,
-            None,
-            HeadlessRuntimeOptions {
-                project_context_files: vec![project_file(&path, "old authority")],
-                resource_loader: Some(loader_trait),
-                ..HeadlessRuntimeOptions::default()
-            },
-        )
-        .await;
-        runtime.activate();
-        let before = runtime.runtime_resources();
-        assert!(matches!(
-            runtime.reload_configuration().await,
-            Err(super::RuntimeResourceReloadError::Failed { .. })
-        ));
-        let after = runtime.runtime_resources();
-        assert!(Arc::ptr_eq(&before, &after));
-        assert_eq!(after.revision().get(), 1);
-        assert_eq!(after.project_instructions(), Some("old authority"));
-        assert_eq!(loader.prepare_count(), 1);
-    }
-
-    #[cfg(feature = "mcp-fixture")]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "one gated configuration reload and retirement scenario"
-    )]
-    async fn failed_reload_retires_candidate_mcp_runtime_after_project_failure() {
-        use crate::tools::mcp::fixture::{
-            FIXTURE_MODE_ENV, FixtureServer, PAGE_SIZE_ENV, fixture_spawn_args,
-            serve_if_fixture_mode,
-        };
-        use crate::tools::mcp::test_sync::CloseProbe;
-
-        if serve_if_fixture_mode(FixtureServer::from_env()).await {
-            return;
-        }
-
-        let test_name = "runtime::conversation_runtime::tests::failed_reload_retires_candidate_mcp_runtime_after_project_failure";
-        let fixture_binding = |page_size: Option<&str>| {
-            let mut environment =
-                std::collections::BTreeMap::from([(FIXTURE_MODE_ENV.to_owned(), "1".to_owned())]);
-            if let Some(page_size) = page_size {
-                environment.insert(PAGE_SIZE_ENV.to_owned(), page_size.to_owned());
-            }
-            crate::tools::mcp::McpServerBinding {
-                credentials: crate::credentials::SourceCredentials::default(),
-                transport: crate::tools::mcp::McpTransportConfig::Stdio {
-                    program: std::env::current_exe()
-                        .expect("test executable")
-                        .display()
-                        .to_string(),
-                    args: fixture_spawn_args(test_name),
-                    cwd: None,
-                    environment,
-                },
-                policy: crate::tools::types::ToolInvocationPolicy::default(),
-            }
-        };
-        let server_id = crate::runtime::identity::McpServerId::new("failed-reload");
-        let candidate_binding = fixture_binding(Some("2"));
-        let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
-        loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
-            source_demand: crate::capabilities::source::ToolSourceDemand::new(
-                [crate::capabilities::ToolSourceId::Mcp(server_id.clone())],
-                crate::runtime::resources::ManagedPythonCatalog::default(),
-            ),
-            base_tool_registry: Arc::new(ToolRegistry::new()),
-            agent_activation: crate::capabilities::AgentActivation {
-                profile: crate::local_runtime::config::AgentProfileDocument {
-                    tools: crate::capabilities::selection::ToolSelectionDocument {
-                        builtin: crate::local_runtime::config::builtin_root_profile()
-                            .tools
-                            .builtin,
-                        sources: [(
-                            crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                            crate::capabilities::selection::SourceToolSelection::All,
-                        )]
-                        .into(),
-                    },
-                    ..headless_activation().profile
-                },
-                ..Default::default()
-            },
-            skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
-            mcp_servers: std::collections::BTreeMap::from([(server_id.clone(), candidate_binding)]),
-            base_environment: crate::tools::environment::ToolEnvironment::new(),
-        });
-        loader.fail("project context discovery failed after MCP preparation");
-        let candidate_close = Arc::new(CloseProbe::parking());
-        loader.set_candidate_close_probe(candidate_close.clone());
-        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
-
-        let dir = tempfile::tempdir().expect("temp dir");
-        let (runtime, _) = headless_runtime_with_options(
-            &dir,
-            Vec::new(),
-            None,
-            None,
-            HeadlessRuntimeOptions {
-                resource_loader: Some(loader_trait),
-                mcp_servers: std::collections::BTreeMap::from([(
-                    server_id.clone(),
-                    fixture_binding(None),
-                )]),
-                ..HeadlessRuntimeOptions::default()
-            },
-        )
-        .await;
-        runtime.activate();
-        let old_resources = runtime.runtime_resources();
-        let old_runtime = runtime
-            .inner
-            .capability
-            .current_mcp_runtime(&server_id)
-            .expect("published MCP runtime");
-
-        let reload_runtime = runtime.clone();
-        let reload = tokio::spawn(async move { reload_runtime.reload_configuration().await });
-        candidate_close.wait_entered().await;
-        assert!(
-            Arc::ptr_eq(&old_resources, &runtime.runtime_resources()),
-            "failed preparation does not publish a resource generation"
-        );
-        assert!(
-            Arc::ptr_eq(
-                &old_runtime,
-                &runtime
-                    .inner
-                    .capability
-                    .current_mcp_runtime(&server_id)
-                    .expect("old MCP runtime remains published")
-            ),
-            "failed preparation does not replace physical MCP authority"
-        );
-        candidate_close.release();
-        assert!(matches!(
-            reload.await.expect("reload task"),
-            Err(super::RuntimeResourceReloadError::Failed { .. })
-        ));
-        assert_eq!(
-            runtime.inner.capability.pending_mcp_retirements(),
-            0,
-            "candidate-only physical ownership is reaped after failed reload"
-        );
-        runtime.shutdown().await.expect("shutdown");
     }
 
     #[cfg(feature = "mcp-fixture")]
@@ -10153,762 +9475,6 @@ mod tests {
     #[cfg(feature = "mcp-fixture")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
-    async fn post_publication_mcp_retirement_failure_fences_runtime_and_survives_shutdown() {
-        use crate::tools::mcp::fixture::{
-            FIXTURE_MODE_ENV, FixtureServer, PAGE_SIZE_ENV, fixture_spawn_args,
-            serve_if_fixture_mode,
-        };
-        use crate::tools::mcp::test_sync::CloseProbe;
-
-        if serve_if_fixture_mode(FixtureServer::from_env()).await {
-            return;
-        }
-
-        let test_name = "runtime::conversation_runtime::tests::post_publication_mcp_retirement_failure_fences_runtime_and_survives_shutdown";
-        let fixture_binding = |page_size: Option<&str>| {
-            let mut environment =
-                std::collections::BTreeMap::from([(FIXTURE_MODE_ENV.to_owned(), "1".to_owned())]);
-            if let Some(page_size) = page_size {
-                environment.insert(PAGE_SIZE_ENV.to_owned(), page_size.to_owned());
-            }
-            crate::tools::mcp::McpServerBinding {
-                credentials: crate::credentials::SourceCredentials::default(),
-                transport: crate::tools::mcp::McpTransportConfig::Stdio {
-                    program: std::env::current_exe()
-                        .expect("test executable")
-                        .display()
-                        .to_string(),
-                    args: fixture_spawn_args(test_name),
-                    cwd: None,
-                    environment,
-                },
-                policy: crate::tools::types::ToolInvocationPolicy::default(),
-            }
-        };
-        let server_id = crate::runtime::identity::McpServerId::new("failed-retirement");
-        let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
-        loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
-            source_demand: crate::capabilities::source::ToolSourceDemand::new(
-                [crate::capabilities::ToolSourceId::Mcp(server_id.clone())],
-                crate::runtime::resources::ManagedPythonCatalog::default(),
-            ),
-            base_tool_registry: Arc::new(ToolRegistry::new()),
-            agent_activation: crate::capabilities::AgentActivation {
-                profile: crate::local_runtime::config::AgentProfileDocument {
-                    tools: crate::capabilities::selection::ToolSelectionDocument {
-                        builtin: crate::local_runtime::config::builtin_root_profile()
-                            .tools
-                            .builtin,
-                        sources: [(
-                            crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                            crate::capabilities::selection::SourceToolSelection::All,
-                        )]
-                        .into(),
-                    },
-                    ..headless_activation().profile
-                },
-                ..Default::default()
-            },
-            skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
-            mcp_servers: std::collections::BTreeMap::from([(
-                server_id.clone(),
-                fixture_binding(Some("2")),
-            )]),
-            base_environment: crate::tools::environment::ToolEnvironment::new(),
-        });
-        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
-        let dir = tempfile::tempdir().expect("temp dir");
-        let (runtime, _) = headless_runtime_with_options(
-            &dir,
-            Vec::new(),
-            None,
-            None,
-            HeadlessRuntimeOptions {
-                resource_loader: Some(loader_trait),
-                mcp_servers: std::collections::BTreeMap::from([(
-                    server_id.clone(),
-                    fixture_binding(None),
-                )]),
-                ..HeadlessRuntimeOptions::default()
-            },
-        )
-        .await;
-        runtime.activate();
-
-        let old_resources = runtime.runtime_resources();
-        let old_runtime = runtime
-            .inner
-            .capability
-            .current_mcp_runtime(&server_id)
-            .expect("generation A");
-        let old_close = Arc::new(CloseProbe::failing("retired A terminal state is unproven"));
-        old_runtime.install_close_probe(old_close.clone());
-
-        let result = runtime.reload_configuration().await;
-        let published =
-            result.expect("publication succeeded; retirement failure is lifecycle health");
-        assert_eq!(published.resource_revision.get(), 2);
-        assert_eq!(published.capability_revision.get(), 2);
-        assert_eq!(
-            runtime.runtime_resources().revision(),
-            published.resource_revision
-        );
-        assert!(!Arc::ptr_eq(&old_resources, &runtime.runtime_resources()));
-        assert!(!Arc::ptr_eq(
-            &old_runtime,
-            &runtime
-                .inner
-                .capability
-                .current_mcp_runtime(&server_id)
-                .expect("generation B remains current")
-        ));
-        assert!(
-            runtime.inner.capability.pending_mcp_retirements() >= 1,
-            "the failed retired generation remains authoritative"
-        );
-        assert_eq!(
-            runtime.inner.lifecycle.state(),
-            ConversationLifecycleState::Draining,
-            "unproven physical settlement fences healthy continuation"
-        );
-        assert_eq!(
-            runtime.submit_inbound(text_content("must be refused")),
-            Err(InboundAdmissionError::Shutdown)
-        );
-
-        let shutdown = runtime.shutdown().await;
-        let Err(super::ShutdownError::RuntimeOwnedSettlement { detail }) = shutdown else {
-            panic!("shutdown must retain the retired physical failure: {shutdown:?}");
-        };
-        assert!(detail.contains("retired A terminal state is unproven"));
-        assert!(old_close.was_entered(), "A close was actually attempted");
-        assert_eq!(
-            runtime.inner.capability.pending_mcp_retirements(),
-            1,
-            "unproven A remains authoritative rather than being reaped"
-        );
-    }
-
-    #[cfg(feature = "mcp-fixture")]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[allow(clippy::too_many_lines)]
-    async fn reload_waits_for_complete_mcp_failure_publication() {
-        use crate::tools::mcp::fixture::{
-            FIXTURE_MODE_ENV, FixtureServer, PAGE_SIZE_ENV, fixture_spawn_args,
-            serve_if_fixture_mode,
-        };
-        use crate::tools::mcp::test_sync::CloseProbe;
-
-        if serve_if_fixture_mode(FixtureServer::from_env()).await {
-            return;
-        }
-
-        let test_name = "runtime::conversation_runtime::tests::reload_waits_for_complete_mcp_failure_publication";
-        let fixture_binding = |page_size: Option<&str>| {
-            let mut environment =
-                std::collections::BTreeMap::from([(FIXTURE_MODE_ENV.to_owned(), "1".to_owned())]);
-            if let Some(page_size) = page_size {
-                environment.insert(PAGE_SIZE_ENV.to_owned(), page_size.to_owned());
-            }
-            crate::tools::mcp::McpServerBinding {
-                credentials: crate::credentials::SourceCredentials::default(),
-                transport: crate::tools::mcp::McpTransportConfig::Stdio {
-                    program: std::env::current_exe()
-                        .expect("test executable")
-                        .display()
-                        .to_string(),
-                    args: fixture_spawn_args(test_name),
-                    cwd: None,
-                    environment,
-                },
-                policy: crate::tools::types::ToolInvocationPolicy::default(),
-            }
-        };
-        let server_id = crate::runtime::identity::McpServerId::new("reload-terminal-race");
-        let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
-        loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
-            source_demand: crate::capabilities::source::ToolSourceDemand::new(
-                [crate::capabilities::ToolSourceId::Mcp(server_id.clone())],
-                crate::runtime::resources::ManagedPythonCatalog::default(),
-            ),
-            base_tool_registry: Arc::new(ToolRegistry::new()),
-            agent_activation: crate::capabilities::AgentActivation {
-                profile: crate::local_runtime::config::AgentProfileDocument {
-                    tools: crate::capabilities::selection::ToolSelectionDocument {
-                        builtin: crate::local_runtime::config::builtin_root_profile()
-                            .tools
-                            .builtin,
-                        sources: [(
-                            crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                            crate::capabilities::selection::SourceToolSelection::All,
-                        )]
-                        .into(),
-                    },
-                    ..headless_activation().profile
-                },
-                ..Default::default()
-            },
-            skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
-            mcp_servers: std::collections::BTreeMap::from([(
-                server_id.clone(),
-                fixture_binding(Some("2")),
-            )]),
-            base_environment: crate::tools::environment::ToolEnvironment::new(),
-        });
-        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
-        let dir = tempfile::tempdir().expect("temp dir");
-        let (runtime, _) = headless_runtime_with_options(
-            &dir,
-            Vec::new(),
-            None,
-            None,
-            HeadlessRuntimeOptions {
-                resource_loader: Some(loader_trait),
-                mcp_servers: std::collections::BTreeMap::from([(
-                    server_id.clone(),
-                    fixture_binding(None),
-                )]),
-                ..HeadlessRuntimeOptions::default()
-            },
-        )
-        .await;
-        runtime.activate();
-        let old_resources = runtime.runtime_resources();
-        let old_runtime = runtime
-            .inner
-            .capability
-            .current_mcp_runtime(&server_id)
-            .expect("generation A");
-        let old_close = Arc::new(CloseProbe::failing_before_failure_publication(
-            "ready A terminal state is unproven",
-        ));
-        old_runtime.install_close_probe(old_close.clone());
-
-        let reload_runtime = runtime.clone();
-        let reload = tokio::spawn(async move { reload_runtime.reload_configuration().await });
-        old_close.wait_before_failure_publication_entered().await;
-        assert_eq!(
-            runtime.runtime_resources().revision().get(),
-            2,
-            "B is already the logical authority before ready A settlement is awaited"
-        );
-        // The close task is parked after `close()` returned but before the
-        // registry/callback publication. The reload future is still waiting
-        // for the complete terminal result, rather than seeing the early
-        // generation completion signal used by the old implementation.
-        tokio::task::yield_now().await;
-        assert!(
-            !reload.is_finished(),
-            "reload must not complete while terminal failure publication is parked"
-        );
-
-        old_close.release_before_failure_publication();
-        let result = reload.await.expect("reload task");
-        let published =
-            result.expect("publication succeeded; retirement failure is lifecycle health");
-        assert_eq!(published.resource_revision.get(), 2);
-        assert_eq!(published.capability_revision.get(), 2);
-        assert!(!Arc::ptr_eq(&old_resources, &runtime.runtime_resources()));
-        assert_eq!(
-            runtime.inner.lifecycle.state(),
-            ConversationLifecycleState::Draining,
-            "the fencing callback is published before reload completion"
-        );
-
-        let shutdown = runtime.shutdown().await;
-        let Err(super::ShutdownError::RuntimeOwnedSettlement { detail }) = shutdown else {
-            panic!("shutdown must retain the ready retirement failure: {shutdown:?}");
-        };
-        assert!(detail.contains("ready A terminal state is unproven"));
-    }
-
-    #[cfg(feature = "mcp-fixture")]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[allow(clippy::too_many_lines)]
-    async fn mcp_reload_generations_are_bounded_and_background_owners_keep_old_runtime_alive() {
-        use crate::tools::mcp::fixture::{
-            FIXTURE_MODE_ENV, FixtureServer, PAGE_SIZE_ENV, fixture_spawn_args,
-            serve_if_fixture_mode,
-        };
-        use crate::tools::mcp::test_sync::CloseProbe;
-
-        if serve_if_fixture_mode(FixtureServer::from_env()).await {
-            return;
-        }
-
-        let test_name = "runtime::conversation_runtime::tests::mcp_reload_generations_are_bounded_and_background_owners_keep_old_runtime_alive";
-        let fixture_binding = |page_size: Option<&str>| {
-            let mut environment =
-                std::collections::BTreeMap::from([(FIXTURE_MODE_ENV.to_owned(), "1".to_owned())]);
-            if let Some(page_size) = page_size {
-                environment.insert(PAGE_SIZE_ENV.to_owned(), page_size.to_owned());
-            }
-            crate::tools::mcp::McpServerBinding {
-                credentials: crate::credentials::SourceCredentials::default(),
-                transport: crate::tools::mcp::McpTransportConfig::Stdio {
-                    program: std::env::current_exe()
-                        .expect("test executable")
-                        .display()
-                        .to_string(),
-                    args: fixture_spawn_args(test_name),
-                    cwd: None,
-                    environment,
-                },
-                policy: crate::tools::types::ToolInvocationPolicy::default(),
-            }
-        };
-        let server_id = crate::runtime::identity::McpServerId::new("reload-server");
-        let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
-        let binding_b = fixture_binding(Some("2"));
-        let binding_c = fixture_binding(None);
-        let inputs = |binding| crate::capabilities::CapabilityResourceInputs {
-            source_demand: crate::capabilities::source::ToolSourceDemand::new(
-                [crate::capabilities::ToolSourceId::Mcp(server_id.clone())],
-                crate::runtime::resources::ManagedPythonCatalog::default(),
-            ),
-            base_tool_registry: Arc::new(ToolRegistry::new()),
-            agent_activation: crate::capabilities::AgentActivation {
-                profile: crate::local_runtime::config::AgentProfileDocument {
-                    tools: crate::capabilities::selection::ToolSelectionDocument {
-                        builtin: crate::local_runtime::config::builtin_root_profile()
-                            .tools
-                            .builtin,
-                        sources: [(
-                            crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                            crate::capabilities::selection::SourceToolSelection::All,
-                        )]
-                        .into(),
-                    },
-                    ..headless_activation().profile
-                },
-                ..Default::default()
-            },
-            skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
-            mcp_servers: std::collections::BTreeMap::from([(server_id.clone(), binding)]),
-            base_environment: crate::tools::environment::ToolEnvironment::new(),
-        };
-        loader.set_capability_inputs(inputs(binding_b.clone()));
-        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
-
-        let dir = tempfile::tempdir().expect("temp dir");
-        let (runtime, _) = headless_runtime_with_options(
-            &dir,
-            Vec::new(),
-            None,
-            None,
-            HeadlessRuntimeOptions {
-                resource_loader: Some(loader_trait),
-                mcp_servers: std::collections::BTreeMap::from([(
-                    server_id.clone(),
-                    fixture_binding(None),
-                )]),
-                ..HeadlessRuntimeOptions::default()
-            },
-        )
-        .await;
-        runtime.activate();
-
-        let old_runtime = runtime
-            .inner
-            .capability
-            .current_mcp_runtime(&server_id)
-            .expect("generation A");
-        let old_capability_snapshot = runtime.inner.capability.current_snapshot();
-        assert_eq!(old_runtime.list_tools().await.expect("A catalog").len(), 3);
-        let old_close = Arc::new(CloseProbe::parking());
-        old_runtime.install_close_probe(old_close.clone());
-
-        let attempt = runtime.inner.capability.acquire_attempt_lease();
-        let mcp_leases = attempt
-            .mcp_leases()
-            .expect("the admitted MCP generation remains dispatchable");
-        drop(attempt);
-        // Retain a physical source lease independently of active work to exercise retirement.
-        let retained_source_lease = mcp_leases.try_clone().unwrap();
-        let background_executor = Arc::new(ParkedMcpBackgroundExecutor {
-            started: Arc::new(tokio::sync::Notify::new()),
-            release: Arc::new(tokio::sync::Notify::new()),
-        });
-        let invocation = ToolInvocation {
-            id: crate::tools::types::ToolInvocationId::Agent {
-                call_id: ToolCallId::new("background-mcp-call"),
-            },
-            tool_id: ToolId::new("background-mcp-tool"),
-            tool_name: "background-mcp-tool".to_owned(),
-            mode: ToolInvocationMode::Background,
-            arguments: serde_json::json!({}),
-        };
-        let background = runtime.tool_runtime().background();
-        let prepared = background
-            .prepare_dispatch_with_mcp_leases(
-                &invocation,
-                &(background_executor.clone() as Arc<dyn ToolExecutor>),
-                runtime
-                    .inner
-                    .capability
-                    .current_snapshot()
-                    .effective_environment()
-                    .clone(),
-                mcp_leases,
-            )
-            .expect("prepare background owner");
-        let cancellation = crate::runtime::CancellationSignal::new();
-        let execution_id = match background
-            .commit_dispatch(prepared, &cancellation)
-            .expect("commit background owner")
-        {
-            crate::tools::background::BackgroundDispatchOutcome::Accepted {
-                execution_id, ..
-            } => execution_id,
-            crate::tools::background::BackgroundDispatchOutcome::RolledBack => {
-                panic!("background owner rolled back")
-            }
-        };
-        background_executor.started.notified().await;
-
-        let published = runtime.runtime_resources();
-        assert!(matches!(
-            runtime.reload_configuration().await,
-            Err(crate::runtime::RuntimeResourceReloadError::Busy { .. })
-        ));
-        assert!(Arc::ptr_eq(&published, &runtime.runtime_resources()));
-        background_executor.release.notify_one();
-        background.wait_until_settled(&execution_id).await;
-        runtime.settlement_signal().notified().await;
-        runtime
-            .reload_configuration()
-            .await
-            .expect("reload after admitted work settles");
-        let runtime_b = runtime
-            .inner
-            .capability
-            .current_mcp_runtime(&server_id)
-            .expect("generation B");
-        assert!(!Arc::ptr_eq(&old_runtime, &runtime_b));
-        assert_eq!(runtime_b.list_tools().await.expect("B catalog").len(), 5);
-        assert!(!old_close.was_entered(), "background lease keeps A open");
-        assert_eq!(runtime.inner.capability.pending_mcp_retirements(), 1);
-        let next_attempt = runtime.inner.capability.acquire_attempt_lease();
-        assert!(next_attempt.mcp_lease_uses_runtime(&runtime_b));
-        assert!(!next_attempt.mcp_lease_uses_runtime(&old_runtime));
-        drop(next_attempt);
-
-        // A clone of the claimed coordinator cannot replace the live
-        // resource/capability/MCP pair independently. The rejected candidate
-        // is dropped and settled, while every current authority remains the
-        // B generation.
-        let resources_b = runtime.runtime_resources();
-        let capability_b = runtime.inner.capability.current_snapshot();
-        let direct_candidate = runtime
-            .inner
-            .capability
-            .prepare_candidate()
-            .await
-            .expect("standalone preparation remains available for the rejection test");
-        assert_eq!(
-            runtime.inner.capability.commit(direct_candidate),
-            Err(crate::capabilities::CapabilityCommitError::RuntimePublicationRequired)
-        );
-        runtime
-            .inner
-            .capability
-            .settle_ready_mcp_runtimes()
-            .await
-            .expect("the rejected candidate has no settlement failure");
-        assert!(Arc::ptr_eq(&resources_b, &runtime.runtime_resources()));
-        assert!(Arc::ptr_eq(
-            &capability_b,
-            &runtime.inner.capability.current_snapshot()
-        ));
-        assert!(Arc::ptr_eq(
-            &runtime_b,
-            &runtime
-                .inner
-                .capability
-                .current_mcp_runtime(&server_id)
-                .expect("B remains current")
-        ));
-
-        // An attempt/resource snapshot captured from A carries A's physical
-        // lease authority even after B is current. It cannot consult the
-        // mutable coordinator generation and accidentally lease B.
-        let old_generation_attempt = runtime
-            .inner
-            .capability
-            .acquire_attempt_lease_for(old_capability_snapshot);
-        assert!(old_generation_attempt.mcp_lease_uses_runtime(&old_runtime));
-        assert!(!old_generation_attempt.mcp_lease_uses_runtime(&runtime_b));
-        drop(old_generation_attempt);
-
-        let old_tools = old_runtime
-            .list_tools()
-            .await
-            .expect("old catalog remains usable");
-        let (old_definition, old_executor) = crate::tools::mcp::definitions(
-            &server_id,
-            crate::tools::types::ToolInvocationPolicy::default(),
-            &old_runtime,
-            old_tools,
-        )
-        .into_iter()
-        .find(|(definition, _)| definition.name == "echo")
-        .expect("old echo tool");
-        let progress = NoProgressForMcp;
-        let tool_runtime = runtime.tool_runtime();
-        let old_result = old_executor
-            .start(
-                ToolInvocation {
-                    id: crate::tools::types::ToolInvocationId::Agent {
-                        call_id: ToolCallId::new("old-generation-call"),
-                    },
-                    tool_id: old_definition.id,
-                    tool_name: "echo".to_owned(),
-                    mode: ToolInvocationMode::Foreground,
-                    arguments: serde_json::json!({}),
-                },
-                ToolExecutionContext::new(
-                    tool_runtime.conversation_id(),
-                    None,
-                    crate::runtime::ExecutionCancellation::detached(
-                        crate::runtime::CancellationSignal::new(),
-                        CancellationReason::UserRequested,
-                    ),
-                    tool_runtime.workspace(),
-                    &progress,
-                    tool_runtime.artifacts(),
-                    tool_runtime.tool_output(),
-                    tool_runtime.environment(),
-                ),
-            )
-            .completion
-            .await;
-        assert!(matches!(old_result.status, ToolExecutionStatus::Success));
-
-        loader.set_capability_inputs(inputs(binding_c));
-        runtime.reload_configuration().await.expect("reload B -> C");
-        let runtime_c = runtime
-            .inner
-            .capability
-            .current_mcp_runtime(&server_id)
-            .expect("generation C");
-        assert!(!Arc::ptr_eq(&runtime_b, &runtime_c));
-        assert_eq!(runtime_c.list_tools().await.expect("C catalog").len(), 3);
-        assert_eq!(runtime.inner.capability.pending_mcp_retirements(), 1);
-        assert!(
-            runtime
-                .inner
-                .capability
-                .current_snapshot()
-                .tool_registry()
-                .definitions()
-                .iter()
-                .all(|definition| definition.name != "alpha"),
-            "new capability authority does not retain B-only tools"
-        );
-
-        drop(retained_source_lease);
-        tokio::time::timeout(std::time::Duration::from_mins(1), old_close.wait_entered())
-            .await
-            .expect("A closes after the background owner settles");
-        old_close.release();
-        let _ = runtime.inner.capability.settle_ready_mcp_runtimes().await;
-        assert_eq!(runtime.inner.capability.pending_mcp_retirements(), 0);
-        runtime.shutdown().await.expect("shutdown");
-    }
-
-    #[cfg(feature = "mcp-fixture")]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[allow(clippy::too_many_lines)]
-    async fn background_late_mcp_settlement_failure_fences_after_reload_return() {
-        use crate::tools::mcp::fixture::{
-            FIXTURE_MODE_ENV, FixtureServer, PAGE_SIZE_ENV, fixture_spawn_args,
-            serve_if_fixture_mode,
-        };
-        use crate::tools::mcp::test_sync::CloseProbe;
-
-        if serve_if_fixture_mode(FixtureServer::from_env()).await {
-            return;
-        }
-
-        let test_name = "runtime::conversation_runtime::tests::background_late_mcp_settlement_failure_fences_after_reload_return";
-        let fixture_binding = |page_size: Option<&str>| {
-            let mut environment =
-                std::collections::BTreeMap::from([(FIXTURE_MODE_ENV.to_owned(), "1".to_owned())]);
-            if let Some(page_size) = page_size {
-                environment.insert(PAGE_SIZE_ENV.to_owned(), page_size.to_owned());
-            }
-            crate::tools::mcp::McpServerBinding {
-                credentials: crate::credentials::SourceCredentials::default(),
-                transport: crate::tools::mcp::McpTransportConfig::Stdio {
-                    program: std::env::current_exe()
-                        .expect("test executable")
-                        .display()
-                        .to_string(),
-                    args: fixture_spawn_args(test_name),
-                    cwd: None,
-                    environment,
-                },
-                policy: crate::tools::types::ToolInvocationPolicy::default(),
-            }
-        };
-        let server_id = crate::runtime::identity::McpServerId::new("late-background-failure");
-        let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
-        loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
-            source_demand: crate::capabilities::source::ToolSourceDemand::new(
-                [crate::capabilities::ToolSourceId::Mcp(server_id.clone())],
-                crate::runtime::resources::ManagedPythonCatalog::default(),
-            ),
-            base_tool_registry: Arc::new(ToolRegistry::new()),
-            agent_activation: crate::capabilities::AgentActivation {
-                profile: crate::local_runtime::config::AgentProfileDocument {
-                    tools: crate::capabilities::selection::ToolSelectionDocument {
-                        builtin: crate::local_runtime::config::builtin_root_profile()
-                            .tools
-                            .builtin,
-                        sources: [(
-                            crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                            crate::capabilities::selection::SourceToolSelection::All,
-                        )]
-                        .into(),
-                    },
-                    ..headless_activation().profile
-                },
-                ..Default::default()
-            },
-            skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
-            mcp_servers: std::collections::BTreeMap::from([(
-                server_id.clone(),
-                fixture_binding(Some("2")),
-            )]),
-            base_environment: crate::tools::environment::ToolEnvironment::new(),
-        });
-        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
-        let dir = tempfile::tempdir().expect("temp dir");
-        let (runtime, _) = headless_runtime_with_options(
-            &dir,
-            Vec::new(),
-            None,
-            None,
-            HeadlessRuntimeOptions {
-                resource_loader: Some(loader_trait),
-                mcp_servers: std::collections::BTreeMap::from([(
-                    server_id.clone(),
-                    fixture_binding(None),
-                )]),
-                ..HeadlessRuntimeOptions::default()
-            },
-        )
-        .await;
-        runtime.activate();
-
-        let old_runtime = runtime
-            .inner
-            .capability
-            .current_mcp_runtime(&server_id)
-            .expect("generation A");
-        let old_close = Arc::new(CloseProbe::failing(
-            "background-late generation A settlement is unproven",
-        ));
-        old_runtime.install_close_probe(old_close.clone());
-
-        let attempt = runtime.inner.capability.acquire_attempt_lease();
-        let mcp_leases = attempt.mcp_leases().expect("generation A lease authority");
-        drop(attempt);
-        // Retain a physical source lease independently of active work to exercise retirement.
-        let retained_source_lease = mcp_leases.try_clone().unwrap();
-        let background_executor = Arc::new(ParkedMcpBackgroundExecutor {
-            started: Arc::new(tokio::sync::Notify::new()),
-            release: Arc::new(tokio::sync::Notify::new()),
-        });
-        let invocation = ToolInvocation {
-            id: crate::tools::types::ToolInvocationId::Agent {
-                call_id: ToolCallId::new("background-late-failure-call"),
-            },
-            tool_id: ToolId::new("background-late-failure-tool"),
-            tool_name: "background-late-failure-tool".to_owned(),
-            mode: ToolInvocationMode::Background,
-            arguments: serde_json::json!({}),
-        };
-        let background = runtime.tool_runtime().background();
-        let prepared = background
-            .prepare_dispatch_with_mcp_leases(
-                &invocation,
-                &(background_executor.clone() as Arc<dyn ToolExecutor>),
-                runtime
-                    .inner
-                    .capability
-                    .current_snapshot()
-                    .effective_environment()
-                    .clone(),
-                mcp_leases,
-            )
-            .expect("prepare background owner");
-        let cancellation = crate::runtime::CancellationSignal::new();
-        let execution_id = match background
-            .commit_dispatch(prepared, &cancellation)
-            .expect("commit background owner")
-        {
-            crate::tools::background::BackgroundDispatchOutcome::Accepted {
-                execution_id, ..
-            } => execution_id,
-            crate::tools::background::BackgroundDispatchOutcome::RolledBack => {
-                panic!("background owner rolled back")
-            }
-        };
-        background_executor.started.notified().await;
-
-        let published = runtime.runtime_resources();
-        assert!(matches!(
-            runtime.reload_configuration().await,
-            Err(crate::runtime::RuntimeResourceReloadError::Busy { .. })
-        ));
-        assert!(Arc::ptr_eq(&published, &runtime.runtime_resources()));
-        background_executor.release.notify_one();
-        background.wait_until_settled(&execution_id).await;
-        runtime.settlement_signal().notified().await;
-        runtime
-            .reload_configuration()
-            .await
-            .expect("reload after admitted work settles");
-        assert_eq!(
-            runtime.lifecycle_state(),
-            ConversationLifecycleState::Running,
-            "B publishes after background settlement while a retained physical A lease remains"
-        );
-        assert_eq!(runtime.inner.capability.pending_mcp_retirements(), 1);
-
-        drop(retained_source_lease);
-        old_close.wait_entered().await;
-        let settlement = runtime.inner.capability.settle_ready_mcp_runtimes().await;
-        assert!(
-            settlement.is_err(),
-            "A's late close failure is authoritative after the background lease settles"
-        );
-        assert_eq!(
-            runtime.lifecycle_state(),
-            ConversationLifecycleState::Draining,
-            "the late failure uses the same atomic failure-drain transition"
-        );
-        assert_eq!(
-            runtime.submit_inbound(text_content("after late failure")),
-            Err(InboundAdmissionError::Shutdown)
-        );
-
-        let shutdown = runtime.shutdown().await;
-        let Err(super::ShutdownError::RuntimeOwnedSettlement { detail }) = shutdown else {
-            panic!("the late physical failure must survive shutdown: {shutdown:?}");
-        };
-        assert!(detail.contains("background-late generation A settlement is unproven"));
-        assert_eq!(
-            runtime.inner.capability.pending_mcp_retirements(),
-            1,
-            "the failed A generation remains retained as settlement evidence"
-        );
-    }
-
-    #[cfg(feature = "mcp-fixture")]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[allow(clippy::too_many_lines)]
     async fn sibling_mcp_settlement_failures_aggregate_through_one_runtime_drain() {
         use crate::tools::mcp::fixture::{
             FIXTURE_MODE_ENV, FixtureServer, TOOL_PREFIX_ENV, fixture_spawn_args,
@@ -11040,151 +9606,6 @@ mod tests {
             section.lane == crate::context::SystemSectionLane::AgentProfile
                 && section.content == persona
         }));
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn active_attempt_refuses_reload_without_changing_the_attempt() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let (release, release_rx) = model_release();
-        let mut script = vec![FakeStep::ParkUntilReleased(release_rx)];
-        script.extend(one_turn_script());
-        let (runtime, model) = headless_runtime(&dir, vec![script], None, None).await;
-        runtime.activate();
-        let mut parked = model.parked();
-        runtime
-            .submit_inbound(text_content("busy"))
-            .expect("inbound");
-        parked.wait_for(|parked| *parked).await.expect("parked");
-        assert!(matches!(
-            runtime.reload_configuration().await,
-            Err(super::RuntimeResourceReloadError::Busy {
-                reason: super::RuntimeResourceReloadBusyReason::Attempt
-            })
-        ));
-        release.send(true).expect("release");
-        let _ = await_settled_ledger(&runtime).await;
-        assert_eq!(model.requests().len(), 1);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn reload_gate_linearizes_queued_admission_after_publication() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("workspace/AGENTS.md");
-        let mutable = Arc::new(MutableResourceLoader::new(vec![project_file(
-            &path,
-            "authority after gate",
-        )]));
-        let (entered, mut entered_rx) = tokio::sync::watch::channel(false);
-        let (release, release_rx) = tokio::sync::watch::channel(false);
-        let loader: Arc<dyn crate::runtime::RuntimeResourceLoader> =
-            Arc::new(GatedResourceLoader {
-                inner: mutable,
-                entered,
-                release: release_rx,
-            });
-        let (runtime, model) = headless_runtime_with_options(
-            &dir,
-            vec![one_turn_script()],
-            None,
-            None,
-            HeadlessRuntimeOptions {
-                project_context_files: vec![project_file(&path, "authority before gate")],
-                resource_loader: Some(loader),
-                ..HeadlessRuntimeOptions::default()
-            },
-        )
-        .await;
-        runtime.activate();
-        let reload_runtime = runtime.clone();
-        let reload = tokio::spawn(async move { reload_runtime.reload_configuration().await });
-        entered_rx
-            .wait_for(|entered| *entered)
-            .await
-            .expect("reload entered");
-        runtime
-            .submit_inbound(text_content("queued at reload"))
-            .expect("queued inbound");
-        assert!(
-            model.requests().is_empty(),
-            "the closed gate admits no attempt"
-        );
-        release.send(true).expect("release reload");
-        assert_eq!(
-            reload
-                .await
-                .expect("reload task")
-                .expect("reload")
-                .resource_revision
-                .get(),
-            2
-        );
-        let _ = await_settled_ledger(&runtime).await;
-        assert!(
-            model.requests()[0]
-                .effective_system_prompt
-                .contains("authority after gate")
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn cancelled_reload_reopens_admission_and_retains_the_old_generation() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("workspace/AGENTS.md");
-        let mutable = Arc::new(MutableResourceLoader::new(vec![project_file(
-            &path,
-            "unpublished authority",
-        )]));
-        let (entered, mut entered_rx) = tokio::sync::watch::channel(false);
-        let (_release, release_rx) = tokio::sync::watch::channel(false);
-        let loader: Arc<dyn crate::runtime::RuntimeResourceLoader> =
-            Arc::new(GatedResourceLoader {
-                inner: mutable,
-                entered,
-                release: release_rx,
-            });
-        let (runtime, model) = headless_runtime_with_options(
-            &dir,
-            vec![one_turn_script()],
-            None,
-            None,
-            HeadlessRuntimeOptions {
-                project_context_files: vec![project_file(&path, "retained authority")],
-                resource_loader: Some(loader),
-                ..HeadlessRuntimeOptions::default()
-            },
-        )
-        .await;
-        runtime.activate();
-        let reload_runtime = runtime.clone();
-        let reload = tokio::spawn(async move { reload_runtime.reload_configuration().await });
-        entered_rx
-            .wait_for(|entered| *entered)
-            .await
-            .expect("reload entered");
-        runtime
-            .submit_inbound(text_content("queued before cancellation"))
-            .expect("queued inbound");
-        assert!(model.requests().is_empty());
-
-        reload.abort();
-        assert!(
-            reload
-                .await
-                .expect_err("reload task cancelled")
-                .is_cancelled()
-        );
-        let _ = await_settled_ledger(&runtime).await;
-        assert_eq!(runtime.runtime_resources().revision().get(), 1);
-        assert!(
-            model.requests()[0]
-                .effective_system_prompt
-                .contains("retained authority")
-        );
-        assert!(
-            !model.requests()[0]
-                .effective_system_prompt
-                .contains("unpublished authority")
-        );
     }
 
     /// Whether an internal runtime event is one of the terminal settlement
@@ -11396,600 +9817,6 @@ mod tests {
             fixture.runtime.submit_inbound(text_content("late")),
             Err(InboundAdmissionError::Shutdown)
         ));
-    }
-
-    /// The complete native interaction shutdown path is owned by the real
-    /// `ConversationRuntime`: the pending map is emptied by runtime-shutdown
-    /// cancellation, but the drain completion remains blocked until the
-    /// interaction waiter is notified, `AgentExecution` settles, and the
-    /// attempt task returns. The settle gate is parked after the terminal map
-    /// transition and before waiter notification, so `pending_count == 0`
-    /// is observed while shutdown is still provably incomplete.
-    #[allow(clippy::too_many_lines)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn shutdown_waits_for_real_runtime_owned_pending_interaction() {
-        use crate::message::types::ContentBlockIndex;
-        use crate::model::event::ModelEvent;
-        use crate::model::finish::ModelFinishReason;
-        use crate::tools::types::{ToolCall, ToolCallStart};
-
-        let definition = ToolDefinition {
-            id: ToolId::new("tool-approval"),
-            name: "approval".to_owned(),
-            description: "a deterministic approval test tool".to_owned(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {"text": {"type": "string"}},
-                "required": ["text"]
-            }),
-            execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::default(),
-            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
-            replay_policy: ToolReplayPolicy::Never,
-            origin: ToolOrigin::Builtin,
-        };
-        let tool = FakeTool::new(definition.clone(), success_result("must not run"));
-        let tool_calls = tool.calls();
-        let tool_started = tool.started();
-        let mut registry = ToolRegistry::new();
-        tool.register(&mut registry);
-
-        let call_id = ToolCallId::new("call-runtime-approval");
-        let scripts = vec![vec![
-            FakeStep::Emit(ModelEvent::Started),
-            FakeStep::Emit(ModelEvent::ToolCallStarted {
-                block_index: ContentBlockIndex::new(0),
-                call: ToolCallStart {
-                    id: call_id.clone(),
-                    tool_id: definition.id.clone(),
-                    name: definition.name.clone(),
-                },
-            }),
-            FakeStep::Emit(ModelEvent::ToolCallArgumentsDelta {
-                block_index: ContentBlockIndex::new(0),
-                call_id: call_id.clone(),
-                arguments_delta: "{\"text\":\"hi\"}".to_owned(),
-            }),
-            FakeStep::Emit(ModelEvent::ToolCallCompleted {
-                block_index: ContentBlockIndex::new(0),
-                call: ToolCall {
-                    id: call_id,
-                    tool_id: definition.id,
-                    name: definition.name,
-                    arguments: serde_json::json!({"text": "hi"}),
-                },
-            }),
-            FakeStep::Emit(ModelEvent::Completed {
-                finish_reason: ModelFinishReason::ToolCalls,
-                usage: None,
-            }),
-        ]];
-
-        let dir = tempfile::tempdir().expect("temp dir");
-        let drain_linearization = Arc::new(tokio::sync::Notify::new());
-        let probe = CoordinatorProbe {
-            drain_linearization: Some(drain_linearization.clone()),
-            ..CoordinatorProbe::default()
-        };
-        let (runtime, _) = headless_runtime(&dir, scripts, Some(registry), Some(probe)).await;
-        runtime.install_test_pre_tool_policy(Arc::new(RuntimeAskPolicy));
-
-        let settle_gate = Arc::new(InteractionSettleGate::default());
-        settle_gate.arm();
-        runtime
-            .inner
-            .interaction
-            .install_settle_gate(settle_gate.clone());
-
-        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-            runtime: runtime.clone(),
-            replay_limit: None,
-        })
-        .expect("Runtime Client host");
-        let (attachment, initialized) = host
-            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
-            .expect("Runtime Client attachment");
-        let cursor = match initialized {
-            RuntimeClientResult::Initialized { cursor, .. } => cursor,
-            other => panic!("unexpected initialization result: {other:?}"),
-        };
-        let subscription = attachment
-            .subscribe_events(cursor)
-            .expect("Runtime Client subscription");
-
-        runtime.activate();
-        let accepted = attachment.handle_request(RuntimeClientRequest::SubmitInbound {
-            id: RequestId::new(1),
-            content: text_content("request approval"),
-        });
-        assert!(matches!(
-            accepted.result,
-            Some(RuntimeClientResult::InboundAccepted { .. })
-        ));
-
-        let pending = loop {
-            match subscription.next().await {
-                EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
-                    if let RuntimeClientEvent::InteractionPending { interaction } = event {
-                        break interaction;
-                    }
-                }
-                EventDelivery::Pending => unreachable!("next never returns Pending"),
-                delivery => panic!("pending interaction stream ended: {delivery:?}"),
-            }
-        };
-        let (snapshot, _) = host.snapshot().expect("pending snapshot");
-        assert_eq!(snapshot.pending_interactions, vec![pending.clone()]);
-        assert!(matches!(
-            runtime.reload_configuration().await,
-            Err(super::RuntimeResourceReloadError::Busy {
-                reason: super::RuntimeResourceReloadBusyReason::Interaction
-            })
-        ));
-
-        let runtime_for_shutdown = runtime.clone();
-        let (shutdown_sender, mut shutdown_receiver) = tokio::sync::oneshot::channel();
-        let drain_wait = drain_linearization.notified();
-        tokio::spawn(async move {
-            let _ = shutdown_sender.send(runtime_for_shutdown.shutdown().await);
-        });
-        drain_wait.await;
-
-        // Cancellation has already won the runtime lifecycle transition, but
-        // the shutdown future cannot complete while `cancel_pending` is
-        // parked before it notifies the AgentExecution waiter.
-        let gate_for_wait = settle_gate.clone();
-        tokio::task::spawn_blocking(move || gate_for_wait.wait_entered())
-            .await
-            .expect("interaction settle gate task");
-        assert_eq!(
-            runtime.inner.lifecycle.state(),
-            ConversationLifecycleState::Draining
-        );
-        assert_eq!(runtime.inner.interaction.pending_count(), 0);
-        assert_eq!(
-            shutdown_receiver.try_recv(),
-            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
-        );
-        assert!(matches!(
-            runtime.submit_inbound(text_content("after drain")),
-            Err(InboundAdmissionError::Shutdown)
-        ));
-        let late_interaction = runtime
-            .inner
-            .interaction
-            .request_approval(
-                AttemptId::new("late-attempt"),
-                ApprovalFacts {
-                    turn: 0,
-                    invocation_id: crate::tools::types::ToolInvocationId::Agent {
-                        call_id: ToolCallId::new("late-call"),
-                    },
-                    tool_id: ToolId::new("late-tool"),
-                    tool_name: "late".to_owned(),
-                    origin: ToolOrigin::Builtin,
-                    mode: crate::tools::types::ToolInvocationMode::Foreground,
-                    arguments: serde_json::json!({}),
-                    audit_arguments: serde_json::json!({}),
-                    reason: "must not publish after drain".to_owned(),
-                },
-                AgentCancellation::new(CancellationReason::RuntimeShutdown)
-                    .execution_cancellation(),
-            )
-            .await;
-        assert_eq!(
-            late_interaction,
-            Err(crate::runtime::interaction::InteractionFailure::PublicationFailed),
-            "a provider is attached, so the post-drain refusal is an internal \
-             publication failure, never provider absence"
-        );
-
-        settle_gate.release();
-        assert_eq!(
-            shutdown_receiver
-                .await
-                .expect("shutdown completion sender")
-                .expect("runtime reaches quiescence"),
-            ()
-        );
-        assert_eq!(
-            runtime.inner.lifecycle.state(),
-            ConversationLifecycleState::Quiescent
-        );
-        assert!(!runtime.has_current_attempt());
-
-        let settled_outcome = loop {
-            match subscription.next().await {
-                EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
-                    if let RuntimeClientEvent::InteractionSettled {
-                        interaction,
-                        outcome,
-                    } = event
-                        && interaction == pending.interaction
-                    {
-                        break outcome;
-                    }
-                }
-                EventDelivery::Pending => unreachable!("next never returns Pending"),
-                delivery => panic!("settled interaction stream ended: {delivery:?}"),
-            }
-        };
-        assert_eq!(
-            settled_outcome,
-            InteractionOutcome::Cancelled {
-                reason: CancellationReason::RuntimeShutdown
-            },
-            "RuntimeShutdown wins when no earlier attempt cancellation exists"
-        );
-        let (after_shutdown, _) = host.snapshot().expect("post-shutdown snapshot");
-        assert!(after_shutdown.pending_interactions.is_empty());
-
-        let stale = attachment
-            .handle_request_async(RuntimeClientRequest::InteractionRespond {
-                id: RequestId::new(2),
-                interaction: pending.interaction.clone(),
-                response: InteractionResponse::Approval {
-                    decision: ApprovalDecision::Allow,
-                },
-            })
-            .await;
-        assert_eq!(
-            stale.error,
-            Some(RuntimeClientError::InteractionNotPending {
-                interaction: pending.interaction.clone()
-            })
-        );
-
-        let canonical = runtime
-            .inner
-            .store
-            .load_canonical()
-            .expect("canonical tool settlement");
-        let tool_messages = canonical
-            .iter()
-            .filter_map(|message| match message {
-                MessageBlock::Tool(tool) => Some(tool),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(tool_messages.len(), 1, "one structural tool result slot");
-        assert!(matches!(
-            &tool_messages[0].result.status,
-            ToolExecutionStatus::Cancelled {
-                reason: CancellationReason::RuntimeShutdown,
-                phase: crate::tools::types::ToolCancellationPhase::BeforeStart,
-            }
-        ));
-        assert!(!matches!(
-            &tool_messages[0].result.status,
-            ToolExecutionStatus::Denied { .. }
-        ));
-        assert!(tool_calls.borrow().is_empty(), "executor was never invoked");
-        assert!(!*tool_started.borrow(), "executor never started");
-
-        let journal = runtime
-            .inner
-            .store
-            .read_events(None, 256)
-            .expect("runtime event journal")
-            .events;
-        assert_eq!(
-            journal
-                .iter()
-                .filter(|envelope| matches!(
-                    envelope.event,
-                    crate::events::types::RuntimeEvent::ToolExecutionStarted { .. }
-                ))
-                .count(),
-            0,
-            "cancelled-before-start emits no ToolExecutionStarted"
-        );
-        let attempt_cancel_reasons = journal
-            .iter()
-            .filter_map(|envelope| match &envelope.event {
-                crate::events::types::RuntimeEvent::AttemptCancelled { reason, .. } => {
-                    Some(*reason)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            attempt_cancel_reasons,
-            vec![CancellationReason::RuntimeShutdown],
-            "the interaction, tool, and attempt all use the same winner"
-        );
-    }
-
-    /// Issue #109 regressions 10, 11, and 12: a pending interaction is pinned
-    /// to the resource/capability generation its attempt was admitted under.
-    ///
-    /// While a waiter owns the attempt, an external workspace edit changes
-    /// nothing that the pending prompt depends on: the quiescent reload
-    /// operation returns `Busy`, the complete old generation is retained, and
-    /// the prompt, approval subject, and tool schema the client is looking at
-    /// are byte-identical before and after the edit. Only after the
-    /// interaction settles and the attempt completes may a reload publish a
-    /// new generation — and that new generation affects a later attempt only,
-    /// never the decision that already happened.
-    #[allow(clippy::too_many_lines)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn an_external_resource_edit_cannot_mutate_a_pending_interaction() {
-        use crate::events::interaction::InteractionSettlement;
-        use crate::events::types::RuntimeEvent;
-        use crate::message::types::ContentBlockIndex;
-        use crate::model::event::ModelEvent;
-        use crate::model::finish::ModelFinishReason;
-        use crate::tools::types::{ToolCall, ToolCallStart};
-
-        let definition = ToolDefinition {
-            id: ToolId::new("tool-pinned-approval"),
-            name: "approval".to_owned(),
-            description: "a deterministic approval test tool".to_owned(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {"text": {"type": "string"}},
-                "required": ["text"]
-            }),
-            execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::default(),
-            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
-            replay_policy: ToolReplayPolicy::Never,
-            origin: ToolOrigin::Builtin,
-        };
-        let tool = FakeTool::new(definition.clone(), success_result("ran"));
-        let tool_calls = tool.calls();
-        let mut registry = ToolRegistry::new();
-        tool.register(&mut registry);
-
-        let call_id = ToolCallId::new("call-pinned-approval");
-        let scripts = vec![
-            vec![
-                FakeStep::Emit(ModelEvent::Started),
-                FakeStep::Emit(ModelEvent::ToolCallStarted {
-                    block_index: ContentBlockIndex::new(0),
-                    call: ToolCallStart {
-                        id: call_id.clone(),
-                        tool_id: definition.id.clone(),
-                        name: definition.name.clone(),
-                    },
-                }),
-                FakeStep::Emit(ModelEvent::ToolCallArgumentsDelta {
-                    block_index: ContentBlockIndex::new(0),
-                    call_id: call_id.clone(),
-                    arguments_delta: "{\"text\":\"hi\"}".to_owned(),
-                }),
-                FakeStep::Emit(ModelEvent::ToolCallCompleted {
-                    block_index: ContentBlockIndex::new(0),
-                    call: ToolCall {
-                        id: call_id.clone(),
-                        tool_id: definition.id.clone(),
-                        name: definition.name.clone(),
-                        arguments: serde_json::json!({"text": "hi"}),
-                    },
-                }),
-                FakeStep::Emit(ModelEvent::Completed {
-                    finish_reason: ModelFinishReason::ToolCalls,
-                    usage: None,
-                }),
-            ],
-            text_turn_script("done"),
-        ];
-
-        let dir = tempfile::tempdir().expect("temp dir");
-        let (runtime, _) = headless_runtime(&dir, scripts, Some(registry), None).await;
-        runtime.install_test_pre_tool_policy(Arc::new(RuntimeAskPolicy));
-
-        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-            runtime: runtime.clone(),
-            replay_limit: None,
-        })
-        .expect("Runtime Client host");
-        let (attachment, initialized) = host
-            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
-            .expect("Runtime Client attachment");
-        let cursor = match initialized {
-            RuntimeClientResult::Initialized { cursor, .. } => cursor,
-            other => panic!("unexpected initialization result: {other:?}"),
-        };
-        let subscription = attachment
-            .subscribe_events(cursor)
-            .expect("Runtime Client subscription");
-
-        runtime.activate();
-        let accepted = attachment.handle_request(RuntimeClientRequest::SubmitInbound {
-            id: RequestId::new(1),
-            content: text_content("request approval"),
-        });
-        assert!(matches!(
-            accepted.result,
-            Some(RuntimeClientResult::InboundAccepted { .. })
-        ));
-
-        let pending = loop {
-            match subscription.next().await {
-                EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
-                    if let RuntimeClientEvent::InteractionPending { interaction } = event {
-                        break interaction;
-                    }
-                }
-                EventDelivery::Pending => unreachable!("next never returns Pending"),
-                delivery => panic!("pending interaction stream ended: {delivery:?}"),
-            }
-        };
-        let pinned_resources = runtime.runtime_resources();
-        let pinned_revision = pinned_resources.revision();
-        let pinned_capability = pinned_resources.capability_revision();
-        let pinned_tool_schema = pinned_resources
-            .capability()
-            .tool_registry()
-            .definitions()
-            .into_iter()
-            .find(|tool| tool.name == "approval")
-            .expect("the admitted generation offers the approved tool")
-            .input_schema;
-
-        // The requested audit fact is already durable: the client is looking
-        // at a prompt the Event Journal has recorded.
-        let facts_at_prompt = interaction_journal(&runtime);
-        assert!(
-            matches!(
-                facts_at_prompt.as_slice(),
-                [RuntimeEvent::InteractionRequested { interaction_id, .. }]
-                    if *interaction_id == pending.request.id
-            ),
-            "expected exactly the requested fact, saw {facts_at_prompt:?}"
-        );
-
-        // The external edit lands while the waiter owns the attempt.
-        let skills = dir
-            .path()
-            .join("workspace")
-            .join(".agents")
-            .join("skills")
-            .join("late-skill");
-        std::fs::create_dir_all(&skills).expect("skill dir");
-        std::fs::write(
-            skills.join("SKILL.md"),
-            "---\nname: late-skill\ndescription: \"an edit made mid-interaction\"\n---\nbody\n",
-        )
-        .expect("SKILL.md");
-
-        assert!(
-            matches!(
-                runtime.reload_configuration().await,
-                Err(super::RuntimeResourceReloadError::Busy {
-                    reason: super::RuntimeResourceReloadBusyReason::Interaction
-                })
-            ),
-            "a pending interaction waiter owns the attempt, so reload is refused"
-        );
-
-        // Nothing the pending prompt depends on moved.
-        let (snapshot, _) = host.snapshot().expect("pending snapshot");
-        assert_eq!(
-            snapshot.pending_interactions,
-            vec![pending.clone()],
-            "the prompt and approval subject are unchanged by the edit"
-        );
-        let after_edit = runtime.runtime_resources();
-        assert_eq!(after_edit.revision(), pinned_revision);
-        assert_eq!(after_edit.capability_revision(), pinned_capability);
-        assert_eq!(
-            after_edit
-                .capability()
-                .tool_registry()
-                .definitions()
-                .into_iter()
-                .find(|tool| tool.name == "approval")
-                .expect("the pinned generation still offers the approved tool")
-                .input_schema,
-            pinned_tool_schema,
-            "the Tool schema the approval subject names cannot be replaced underneath the waiter"
-        );
-        assert_eq!(interaction_journal(&runtime), facts_at_prompt);
-
-        // The decision proceeds under the generation it was admitted with.
-        let answered = attachment
-            .handle_request_async(RuntimeClientRequest::InteractionRespond {
-                id: RequestId::new(2),
-                interaction: pending.interaction.clone(),
-                response: InteractionResponse::Approval {
-                    decision: ApprovalDecision::Allow,
-                },
-            })
-            .await;
-        assert!(matches!(
-            answered.result,
-            Some(RuntimeClientResult::InteractionResponseAccepted { .. })
-        ));
-        loop {
-            match subscription.next().await {
-                EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
-                    if matches!(event, RuntimeClientEvent::AttemptSettled { .. }) {
-                        break;
-                    }
-                }
-                EventDelivery::Pending => unreachable!("next never returns Pending"),
-                delivery => panic!("attempt stream ended: {delivery:?}"),
-            }
-        }
-        assert_eq!(tool_calls.borrow().len(), 1, "the approved tool ran once");
-
-        let journal = runtime
-            .inner
-            .store
-            .read_events(None, 256)
-            .expect("runtime event journal")
-            .events;
-        let sequence = |matcher: fn(&RuntimeEvent) -> bool| {
-            journal
-                .iter()
-                .find(|envelope| matcher(&envelope.event))
-                .map(|envelope| envelope.sequence)
-                .expect("the fact is durable")
-        };
-        let requested =
-            sequence(|event| matches!(event, RuntimeEvent::InteractionRequested { .. }));
-        let settled = sequence(|event| {
-            matches!(
-                event,
-                RuntimeEvent::InteractionSettled {
-                    settlement: InteractionSettlement::Approved,
-                    ..
-                }
-            )
-        });
-        let started = sequence(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }));
-        assert!(
-            requested < settled && settled < started,
-            "requested < settled(approved) < tool start, got {requested} {settled} {started}"
-        );
-
-        // Only now may a reload publish a new generation, and it affects a
-        // later attempt only — the settled interaction is unchanged.
-        let reloaded = runtime
-            .reload_configuration()
-            .await
-            .expect("reload after idle");
-        assert_eq!(reloaded.resource_revision, pinned_revision.next());
-        assert_eq!(
-            runtime.runtime_resources().revision(),
-            reloaded.resource_revision,
-            "the new generation is what a later attempt acquires"
-        );
-        assert_eq!(
-            interaction_journal(&runtime).len(),
-            2,
-            "the historical interaction pair is untouched by the new generation"
-        );
-
-        runtime
-            .shutdown()
-            .await
-            .expect("runtime reaches quiescence");
-    }
-
-    /// The interaction audit facts of one runtime, in durable sequence order.
-    fn interaction_journal(
-        runtime: &ConversationRuntime,
-    ) -> Vec<crate::events::types::RuntimeEvent> {
-        use crate::events::types::RuntimeEvent;
-        runtime
-            .inner
-            .store
-            .read_events(None, 256)
-            .expect("runtime event journal")
-            .events
-            .into_iter()
-            .filter(|envelope| {
-                matches!(
-                    envelope.event,
-                    RuntimeEvent::InteractionRequested { .. }
-                        | RuntimeEvent::InteractionSettled { .. }
-                )
-            })
-            .map(|envelope| envelope.event)
-            .collect()
     }
 
     /// A user cancellation that wins the owning attempt must remain the cause
@@ -12621,31 +10448,6 @@ mod tests {
             panic!("the latched failure must remain shutdown evidence: {shutdown:?}");
         };
         assert!(detail.contains("compaction MCP failure"));
-    }
-
-    /// Lifecycle Draining remains the generic admission authority for an
-    /// explicit configuration reload after MCP failure publication. The old
-    /// generation stays the live resource authority and no reload gate is
-    /// established.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn mcp_failure_blocks_resource_reload_through_lifecycle() {
-        let fixture = headless_fixture().await;
-        let before = fixture.runtime.runtime_resources();
-        fixture
-            .runtime
-            .inner
-            .fence_mcp_settlement_failure("reload MCP failure".to_owned());
-        assert_eq!(
-            fixture.runtime.reload_configuration().await,
-            Err(super::RuntimeResourceReloadError::Shutdown)
-        );
-        assert!(Arc::ptr_eq(&before, &fixture.runtime.runtime_resources()));
-
-        let shutdown = fixture.runtime.shutdown().await;
-        let Err(super::ShutdownError::RuntimeOwnedSettlement { detail }) = shutdown else {
-            panic!("the latched failure must remain shutdown evidence: {shutdown:?}");
-        };
-        assert!(detail.contains("reload MCP failure"));
     }
 
     /// Issue #63 (Finding 5 / Important 5): a transient select storage
@@ -13359,6 +11161,8 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
+                            execution_policy:
+                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
                             approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "first terminal".to_owned(),
@@ -13422,6 +11226,8 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
+                            execution_policy:
+                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
                             approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "second terminal".to_owned(),
@@ -13606,6 +11412,8 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
+                            execution_policy:
+                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
                             approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "owned child".to_owned(),
@@ -13680,6 +11488,7 @@ mod tests {
         let prepared = subagents
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
+                    execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: test_resolved_subagent("explore"),
                     approval_mode: crate::runtime::ApprovalMode::Policy,
                     task: "rejected after failure".to_owned(),
@@ -13795,6 +11604,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // one ordered ownership transaction
     async fn child_transcript_invalid_limits_precede_unavailable_history_access() {
         use crate::runtime_client::RuntimeClientError;
         let dir = tempfile::tempdir().expect("temp dir");
@@ -13831,6 +11641,8 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
+                            execution_policy:
+                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
                             approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "owned".to_owned(),
@@ -13937,6 +11749,8 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
+                            execution_policy:
+                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
                             approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "owned".to_owned(),
@@ -14050,6 +11864,8 @@ mod tests {
             let prepared = commit_registry
                 .prepare(
                     &crate::runtime::subagent::SubagentStartSpec {
+                        execution_policy:
+                            crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("explore"),
                         approval_mode: crate::runtime::ApprovalMode::Policy,
                         task: "racing".to_owned(),
@@ -14703,6 +12519,8 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
+                            execution_policy:
+                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
                             approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "owned".to_owned(),
@@ -14803,6 +12621,7 @@ mod tests {
         let prepared = subagents
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
+                    execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: test_resolved_subagent("explore"),
                     approval_mode: crate::runtime::ApprovalMode::Policy,
                     task: "rejected".to_owned(),
@@ -17299,6 +15118,7 @@ mod tests {
         let prepared = subagents
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
+                    execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: test_resolved_subagent("reviewer"),
                     approval_mode: ApprovalMode::Policy,
                     task: "Produce the workflow result.".to_owned(),
@@ -17674,113 +15494,6 @@ mod tests {
             1,
             "only the first parallel sibling crossed the start frontier"
         );
-        assert_eq!(
-            runtime.lifecycle_state(),
-            ConversationLifecycleState::Quiescent
-        );
-    }
-
-    /// Issue #144: a configuration reload can never commit a new generation
-    /// underneath a live attempt, so an attempt's tool execution cannot
-    /// observe a generation other than the one it was admitted with.
-    ///
-    /// The ordering is decided by the tool-start frontier and the typed
-    /// refusal, not by timing: the attempt is provably parked inside its
-    /// tool batch when `reload_configuration` returns `Busy { Attempt }`, and
-    /// the same reload succeeds only after the attempt has settled.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn a_reload_cannot_commit_a_new_generation_under_a_live_attempt() {
-        use crate::agent::execution::test_sync::ToolStartPause;
-        use crate::tools::executor::ToolRegistry;
-        use crate::tools::types::{
-            ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
-            ToolReplayPolicy,
-        };
-
-        let (tool, mut started, release) = GatedBackgroundExecutor::new();
-        let mut registry = ToolRegistry::new();
-        registry
-            .register(
-                ToolDefinition {
-                    id: crate::runtime::identity::ToolId::new("tool-a"),
-                    name: "alpha".to_owned(),
-                    description: String::new(),
-                    input_schema: serde_json::json!({"type": "object"}),
-                    execution_policy: ToolExecutionPolicy::ForegroundOnly,
-                    concurrency_policy: ToolConcurrencyPolicy::Sequential,
-                    approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
-                    replay_policy: ToolReplayPolicy::Never,
-                    origin: ToolOrigin::Builtin,
-                },
-                Arc::new(tool),
-            )
-            .expect("tool registration");
-
-        let call = crate::scripted_suites::support::fake::ScriptedCall {
-            id: "call-a",
-            tool_id: "tool-a",
-            name: "alpha",
-            arguments: serde_json::json!({}),
-        };
-        let mut script = vec![FakeStep::Emit(crate::model::event::ModelEvent::Started)];
-        script.extend(
-            crate::scripted_suites::support::fake::tool_call_events(0, &call)
-                .into_iter()
-                .map(FakeStep::Emit),
-        );
-        script.push(FakeStep::Emit(crate::model::event::ModelEvent::Completed {
-            finish_reason: crate::model::finish::ModelFinishReason::ToolCalls,
-            usage: None,
-        }));
-        let continuation = one_turn_script();
-
-        let dir = tempfile::tempdir().expect("temp dir");
-        let (tool_start_pause, mut tool_start_reached, tool_start_release) =
-            ToolStartPause::install();
-        let (runtime, _model) = headless_runtime(
-            &dir,
-            vec![script, continuation],
-            Some(registry),
-            Some(CoordinatorProbe {
-                tool_start_pause: Some(tool_start_pause),
-                ..CoordinatorProbe::default()
-            }),
-        )
-        .await;
-        runtime.activate();
-        let admitted = runtime.runtime_resources();
-        runtime
-            .submit_inbound(text_content("run a tool"))
-            .expect("accepted");
-        tool_start_reached
-            .wait_for(|reached| *reached)
-            .await
-            .expect("the attempt parks at its tool-start frontier");
-
-        // The attempt provably owns the runtime here, and the reload is
-        // refused rather than publishing a generation the running attempt
-        // would then be able to observe.
-        assert!(matches!(
-            runtime.reload_configuration().await,
-            Err(super::RuntimeResourceReloadError::Busy {
-                reason: super::RuntimeResourceReloadBusyReason::Attempt
-            })
-        ));
-        assert!(
-            Arc::ptr_eq(&admitted, &runtime.runtime_resources()),
-            "a refused reload publishes nothing"
-        );
-
-        tool_start_release.send(()).expect("release the frontier");
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("the tool starts");
-        release.send_replace(true);
-        runtime.shutdown().await.expect("the attempt settles");
-
-        // Between attempts, the same reload is admitted normally: the
-        // refusal above is about the live attempt, not about reload itself.
         assert_eq!(
             runtime.lifecycle_state(),
             ConversationLifecycleState::Quiescent

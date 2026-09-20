@@ -10,7 +10,6 @@ use rustx::app_server::connection::AppServerConnection;
 use rustx::app_server::protocol::*;
 use rustx::local_runtime::session::SessionId;
 use rustx::runtime::types::ApprovalMode;
-use rustx::runtime_client::event::RuntimeClientEvent;
 
 /// A driver must support concurrent requests on one connection and preserve IDs.
 pub trait AppServerConformanceDriver: Sync {
@@ -115,7 +114,8 @@ pub async fn representative_scenario(
     let MethodResult::Attached {
         target: a,
         snapshot: snapshot_a,
-        cursor: cursor_a,
+        cursor: _cursor_a,
+        ..
     } = a
     else {
         panic!("attach A")
@@ -123,7 +123,8 @@ pub async fn representative_scenario(
     let MethodResult::Attached {
         target: b,
         snapshot: snapshot_b,
-        cursor: cursor_b,
+        cursor: _cursor_b,
+        ..
     } = b
     else {
         panic!("attach B")
@@ -160,121 +161,32 @@ pub async fn representative_scenario(
         })
     );
 
-    let (changed_a, unchanged_b) = tokio::join!(
-        call(driver, 3, Method::ConfigurationReload { target: a.clone() }),
-        call(
+    // Reconciliation is native, scope identified and does not fabricate a
+    // resource generation for unchanged inputs.
+    for (sequence, target) in [(3, &a), (4, &b)] {
+        let result = call(
             driver,
-            4,
-            Method::SessionSnapshot {
-                trace_records: vec![],
-                target: b.clone()
-            }
-        ),
-    );
-    assert!(matches!(
-        changed_a,
-        MethodResult::ConfigurationReloaded { .. }
-    ));
-    let MethodResult::Snapshot { snapshot, .. } = unchanged_b else {
-        panic!("snapshot B")
-    };
-    assert_eq!(snapshot.conversation_id, b.conversation_id);
-    assert_eq!(snapshot.effective_approval_mode, ApprovalMode::Policy);
-
-    let notification = driver.next_notification().await;
-    assert_eq!(notification.jsonrpc, JsonRpcVersion::V2);
-    let NotificationMethod::Event {
-        target,
-        cursor,
-        event,
-    } = notification.notification
-    else {
-        panic!("event A")
-    };
-    assert_eq!(target, a);
-    assert!(cursor > cursor_a);
-    assert!(matches!(
-        *event,
-        RuntimeClientEvent::ResourceGenerationUpdated { .. }
-    ));
-    let cursor_a = cursor;
-
-    // Park the fan-in on the old registration before replacing it. A closed
-    // subscription here means resubscribe, never Session residency ending.
-    let parked = driver.next_notification();
-    futures_util::pin_mut!(parked);
-    assert!(futures_util::poll!(parked.as_mut()).is_pending());
-    assert!(matches!(
-        call(
-            driver,
-            40,
-            Method::SessionSubscribe {
-                target: a.clone(),
-                after_cursor: cursor_a,
-            }
+            sequence,
+            Method::ConfigurationReconcile {
+                session_id: target.session_id.clone(),
+            },
         )
-        .await,
-        MethodResult::Subscribed { .. }
-    ));
-    let MethodResult::Boundaries {
-        boundaries,
-        next_offset,
-        ..
-    } = call(
-        driver,
-        41,
-        Method::SessionBoundaries {
-            target: a.clone(),
-            offset: 0,
-            limit: 32,
-        },
-    )
-    .await
-    else {
-        panic!("boundary page")
-    };
-    assert!(boundaries.is_empty());
-    assert!(next_offset.is_none());
-
-    let (changed_a, changed_b) = tokio::join!(
-        call(driver, 5, Method::ConfigurationReload { target: a.clone() }),
-        call(driver, 6, Method::ConfigurationReload { target: b.clone() }),
-    );
-    assert!(matches!(
-        changed_a,
-        MethodResult::ConfigurationReloaded { .. }
-    ));
-    assert!(matches!(
-        changed_b,
-        MethodResult::ConfigurationReloaded { .. }
-    ));
-    let mut seen = std::collections::BTreeSet::new();
-    for index in 0..2 {
-        let next = if index == 0 {
-            parked.as_mut().await
-        } else {
-            driver.next_notification().await
-        };
-        let NotificationMethod::Event {
-            target,
-            cursor,
-            event,
-        } = next.notification
-        else {
-            panic!("routed event")
-        };
-        let (expected, before) = if target == a {
-            (3, cursor_a)
-        } else {
-            assert_eq!(target, b);
-            (2, cursor_b)
-        };
-        assert!(seen.insert(target.session_id));
-        assert!(cursor > before);
-        let RuntimeClientEvent::ResourceGenerationUpdated { resources, .. } = *event else {
-            panic!("configuration publication")
-        };
-        assert_eq!(resources.revision.get(), expected);
+        .await;
+        assert!(matches!(
+            result,
+            MethodResult::ConfigurationApplication { .. }
+        ));
+        loop {
+            let notification = driver.next_notification().await;
+            if let NotificationMethod::ConfigurationChanged { application } =
+                notification.notification
+                && application.scope == target.session_id.to_string()
+                    && application.units.values().all(|unit| !matches!(unit,
+                        rustx::local_runtime::configuration::application::UnitApplication::Preparing)) {
+                    assert!(application.candidate.is_none());
+                    break;
+                }
+        }
     }
 
     assert!(matches!(
@@ -315,7 +227,7 @@ pub async fn representative_scenario(
     assert_eq!(snapshot.effective_approval_mode, ApprovalMode::Policy);
     assert_eq!(
         snapshot.resources.revision.get(),
-        snapshot_a.resources.revision.get() + 2
+        snapshot_a.resources.revision.get()
     );
     let MethodResult::Snapshot { snapshot, .. } = call(
         driver,
@@ -333,7 +245,7 @@ pub async fn representative_scenario(
     assert_eq!(snapshot.effective_approval_mode, ApprovalMode::Policy);
     assert_eq!(
         snapshot.resources.revision.get(),
-        snapshot_b.resources.revision.get() + 1
+        snapshot_b.resources.revision.get()
     );
     call(
         driver,

@@ -276,6 +276,7 @@ impl ToolExecutor for SubagentExecutor {
                     Err(error) => return failed_result(error.to_string()),
                 };
                 let spec = SubagentStartSpec {
+                    execution_policy: subagent_context.execution_policy(),
                     resolved,
                     approval_mode: subagent_context.approval_mode(),
                     task: input.task,
@@ -623,7 +624,7 @@ chat_reasoning_replay = "omit"
         use std::sync::Arc;
 
         use crate::capabilities::CapabilitySnapshot;
-        use crate::context::SessionContextPolicy;
+
         use crate::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
         use crate::model::invocation::ModelBindingRegistry;
         use crate::model::session::SessionModelConfig;
@@ -671,14 +672,6 @@ chat_reasoning_replay = "omit"
                     &runtime_root.clone(),
                 )
                 .expect("product root"),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
-                tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
-                ),
-                context: SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
             },
             workspace: WorkspaceManager::new(&workspace_root, &runtime_root),
             max_active: 4,
@@ -798,7 +791,7 @@ chat_reasoning_replay = "omit"
 
         use crate::capabilities::CapabilitySnapshot;
         use crate::capabilities::selection::AgentToolSelection;
-        use crate::context::SessionContextPolicy;
+
         use crate::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
         use crate::model::invocation::ModelBindingRegistry;
         use crate::model::session::SessionModelConfig;
@@ -871,14 +864,6 @@ chat_reasoning_replay = "omit"
                 program: std::path::PathBuf::from("/nonexistent/rustx"),
                 product_root: crate::runtime::local_storage::ProductRoot::create(&runtime_root)
                     .unwrap(),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
-                tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
-                ),
-                context: SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
             },
             workspace: WorkspaceManager::new(&workspace_root, &runtime_root),
             max_active: 4,
@@ -1109,6 +1094,39 @@ chat_reasoning_replay = "omit"
             plane.subagents.listing(false, 16).snapshots.is_empty(),
             "the deliberately missing spawn program still commits no ownership"
         );
+    }
+
+    /// T02: registry publication precedes the model-created delegation, but
+    /// the actual intrinsic forwards the admitting Attempt's immutable policy.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn t02_subagent_created_after_publication_inherits_admitted_policy() {
+        let mut plane = delegation_plane();
+        let old = plane.subagent_context.execution_policy();
+        let mut future = crate::local_runtime::config::CurrentRuntimeConfig::from_toml_slice(
+            b"[agent.model]\nmodel = \"local/model\"\n",
+        )
+        .unwrap();
+        future.model_timeout_policy.response_start_timeout_ms = 41_000;
+        future.tool_deadline_policy.hard_deadline_ms = 42_000;
+        future.context.reserve_tokens = 123;
+        plane.subagents.publish_configuration(&future);
+        let new = crate::runtime::subagent::InheritedExecutionPolicy {
+            model_timeout: future.timeout_policy().unwrap(),
+            tool_deadline: future.tool_deadline_policy().unwrap(),
+            context: future.context_policy(),
+        };
+        assert_ne!(old, new);
+        let arguments = serde_json::json!({"agent":"reviewer", "task":"review"});
+        let _ = invoke_subagent(&plane, arguments.clone()).await;
+        assert_eq!(plane.subagents.prepared_execution_policies(), vec![old]);
+        plane.subagent_context = plane.subagent_context.with_test_policy(new);
+        let _ = invoke_subagent(&plane, arguments).await;
+        assert_eq!(
+            plane.subagents.prepared_execution_policies(),
+            vec![old, new]
+        );
+        assert!(plane.subagents.listing(false, 16).snapshots.is_empty());
     }
 
     /// Issue #188 — the model-facing regression.

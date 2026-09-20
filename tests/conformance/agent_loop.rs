@@ -1159,21 +1159,30 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
 
     // The first attempt is provably in flight and has already been billed
     // its provider request.
-    driver
-        .host()
-        .model_set(SessionModelConfig {
-            summary_model: SummaryModelPolicy::Session,
-            ..SessionModelConfig::of(
-                ModelRef::parse(&format!("emulator/{SECOND_MODEL}"))
-                    .expect("the second model reference parses"),
-            )
-        })
-        .expect("the session model updates while an attempt runs");
+    let next_model = SessionModelConfig {
+        summary_model: SummaryModelPolicy::Session,
+        ..SessionModelConfig::of(
+            ModelRef::parse(&format!("emulator/{SECOND_MODEL}"))
+                .expect("the second model reference parses"),
+        )
+    };
+    assert!(matches!(
+        driver.host().model_set(next_model.clone()),
+        Err(
+            rustx::runtime_client::RuntimeClientError::ConfigurationAdoption {
+                rejection: rustx::local_runtime::configuration::application::AdoptionError::Busy
+            }
+        )
+    ));
 
     emulator.release_gate("session-model-updated").await;
     let (_, outcome) = driver.settle().await;
     assert!(matches!(outcome, RuntimeClientOutcome::Completed { .. }));
 
+    driver
+        .host()
+        .model_set(next_model)
+        .expect("idle model adoption");
     let (snapshot, _) = driver.host().snapshot().expect("snapshot");
     let attempt = snapshot.attempt.as_ref().expect("the settled attempt");
     assert!(matches!(

@@ -1,7 +1,7 @@
 //! Resolved runtime policy and complete Agent profiles for one CFG3 generation.
 //! Authored partial documents live in `authoring::RuntimeLayer`; this type is
 //! neither a file binding nor durable Session authority. Cold composition and
-//! reload resolve current User/Workspace sources before preparing this value.
+//! configuration capture resolves current User/Workspace sources before preparing this value.
 //! A published generation is immutable and contains policy, model bindings,
 //! Agent profiles, resource catalogs, and prepared finite source demand.
 
@@ -557,7 +557,7 @@ impl CurrentRuntimeConfig {
     ///
     /// Composition calls this exactly once. The returned value is the whole
     /// extension authority of the composed root `ConversationRuntime`: no
-    /// later resource generation, reload, or configuration edit reaches it.
+    /// later resource generation or configuration edit reaches it.
     #[must_use]
     pub fn extension_composition(&self) -> NativeAgentExtensions {
         self.agent.extensions.resolve()

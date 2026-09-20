@@ -2,7 +2,9 @@
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Settings } from '../src/app/settings/Settings';
+import { TextField, UnitForm } from '../src/app/settings/controls';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
+import { cfg3Application } from './cfg3-data';
 import { cfg3Client, cfg3Session } from './cfg3-fixture';
 afterEach(cleanup);
 async function open(subject: ReturnType<typeof cfg3Client>, section: string, scope = 'Workspace') {
@@ -28,12 +30,12 @@ it('saves a whole Workspace Provider with explicit credentials without copying U
   fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://workspace.invalid' } });
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'WORKSPACE_KEY' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
-  await screen.findByText(/Source saved. Use Reload/);
+  await screen.findByText(/Source saved. Native application/);
   expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toEqual({ method: 'configuration/sourceWrite', params: { session_id: cfg3Session, expected_revision: 'workspace-1', mutation: { kind: 'config', scope: 'workspace', mutation: { unit: 'provider', id: 'transport', authored: { base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } });
-  expect(subject.request.mock.calls.filter(([operation]) => operation.method === 'configuration/reload')).toHaveLength(0);
-  expect(screen.getByText(/Runtime generation 7 · Pending reload/)).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
-  await screen.findByText('Configuration published: 7 → 8.');
+  expect(subject.request.mock.calls.filter(([operation]) => operation.method === 'session/adoptConfiguration')).toHaveLength(0);
+  expect(screen.getByText(/Prepared context changes await/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Adopt prepared context' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Adopt prepared context' })).toBeNull());
 });
 it('preserves stale drafts and exact revision until a separate explicit review gesture', async () => {
   const subject = cfg3Client(async (operation, source) => {
@@ -57,11 +59,12 @@ it('repairs uncertain writes by rereading and never replays the mutation', async
   expect(subject.request.mock.calls.filter(([operation]) => operation.method === 'configuration/sourceWrite')).toHaveLength(1);
   expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
 });
-it('shows reload refusal with the authoritative old generation', async () => {
-  const subject = cfg3Client(async operation => { if (operation.method === 'configuration/reload') throw new Error('busy: admitted work'); });
+it('shows native adoption refusal without changing the effective generation', async () => {
+  const subject = cfg3Client(async operation => { if (operation.method === 'session/adoptConfiguration') throw new Error('busy: admitted work'); });
+  subject.source.application = cfg3Application();
   render(<Settings client={subject.client} sessionId={cfg3Session} />); await screen.findByText('server-frozen-model');
-  fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
-  expect((await screen.findByRole('alert')).textContent).toContain('generation 7 remains authoritative');
+  fireEvent.click(screen.getByRole('button', { name: 'Adopt prepared context' }));
+  expect((await screen.findByRole('alert')).textContent).toContain('busy: admitted work');
 });
 it('edits an independent named-Agent whole resource with inherited model and Plugins off', async () => {
   const subject = cfg3Client(); await open(subject, 'Agents');
@@ -111,7 +114,7 @@ it('replaces against the newer revision only after an explicit review gesture', 
   fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Use reviewed revision' }));
   fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
-  await screen.findByText(/Source saved. Use Reload/);
+  await screen.findByText(/Source saved. Native application/);
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'reviewed', mutation: { mutation: { authored: ['read'] } } } });
 });
 
@@ -121,25 +124,26 @@ it.each(['empty', 'omit'] as const)('preserves native %s Tool selection as a dis
   await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'native_tools', authored: mode === 'empty' ? [] : null } } } }));
 });
 
-it('repairs an uncertain Reload by rereading the native generation without replay', async () => {
-  const subject = cfg3Client(async (op, source, effective) => { if (op.method === 'configuration/reload') { effective.generation = '8'; source.loaded = { generation: '8', pending_reload: false, changed_sources: [] }; throw new OutcomeUncertain(); } });
+it('T12 repairs uncertain adoption by rereading authority without replay', async () => {
+  const subject = cfg3Client(async (op, source, effective) => { if (op.method === 'session/adoptConfiguration') { effective.generation = '8'; source.application = { ...cfg3Application(), version: '3', candidate: null, units: { instructions: { status: 'applied' } } }; throw new OutcomeUncertain(); } });
+  subject.source.application = cfg3Application();
   render(<Settings client={subject.client} sessionId={cfg3Session} />); await screen.findByText('server-frozen-model');
-  fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
-  await screen.findByText(/Runtime generation 8/);
+  fireEvent.click(screen.getByRole('button', { name: 'Adopt prepared context' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Adopt prepared context' })).toBeNull());
   expect(screen.getByRole('alert').textContent).toContain('will not be replayed');
-  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/reload')).toHaveLength(1);
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'session/adoptConfiguration')).toHaveLength(1);
 });
 
-it('presents User-only process policy as restart-required and Effective as read-only', async () => {
+it('presents native process policy ownership and Effective as read-only', async () => {
   const subject = cfg3Client(); await open(subject, 'General', 'User');
-  expect(screen.getByText(/take effect after restart/)).toBeTruthy();
+  expect(screen.getByText(/shutdown deadline requires restart/)).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Save App Server policy' })).toBeTruthy();
   fireEvent.click(screen.getByRole('tab', { name: 'Workspace' }));
   expect(screen.queryByRole('button', { name: 'Save App Server policy' })).toBeNull();
-  expect(screen.getByText(/User-only and restart-required/)).toBeTruthy();
+  expect(screen.getByText(/process policy is User-only/)).toBeTruthy();
   fireEvent.click(screen.getByRole('tab', { name: 'Effective' }));
   expect(screen.queryByRole('button', { name: /^Save / })).toBeNull();
-  expect(screen.getByText(/not evidence of a live process change/)).toBeTruthy();
+  expect(screen.getByText(/Actual process bindings/)).toBeTruthy();
 });
 
 it('does not equate invalid resource existence with readiness or Root authority', async () => {
@@ -176,7 +180,7 @@ it('reconnect rereads native sources without replaying a dirty draft', async () 
 });
 
 it('an older authoritative read cannot replace a newer read', async () => {
-  let release: (value: import('../../protocol/app-server/v13').MethodResult) => void = () => {};
+  let release: (value: import('../../protocol/app-server/v14').MethodResult) => void = () => {};
   let count = 0;
   const subject = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++count === 2) return new Promise(resolve => { release = resolve; }); });
   render(<Settings client={subject.client} sessionId={cfg3Session} />); await screen.findByText('server-frozen-model');
@@ -202,7 +206,7 @@ it('removes literal credentials from a successful Provider draft using the redac
   fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } }); fireEvent.change(screen.getByLabelText('Credential source'), { target: { value: 'literal' } });
   fireEvent.change(screen.getByLabelText('New literal credential'), { target: { value: 'SECRET_SENTINEL' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
-  await screen.findByText(/Source saved. Use Reload/);
+  await screen.findByText(/Source saved. Native application/);
   await waitFor(() => expect(screen.queryByLabelText('New literal credential')).toBeNull());
   expect(document.body.innerHTML).not.toContain('SECRET_SENTINEL');
   fireEvent.click(screen.getByRole('button', { name: 'Back to catalog' })); fireEvent.click(screen.getByRole('button', { name: 'Edit Provider secret' }));
@@ -210,12 +214,12 @@ it('removes literal credentials from a successful Provider draft using the redac
 });
 
 it('retains a Model draft when native validation rejects its semantic unit', async () => {
- const subject = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite') throw new RpcFailure({ code: -32000, message: 'Native validation failed', data: { kind: 'configuration_failed', diagnostic: 'Invalid provider reference' } }); });
+ const subject = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite') throw new RpcFailure({ code: -32000, message: 'Native validation failed', data: { kind: 'configuration_adoption', rejection: { status: 'failed', diagnostic: 'Invalid provider reference' } } }); });
  await open(subject, 'Providers & Models'); fireEvent.change(screen.getByLabelText('New Model identity'), { target: { value: 'draft-model' } }); fireEvent.click(screen.getByRole('button', { name: 'Add Model' }));
  fireEvent.change(screen.getByLabelText('Wire model identity'), { target: { value: 'wire' } }); fireEvent.change(screen.getByLabelText('Provider identity'), { target: { value: 'missing' } });
  fireEvent.click(screen.getByRole('button', { name: 'Save Model draft-model' }));
  expect((await screen.findByRole('alert')).textContent).toContain('Invalid provider reference'); expect((screen.getByLabelText('Provider identity') as HTMLInputElement).value).toBe('missing');
- expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/reload')).toHaveLength(0);
+ expect(subject.request.mock.calls.filter(([op]) => op.method === 'session/adoptConfiguration')).toHaveLength(0);
 });
 it('preserves the original revision when removing an otherwise clean unit conflicts', async () => {
   const subject = cfg3Client(async (op, source) => {
@@ -235,7 +239,7 @@ it.each([
   ['effect', 'refresh'], ['effect', 'write'], ['refresh', 'refresh'], ['refresh', 'write'],
 ] as const)('fences an obsolete %s read rejection after a newer %s', async (readKind, successor) => {
   let rejectRead!: (error: Error) => void;
-  const pending = new Promise<import('../../protocol/app-server/v13').MethodResult>((_, reject) => { rejectRead = reject; });
+  const pending = new Promise<import('../../protocol/app-server/v14').MethodResult>((_, reject) => { rejectRead = reject; });
   let reads = 0;
   const subject = cfg3Client(async op => {
     if (op.method === 'configuration/sourcesRead' && ++reads === 2) return pending;
@@ -256,7 +260,7 @@ it.each([
   } else {
     fireEvent.click(screen.getByLabelText('read'));
     fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
-    await screen.findByText(/Source saved. Use Reload/);
+    await screen.findByText(/Source saved. Native application/);
   }
   const revision = successor === 'refresh' ? 'new-authority' : 'saved-2';
   await screen.findByText(new RegExp(`Revision: ${revision}`));
@@ -264,4 +268,52 @@ it.each([
   expect(screen.getByText(new RegExp(`Revision: ${revision}`))).toBeTruthy();
   expect(screen.queryByRole('alert')).toBeNull();
   expect(document.body.textContent).not.toContain('obsolete read failed');
+});
+
+it('T03/T16 renders simultaneous native application outcomes without inferring field impact', async () => {
+  const subject = cfg3Client();
+  const application = cfg3Application();
+  application.units = {
+    execution_policy: { status: 'applied' },
+    instructions: { status: 'ready', impact: 'prefix_changed' },
+    provider: { status: 'failed', diagnostic: 'candidate rejected' },
+    capabilities: { status: 'preparing' },
+    process_bindings: { status: 'process_restart' },
+  };
+  subject.source.application = application;
+  render(<Settings client={subject.client} sessionId={cfg3Session} />);
+  await screen.findByText(/Preparing configuration/);
+  expect(screen.getByText(/applied for future independent Attempts/)).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Adopt prepared context' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Retry application' })).toBeTruthy();
+  expect(screen.getByText(/Process restart required/)).toBeTruthy();
+  expect(subject.request.mock.calls.every(([op]) => !['configuration/reconcile', 'session/adoptConfiguration', 'configuration/sourceWrite'].includes(op.method))).toBe(true);
+});
+
+
+it.each(['before acknowledgement', 'after acknowledgement', 'after the next edit'] as const)('T12/T16 source projection %s preserves subsequent drafts', async order => {
+  let acknowledge!: (revision: string) => void;
+  const pending = new Promise<string>(resolve => { acknowledge = resolve; });
+  const save = async () => pending;
+  const form = (initial: { command: string }, revision: string) => <UnitForm
+    title="MCP acknowledgement" initial={initial} revision={revision} save={save}
+    mutation={value => ({ kind: 'mcp', scope: 'workspace', id: 'fixture', authored: value ? { definition: { type: 'stdio', command: value.command } } : null })}>
+    {(value, change) => <TextField label="Acknowledged command" value={value.command} change={command => change({ command })} />}
+  </UnitForm>;
+  const ui = render(form({ command: 'original' }, 'r1'));
+  fireEvent.change(screen.getByLabelText('Acknowledged command'), { target: { value: 'submitted-literal' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save MCP acknowledgement' }));
+  // Hold source publication and save return independently; no timers establish order.
+  if (order === 'before acknowledgement') ui.rerender(form({ command: 'native-redacted' }, 'r2'));
+  await act(async () => { acknowledge('r2'); await pending; });
+  if (order === 'after acknowledgement') ui.rerender(form({ command: 'native-redacted' }, 'r2'));
+  if (order !== 'after the next edit') expect((screen.getByLabelText('Acknowledged command') as HTMLInputElement).value).toBe('native-redacted');
+  fireEvent.change(screen.getByLabelText('Acknowledged command'), { target: { value: 'preserved-draft' } });
+  // A later native application notification rereads the same source, then a
+  // conflict reread advances its revision. Neither owns this subsequent edit.
+  ui.rerender(form({ command: 'native-redacted' }, 'r2'));
+  ui.rerender(form({ command: 'external' }, 'r3'));
+  expect((screen.getByLabelText('Acknowledged command') as HTMLInputElement).value).toBe('preserved-draft');
+  expect(screen.getByText(/Draft base revision:/).textContent).toContain('r2');
+  expect(screen.getByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();
 });

@@ -1,6 +1,6 @@
-# App Server protocol v13
+# App Server protocol v14
 
-App Server v13 identifies one complete mandatory vocabulary, including exact
+App Server v14 identifies one complete mandatory vocabulary, including exact
 `session/summary`, bounded historical Trace detail, and read-only Subagent
 transcripts. v12 and all earlier initialization and WebSocket admission versions
 are rejected; there is no downgrade or compatibility path.
@@ -66,7 +66,7 @@ rustx app-server --config /private/user/rustx.toml \
 
 Defaults are `~/rustx/rustx.toml`, `~/rustx/.agents`, and `~/rustx/runtime`.
 `--config` replaces only the User document. Both explicit path bindings must be
-absolute. They cannot change through Reload. Each Session's explicit cwd selects
+absolute. They are fixed process bindings. Each Session's explicit cwd selects
 exactly its Workspace document and `.agents`; no ancestor accumulation or rustX
 Workspace trust gate exists. Transport credentials remain a separate owner.
 
@@ -108,13 +108,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v13",
+  "rustx.app-server.v14",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v13` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v14` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -131,7 +131,7 @@ The [local Web launcher](../web-console/CONNECTION.md) implements delivery throu
 a separate browser launch-token exchange and a process-ephemeral browser proof in
 origin-scoped sessionStorage (not a Cookie). A dedicated header authenticates
 same-origin carrier APIs. Its bootstrap returns the exact native
-endpoint/token; the browser then connects directly using the v13 subprotocols above.
+endpoint/token; the browser then connects directly using the v14 subprotocols above.
 The browser launch credential is never a valid substitute for the native credential.
 Remote Web attachment is explicit Settings configuration. Neither browser login
 nor remote attachment grants Product Host Workspace filesystem authority.
@@ -212,7 +212,7 @@ an ID does not deduplicate a mutation. Integer correlation IDs must fit the
 JavaScript safe integer range. String IDs are recommended for arbitrary IDs.
 
 ```json
-{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{"protocol_version":13,"client":{"name":"example","version":"1"},"presentation":{"images":true,"questionnaires":true,"reviews":true}}}
+{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{"protocol_version":14,"client":{"name":"example","version":"1"},"presentation":{"images":true,"questionnaires":true,"reviews":true}}}
 ```
 
 `APP_SERVER_PROTOCOL_VERSION` is independent of crate, manifest, journal,
@@ -228,7 +228,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v13; pipeline individual requests instead. This limitation is
+supported in v14; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -245,11 +245,10 @@ explicitly rejected as an invalid request before any action occurs.
 | `session/snapshot`, `session/subscribe`, `session/transcript`, `session/boundaries` | Authoritative projection, bounded replay, durable transcript and revision-bound user-message pages |
 | `turn/start`, `turn/steer`, `turn/cancel` | Native inbound and attempt-cancellation owners; acceptance is not terminal execution |
 | `interaction/respond`, `interaction/cancel` | Originating runtime/coordinator, including routed child interactions |
-| `settings/read`, `settings/replace` | Explicit durable Session selections with revision CAS; cold composition consumes them |
+| `settings/read` | Durable resolved Session selection; model mutation uses `settings/setModel` |
 | `settings/model`, `settings/models`, `settings/setModel` | Live attached Session model read/catalog/mutation; native validation and persistence, exact model and advertised profile references |
-| `settings/selectModel` | Explicit durable Session model selection (or clear to authored default), with revision CAS |
 | `configuration/sourcesRead`, `configuration/sourceWrite` | Native structured User/Workspace documents and exact revisions; bounded semantic-unit CAS writes |
-| `configuration/effective`, `configuration/reload` | Published generation/provenance and the one explicit full-generation reload |
+| `configuration/effective`, `configuration/reconcile`, `session/adoptConfiguration` | Authoritative application state, native rescan/retry, and fenced explicit Session adoption |
 | `context/compact`, `goal/control` | Existing maintenance and Goal owners |
 | `background/status`, `background/cancel` | Existing background execution registry |
 | `subagent/transcript` | Parent `AttachmentTarget` → current parent Runtime Client authority → exact parent `SubagentRegistry` ownership resolution of caller-supplied `SubagentId` (never arbitrary child `ConversationId`) → exact owned child Conversation, which remains history authority → bounded read-only durable transcript projection; grants no execution, control, or HITL authority |
@@ -318,7 +317,7 @@ fenced. Attachment cleanup does not grant durable deletion authority.
 
 ## Attachment and observation lifetime
 
-Protocol v13 admits at most one writable external controller per resident
+Protocol v14 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -397,8 +396,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v13.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v13.ts`: TypeScript generated from that schema using pinned
+- `v14.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v14.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -663,7 +662,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v13; no compatibility path is provided.
+This remains mandatory protocol v14; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -693,7 +692,7 @@ The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 43 carries this vocabulary;
 version 38 clients are rejected by strict negotiation. This remains mandatory
-App Server protocol v13, with no compatibility field and no activation mode.
+App Server protocol v14, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
 `Paused` and `Blocked` offer Resume, and there is no separate Play/arm control
@@ -708,7 +707,7 @@ boundary.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v13 includes `inbound/edit { target, expected, text }` and
+Protocol v14 includes `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and controller attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -806,21 +805,22 @@ Session, and unregistering a Workspace is not Session deletion.
 [Configuration](configuration.md) defines the native source model and
 [Web Settings](web-settings.md) documents its projection. User and Workspace
 read/write operations return exact revisions and redacted structured documents.
-Rust validates and serializes whole semantic units. MCP and named Agent writes
-are separately revision-fenced. Saving never implicitly reloads.
+Rust validates and serializes whole semantic units. Save transfers responsibility
+to native reconciliation. Complete independent units apply automatically;
+context-changing or unproven candidates await explicit Session adoption.
 
-Effective state is one published immutable generation, including native origins,
-selected versus defined resources, shadowing, Session explicit model, and the
-admitted Attempt's frozen generation/model/resources. Explicit source revision
-comparison reports pending reload. `configuration/reload` either publishes one
-complete candidate or returns `configuration_busy` with the native owner
-(`attempt`, `interaction`, `owned_work`, `compaction`, or `reload`), or
-`configuration_failed` with a bounded redacted diagnostic. Both refusals leave the
-old generation authoritative. Session and node fields use strict typed UUIDv7
-identities in public and native Session projections.
-Reconnect reads authoritative snapshots and never replays mutations.
+`configuration/effective` and source projections expose desired input revision,
+application identity, per-unit results, current process bindings, complete ready
+candidate, and adopted Session binding. Applied, ready, failed and restart states
+can coexist. `configuration/changed` carries scope and monotonic version; clients
+reject older notifications. Reconnect rereads authority without mutation replay.
 
-Protocol 7 refuses obsolete development versions; no dual decoding exists.
+`session/adoptConfiguration` requires the inspected candidate identity and expected
+binding revision. `configuration_adoption` reports Busy, NotReady, Conflict or a
+preparation/commit diagnostic. Adoption is ordered against Attempt admission and
+preserves canonical history. `configuration/reconcile` rescans external inputs or
+starts a new same-revision application attempt. It is never a second Save step.
+See [the native contract](configuration.md#save-automatic-application-and-session-adoption).
 
 ## Agent read projections (#346)
 
@@ -873,7 +873,7 @@ There is no new event protocol, browser assembler or execution owner.
 `SourceSettings.prospective_approval_mode` is the native configuration resolver's
 prospective policy (absent when the candidate is invalid). It describes authored
 source intent, not loaded/attempt authority. Source writes remain revision-CAS
-semantic-unit mutations. Explicit Reload publishes the generation; active attempts
+semantic-unit mutations. Independent policy applies automatically; active Attempts
 retain `attempt.execution_settings.approval_mode`. `effective_approval_mode` remains
 the loaded runtime fact. Neither field introduces a Session approval override.
 
@@ -882,14 +882,14 @@ the loaded runtime fact. Neither field introduces a Session approval override.
 `configuration/sourceWrite` accepts native `ConfigMutation` units
 `agent_identity` (`AgentId | null`) and `description` (`string | null`). They address
 independent Root metadata scalars through the same revision/CAS, validation,
-serialization and Save-versus-Reload boundary as `instructions`. `null` removes
+serialization and native reconciliation boundary as `instructions`. `null` removes
 the authored unit in that scope. Clients never write whole config documents.
 
 ## Current Session lifecycle contract
 
-Initialization requires exactly v13 and WebSocket requires `rustx.app-server.v13`.
-v12 and all earlier versions are rejected without fallback. Rust DTOs generate
-`v13.ts`, `v13.schema.json`, and the serialized fixtures; only the current version is kept.
+Initialization requires exactly v14 and WebSocket requires `rustx.app-server.v14`.
+v13 and all earlier versions are rejected without fallback. Rust DTOs generate
+`v14.ts`, `v14.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -918,8 +918,8 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
-explicit recovery action. These recovery semantics remain in App Server v13;
-native Runtime Client is v43.
+explicit recovery action. These recovery semantics remain in App Server v14;
+native Runtime Client is v44.
 
 ## Rich historical Trace inspection (#364)
 
@@ -940,7 +940,7 @@ request Context that exact request introduced, in frozen snapshot order).
 `TraceRecord` gains `originating_tool_call_id`, the exact outer `ToolCall` of a
 Background, Subagent or Workflow record. All three are resolved by native
 authority before they reach a client; no client infers them. `TraceLifecycle`
-is unchanged and never repeats them. This v13 vocabulary includes v12's
+is unchanged and never repeats them. This v14 vocabulary includes v12's
 read-only native `subagent/transcript` contract and these Trace DTO changes.
 Version 12 and earlier clients are rejected without a compatibility decoder or a
 dual Trace DTO path.
@@ -960,7 +960,7 @@ Unknown Session/capacity use their existing failures. No raw storage/provider
 error is projected. See [Session archive safety and errors](session-archive.md).
 
 
-## Read-only native Subagent conversations (v13)
+## Read-only native Subagent conversations (v14)
 
 `subagent/transcript { target, subagent_id, before, limit }` returns the existing
 `transcript { page }` result. `target` is the **parent** AttachmentTarget (Session,

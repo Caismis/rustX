@@ -99,11 +99,8 @@ this Linux host does not claim to execute macOS locally.
 - Exact CAS base revision, draft retention across navigation, reviewed-revision
   replacement, clean-unit removal conflict, validation rejection and credential
   draft clearing after successful native redaction.
-- Save leaves the old generation published; Reload publishes coherent native
-  state; failed/busy Reload retains old state. Lost Save/Reload replies and
-  reconnect reread without replay. Deterministic overlapping-read tests prevent
-  obsolete successful observations from replacing newer reads/write acknowledgements.
-  The review repair also covers obsolete read rejections.
+- The historical configuration publication checks in this report are superseded
+  by issue #380; see [current configuration contracts](../docs/configuration.md).
 - Native GoalPhase/Todo/Queue controls, current Subagent/Workflow/background
   projection, Trace history, managed artifact bounds/fences/URL cleanup, inert
   text preview and browser-local appearance.
@@ -119,7 +116,7 @@ projections; they are not represented as real-server evidence.
 
 Manually reviewed full-size captures of desktop/narrow Settings, light/dark,
 Effective, User and Workspace, Provider/Model forms, native source Save and pending
-reload, successful publication, conflict review, failed publication, resource
+automatic application, successful adoption, conflict review, failed publication, resource
 inventory, Plugins, named Agents, Goal/Todo, Subagent/Workflow, Trace, artifact
 preview and Inspector. Keyboard tests traverse 390/820/1280/1600px layouts, close
 paths and focus return; reference tests cover the existing shell and Agent seats.

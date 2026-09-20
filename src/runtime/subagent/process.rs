@@ -38,7 +38,6 @@ use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
 
-use crate::context::SessionContextPolicy;
 use crate::runtime::identity::{ConversationId, SubagentId};
 use crate::runtime::interaction::{InteractionRef, RoutedInteractionError};
 use crate::runtime::types::CancellationReason;
@@ -104,14 +103,6 @@ pub struct SubagentSpawnPlan {
     /// `subagents/<semantic_subagent_id>/`, and only that directory is ever
     /// given to the child as mutable authority.
     pub product_root: crate::runtime::local_storage::ProductRoot,
-    /// The parent runtime's frozen model timeout policy, inherited by every
-    /// child unchanged (Issue #138).
-    pub model_timeout_policy: crate::model::ModelTimeoutPolicy,
-    /// The parent runtime's frozen tool execution-liveness policy, inherited
-    /// by every child unchanged (Issue #204).
-    pub tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
-    /// The session context policy inherited by the child.
-    pub context: SessionContextPolicy,
 }
 
 impl SubagentSpawnPlan {
@@ -148,7 +139,7 @@ impl SubagentSpawnPlan {
     /// The one typed startup specification of a child.
     ///
     /// The spawn plan contributes only launch-scoped physical locations and
-    /// inherited launch policy. Every semantic decision — agent identity,
+    /// process launch options. Every semantic decision — agent identity,
     /// instructions, the resolved model invocation, capabilities, Skills,
     /// project instructions, native Agent Extension composition — comes from
     /// the already-frozen [`ResolvedSubagentSpec`] the invoking attempt's
@@ -168,6 +159,7 @@ impl SubagentSpawnPlan {
         parent_agent_id: &crate::runtime::identity::AgentId,
         resolved: &ResolvedSubagentSpec,
         approval_mode: crate::runtime::types::ApprovalMode,
+        execution_policy: super::InheritedExecutionPolicy,
         runtime_root: &PhysicalChildRuntimeRoot,
         workspace: &WorkspaceUse,
         terminal: &SubagentTerminalMode,
@@ -182,9 +174,9 @@ impl SubagentSpawnPlan {
             parent_agent_id: parent_agent_id.clone(),
             resolved: resolved.clone(),
             approval_mode,
-            model_timeout_policy: self.model_timeout_policy,
-            tool_deadline_policy: self.tool_deadline_policy,
-            context: self.context,
+            model_timeout_policy: execution_policy.model_timeout,
+            tool_deadline_policy: execution_policy.tool_deadline,
+            context: execution_policy.context,
             workspace_snapshot: workspace.snapshot().clone(),
             incarnation: runtime_root
                 .path()
@@ -2042,7 +2034,7 @@ mod tests {
         PhysicalChildRuntimeRoot, PhysicalOutcome, StagedChild, SubagentSpawnPlan, settle_nested,
         spawn_staged,
     };
-    use crate::context::SessionContextPolicy;
+
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{ConversationId, ProcessUnitId, SubagentId};
     use crate::runtime::subagent::anchors::RetainedProcessUnits;
@@ -2105,13 +2097,6 @@ mod tests {
             program: PathBuf::from("/nonexistent/rustx"),
             product_root: crate::runtime::local_storage::ProductRoot::create(runtime_root.as_ref())
                 .expect("product root"),
-            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
-            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-            context: SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
         }
     }
 
@@ -2670,13 +2655,6 @@ mod tests {
                 &dir.path().join("runtime"),
             )
             .expect("product root"),
-            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
-            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-            context: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
         };
         let mut spec = crate::runtime::subagent::ipc::SubagentChildSpec {
             session_id: crate::runtime::identity::SessionId::new(

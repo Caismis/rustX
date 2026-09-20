@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ModelCatalogView, SourceSettings } from '../../../../protocol/app-server/v13';
+import type { ModelCatalogView, SourceSettings } from '../../../../protocol/app-server/v14';
 import { AppServerClient, isOutcomeUncertain, sameTarget, type SessionView } from '../../client/app-server';
 import { ModelSelect } from '../../presentation/agent/ModelSelect';
 import { PermissionSelect } from '../../presentation/agent/PermissionSelect';
@@ -61,7 +61,9 @@ export function AgentControls({ client, view, kind }: { client: AppServerClient;
  const effectiveLabel = `Effective${activeAttempt(view.snapshot) ? ' for running attempt' : ''}: ${effective ?? 'unavailable'}`;
  return <div className="agent-control"><PermissionSelect title={effectiveLabel} key={`${generation}:${target?.attachment_id}`} choices={[{ id: 'policy', label: 'Tool policy' }, { id: 'full_access', label: 'Full access' }]} desired={desired} disabled={disabled} loading={blocked} load={load}
  choose={mode => { if (mode !== 'policy' && mode !== 'full_access') return; void mutate(() => client.request({ method: 'configuration/sourceWrite', params: { session_id: view.id, expected_revision: source!.workspace.revision, mutation: { kind: 'config', scope: 'workspace', mutation: { unit: 'approval', authored: mode } } } }, 'source_settings')); }}/>
- {source?.loaded?.pending_reload && <><small>{effectiveLabel}</small><small>Desired: {desired ?? 'unavailable'} · pending Reload</small><Button size="sm" disabled={disabled || blocked || activeAttempt(view.snapshot)} onClick={() => void mutate(() => client.request({ method: 'configuration/reload', params: { target: target! } }, 'configuration_reloaded'))}>Apply saved policy</Button></>}
+ {desired && desired !== effective && <small>{effectiveLabel}</small>}
+ {source?.application?.units.execution_policy?.status === 'preparing' && <small>Applying saved policy…</small>}
+
  {error && <p role="alert">{error}</p>}{blocked && !busy && error && <Button size="sm" disabled={!attached} onClick={load}>Reread policy</Button>}
  </div>;
 }

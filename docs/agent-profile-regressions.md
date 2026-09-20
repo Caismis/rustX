@@ -16,9 +16,9 @@ The complete profile contract is in [configuration](configuration.md) and
 | Invocation policy survives materialization | subagent definitions `a_non_default_builtin_policy_survives_child_materialization_exactly` |
 | Skills disclose metadata and roots before ordinary reads | `tests/tools/skills.rs`, subagent definitions Skill tests, `tests/subagent/process_conformance.rs` |
 
-The publication owner is `ConversationRuntime::reload_configuration` and the
-capability coordinator's complete snapshot commit. Candidate preparation happens
-off-side. Busy/failed publication retains the old snapshot. Named profiles resolve
+The native configuration coordinator owns preparation and publication decisions.
+Complete capability closures commit under source and Session fences. Independent
+preserved units apply automatically; explicit context adoption refuses busy Sessions. Named profiles resolve
 from admitted generation data; child processes receive a frozen specification and
 captured resources. Tests use channels, watches, owned fake catalogs and real
 provider-emulator processes; sleeps are not ordering evidence.

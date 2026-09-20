@@ -169,7 +169,7 @@ struct CoordinatorInner {
     /// Closed Plugin Tool registrations backed by this conversation's domain owners.
     /// The owner-backed registration set is stable. Each candidate's resolved
     /// profile independently selects explicitly enabled Plugins from that set;
-    /// configuration reload can change that selection at the safe publication
+    /// configuration publication can change that selection at the safe publication
     /// boundary without replacing Todo/Goal current state.
     extension_tools: crate::extensions::ExtensionToolPlane,
     environment_store: EnvironmentStore,
@@ -293,7 +293,7 @@ pub struct CapabilityCoordinator {
 }
 
 /// The unforgeable capability-publication authority held by a live
-/// `ConversationRuntime`. A runtime configuration reload must present this token
+/// `ConversationRuntime`. A runtime configuration publication must present this token
 /// to advance the capability generation; ordinary callers only retain the
 /// standalone coordinator commit API.
 pub(crate) struct RuntimeCapabilityPublication {
@@ -336,7 +336,7 @@ pub struct CapabilityResourceInputs {
 ///
 /// **Exception.** A commit made by the claiming `ConversationRuntime`
 /// (see [`CapabilityCoordinator::commit_runtime`]) fires no callback at
-/// all. That commit is one half of a runtime configuration reload, and the
+/// all. That commit is one half of a runtime configuration publication, and the
 /// runtime publishes the whole generation — capability, availability, and
 /// resources — as a single observation. Firing here as well would let a
 /// consumer fold the capability half on its own and briefly present a
@@ -393,13 +393,43 @@ pub struct PreparedCapabilityCandidate {
     /// publishes back as the coordinator's authoritative reload state.
     effective_mcp_servers: crate::tools::mcp::McpServerBindings,
     resource_inputs: CapabilityResourceInputs,
-    /// Explicit runtime-configuration reload must publish the candidate registry
+    /// Explicit runtime-configuration publication must publish the candidate registry
     /// even when model-facing definitions are byte-identical: executor
     /// configuration is not represented by those definitions.
     force_publish: bool,
 }
 
 impl PreparedCapabilityCandidate {
+    pub(crate) fn set_context_profile(
+        &mut self,
+        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
+    ) {
+        if let Some(profile) = &mut self.resolved_profile {
+            let profile = Arc::make_mut(profile);
+            profile
+                .instructions
+                .clone_from(&capture.config.agent.instructions);
+            profile.project_instructions.inherit = capture.config.agent.agents_md.inherit;
+            profile
+                .project_instructions
+                .files
+                .clone_from(&capture.root_agent_project_files);
+        }
+        self.resource_inputs
+            .agent_activation
+            .profile
+            .instructions
+            .clone_from(&capture.config.agent.instructions);
+        self.resource_inputs
+            .agent_activation
+            .profile
+            .agents_md
+            .clone_from(&capture.config.agent.agents_md);
+        self.resource_inputs
+            .agent_activation
+            .project_files
+            .clone_from(&capture.root_agent_project_files);
+    }
     /// An admission-local view; the caller retains this candidate until the
     /// child has frozen its materialization or the Workflow has settled.
     pub(crate) fn admitted_snapshot(
@@ -423,6 +453,18 @@ impl PreparedCapabilityCandidate {
                 Arc::new(self.effective_mcp_servers.clone()),
             )
             .with_resolved_profile(invoking.resolved_profile().cloned().map(Arc::new)),
+        )
+    }
+
+    pub(crate) fn configuration_snapshot(
+        &self,
+        invoking: &CapabilitySnapshot,
+    ) -> Arc<CapabilitySnapshot> {
+        Arc::new(
+            self.admitted_snapshot(invoking)
+                .as_ref()
+                .clone()
+                .with_resolved_profile(self.resolved_profile.clone()),
         )
     }
 
@@ -933,7 +975,7 @@ impl CapabilityCoordinator {
             .await
     }
 
-    /// Prepares a complete candidate from explicit reload-time inputs.
+    /// Prepares a complete candidate from explicit candidate inputs.
     #[cfg(test)]
     pub(crate) async fn prepare_candidate_with_inputs(
         &self,
@@ -949,15 +991,22 @@ impl CapabilityCoordinator {
             .await
     }
 
-    /// Reload uses the single source capture made by the configuration owner.
-    pub(crate) async fn prepare_reload_capture(
+    /// Preparation uses the single source capture made by the configuration owner.
+    pub(crate) async fn prepare_captured_inputs(
         &self,
         inputs: CapabilityResourceInputs,
         discovered: crate::skills::SkillDiscoveryOutcome,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
         let revision = self.current_snapshot().revision();
-        self.prepare_candidate_from_inputs(inputs, true, revision, Some(discovered), None)
-            .await
+        self.prepare_candidate_from_inputs(
+            inputs,
+            true,
+            revision,
+            Some(discovered),
+            Some(cancellation),
+        )
+        .await
     }
 
     /// Materializes finite child/Workflow demand from an admitted generation.
@@ -2066,7 +2115,7 @@ impl CapabilityCoordinator {
                     current: state.revision,
                 });
             }
-            if state.active_attempts > 0 {
+            if state.active_attempts > 0 && !defers_observation {
                 return Err(CapabilityCommitError::Busy);
             }
             // The MCP invalidation guard: final epoch validation and the
@@ -2540,11 +2589,6 @@ impl AttemptCapabilityLease {
     /// before the attempt releases its capability lease.
     pub(crate) fn mcp_leases(&self) -> Option<McpRuntimeLeaseSet> {
         self.mcp_leases.try_clone()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mcp_lease_uses_runtime(&self, runtime: &Arc<McpServerRuntime>) -> bool {
-        self.mcp_leases.contains_runtime(runtime)
     }
 }
 

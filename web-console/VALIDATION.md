@@ -985,7 +985,7 @@ when the replaceable snapshot has not projected an Attempt yet.
 5. `SessionController::copy_lineage` reads the exact immutable Surface cut and
    retains allocation access. Source appends do not alter that cut. Independent
    Fork neither unloads nor replaces the source and remains allowed.
-6. `compact_context` rejects current Attempt, manual compaction, configuration reload,
+6. `compact_context` rejects current Attempt, manual compaction,
    lifecycle/durability conflicts, but intentionally does not reject pending inbox
    entries. It owns the Conversation while maintenance runs. `/compact` therefore
    has `no-attempt` availability, not the stronger lineage-switch condition.

@@ -438,17 +438,17 @@ pub enum RuntimeClientEvent {
     /// project context files it loaded **and** the capability generation
     /// they were composed against, as one fact.
     ///
-    /// A reload commits both halves together, so it publishes one event
+    /// A configuration commit commits both halves together, so it publishes one event
     /// carrying both. Splitting it into a capability event beside a
     /// resource event would allocate two cursors, and an incremental client
     /// that folds events — rather than re-reading `snapshot_get` — would
     /// then hold the new capability generation beside the resource
-    /// generation the same reload retired. That pairing never existed in
+    /// generation the same commit retired. That pairing never existed in
     /// the runtime, so it is never published.
     ///
-    /// Both halves travel even when only one moved: a reload that changes
+    /// Both halves travel even when only one moved: a configuration commit that changes
     /// only an `AGENTS.md` advances the resource revision and repeats the
-    /// unchanged capability view, and a reload that only rebuilds tools
+    /// unchanged capability view, and a configuration commit that only rebuilds tools
     /// does the converse. The carried revisions, not the event's presence,
     /// tell a client what changed.
     ///
@@ -462,7 +462,7 @@ pub enum RuntimeClientEvent {
         /// The active capability projection this generation was composed
         /// against.
         capabilities: CapabilityView,
-        /// The active runtime resource projection after the reload.
+        /// The active runtime resource projection after the commit.
         resources: RuntimeClientResourcesView,
     },
 

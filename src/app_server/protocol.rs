@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v13 envelope and method vocabulary.
+//! Rust authority for the App Server v14 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 13;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 14;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -288,12 +288,6 @@ pub enum Method {
         target: AttachmentTarget,
         interaction: InteractionRef,
     },
-    #[serde(rename = "settings/selectModel")]
-    SelectModel {
-        session_id: SessionId,
-        expected_revision: u64,
-        selection: Option<crate::model::session::SessionModelConfig>,
-    },
     #[serde(rename = "configuration/effective")]
     ConfigurationGet { target: AttachmentTarget },
     #[serde(rename = "configuration/sourcesRead")]
@@ -306,28 +300,26 @@ pub enum Method {
     },
     #[serde(rename = "settings/read")]
     SettingsRead { session_id: SessionId },
-    #[serde(rename = "settings/replace")]
-    SettingsReplace {
+    #[serde(rename = "configuration/reconcile")]
+    ConfigurationReconcile { session_id: SessionId },
+    #[serde(rename = "session/adoptConfiguration")]
+    AdoptConfiguration {
         session_id: SessionId,
-        expected_revision: u64,
-        settings: SessionPersistentState,
+        candidate: crate::local_runtime::configuration::application::ApplicationIdentity,
+        expected_binding: u64,
     },
-    #[serde(rename = "configuration/reload")]
-    ConfigurationReload { target: AttachmentTarget },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ErrorData {
+    ConfigurationAdoption {
+        rejection: crate::local_runtime::configuration::application::AdoptionError,
+    },
     ArchivePreparationFailed {
         reason: crate::session_archive::SessionArchivePrepareError,
     },
-    ConfigurationBusy {
-        reason: crate::runtime::RuntimeResourceReloadBusyReason,
-    },
-    ConfigurationFailed {
-        diagnostic: String,
-    },
+
     UnknownSubagent {
         subagent_id: crate::runtime::identity::SubagentId,
     },
@@ -501,6 +493,9 @@ pub enum MethodResult {
         result: crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult,
     },
     Attached {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        configuration:
+            Option<crate::local_runtime::configuration::application::ConfigurationApplication>,
         target: AttachmentTarget,
         snapshot: Box<crate::runtime_client::snapshot::RuntimeClientSnapshot>,
         cursor: RuntimeClientCursor,
@@ -523,6 +518,9 @@ pub enum MethodResult {
     InteractionSettled {
         interaction: InteractionRef,
     },
+    ConfigurationApplication {
+        application: crate::local_runtime::configuration::application::ConfigurationApplication,
+    },
     EffectiveConfiguration {
         projection: Box<crate::local_runtime::configuration::settings::EffectiveConfiguration>,
     },
@@ -536,13 +534,6 @@ pub enum MethodResult {
         /// Loaded configuration has its own immutable generation.
         revision: u64,
         settings: SessionPersistentState,
-    },
-    SettingsReplaced {
-        revision: u64,
-    },
-    ConfigurationReloaded {
-        resource_revision: u64,
-        capability_revision: crate::runtime::identity::CapabilityRevision,
     },
 }
 
@@ -577,6 +568,10 @@ pub struct Notification {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 pub enum NotificationMethod {
+    #[serde(rename = "configuration/changed")]
+    ConfigurationChanged {
+        application: crate::local_runtime::configuration::application::ConfigurationApplication,
+    },
     #[serde(rename = "session/event")]
     Event {
         target: AttachmentTarget,

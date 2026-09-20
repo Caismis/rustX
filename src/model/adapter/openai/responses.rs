@@ -1263,7 +1263,7 @@ fn parse_usage(usage: &serde_json::Value) -> Option<ModelUsage> {
 }
 
 /// Translates a provider-neutral request into a raw Responses request JSON value.
-fn translate_request(
+pub(crate) fn translate_request(
     request: &ModelRequest,
     tools: &ValidatedTools,
     storage_mode: ResponsesStorageMode,

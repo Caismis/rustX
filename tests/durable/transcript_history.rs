@@ -1238,33 +1238,6 @@ fn transcript_reference_identity_is_typed_and_collision_free() {
     ));
 }
 
-/// Requirement 13: configuration reload changes future resource state only; it
-/// cannot append a transcript item or rewrite an existing one.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn requirement_13_resource_reload_has_no_transcript_item_or_diff() {
-    let root = tempfile::tempdir().expect("root");
-    let mut paths = startup(root.path());
-    seed_composed_store(&mut paths, &[user_message("reload-user", "history")]).await;
-    let runtime =
-        LocalConversationRuntime::compose(&(paths).resolve(), &selected_dependencies(&paths))
-            .await
-            .expect("interactive composition");
-    let before = runtime
-        .host()
-        .transcript_page(None, 64)
-        .expect("before page");
-    runtime
-        .host()
-        .reload_configuration()
-        .await
-        .expect("reload resources");
-    let after = runtime
-        .host()
-        .transcript_page(None, 64)
-        .expect("after page");
-    assert_eq!(before, after);
-}
-
 /// Requirement 14: a cold reopen retains transcript pages while startup
 /// resource discovery observes the new workspace generation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

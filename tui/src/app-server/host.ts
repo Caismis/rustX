@@ -126,7 +126,7 @@ export class AppServerHost {
     // attachment target; each attachment decides whether that target is its
     // own, so a superseded incarnation cannot reach its replacement.
     client.onNotification((notification) => {
-      const session = this.#sessions.get(notification.params.target.session_id);
+      const session = this.#sessions.get(notification.method === "configuration/changed" ? notification.params.application.scope : notification.params.target.session_id);
       session?.applyNotification(notification);
     });
   }
@@ -467,23 +467,6 @@ export class AppServerHost {
       "settings",
     );
     return { revision: read.revision, settings: read.settings };
-  }
-
-  async replaceSettings(
-    sessionId: SessionId,
-    expectedRevision: string,
-    settings: SessionPersistentState,
-  ): Promise<string> {
-    const replaced = await this.client.call(
-      "settings/replace",
-      {
-        session_id: sessionId,
-        expected_revision: expectedRevision,
-        settings,
-      },
-      "settings_replaced",
-    );
-    return replaced.revision;
   }
 
   // -------------------------------------------------------------------------

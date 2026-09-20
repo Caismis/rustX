@@ -60,7 +60,7 @@ native workspace managers derive storage from their composed Conversation access
 `SessionArchiveProducer` in the native library reads catalog/lineage, immutable
 SQLite history and ArtifactStore bytes. It owns one finite cut and one versioned
 inspection archive, without loading runtimes or depending on transport/Trace.
-App Server v13 prepares a scoped streaming-download capability; Web consumes it
+App Server v14 prepares a scoped streaming-download capability; Web consumes it
 through the browser download manager and TUI writes bytes to a client-local file.
 Neither client composes the archive. Execution coordination ends before history
 serialization, compression or transport backpressure. See the exact authority,
@@ -353,7 +353,7 @@ critical section: failure publication and the `ConversationLifecycle`
 transition to `Draining` are one runtime coordinator linearization point. The
 persistent MCP failure latch is retained as diagnostic/admission evidence;
 `ConversationLifecycle` remains the generic gate that closes inbound,
-attempt, compaction, reload, interaction, background, and subagent semantic
+attempt, compaction, adoption, interaction, background, and subagent semantic
 ownership. A background-late settlement failure follows this identical
 failure-drain transition, so there is no post-publication interval in which a
 runtime is still healthily `Running`.
@@ -1056,15 +1056,13 @@ is also what makes the pin verifiable rather than decorative. Keypresses,
 focus changes, editing state, and TUI presentation details are not interaction
 facts and never enter the Journal, so its size stays O(human decisions).
 
-A pending interaction belongs to the already admitted attempt and its pinned
-Runtime Resource Snapshot / `CapabilitySnapshot`. While a waiter owns the
-attempt, `reload_resources` returns `Busy { reason: Interaction }` and the
-complete old generation is retained: an external edit to `AGENTS.md`-style
-files, Skills, extension instructions, or Tool configuration cannot change the
-pending prompt, the approval subject, the Tool schema, or execution authority
-underneath the waiter. Only after settlement and attempt completion may a
-reload publish a new generation, and that generation affects a later admitted
-attempt only.
+Native configuration application publishes independently valid, complete units.
+The source/application fence and runtime gate order publication against new input
+and Attempt capture. Explicit context adoption requires an idle Session and the
+inspected candidate/binding revision. Existing Attempts and every derived request,
+Tool batch, child and Workflow retain their captured immutable configuration.
+Session bindings survive runtime unload/load within the process. See
+[configuration application](configuration.md#save-automatic-application-and-session-adoption).
 
 The Runtime Client protocol carries the same semantic plane through
 `interaction_respond`, typed acceptance/errors, `interaction_pending` and
@@ -1229,9 +1227,9 @@ inside either audit is typed and rendered as proposed, unaccepted, and
 unexecuted; it is never a Tool Plane invocation and never implies execution,
 a result, or side effects. Historical interaction requested/settled audits
 are visible evidence only: recovery never recreates their waiters or grants
-authority. Resource discovery and reload likewise produce no transcript item;
-old RequestSnapshots retain their exact System/resource bytes, while a cold
-reopen loads a fresh resource generation for future requests.
+authority. Resource discovery and Session adoption likewise produce no transcript item;
+old RequestSnapshots retain exact System/resource bytes. Runtime recreation
+within the process restores the Session adopted binding.
 
 The TUI therefore sends user input through the App Server and renders it
 only after durable acceptance. It does not maintain an optimistic semantic
@@ -1247,7 +1245,7 @@ complete named Agent's `plugins` table. All default off. `NativeAgentExtensions`
 is the internal typed representation; it is not a dynamic plugin API.
 
 Root composition belongs to the immutable configuration generation. A successful
-reload publishes Plugin configuration, Tool registrations, policies and context
+capability publication applies Plugin configuration, Tool registrations, policies and context
 contributors together. Each Attempt uses its admitted profile. Named Agents
 compose independently, without a Root Tool or Plugin ceiling. Child scope
 restrictions remain typed admission rules.
@@ -1998,7 +1996,7 @@ Key contracts:
   model working set, and RequestSnapshot is the exact historical request-time
   authority for System bytes and Tool definitions. Runtime Resource Snapshot
   is process-local executable authority, not durable compaction state;
-  compaction never reloads it. Explicit reload and cold recreation remain
+  compaction never changes it. Native application and explicit adoption remain
   separate lifecycle boundaries.
 - Agent Status is an optional delivery opportunity, not an automatic emission
   rule. One logical primary step owns one finite
@@ -2072,12 +2070,13 @@ Key contracts:
 
 #### CFG3 generations, Skills and external sources
 
-The complete [configuration generation](configuration.md#reload-and-frozen-work)
-contains Providers, Models, policy, Root profile, resource catalogs, provenance,
-source revisions and prepared finite demand. Off-side preparation cannot change
-published state. The coordinator lock publishes one complete resource snapshot;
-failure leaves the exact prior snapshot authoritative. Owned active work returns
-busy. Admitted work retains its snapshot; subsequent admission uses the new one.
+Native configuration application publishes independently valid, complete units.
+The source/application fence and runtime gate order publication against new input
+and Attempt capture. Explicit context adoption requires an idle Session and the
+inspected candidate/binding revision. Existing Attempts and every derived request,
+Tool batch, child and Workflow retain their captured immutable configuration.
+Session bindings survive runtime unload/load within the process. See
+[configuration application](configuration.md#save-automatic-application-and-session-adoption).
 
 The two Skill roots are `~/rustx/.agents/skills` and
 `<workspace>/.agents/skills`. Whole-package shadowing occurs before validation.
@@ -4021,12 +4020,11 @@ correlation-id carry-over, and no resubmission path. A request that crossed
 the frontier lives entirely inside its own execution future and has already
 reached a terminal classification before any replacement generation exists.
 
-**Configuration reload publishes only a complete successful candidate.** A
-selected-source failure rejects the entire candidate, including changed binding
-metadata and policy. The exact prior generation stays authoritative. No
-last-known-good executor is installed under a replacement endpoint or policy.
-Physical transport recovery within an unchanged frozen binding remains owned by
-the existing connection lifecycle; it is separate from configuration publication.
+**Only complete capability closures publish.** A required-source failure rejects
+that closure, preserving its prior effective bindings. Independently valid policy
+can still apply. No executor is installed under mismatched endpoint, definitions
+or policy. Transport recovery within an unchanged frozen binding remains owned
+by the existing connection lifecycle.
 
 
 Drain closes publication authority: closing a connection cancels its
@@ -4638,7 +4636,7 @@ The outermost layer exposes the runtime to humans and other systems:
 - Runtime command interface
 - Runtime projection/event streaming
 
-See [App Server protocol v13](app-server-protocol.md) for the method vocabulary,
+See [App Server protocol v14](app-server-protocol.md) for the method vocabulary,
 generated client schemas, connection multiplexing, weak attachment lifetime and
 headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
 local TUI-owned child and WebSocket for browser/remote/existing-server clients;
@@ -4663,7 +4661,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v13
+       App Server protocol v14
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4680,7 +4678,7 @@ point. Neither binding owns domain semantics. The existing `src/protocol` bounda
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
 The following version history describes the local Runtime Client stdio contract,
-which after #290 has no external client: `rustx-tui` speaks App Server v13, and
+which after #290 has no external client: `rustx-tui` speaks App Server v14, and
 `src/runtime_client` is an internal projection foundation the App Server reuses.
 App Server clients never negotiate or nest it. Its local version is
 `RUNTIME_CLIENT_PROTOCOL_VERSION`.
@@ -5011,7 +5009,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   `commit_dispatch` with `BackgroundDispatchError::ConversationInactive`,
   and the capability coordinator refuses a runtime-owned ordinary `commit`
   with `CapabilityCommitError::RuntimePublicationRequired`; live capability
-  mutation must use the configuration reload publication owner. No admission worker
+  mutation must use the native configuration publication owner. No admission worker
   exists, `admit_next_attempt` is a no-op, and an inactive runtime
   therefore publishes no observation at all.
 
@@ -5758,11 +5756,10 @@ not stdio as a transport choice. The following describes the current #38 adapter
 
 #### Runtime Client configuration projection
 
-App Server V7 projects authored source revisions, published effective facts,
-provenance, selected versus defined resources and admitted Attempt differences.
-Clients never resolve configuration. Source CAS commits and full configuration
-reload are separate operations. Reconnect reconstructs authoritative state and
-never replays an uncertain mutation. See [the protocol](app-server-protocol.md).
+App Server V14 projects authored sources, effective configuration and composable
+per-unit application state. Save transfers work to native reconciliation; clients
+render native cache impact and submit explicit adoption intent. Scope/version
+notifications and authoritative rereads repair reconnect without mutation replay.
 
 
 ### Layer 8: CFG3 composition and durable Sessions
@@ -5777,14 +5774,16 @@ semantic units. Domain resource readers shadow Workspace identities before
 parsing. Discovery is inert; finite Root/child/Workflow admission drives the
 existing MCP/Python lifecycle owners.
 
-`RuntimeConfiguration` and `RuntimeResourceSnapshot` form one immutable generation.
-Reload builds off-side, validates all selected demand, and publishes under the
-coordinator's one state lock. Active Attempt, background, child, Workflow and
-maintenance ownership refuses publication with typed busy. Already-admitted work
-keeps its frozen snapshots; source writes alone change no runtime.
+Native configuration application publishes independently valid, complete units.
+The source/application fence and runtime gate order publication against new input
+and Attempt capture. Explicit context adoption requires an idle Session and the
+inspected candidate/binding revision. Existing Attempts and every derived request,
+Tool batch, child and Workflow retain their captured immutable configuration.
+Session bindings survive runtime unload/load within the process. See
+[configuration application](configuration.md#save-automatic-application-and-session-adoption).
 
-Session persistence owns cwd and explicit model intent. Cold load rereads current
-files/startup bindings and revalidates that intent. `SessionRuntimeManager` owns
+Session persistence owns cwd and explicit model intent. Runtime recreation restores the process-local adopted binding; a new process
+resolves current sources while preserving the durable selected model. `SessionRuntimeManager` owns
 residency, not a second configuration generation. The runtime root is startup-only
 `~/rustx/runtime` (or explicit binding). Sessions own Conversation directories,
 each with one SQLite store and managed Tool output. Typed UUIDv7 identities are
@@ -5794,12 +5793,11 @@ as future authority.
 
 ### Layer 9: TUI and Web
 
-Both are thin App Server V7 clients. TUI `/settings`, `/model` and `/reload`
-project/control native facts. Web [Settings](web-settings.md) separates read-only
-Effective from authored User and Workspace drafts. Structured editors cover
-Providers/Models, policies, Root selections, Plugins, MCP and complete named
-Agents. Save is revision-fenced source publication; Reload publishes a generation.
-Drafts survive CAS conflict. Uncertain outcomes trigger reads, never blind replay.
+Both are thin App Server V14 clients. TUI `/settings`, `/model` and `/configuration`
+project native facts and send typed intent. Web Settings separates Effective from
+User/Workspace drafts. Save automatically starts native application. Context
+adoption, preparation failure/retry and process restart can appear together.
+Conflicts preserve drafts; uncertain outcomes trigger reads, never blind replay.
 
 
 ## Native YAML WorkflowRuntime (M9.5 / Issue #83)
@@ -5925,16 +5923,16 @@ Workflow run reaches terminal settlement only after all owned child work has
 reached the native settlement point. Runtime drain proves zero
 Workflow-owned active work; no detached child survives successful quiescence.
 
-### Publication, reload, and recovery
+### Configuration publication and recovery
 
-Startup and reload construct one complete candidate: configuration, exact
+Startup and capability preparation construct one complete candidate: configuration, exact
 discovered YAML, frozen Workflow admission, Agent selections, capability
 availability, and native Tool registrations. Validation happens off-side and
 one publication boundary makes the coherent generation visible. An invalid
 candidate leaves the previous valid generation untouched. A foreground
 Workflow Tool captures the immutable program at registration; a run therefore
-retains its program snapshot across later reloads, while reload affects only
-future runs.
+retains its program snapshot across later configuration publication; only new
+independent Attempts capture newly applicable programs.
 
 Ordinary Workflow lifecycle and join events (`started`, child admission,
 Branch selection, Parallel admission/settlement, and terminal
@@ -6375,16 +6373,14 @@ real Tool Plane invocation fact by which plane it came from.
 
 A publication stream is pinned to the exact attempt, turn, request, and
 provisional message identity that opened it. FND-01 (Issue #106) owns resource
-loading and reload; this plane preserves that boundary:
+loading; native configuration coordination now owns application:
 
 - external edits to project instructions, Skills, or extension Tool
   configuration during streaming cannot alter the in-flight provider request,
   the model Tool schemas, preflight authority, publication classification, or
   the later canonical Assistant of that stream;
-- the public reload operation returns `Busy` while the attempt owns the
-  session; it never aborts or splices a new generation into publication;
-- after the attempt ends, a successful reload may affect a later admitted
-  attempt only;
+- explicit context adoption returns `Busy` while an Attempt owns the Session;
+- independent policy can publish for new Attempts while old execution continues;
 - recovery classifies P/U/C and tool-proposal state from rustX-owned durable
   evidence, never by re-reading current resources or the current Tool registry.
 
@@ -6944,7 +6940,7 @@ See [Session-owned workspace uploads](session-uploads.md) for receipt admission,
 
 ### Pending inbound mutation and committed claim receipts
 
-The exact pending controls described in [App Server protocol v13](app-server-protocol.md#exact-pending-inbound-controls-web-06)
+The exact pending controls described in [App Server protocol v14](app-server-protocol.md#exact-pending-inbound-controls-web-06)
 remain native `ConversationStore` transitions. Sequence + MessageId identify one
 occurrence, and a monotonic pending revision prevents lost updates. The durable
 mutation transaction and canonical adoption transaction are the only ownership
@@ -6964,7 +6960,7 @@ canonical history.
 
 Rust owns bounded semantic mutations, validation, canonical serialization,
 revisions, CAS, redaction and publication. Clients own drafts and presentation.
-A source Save commits bytes independently of Reload. Stale writes fail without
+A source Save commits bytes and transfers responsibility to native reconciliation. Stale writes fail without
 overwriting or dropping drafts; uncertain outcomes require authoritative reread.
 See [Web Settings](web-settings.md) and [configuration](configuration.md).
 
@@ -7016,4 +7012,4 @@ and retained workspace facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-subagent-conversations-v13).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-subagent-conversations-v14).

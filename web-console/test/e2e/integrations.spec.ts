@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
-test('CFG3 structured source authoring, inert definitions, CAS and explicit publication', async ({ page }) => {
+test('CFG3 structured source authoring, inert definitions, CAS and automatic no-op application', async ({ page }) => {
   const fixture = await startDogfood(); const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   try {
@@ -35,11 +35,9 @@ test('CFG3 structured source authoring, inert definitions, CAS and explicit publ
     await settings.getByRole('button', { name: 'Add Arguments', exact: true }).click();
     await settings.getByLabel('Arguments 2', { exact: true }).fill(join(fixture.directory, 'mcp-started'));
     await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
-    await expect(settings.getByText(/Source saved. Use Reload/)).toBeVisible();
-    await expect(settings.getByText(/Pending reload/)).toBeVisible();
+    await expect(settings.getByText(/Source saved. Native application/)).toBeVisible();
     expect(existsSync(join(fixture.directory, 'mcp-started'))).toBe(false);
-    await settings.getByRole('button', { name: 'Reload', exact: true }).click();
-    await expect(settings.getByText(/Configuration published:/)).toBeVisible();
+    await expect(settings.getByText(/Applicable changes are applied/)).toBeVisible();
     expect(existsSync(join(fixture.directory, 'mcp-started'))).toBe(false);
     await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
     await settings.getByLabel('New MCP identity').fill('local-fixture');
@@ -47,7 +45,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and explicit publ
     await expect(settings.getByLabel('MCP command')).toHaveValue('');
     await settings.getByLabel('MCP command').fill('unused-workspace-command');
     await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
-    await expect(settings.getByText(/Source saved. Use Reload/)).toBeVisible();
+    await expect(settings.getByText(/Source saved. Native application/)).toBeVisible();
     await settings.getByLabel('MCP command').fill('preserved-draft');
     appendFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), '\n# external edit invalidates the draft revision\n');
     await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
@@ -56,7 +54,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and explicit publ
     await settings.screenshot({ path: test.info().outputPath('cfg3-cas-conflict.png') });
     await settings.getByRole('button', { name: 'Use reviewed revision', exact: true }).click();
     await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
-    await expect(settings.getByText(/Source saved. Use Reload/)).toBeVisible();
+    await expect(settings.getByText(/Source saved. Native application/)).toBeVisible();
     await settings.getByRole('button', { name: 'Agents', exact: true }).click();
     await settings.getByLabel('New Agent identity').fill('reviewer');
     await settings.getByRole('button', { name: 'Add Agent', exact: true }).click();
@@ -65,13 +63,12 @@ test('CFG3 structured source authoring, inert definitions, CAS and explicit publ
     await settings.getByLabel('Instructions', { exact: true }).fill('Review the requested change and report concrete findings.');
     await settings.getByLabel('read', { exact: true }).check();
     await settings.getByRole('button', { name: 'Save Agent reviewer', exact: true }).click();
-    await expect(settings.getByText(/Source saved. Use Reload/)).toBeVisible();
+    await expect(settings.getByText(/Source saved. Native application/)).toBeVisible();
     await expect(settings.getByRole('region', { name: 'agents inventory' }).getByRole('article').filter({ hasText: 'reviewer' })).toContainText('Valid definition');
     await settings.getByRole('heading', { name: 'Named Agents', exact: true }).scrollIntoViewIfNeeded();
     await settings.screenshot({ path: test.info().outputPath('cfg3-named-agent.png') });
-    await settings.getByRole('button', { name: 'Reload', exact: true }).click();
-    await expect(settings.getByText(/Configuration published:/)).toBeVisible();
-    await expect(settings.getByText(/Pending reload/)).toHaveCount(0);
+    await expect(settings.getByText(/Applicable changes are applied/)).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Adopt prepared context', exact: true })).toHaveCount(0);
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: test.info().outputPath('cfg3-settings-mobile.png'), fullPage: true });

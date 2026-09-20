@@ -271,8 +271,8 @@ export class CommandDispatcher {
           return inspect("Agent Status", renderStatus(state));
         case "/compact":
           return await this.#compact(session, argument);
-        case "/reload":
-          return await this.#reload(session, argument);
+        case "/configuration":
+          return await this.#configuration(session, argument);
         case "/debug":
           return inspect("Client diagnostics", renderDebug(state, this.#context.diagnostics()));
         case "/show-reasoning":
@@ -444,18 +444,31 @@ export class CommandDispatcher {
     return inspect("Goal", goalSummary(updated));
   }
 
-  async #reload(
-    session: AppServerSession,
-    argument: string,
-  ): Promise<CommandOutcome> {
-    if (argument.length > 0) {
-      return transient("error", "usage: /reload");
+  async #configuration(session: AppServerSession, argument: string): Promise<CommandOutcome> {
+    const source = await session.permissionSources();
+    const [action, candidateId] = argument.trim().split(/\s+/);
+    if (action === "rescan" || action === "retry") {
+      await session.reconcileConfiguration();
+      return transient("info", "Native reconciliation started. Use /configuration to inspect application.");
     }
-    const reloaded = await session.reloadConfiguration();
-    return transient(
-      "info",
-      `configuration reloaded to generation ${reloaded.resourceRevision} (capabilities ${reloaded.capabilityRevision})`,
-    );
+    if (action === "adopt") {
+      const candidate = source.application?.candidate;
+      if (!candidate || candidate.identity.attempt !== candidateId) return transient("error", "Candidate changed or not ready. Inspect /configuration before adopting.");
+      await session.adoptConfiguration(candidate);
+      return transient("info", "Prepared configuration adopted by this Session.");
+    }
+    if (action) return transient("error", "usage: /configuration [rescan | retry | adopt <attempt>]");
+    const application = source.application;
+    const units = Object.values(application?.units ?? {});
+    return inspect("Configuration", [
+      "Save applies independent changes automatically. Running Attempts retain their captured configuration.",
+      ...(units.some(unit => unit?.status === "preparing") ? ["Preparing configuration…"] : []),
+      ...(units.some(unit => unit?.status === "applied") ? ["Applicable changes applied for future independent Attempts."] : []),
+      ...(units.some(unit => unit?.status === "failed") ? ["Application failed. /configuration retry"] : []),
+      ...(units.some(unit => unit?.status === "process_restart") ? ["Process restart required for pending bindings."] : []),
+      ...(application?.candidate ? [`Context awaiting adoption. /configuration adopt ${application.candidate.identity.attempt}`] : []),
+      JSON.stringify(application ?? {}, null, 2),
+    ].join("\n"));
   }
 
   /**
@@ -1110,6 +1123,6 @@ export function renderSettings(state: PresentationState, configuration?: import(
       `Admitted Attempt: ${JSON.stringify(configuration.admitted_attempt ?? null)}`,
       "Effective configuration and provenance:", JSON.stringify(configuration, null, 2),
     ] : []),
-    "Save commits authored sources. /reload publishes a complete configuration generation. Restart rereads current files.",
+    "Save starts native application. /configuration inspects application, rescans files, retries, and explicitly adopts prepared context.",
   ].join("\n");
 }

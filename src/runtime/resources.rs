@@ -1,6 +1,6 @@
 //! Immutable process-local runtime resources (Issue #106).
 //!
-//! Resource discovery belongs to runtime creation and explicit reload. An
+//! Resource discovery belongs to runtime creation and native configuration preparation. An
 //! admitted attempt receives one [`RuntimeResourceSnapshot`] by `Arc` and
 //! never consults the loader or filesystem again. Historical request values
 //! remain frozen by [`crate::model::RequestSnapshot`]; this process-local
@@ -96,6 +96,10 @@ impl ManagedPythonCatalog {
 /// Authored source capture is process-local and never persisted as Session intent.
 #[derive(Clone)]
 pub struct RuntimeConfiguration {
+    pub(crate) component_revisions: std::collections::BTreeMap<
+        crate::local_runtime::configuration::application::ApplyUnit,
+        String,
+    >,
     pub resource_definitions: Vec<crate::runtime::capability_inspection::ResourceDefinition>,
     pub resource_diagnostics: Vec<crate::runtime::capability_inspection::ResourceDiagnostic>,
     pub source_revisions: std::collections::BTreeMap<PathBuf, String>,
@@ -159,6 +163,225 @@ impl core::fmt::Debug for RuntimeResourceSnapshot {
 }
 
 impl RuntimeResourceSnapshot {
+    pub(crate) fn with_context_binding(
+        &self,
+        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
+        models: crate::model::invocation::ModelBindingRegistry,
+    ) -> Result<Self, String> {
+        let mut snapshot = self.clone();
+        let mut configuration = self
+            .configuration
+            .as_deref()
+            .ok_or("missing configuration")?
+            .clone();
+        let config = Arc::make_mut(&mut configuration.config);
+        config
+            .agent
+            .instructions
+            .clone_from(&capture.config.agent.instructions);
+        config
+            .agent
+            .agents_md
+            .clone_from(&capture.config.agent.agents_md);
+        config.context = capture.config.context;
+        config.agent.model.clone_from(&capture.config.agent.model);
+        configuration.models = models;
+        for unit in [
+            crate::local_runtime::configuration::application::ApplyUnit::Instructions,
+            crate::local_runtime::configuration::application::ApplyUnit::Provider,
+        ] {
+            configuration
+                .component_revisions
+                .insert(unit, capture.component_revisions[&unit].clone());
+            crate::local_runtime::configuration::copy_unit_provenance(
+                &mut configuration.provenance,
+                &capture.provenance,
+                unit,
+            );
+        }
+        let context = configuration
+            .effective
+            .agent
+            .get_or_insert_with(Default::default);
+        context.instructions = capture
+            .effective
+            .agent
+            .as_ref()
+            .and_then(|agent| agent.instructions.clone());
+        context.agents_md = capture
+            .effective
+            .agent
+            .as_ref()
+            .and_then(|agent| agent.agents_md.clone());
+        context.model = capture
+            .effective
+            .agent
+            .as_ref()
+            .and_then(|agent| agent.model.clone());
+        configuration
+            .effective
+            .context
+            .clone_from(&capture.effective.context);
+        configuration
+            .effective
+            .models
+            .clone_from(&capture.effective.models);
+        configuration.effective.providers = capture
+            .effective
+            .clone()
+            .map_providers(Into::into)
+            .providers;
+        // The capture may itself be composed (C1+I2); carry its diagnostic
+        // baseline, never substitute the newest authored source manifest.
+        configuration
+            .source_revisions
+            .clone_from(&capture.source_revisions);
+        snapshot.configuration = Some(Arc::new(configuration));
+        let mut profile = self.root_profile().ok_or("missing root profile")?.clone();
+        profile
+            .instructions
+            .clone_from(&capture.config.agent.instructions);
+        profile.project_instructions.inherit = capture.config.agent.agents_md.inherit;
+        profile
+            .project_instructions
+            .files
+            .clone_from(&capture.root_agent_project_files);
+        snapshot.capability = Arc::new(
+            self.capability
+                .as_ref()
+                .clone()
+                .with_resolved_profile(Some(Arc::new(profile))),
+        );
+        snapshot.project_context_files = capture.project_context_files.clone().into();
+        let mut files = if capture.config.agent.agents_md.inherit {
+            capture.project_context_files.clone()
+        } else {
+            Vec::new()
+        };
+        files.extend(capture.root_agent_project_files.clone());
+        snapshot.project_instructions = concatenate_project_instructions(&files).map(Arc::from);
+        snapshot.agent_profile = (!capture.config.agent.instructions.is_empty())
+            .then(|| Arc::from(capture.config.agent.instructions.as_str()));
+        snapshot.refresh_inspection();
+        Ok(snapshot)
+    }
+
+    pub(crate) fn with_revision(mut self, revision: RuntimeResourceRevision) -> Self {
+        self.revision = revision;
+        self
+    }
+    /// Compose independent execution policy with this exact adopted context.
+    /// The old snapshot and all of its physical resources remain immutable.
+    pub(crate) fn with_shared_capacity(
+        &self,
+        desired: &crate::local_runtime::configuration::IndependentPolicy,
+    ) -> Option<Self> {
+        let old = self.configuration.as_ref()?;
+        let mut configuration = old.as_ref().clone();
+        desired.compose_shared_capacity(
+            Arc::make_mut(&mut configuration.config),
+            &mut configuration.effective,
+            &mut configuration.provenance,
+            &mut configuration.component_revisions,
+        );
+        if configuration.config == old.config
+            && configuration.effective == old.effective
+            && configuration.provenance == old.provenance
+        {
+            return None;
+        }
+        let mut snapshot = self.clone();
+        snapshot.configuration = Some(Arc::new(configuration));
+        Some(snapshot)
+    }
+
+    pub(crate) fn with_execution_policy(
+        &self,
+        desired: &crate::local_runtime::configuration::IndependentPolicy,
+    ) -> Option<Self> {
+        let old = self.configuration.as_ref()?;
+        let mut configuration = (**old).clone();
+        desired.compose_execution_policy(
+            Arc::make_mut(&mut configuration.config),
+            &mut configuration.effective,
+            &mut configuration.provenance,
+            &mut configuration.component_revisions,
+        );
+        if configuration.config == old.config
+            && configuration.effective == old.effective
+            && configuration.provenance == old.provenance
+        {
+            return None;
+        }
+        let mut snapshot = self.clone();
+        snapshot.configuration = Some(Arc::new(configuration));
+        snapshot.revision = self.revision.next();
+        Some(snapshot)
+    }
+
+    pub(crate) fn request_shape(
+        &self,
+        model: &crate::model::session::SessionModelState,
+    ) -> Result<crate::model::request_shape::ConfigurationRequestShape, String> {
+        let registry = model
+            .registry()
+            .ok_or("frozen model has no configuration adoption registry")?;
+        let binding = registry
+            .freeze(&model.config().selection())
+            .map_err(|e| e.to_string())?
+            .binding;
+        let sections = self
+            .context_assembly
+            .system_sections(&crate::context::NativeContextInput {
+                workspace_instructions: self.project_instructions().map(str::to_owned),
+                skill_guidance: self.skill_catalog().map(str::to_owned),
+                agent_profile: self.agent_profile().map(str::to_owned),
+                ..crate::context::NativeContextInput::default()
+            })
+            .map_err(|e| e.to_string())?;
+        let tools = self
+            .capability
+            .tool_registry()
+            .definitions()
+            .iter()
+            .map(crate::tools::schema::compile_model_definition)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        let primary = crate::model::request_shape::ConfigurationRequestShape::capture(
+            binding,
+            model.snapshot().primary().context_window(),
+            crate::model::ModelRequest {
+                invocation: model.snapshot().primary().invocation_config(),
+                messages: Vec::new(),
+                tools,
+                effective_system_prompt: crate::context::render_effective_system_prompt(&sections),
+                continuation: None,
+            },
+        )
+        .map_err(|e| e.message)?;
+        let summary_binding = registry
+            .freeze(
+                &model
+                    .config()
+                    .summary_selection()
+                    .unwrap_or_else(|| model.config().selection()),
+            )
+            .map_err(|e| e.to_string())?
+            .binding;
+        let summary = crate::model::request_shape::ConfigurationRequestShape::capture(
+            summary_binding,
+            model.snapshot().summary_invocation().context_window(),
+            crate::model::ModelRequest {
+                invocation: model.snapshot().summary_invocation().invocation_config(),
+                messages: Vec::new(),
+                tools: Vec::new(),
+                effective_system_prompt: String::new(),
+                continuation: None,
+            },
+        )
+        .map_err(|e| e.message)?;
+        Ok(primary.with_summary(summary))
+    }
     #[cfg(test)]
     pub(crate) fn with_test_root_agents(mut self, agents: BTreeSet<SubagentName>) -> Self {
         use crate::runtime::agent_profile::{
@@ -472,7 +695,7 @@ impl RuntimeResourceSnapshot {
     ///
     /// A subagent invocation resolves against exactly this catalog: an
     /// attempt that owns generation R1 keeps resolving R1 even after a
-    /// reload has committed R2 as runtime-current.
+    /// configuration publication has committed R2 as runtime-current.
     #[must_use]
     pub fn subagents(&self) -> &AgentCatalog {
         &self.subagents
@@ -514,6 +737,7 @@ pub struct PreparedRuntimeResources {
 
 /// The non-capability half of a prepared resource candidate after the
 /// capability candidate has been moved into its commit boundary.
+#[derive(Clone)]
 pub(crate) struct PreparedRuntimeResourceData {
     pub(crate) configuration: Option<Arc<RuntimeConfiguration>>,
     inspection: Arc<crate::runtime::capability_inspection::CapabilityInspection>,
@@ -528,6 +752,30 @@ pub(crate) struct PreparedRuntimeResourceData {
     workflows: WorkflowCatalog,
     managed_python: ManagedPythonCatalog,
     capability_availability: CapabilityAvailability,
+}
+
+impl PreparedRuntimeResourceData {
+    pub(crate) fn set_context_binding(
+        &mut self,
+        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
+        models: crate::model::invocation::ModelBindingRegistry,
+    ) {
+        if let Some(configuration) = &mut self.configuration {
+            let configuration = Arc::make_mut(configuration);
+            configuration.config = capture.config.clone();
+            configuration.models = models;
+            configuration
+                .component_revisions
+                .clone_from(&capture.component_revisions);
+            configuration.effective = capture.effective.clone().map_providers(Into::into);
+            configuration.provenance.clone_from(&capture.provenance);
+            configuration
+                .source_revisions
+                .clone_from(&capture.source_revisions);
+        }
+        self.project_context_files
+            .clone_from(&capture.project_context_files);
+    }
 }
 
 impl PreparedRuntimeResources {
@@ -676,14 +924,15 @@ impl PreparedRuntimeResources {
     }
 }
 
-/// Runtime-owned resource loading. Implementations may read explicit current
-/// configuration and filesystem inputs, but are invoked only at runtime
-/// creation or through the semantic reload operation.
+/// Off-side resource preparation, invoked by native configuration coordination.
+/// Local application consumes one complete immutable configuration input capture.
 pub trait RuntimeResourceLoader: Send + Sync {
     /// Builds a complete candidate off-side.
     fn prepare<'a>(
         &'a self,
         capability: &'a CapabilityCoordinator,
+        capture: Option<crate::local_runtime::configuration::ProspectiveSessionConfig>,
+        _preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
     ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>>;
 }
 
@@ -691,7 +940,7 @@ pub trait RuntimeResourceLoader: Send + Sync {
 ///
 /// It reuses the coordinator's explicit current capability inputs and owns
 /// only filesystem discovery timing. Local product composition may use a
-/// richer loader that reparses its current config on explicit reload.
+/// richer loader that consumes an immutable captured configuration.
 #[derive(Clone)]
 pub struct FilesystemRuntimeResourceLoader {
     workspace: PathBuf,
@@ -743,6 +992,8 @@ impl RuntimeResourceLoader for FilesystemRuntimeResourceLoader {
     fn prepare<'a>(
         &'a self,
         capability: &'a CapabilityCoordinator,
+        _capture: Option<crate::local_runtime::configuration::ProspectiveSessionConfig>,
+        _preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
     ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
         Box::pin(async move {
             let project_context_files = load_project_context_files(&self.workspace)?;

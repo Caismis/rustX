@@ -132,10 +132,10 @@ and Questionnaire. The same pending identity must reappear. Answer once. Use the
 raw protocol log and Runtime facts panel to inspect attachment/incarnation/cursor
 and authoritative state; never resubmit a mutation merely because its reply was lost.
 
-Edit the printed canonical TOML source after a runtime is loaded. Resync must keep
-that runtime's composition. Use the existing configuration reload owner for safe
-live changes. Composition-only changes take effect on reconstruction by the
-process owner, using current defaults plus persisted selections.
+Edit the printed canonical TOML source after a runtime is loaded. Resync preserves
+that Session's adopted binding. **Rescan configuration files** ingests external
+changes; independently valid policy applies automatically and prepared context
+requires explicit adoption. Runtime reconstruction does not adopt pending context.
 To dogfood automatic idle residency, configure `[app_server] idle_grace_ms` before
 server startup, detach every view/controller of an idle Session, and inspect
 `server/diagnostics` until it reports unloaded. The catalog remains visible and a

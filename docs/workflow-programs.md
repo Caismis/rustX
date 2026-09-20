@@ -363,7 +363,7 @@ legacy grammar remains.
 owner-node/child keys: a Parallel branch key or the fixed Loop key `body`.
 A `WorkflowRunId` contains the conversation, native
 admitted `AttemptId`, and a WorkflowRuntime-owned invocation ordinal.
-Cloned runtimes share the ordinal allocator, including across configuration reload.
+Cloned runtimes share the ordinal allocator, including across configuration publication.
 Recovery creates a fresh native attempt identity rather than resuming a run.
 `WorkflowBlockInstance` combines
 that run, the static path and structural invocation components.

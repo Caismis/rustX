@@ -69,7 +69,7 @@ an independently managed runtime/Host. The [Host contract](WORKSPACES.md) descri
 that operator-owned integration. Use the launcher for complete local composition.
 
 Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v13` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v14` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -109,7 +109,7 @@ requests provider/MCP configuration.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v13.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v14.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -367,14 +367,14 @@ semantic units, including independent Provider/Model identities, Root capability
 selections, Plugins, MCP definitions and complete named-Agent resources.
 
 Save commits one revision-fenced source mutation and leaves the loaded runtime
-unchanged. Reload publishes one coherent generation or reports typed busy/failure
+unchanged until native application publishes complete independent units; context changes require explicit adoption
 with the old generation authoritative. Conflicts preserve the draft and original
 revision; uncertain outcomes trigger rereads without mutation replay. The bound
 User config path and fixed User resource root are displayed separately.
 
 See [the complete Settings contract](../docs/web-settings.md) and
 [configuration reference](../docs/configuration.md). Browser regressions exercise
-Save/Reload, CAS external edits, named-Agent editing and desktop/mobile views.
+Save/adoption, CAS external edits, named-Agent editing and desktop/mobile views.
 
 The [Settings/native auxiliary architecture](SETTINGS-ARCHITECTURE.md) documents CFG3 ownership, draft recovery, resource cards, appearance and bounded artifact preview.
 

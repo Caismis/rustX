@@ -1410,8 +1410,23 @@ fn chat_stream_error(error: &serde_json::Value) -> ModelError {
 /// (including the compat-selected max-token spelling), and the effective
 /// opaque request parameters are shallow-overlaid last under the
 /// protected-key contract.
-fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelError> {
-    let messages = translate_messages(request)?;
+pub(crate) fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelError> {
+    construct_request(request, true)
+}
+
+/// Configuration comparison uses the real constructor with history omitted.
+/// This evidence is never submitted to the provider or canonical history.
+pub(crate) fn configuration_request(
+    request: &ModelRequest,
+) -> Result<serde_json::Value, ModelError> {
+    construct_request(request, false)
+}
+
+fn construct_request(
+    request: &ModelRequest,
+    require_history: bool,
+) -> Result<serde_json::Value, ModelError> {
+    let messages = translate_messages(request, require_history)?;
     let assistant_reasoning: Vec<Option<String>> = messages
         .iter()
         .map(|message| message.reasoning.clone())
@@ -1506,7 +1521,10 @@ struct TranslatedChatMessage {
     reasoning: Option<String>,
 }
 
-fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessage>, ModelError> {
+fn translate_messages(
+    request: &ModelRequest,
+    require_history: bool,
+) -> Result<Vec<TranslatedChatMessage>, ModelError> {
     let mut system_messages = Vec::new();
     let mut transcript_messages = Vec::new();
     let reasoning_replay = request.invocation.compat.chat_reasoning_replay;
@@ -1551,7 +1569,7 @@ fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessag
     }
     let mut messages = system_messages;
     messages.extend(transcript_messages);
-    if messages.is_empty() {
+    if require_history && messages.is_empty() {
         return Err(invalid_request(
             "a Chat Completions request requires at least one message",
         ));

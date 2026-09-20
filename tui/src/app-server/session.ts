@@ -55,6 +55,8 @@
 import {
   compareExact,
   sameTarget,
+  type ConfigurationApplication,
+  type AvailableConfiguration,
   type AttachmentTarget,
   type CapabilityView,
   type GoalControl,
@@ -110,6 +112,8 @@ export class AppServerSession {
   readonly #client: AppServerClient;
   #target: AttachmentTarget;
   #state: PresentationState;
+  #configuration?: ConfigurationApplication;
+  get application(): ConfigurationApplication | undefined { return this.#configuration; }
   readonly #listeners = new Set<StateListener>();
   readonly #snapshotListeners = new Set<SnapshotListener>();
   readonly #closedListeners = new Set<ClosedListener>();
@@ -156,12 +160,10 @@ export class AppServerSession {
       { session_id: sessionId, node_id: nodeId ?? null },
       "attached",
     );
-    return new AppServerSession(
-      client,
-      attached.target,
-      replaceFromSnapshot(attached.snapshot, attached.cursor),
-      nodeId,
-    );
+    const session = new AppServerSession(client, attached.target,
+      replaceFromSnapshot(attached.snapshot, attached.cursor), nodeId);
+    if (attached.configuration) session.#installConfiguration(attached.configuration);
+    return session;
   }
 
   /** The full four-domain identity of this attachment. */
@@ -229,6 +231,12 @@ export class AppServerSession {
    * projection that replaced it.
    */
   applyNotification(notification: Notification): boolean {
+    if (notification.method === "configuration/changed") {
+      const application = notification.params.application;
+      if (this.#released || application.scope !== this.sessionId) return false;
+      this.#installConfiguration(application);
+      return true;
+    }
     if (this.#released || this.#serverClosed || !sameTarget(notification.params.target, this.#target)) {
       return false;
     }
@@ -301,7 +309,9 @@ export class AppServerSession {
   }
 
   async permissionSources() {
-    return (await this.#client.call("configuration/sourcesRead", { session_id: this.sessionId }, "source_settings")).projection;
+    const source = (await this.#client.call("configuration/sourcesRead", { session_id: this.sessionId }, "source_settings")).projection;
+    if (source.application) this.#installConfiguration(source.application);
+    return source;
   }
 
   async writePermission(revision: string, mode: import("../protocol/app-server.ts").ApprovalMode) {
@@ -309,12 +319,6 @@ export class AppServerSession {
       session_id: this.sessionId, expected_revision: revision,
       mutation: { kind: "config", scope: "workspace", mutation: { unit: "approval", authored: mode } },
     }, "source_settings");
-    return this.permissionSources();
-  }
-
-  async publishPermissions() {
-    await this.#client.call("configuration/reload", { target: this.#target }, "configuration_reloaded");
-    await this.resync();
     return this.permissionSources();
   }
 
@@ -462,20 +466,24 @@ export class AppServerSession {
     return result.view;
   }
 
-  /** Atomically reloads resources for future admitted attempts. */
-  async reloadConfiguration(): Promise<{
-    resourceRevision: string;
-    capabilityRevision: string;
-  }> {
-    const reloaded = await this.#client.call(
-      "configuration/reload",
-      { target: this.#target },
-      "configuration_reloaded",
-    );
-    return {
-      resourceRevision: reloaded.resource_revision,
-      capabilityRevision: reloaded.capability_revision,
-    };
+  #installConfiguration(application: ConfigurationApplication): void {
+    if (this.#configuration && compareExact(application.version, this.#configuration.version) <= 0) return;
+    this.#configuration = application;
+    this.#publish();
+  }
+
+  async reconcileConfiguration(): Promise<ConfigurationApplication> {
+    const { application } = await this.#client.call("configuration/reconcile", { session_id: this.sessionId }, "configuration_application");
+    this.#installConfiguration(application);
+    return application;
+  }
+
+  async adoptConfiguration(candidate: AvailableConfiguration): Promise<ConfigurationApplication> {
+    const { application } = await this.#client.call("session/adoptConfiguration", {
+      session_id: this.sessionId, candidate: candidate.identity, expected_binding: candidate.expected_binding,
+    }, "configuration_application");
+    this.#installConfiguration(application);
+    return application;
   }
 
   /** The safe public catalog. This is why the client never reads rustx.toml. */

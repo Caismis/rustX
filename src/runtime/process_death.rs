@@ -32,15 +32,10 @@
 //! means the durable authority provably contains no P, not that the test hoped
 //! the kill won a race.
 //!
-//! Two durable planes outside the conversation store use the same seam with
-//! their own exclusion, because the fact they linearize is not a SQLite
-//! transaction:
+//! Session catalog publication uses the same seam with its own exclusion;
+//! the fact it linearizes is not a SQLite transaction:
 //!
 //! ```text
-//! reload:prepared / reload:published
-//!     the configuration reload's build/publish boundary, under the runtime's own
-//!     one-reload-at-a-time gate
-//!
 //! before/after:publish_session, before/after:publish_node
 //!     the native Session catalog's visibility commit — the atomic rename that
 //!     makes a lineage the active one — under the supervisor state mutex the

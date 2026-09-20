@@ -645,7 +645,7 @@ Implemented in the current architecture:
   `commit_dispatch` with `BackgroundDispatchError::ConversationInactive`,
   and the capability coordinator refuses a runtime-owned ordinary `commit`
   with `CapabilityCommitError::RuntimePublicationRequired` — all consuming
-  nothing. Live capability publication uses the configuration reload owner.
+  nothing. Live capability publication uses the native configuration coordinator.
   Activation has **one authoritative lifecycle state**: the shared
   `ConversationLifecycle` token composed by the runtime, read by the
   mailbox (runtime ownership is the handle itself), the background
@@ -715,11 +715,11 @@ Implemented in the current architecture:
   (an activation-gate test parks `activate` before the lifecycle
   transition and proves both sides: while parked, background commit,
   ordinary capability commit, and mailbox enqueue are refused typed, while
-  live capability publication remains owned by configuration reload; after the
+  live capability publication remains owned by configuration reconciliation; after the
   transition the same operations follow the normal running semantics; a
   real-time ordered cross-subsystem regression parks a background commit
   after it has observed `Running` at the registry ownership-commit boundary
-  and proves a configuration reload that begins afterwards — and one that begins
+  and proves a configuration reconciliation that begins afterwards — and one that begins
   after the background completed — cannot create mixed authority; a
   host-bind-vs-activate race proves
   the host binds with the bootstrap seed at cursor 0 while `activate` is
@@ -1192,7 +1192,7 @@ restart authorization. Recovery has no interaction dimension at all: it takes
 the attempt identity watermark and nothing else, so a call whose
 `ToolExecutionStarted` is absent is a call that never started. A pending
 interaction stays pinned to its admitted resource/capability generation:
-reload returns `Busy { reason: Interaction }` while a waiter owns the attempt,
+explicit Session adoption returns `Busy` while a waiter owns the attempt,
 and external resource edits cannot mutate the prompt, subject, policy, Tool
 schema, or authority underneath it.
 
@@ -1239,7 +1239,7 @@ requested/settled pair and exactly one submitted or declined response;
 exactly-once settlement at both
 the coordinator and the store; audit unaffected by client detach/reattach and
 headless execution writing no audit at all; an external resource edit unable
-to mutate a pending interaction, with reload returning `Busy` and the old
+to mutate a pending interaction, with explicit Session adoption returning `Busy` and the old
 generation retained; a restarted coordinator reconstructing no waiter; and
 store-level refusal of a settlement under a foreign attempt or turn, an
 Approval subject that does not match its canonical `ToolCall` (missing call,
@@ -1424,7 +1424,7 @@ linearization are all deterministic. Only enabled Workflows selected by the
 invoking Agent's `agent.workflows` are exposed as concrete model-facing Tools,
 with no generic dispatcher and no intermediate parent-history injection.
 
-Reload builds the complete capability/subagent/Workflow candidate off-side
+Native configuration preparation builds the complete capability/subagent/Workflow candidate off-side
 and publishes it atomically; active runs retain their program snapshot.
 Ordinary Workflow lifecycle and join events use the existing journal as
 explicitly best-effort observability only: an append failure does not alter
@@ -1437,7 +1437,7 @@ the new event vocabulary. There is no
 durable Workflow resume, crash replay, Workflow-local scheduler, Canvas, or
 generic DSL. Deterministic unit and real-provider conformance tests cover
 admission, compilation, output terminalization, Branch/Parallel semantics,
-isolation, cancellation/drain, Tool exposure, and reload behavior.
+isolation, cancellation/drain, Tool exposure, and configuration binding behavior.
 
 ## Milestone 10 — Local runtime product
 
@@ -1454,7 +1454,7 @@ scopes, typed semantic overlay and domain defaults before composition. Source
 definitions are inert; admitted demand drives materialization. See
 [configuration](configuration.md) for the current contract.
 
-CFG3 also supplies structured configuration authoring and explicit reload across
+CFG3 also supplies structured configuration authoring and native automatic application across
 the CLI, App Server, TUI and Web. Remaining product work can build on these
 current ownership boundaries; earlier M10 suggestions below are planning history.
 

@@ -441,9 +441,6 @@ impl SubagentRecord {
 
 struct RegistryState {
     max_active: usize,
-    model_timeout_policy: crate::model::ModelTimeoutPolicy,
-    tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
-    context_policy: crate::context::SessionContextPolicy,
     /// Registered staged children, ordered by their already allocated native
     /// identity ordinal. Notifications never confer eligibility.
     capacity_waiters: BTreeMap<u64, CancellationSignal>,
@@ -508,6 +505,8 @@ struct RegistryState {
     /// spawning the real child binary.
     #[cfg(test)]
     staged_overrides: std::collections::VecDeque<StagedChild>,
+    #[cfg(test)]
+    prepared_policies: Vec<super::InheritedExecutionPolicy>,
     /// Signals the production allocation attempt; substitutes only process
     /// staging AFTER the real identity/incarnation reservation has completed.
     #[cfg(test)]
@@ -705,7 +704,7 @@ pub struct SubagentSnapshot {
     /// The deterministic definition digest frozen at start (Issue #144).
     ///
     /// The snapshot reports the definition the child actually started with,
-    /// so a configuration reload that redefines the same agent name can never
+    /// so a configuration adoption that redefines the same agent name can never
     /// make an already-running child appear to have the new definition.
     pub definition_digest: String,
     /// The deterministic **effective execution profile** digest frozen at
@@ -915,6 +914,8 @@ impl std::error::Error for SubagentSteerError {}
 pub struct SubagentStartSpec {
     /// The frozen named-agent specification of the child.
     pub resolved: ResolvedSubagentSpec,
+    /// Policy inherited from the admitting parent, never from registry state.
+    pub execution_policy: super::InheritedExecutionPolicy,
     /// The effective approval mode frozen by the invoking Agent attempt.
     /// This changes approval decisions only for Tools already present in
     /// resolved; it never widens the child's capability set.
@@ -1418,17 +1419,11 @@ impl SubagentRegistry {
     #[must_use]
     pub fn new(config: SubagentRegistryConfig) -> Self {
         let max_active = config.max_active;
-        let model_timeout_policy = config.spawn.model_timeout_policy;
-        let tool_deadline_policy = config.spawn.tool_deadline_policy;
-        let context_policy = config.spawn.context;
         Self {
             config,
             identities: Arc::new(crate::runtime::identity::SystemUuidV7Generator),
             state: Arc::new(Mutex::new(RegistryState {
                 max_active,
-                model_timeout_policy,
-                tool_deadline_policy,
-                context_policy,
                 capacity_waiters: BTreeMap::new(),
                 #[cfg(test)]
                 capacity_wait_entered: None,
@@ -1461,6 +1456,8 @@ impl SubagentRegistry {
                 deadline_completion: HashMap::new(),
                 #[cfg(test)]
                 staged_overrides: std::collections::VecDeque::new(),
+                #[cfg(test)]
+                prepared_policies: Vec::new(),
                 #[cfg(test)]
                 allocation_test_hook: None,
             })),
@@ -1516,17 +1513,15 @@ impl SubagentRegistry {
         self.config.mailbox.shares_domain_with(other)
     }
 
-    /// Called only under the configuration publication gate after quiescence.
-    /// Previously admitted child specs already own copies of these values.
+    /// Updates the shared admission limit under the native publication fence.
+    /// Existing execution retains its separate immutable policy.
     pub(crate) fn publish_configuration(
         &self,
         config: &crate::local_runtime::config::CurrentRuntimeConfig,
     ) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.max_active = config.subagents.max_concurrent;
-        state.model_timeout_policy = config.timeout_policy().expect("validated generation");
-        state.tool_deadline_policy = config.tool_deadline_policy().expect("validated generation");
-        state.context_policy = config.context_policy();
+        self.state_version.send_modify(|version| *version += 1);
     }
 
     pub(crate) fn configuration_busy(&self) -> bool {
@@ -1984,6 +1979,12 @@ impl SubagentRegistry {
         preparation_cancellation: &CancellationSignal,
         access: &mut Option<WorkspaceAccess>,
     ) -> Result<PreparedSubagent, SubagentStartError> {
+        #[cfg(test)]
+        self.state
+            .lock()
+            .unwrap()
+            .prepared_policies
+            .push(spec.execution_policy);
         if let Some(access) = access.as_ref() {
             let matches = matches!(&spec.terminal, SubagentTerminalMode::WorkflowOutput { node_id, .. } if node_id.as_ref() == access.node());
             if !matches || spec.resolved.workspace_policy != access.policy() {
@@ -2178,23 +2179,18 @@ impl SubagentRegistry {
                 runtime_root,
             );
         };
-        let mut child_spec = self.config.spawn.child_spec(
+        let child_spec = self.config.spawn.child_spec(
             &subagent_id,
             &child_conversation_id,
             &child_agent_id,
             &self.config.agent_id,
             &spec.resolved,
             spec.approval_mode,
+            spec.execution_policy,
             &runtime_root,
             &workspace_lease,
             &spec.terminal,
         );
-        {
-            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            child_spec.model_timeout_policy = state.model_timeout_policy;
-            child_spec.tool_deadline_policy = state.tool_deadline_policy;
-            child_spec.context = state.context_policy;
-        }
         let staged = match super::process::spawn_staged(
             &self.config.spawn,
             &child_spec,
@@ -2234,6 +2230,11 @@ impl SubagentRegistry {
 
     /// Installs a pre-staged child `prepare` consumes instead of spawning
     /// (tests only).
+    #[cfg(test)]
+    pub(crate) fn prepared_execution_policies(&self) -> Vec<super::InheritedExecutionPolicy> {
+        self.state.lock().unwrap().prepared_policies.clone()
+    }
+
     #[cfg(test)]
     pub(crate) fn push_staged_override(&self, staged: StagedChild) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -5534,14 +5535,6 @@ mod tests {
                     &runtime_root.clone(),
                 )
                 .expect("product root"),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
-                tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
-                ),
-                context: SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
             },
             workspace: workspace_manager,
             max_active,
@@ -5791,6 +5784,7 @@ mod tests {
 
     fn spec(task: &str) -> SubagentStartSpec {
         SubagentStartSpec {
+            execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
             resolved: resolved("explore"),
             approval_mode: crate::runtime::ApprovalMode::Policy,
             task: task.to_owned(),
@@ -9913,8 +9907,6 @@ mod tests {
         assert_eq!(after[0].state, SubagentState::Running);
         assert_eq!(after[0].observation.revision, 7);
     }
-
-    use crate::context::SessionContextPolicy;
 
     /// Issue #258 — the effective execution-profile identity is a **durable**
     /// execution fact.

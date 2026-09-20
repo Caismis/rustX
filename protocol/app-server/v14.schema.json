@@ -1398,46 +1398,6 @@
           "properties": {
             "method": {
               "type": "string",
-              "const": "settings/selectModel"
-            },
-            "params": {
-              "type": "object",
-              "properties": {
-                "session_id": {
-                  "$ref": "#/$defs/SessionId"
-                },
-                "expected_revision": {
-                  "type": "string",
-                  "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-                },
-                "selection": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/SessionModelConfig"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "additionalProperties": false,
-              "required": [
-                "session_id",
-                "expected_revision"
-              ]
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "method": {
-              "type": "string",
               "const": "configuration/effective"
             },
             "params": {
@@ -1546,27 +1506,18 @@
           "properties": {
             "method": {
               "type": "string",
-              "const": "settings/replace"
+              "const": "configuration/reconcile"
             },
             "params": {
               "type": "object",
               "properties": {
                 "session_id": {
                   "$ref": "#/$defs/SessionId"
-                },
-                "expected_revision": {
-                  "type": "string",
-                  "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-                },
-                "settings": {
-                  "$ref": "#/$defs/SessionPersistentState"
                 }
               },
               "additionalProperties": false,
               "required": [
-                "session_id",
-                "expected_revision",
-                "settings"
+                "session_id"
               ]
             }
           },
@@ -1580,18 +1531,27 @@
           "properties": {
             "method": {
               "type": "string",
-              "const": "configuration/reload"
+              "const": "session/adoptConfiguration"
             },
             "params": {
               "type": "object",
               "properties": {
-                "target": {
-                  "$ref": "#/$defs/AttachmentTarget"
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "candidate": {
+                  "$ref": "#/$defs/ApplicationIdentity"
+                },
+                "expected_binding": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
                 }
               },
               "additionalProperties": false,
               "required": [
-                "target"
+                "session_id",
+                "candidate",
+                "expected_binding"
               ]
             }
           },
@@ -4834,6 +4794,26 @@
       },
       "additionalProperties": false
     },
+    "ApplicationIdentity": {
+      "description": "Source attempt identity is independent of both content and execution version.",
+      "type": "object",
+      "properties": {
+        "input_revision": {
+          "description": "None means immutable input capture failed; no source revision is fabricated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attempt": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "required": [
+        "attempt"
+      ]
+    },
     "Response": {
       "description": "Success and failure are exclusive, including on deserialization.",
       "anyOf": [
@@ -5372,6 +5352,16 @@
         {
           "type": "object",
           "properties": {
+            "configuration": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConfigurationApplication"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "target": {
               "$ref": "#/$defs/AttachmentTarget"
             },
@@ -5503,6 +5493,23 @@
         {
           "type": "object",
           "properties": {
+            "application": {
+              "$ref": "#/$defs/ConfigurationApplication"
+            },
+            "type": {
+              "type": "string",
+              "const": "configuration_application"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "application"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "projection": {
               "$ref": "#/$defs/EffectiveConfiguration"
             },
@@ -5570,46 +5577,6 @@
             "type",
             "revision",
             "settings"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "revision": {
-              "type": "string",
-              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-            },
-            "type": {
-              "type": "string",
-              "const": "settings_replaced"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "revision"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "resource_revision": {
-              "type": "string",
-              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-            },
-            "capability_revision": {
-              "$ref": "#/$defs/CapabilityRevision"
-            },
-            "type": {
-              "type": "string",
-              "const": "configuration_reloaded"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "resource_revision",
-            "capability_revision"
           ]
         }
       ]
@@ -11465,7 +11432,7 @@
           "type": "string"
         },
         "definition_digest": {
-          "description": "The deterministic definition digest frozen at start (Issue #144).\n\nA client observing an already-running child sees the definition it\nactually started with, so a later configuration reload that redefines the\nsame agent name can never be mistaken for a change to that child.",
+          "description": "The deterministic definition digest frozen at start (Issue #144).\n\nA client observing an already-running child sees the definition it\nactually started with, so a later configuration adoption that redefines the\nsame agent name can never be mistaken for a change to that child.",
           "type": "string"
         },
         "profile_digest": {
@@ -12540,6 +12507,162 @@
         }
       ]
     },
+    "ConfigurationApplication": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "desired": {
+          "$ref": "#/$defs/ApplicationIdentity"
+        },
+        "units": {
+          "type": "object",
+          "properties": {
+            "capabilities": {
+              "$ref": "#/$defs/UnitApplication"
+            },
+            "execution_policy": {
+              "$ref": "#/$defs/UnitApplication"
+            },
+            "instructions": {
+              "$ref": "#/$defs/UnitApplication"
+            },
+            "process_bindings": {
+              "$ref": "#/$defs/UnitApplication"
+            },
+            "provider": {
+              "$ref": "#/$defs/UnitApplication"
+            },
+            "shared_capacity": {
+              "$ref": "#/$defs/UnitApplication"
+            }
+          },
+          "additionalProperties": false
+        },
+        "candidate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AvailableConfiguration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "scope",
+        "version",
+        "desired",
+        "units"
+      ]
+    },
+    "UnitApplication": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "applied"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "preparing"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "impact": {
+              "$ref": "#/$defs/CacheImpact"
+            },
+            "status": {
+              "type": "string",
+              "const": "ready"
+            }
+          },
+          "required": [
+            "status",
+            "impact"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "diagnostic": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "status",
+            "diagnostic"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "process_restart"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        }
+      ]
+    },
+    "CacheImpact": {
+      "type": "string",
+      "enum": [
+        "preserved",
+        "prefix_changed",
+        "cache_namespace_changed",
+        "unproven"
+      ]
+    },
+    "AvailableConfiguration": {
+      "type": "object",
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/ApplicationIdentity"
+        },
+        "expected_binding": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "impact": {
+          "$ref": "#/$defs/CacheImpact"
+        }
+      },
+      "required": [
+        "identity",
+        "expected_binding",
+        "impact"
+      ]
+    },
     "RuntimeClientSnapshot": {
       "description": "The authoritative Runtime Client snapshot of one conversation runtime.\n\nEvery section is a deterministic projection of one authoritative\nruntime owner. The shape belongs to the Runtime Client protocol: internal\nsnapshot types are projected into these external DTOs, never exposed\ndirectly.",
       "type": "object",
@@ -12668,7 +12791,7 @@
           "$ref": "#/$defs/CapabilityView"
         },
         "resources": {
-          "description": "The active runtime resource generation: the project context files\nthe runtime actually loaded, and whether an agent profile is frozen\ninto the generation.\n\nThis is deliberately separate from [`CapabilityView`]: a\nresource-only reload advances the resource revision while the\ncapability revision stays put. Nothing here is conversation content\n— a project context file is request input the runtime assembles into\nthe Effective System Prompt, never a canonical Ledger message.",
+          "description": "The active runtime resource generation: the project context files\nthe runtime actually loaded, and whether an agent profile is frozen\ninto the generation.\n\nThis is deliberately separate from [`CapabilityView`]: a\nresource publication advances the resource revision while the\ncapability revision stays put. Nothing here is conversation content\n— a project context file is request input the runtime assembles into\nthe Effective System Prompt, never a canonical Ledger message.",
           "$ref": "#/$defs/RuntimeClientResourcesView",
           "default": {
             "inspection": {
@@ -16329,6 +16452,30 @@
       "description": "Redacted, immutable facts read at the runtime configuration publication lock.",
       "type": "object",
       "properties": {
+        "process_bindings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AppServerPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "application": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfigurationApplication"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "adopted_binding": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
         "source_revisions": {
           "type": "object",
           "additionalProperties": {
@@ -16399,6 +16546,7 @@
         }
       },
       "required": [
+        "adopted_binding",
         "source_revisions",
         "generation",
         "document",
@@ -16997,6 +17145,29 @@
     "AdmittedConfiguration": {
       "type": "object",
       "properties": {
+        "approval_mode": {
+          "$ref": "#/$defs/ApprovalMode"
+        },
+        "model_timeout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelTimeoutPolicyDocument"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_deadline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolDeadlinePolicyDocument"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "attempt": {
           "$ref": "#/$defs/AttemptId"
         },
@@ -17011,6 +17182,7 @@
         }
       },
       "required": [
+        "approval_mode",
         "attempt",
         "generation",
         "model",
@@ -17020,6 +17192,26 @@
     "SourceSettings": {
       "type": "object",
       "properties": {
+        "process_bindings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AppServerPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "application": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfigurationApplication"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "prospective_approval_mode": {
           "description": "Native current-file approval resolution. None when prospective configuration is invalid.",
           "anyOf": [
@@ -17115,9 +17307,6 @@
         "generation": {
           "$ref": "#/$defs/RuntimeResourceRevision"
         },
-        "pending_reload": {
-          "type": "boolean"
-        },
         "changed_sources": {
           "type": "array",
           "items": {
@@ -17127,7 +17316,6 @@
       },
       "required": [
         "generation",
-        "pending_reload",
         "changed_sources"
       ]
     },
@@ -17327,6 +17515,23 @@
         {
           "type": "object",
           "properties": {
+            "rejection": {
+              "$ref": "#/$defs/AdoptionError"
+            },
+            "kind": {
+              "type": "string",
+              "const": "configuration_adoption"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "rejection"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "reason": {
               "$ref": "#/$defs/SessionArchivePrepareError"
             },
@@ -17339,40 +17544,6 @@
           "required": [
             "kind",
             "reason"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "reason": {
-              "$ref": "#/$defs/RuntimeResourceReloadBusyReason"
-            },
-            "kind": {
-              "type": "string",
-              "const": "configuration_busy"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "reason"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "diagnostic": {
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "configuration_failed"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "diagnostic"
           ]
         },
         {
@@ -17740,6 +17911,62 @@
         }
       ]
     },
+    "AdoptionError": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "busy"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "not_ready"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "conflict"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "diagnostic": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "status",
+            "diagnostic"
+          ]
+        }
+      ]
+    },
     "SessionArchivePrepareError": {
       "type": "string",
       "enum": [
@@ -17751,36 +17978,6 @@
         "corrupt_authority",
         "storage",
         "cancelled"
-      ]
-    },
-    "RuntimeResourceReloadBusyReason": {
-      "description": "The semantic owner preventing a quiescent reload.",
-      "oneOf": [
-        {
-          "description": "Accepted background or child work still owns the previous generation.",
-          "type": "string",
-          "const": "owned_work"
-        },
-        {
-          "description": "An admitted attempt owns the conversation.",
-          "type": "string",
-          "const": "attempt"
-        },
-        {
-          "description": "A pending Questionnaire/Approval interaction owns the session.",
-          "type": "string",
-          "const": "interaction"
-        },
-        {
-          "description": "Manual context compaction owns the conversation.",
-          "type": "string",
-          "const": "compaction"
-        },
-        {
-          "description": "Another configuration reload already owns the narrow admission gate.",
-          "type": "string",
-          "const": "reload"
-        }
       ]
     },
     "Notification": {
@@ -17795,6 +17992,31 @@
       ],
       "unevaluatedProperties": false,
       "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "configuration/changed"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "application": {
+                  "$ref": "#/$defs/ConfigurationApplication"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "application"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
         {
           "type": "object",
           "properties": {
@@ -18855,7 +19077,7 @@
           ]
         },
         {
-          "description": "The runtime published a new immutable resource generation: the\nproject context files it loaded **and** the capability generation\nthey were composed against, as one fact.\n\nA reload commits both halves together, so it publishes one event\ncarrying both. Splitting it into a capability event beside a\nresource event would allocate two cursors, and an incremental client\nthat folds events — rather than re-reading `snapshot_get` — would\nthen hold the new capability generation beside the resource\ngeneration the same reload retired. That pairing never existed in\nthe runtime, so it is never published.\n\nBoth halves travel even when only one moved: a reload that changes\nonly an `AGENTS.md` advances the resource revision and repeats the\nunchanged capability view, and a reload that only rebuilds tools\ndoes the converse. The carried revisions, not the event's presence,\ntell a client what changed.\n\n[`Self::CapabilityUpdated`] remains the observation for a capability\ncommit that is *not* a resource generation — an availability\ntransition or an activation committed on its own authority.",
+          "description": "The runtime published a new immutable resource generation: the\nproject context files it loaded **and** the capability generation\nthey were composed against, as one fact.\n\nA configuration commit commits both halves together, so it publishes one event\ncarrying both. Splitting it into a capability event beside a\nresource event would allocate two cursors, and an incremental client\nthat folds events — rather than re-reading `snapshot_get` — would\nthen hold the new capability generation beside the resource\ngeneration the same commit retired. That pairing never existed in\nthe runtime, so it is never published.\n\nBoth halves travel even when only one moved: a configuration commit that changes\nonly an `AGENTS.md` advances the resource revision and repeats the\nunchanged capability view, and a configuration commit that only rebuilds tools\ndoes the converse. The carried revisions, not the event's presence,\ntell a client what changed.\n\n[`Self::CapabilityUpdated`] remains the observation for a capability\ncommit that is *not* a resource generation — an availability\ntransition or an activation committed on its own authority.",
           "type": "object",
           "properties": {
             "plugins": {
@@ -18879,7 +19101,7 @@
               "$ref": "#/$defs/CapabilityView"
             },
             "resources": {
-              "description": "The active runtime resource projection after the reload.",
+              "description": "The active runtime resource projection after the commit.",
               "$ref": "#/$defs/RuntimeClientResourcesView"
             },
             "type": {

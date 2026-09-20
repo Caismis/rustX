@@ -244,13 +244,16 @@ async fn goal351_pause_or_drain_before_the_round_frontier_consumes_no_round() {
             composed.runtime.shutdown().await.unwrap();
         } else {
             let mut shutdown = Box::pin(composed.runtime.shutdown());
-            assert!(
-                futures_util::poll!(&mut shutdown).is_pending(),
-                "drain must await the parked coordinator"
-            );
+            // Poll once to linearize drain before releasing admission. The
+            // parked caller may be activation itself rather than the owned
+            // worker, so drain can already be complete without owning it.
+            let drained = futures_util::poll!(&mut shutdown);
             drop(release);
             activation.join().unwrap();
-            shutdown.await.unwrap();
+            match drained {
+                std::task::Poll::Ready(result) => result.unwrap(),
+                std::task::Poll::Pending => shutdown.await.unwrap(),
+            }
         }
         composed.runtime.admit_now_for_test();
         let goal = tools.goal().unwrap().view().unwrap().current.unwrap();

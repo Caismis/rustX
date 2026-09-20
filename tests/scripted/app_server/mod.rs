@@ -3,6 +3,7 @@
 #![allow(clippy::too_many_lines)]
 #[path = "../../support/app_server_conformance.rs"]
 mod app_server_conformance;
+mod configuration;
 mod inbound_model;
 mod protocol;
 mod residency_policy;
@@ -48,6 +49,11 @@ impl AsyncGate {
 }
 #[derive(Debug)]
 pub(super) struct Probe {
+    pub(super) configuration_preparations: AtomicUsize,
+    pub(super) fail_configuration_once: std::sync::atomic::AtomicBool,
+    pub(super) after_configuration_persistence: AsyncGate,
+    pub(super) before_configuration_prepare: AsyncGate,
+    pub(super) before_configuration_publish: AsyncGate,
     pub(super) idle_before_claim: Arc<crate::runtime::conversation_runtime::Gate>,
     pub(super) idle_after_claim: Arc<crate::runtime::conversation_runtime::Gate>,
     pub(super) activation: Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
@@ -68,6 +74,11 @@ pub(super) struct Probe {
 impl Default for Probe {
     fn default() -> Self {
         Self {
+            configuration_preparations: AtomicUsize::new(0),
+            fail_configuration_once: std::sync::atomic::AtomicBool::new(false),
+            after_configuration_persistence: AsyncGate::default(),
+            before_configuration_prepare: AsyncGate::default(),
+            before_configuration_publish: AsyncGate::default(),
             idle_before_claim: Arc::default(),
             idle_after_claim: Arc::default(),
             activation: Mutex::new(None),
@@ -117,7 +128,20 @@ impl Fixture {
         let provider = FixtureServer::start_with_body(move |_, _, body| {
             let index = usize::from(body.contains("request-B"));
             let request: serde_json::Value = serde_json::from_str(body).unwrap();
+            if tool == Some("review") {
+                let child = request["tools"].as_array().unwrap().iter().any(|tool| tool["function"]["name"] == "workflow_output");
+                let messages = request["messages"].as_array().unwrap();
+                if child || messages.last().is_some_and(|message| message["role"] == "user") {
+                    let name = if child { "workflow_output" } else { "review" };
+                    let chunk = serde_json::json!({"id":"workflow","object":"chat.completion.chunk","created":1,"model":"a",
+                        "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"workflow-call","type":"function",
+                            "function":{"name":name,"arguments":"{}"}}]},"finish_reason":"tool_calls"}]});
+                    return FixtureReply::body(200,"OK","text/event-stream",format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+                        .with_header_gate(server_gates[index].clone());
+                }
+            }
             if let Some(name) = tool
+                && name != "review"
                 && !request["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool") {
                 let arguments = if name == "ask_user" {
                     serde_json::json!({"questions":[{"question":"Continue?", "header":"Decision", "options":[
@@ -211,7 +235,18 @@ impl Fixture {
             controller,
             UserConfigManager::new(paths.sources.clone()).unwrap(),
             CredentialSnapshot::new([("TEST_KEY".into(), "fixture".into())]),
-            LocalRuntimeDependencies::default(),
+            LocalRuntimeDependencies {
+                child_program: (tool == Some("review")).then(|| {
+                    std::env::current_exe()
+                        .unwrap()
+                        .parent()
+                        .unwrap()
+                        .parent()
+                        .unwrap()
+                        .join("rustx")
+                }),
+                ..LocalRuntimeDependencies::default()
+            },
             RuntimeResidencyPolicy {
                 max_resident_runtimes: 8,
                 idle_grace_ms: 300_000,
@@ -652,7 +687,10 @@ async fn replacement_failure_is_unloaded_and_retryable_but_shutdown_failure_reta
         let live_b = b.inspect_runtime().unwrap();
         live_b.submit_inbound(input("request-B")).unwrap();
         f.gates[1].wait_entered().await;
-        std::fs::write(f.workspaces[0].join("rustx.toml"), "invalid = [").unwrap();
+        f.manager
+            .probe(a.conversation_id())
+            .fail_compose_once
+            .store(true, Ordering::SeqCst);
         assert!(replace_task(&f, 0).await.unwrap().is_err());
         assert_eq!(
             f.manager.residency(a.conversation_id()),
@@ -663,7 +701,6 @@ async fn replacement_failure_is_unloaded_and_retryable_but_shutdown_failure_reta
             f.manager
                 .is_current(b.conversation_id(), b.incarnation_id())
         );
-        std::fs::remove_file(f.workspaces[0].join("rustx.toml")).unwrap();
         let a = f.load(0).await.unwrap().unwrap();
         a.inspect_runtime().unwrap().fail_residency_settlement();
         let failure = f.manager.unload(a.conversation_id()).await.unwrap_err();

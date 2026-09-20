@@ -94,13 +94,9 @@ pub(crate) const COMPACTION: &str = "compaction";
 pub(crate) const LIVE_RESOURCE_EDIT: &str = "live_resource_edit";
 /// One settled attempt, an explicit runtime reload at a quiescent boundary,
 /// and one more attempt afterwards.
-pub(crate) const RELOAD: &str = "reload";
 /// A reload attempted while an attempt owns the session.
-pub(crate) const RELOAD_BUSY: &str = "reload_busy";
 /// A reload attempted while a **compaction** owns the session.
-pub(crate) const RELOAD_BUSY_COMPACTION: &str = "reload_busy_compaction";
 /// A reload attempted while a pending **interaction** owns the session.
-pub(crate) const RELOAD_BUSY_INTERACTION: &str = "reload_busy_interaction";
 /// A reopened conversation that admits one new request.
 pub(crate) const COLD_RESUME: &str = "cold_resume";
 /// One unresolved publication whose terminal attempt transition can be
@@ -124,7 +120,6 @@ pub(crate) const SECOND_TURN: &str = "second_turn";
 /// A streaming turn that is still open while a second inbound is accepted.
 pub(crate) const STREAMING_INBOUND: &str = "streaming_inbound";
 /// A reload attempted while a **foreground Tool execution** is running.
-pub(crate) const RELOAD_BUSY_TOOL: &str = "reload_busy_tool";
 /// A catalog-owning child that answers two turns, durably owns a background
 /// execution and a subagent child, and then cuts a new lineage at the second
 /// user message with `/fork`.
@@ -1097,120 +1092,6 @@ async fn scenario_body(root: &Path, scenario: &str) {
             child.log.wait_settled(2).await;
             note("settled");
         }
-        RELOAD => {
-            let server = crate::boundary_suites::common::FixtureServer::start(|_, _| {
-                crate::boundary_suites::common::sse_fixture("openai_chat", "plain_text.sse")
-            })
-            .await;
-            let path = root.join("rustx.toml");
-            let source = std::fs::read_to_string(&path)
-                .unwrap()
-                .replace("https://fixture.invalid", &server.url(""));
-            std::fs::write(&path, source).unwrap();
-            let child = Child::require(
-                root,
-                vec![
-                    wide_text_turn(),
-                    vec![
-                        started(),
-                        text("after reload"),
-                        done(ModelFinishReason::Stop),
-                    ],
-                ],
-                false,
-                true,
-            )
-            .await;
-            child.submit("go");
-            child.log.wait_settled(1).await;
-            rendezvous("settled");
-            let reloaded = child.runtime().reload_configuration().await;
-            note(&format!("reload:{}", describe(&reloaded)));
-            // Whether the reload published R2 or kept R1, the next admitted
-            // attempt records which generation it actually used.
-            child.submit("after reload");
-            child.log.wait_settled(2).await;
-            note("reload-done");
-        }
-        RELOAD_BUSY => {
-            let (release, receiver) = model_release();
-            let child = Child::require(
-                root,
-                vec![vec![
-                    started(),
-                    text(WIDE_TEXT),
-                    FakeStep::ParkUntilReleased(receiver),
-                    done(ModelFinishReason::Stop),
-                ]],
-                false,
-                true,
-            )
-            .await;
-            child.submit("go");
-            child.wait_model_parked().await;
-            let reloaded = child.runtime().reload_configuration().await;
-            note(&format!("reload:{}", describe(&reloaded)));
-            release.send_replace(true);
-            child.log.wait_settled(1).await;
-            note("settled");
-        }
-        RELOAD_BUSY_COMPACTION => {
-            let (release, receiver) = model_release();
-            let child = Child::require(
-                root,
-                vec![
-                    wide_text_turn(),
-                    vec![
-                        FakeStep::ParkUntilReleased(receiver),
-                        started(),
-                        text("compact summary"),
-                        done(ModelFinishReason::Stop),
-                    ],
-                ],
-                false,
-                true,
-            )
-            .await;
-            child.submit("go");
-            child.log.wait_settled(1).await;
-            // No attempt owns the session here: the only owner is the manual
-            // compaction, whose summary side request is provably in flight.
-            let runtime = child.runtime().clone();
-            let compaction = tokio::spawn(async move { runtime.compact_context().await });
-            child.wait_model_parked().await;
-            let reloaded = child.runtime().reload_configuration().await;
-            note(&format!("reload:{}", describe(&reloaded)));
-            release.send_replace(true);
-            let outcome = compaction.await.expect("the compaction task joins");
-            note(&format!("compaction:{}", describe(&outcome)));
-            park_owning(child).await;
-        }
-        RELOAD_BUSY_INTERACTION => {
-            let call = read_call("call-read-busy", "note.txt");
-            let child = Child::require(
-                root,
-                vec![
-                    calling_turn(&call),
-                    vec![started(), text("continued"), done(ModelFinishReason::Stop)],
-                ],
-                // A non-approving child leaves the waiter pending forever, so
-                // the interaction owns the session at the reload boundary.
-                false,
-                true,
-            )
-            .await;
-            child.submit("read the note");
-            child
-                .log
-                .wait_for(|seen| {
-                    seen.iter()
-                        .any(|entry| matches!(entry, Seen::InteractionPending))
-                })
-                .await;
-            let reloaded = child.runtime().reload_configuration().await;
-            note(&format!("reload:{}", describe(&reloaded)));
-            park_owning(child).await;
-        }
         COLD_RESUME | COLD_RESUME_READ => {
             let first = if scenario == COLD_RESUME_READ {
                 calling_turn(&read_call("call-read-cold", SKILL_FILE))
@@ -1348,48 +1229,6 @@ async fn scenario_body(root: &Path, scenario: &str) {
             // boundary, so this stays one attempt with two model turns.
             child.log.wait_settled(1).await;
             note("settled");
-        }
-        RELOAD_BUSY_TOOL => {
-            // A **foreground** tool execution owns the session for as long as
-            // the command runs. `sleep 300` outlives the parent's liveness
-            // bound by construction, so the reload boundary below is reached
-            // while the execution is provably still running rather than in a
-            // race with its completion.
-            let call = ScriptedCall {
-                id: "call-bash-foreground",
-                tool_id: "tool-bash",
-                name: "bash",
-                arguments: serde_json::json!({
-                    "command": "sleep 300",
-                    "execution_mode": "foreground"
-                }),
-            };
-            let child = Child::require(
-                root,
-                vec![
-                    calling_turn(&call),
-                    vec![started(), text("continued"), done(ModelFinishReason::Stop)],
-                ],
-                false,
-                true,
-            )
-            .await;
-            child.submit("run the command");
-            // The durable `ToolExecutionStarted` fact is the happens-after
-            // proof that the execution is running: the reload below is
-            // attempted strictly after it.
-            child
-                .log
-                .wait_for(|seen| {
-                    seen.iter().any(|entry| {
-                        matches!(entry, Seen::Event(event)
-                            if matches!(**event, RuntimeEvent::ToolExecutionStarted { .. }))
-                    })
-                })
-                .await;
-            let reloaded = child.runtime().reload_configuration().await;
-            note(&format!("reload:{}", describe(&reloaded)));
-            park_owning(child).await;
         }
         BACKGROUND_STATUS => {
             let call = ScriptedCall {

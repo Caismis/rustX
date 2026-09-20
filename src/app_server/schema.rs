@@ -263,10 +263,19 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         MethodResult::InboundMutation {
             outcome: crate::durable::inbox::PendingMutationOutcome::Conflict,
         },
-        MethodResult::SettingsReplaced { revision: EXACT },
-        MethodResult::ConfigurationReloaded {
-            resource_revision: EXACT,
-            capability_revision: crate::runtime::identity::CapabilityRevision::new(EXACT),
+        MethodResult::ConfigurationApplication {
+            application:
+                crate::local_runtime::configuration::application::ConfigurationApplication {
+                    scope: "session-fixture".into(),
+                    version: EXACT,
+                    desired:
+                        crate::local_runtime::configuration::application::ApplicationIdentity {
+                            input_revision: Some("input".into()),
+                            attempt: EXACT,
+                        },
+                    units: std::collections::BTreeMap::default(),
+                    candidate: None,
+                },
         },
         MethodResult::InboundAccepted {
             message_id: crate::runtime::identity::MessageId::new("message-fixture"),
@@ -594,9 +603,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v13.schema.json", "v13.ts"]);
+        assert_eq!(generations, ["v14.schema.json", "v14.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v13.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v14.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

@@ -156,13 +156,6 @@ impl RuntimeAttachment {
             .await
     }
 
-    /// Publish a new native resource generation at its existing admission boundary.
-    /// # Errors
-    /// Closed attachments or native reload failures.
-    pub async fn reload_configuration(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(true)?.reload_configuration().await
-    }
-
     /// Cancel exactly one pending interaction at its authoritative coordinator.
     /// # Errors
     /// Closed attachments and stale interactions fail explicitly.
@@ -237,9 +230,6 @@ impl RuntimeAttachment {
             RuntimeClientRequest::CancelCurrentAttempt { .. } => inner.cancel_current_attempt(),
             RuntimeClientRequest::CompactContext { .. } => {
                 unreachable!("manual compaction is handled asynchronously")
-            }
-            RuntimeClientRequest::ReloadConfiguration { .. } => {
-                unreachable!("configuration reload is handled asynchronously")
             }
             RuntimeClientRequest::InteractionRespond { .. } => {
                 unreachable!("interaction responses are handled asynchronously")
@@ -335,17 +325,6 @@ impl RuntimeAttachment {
         if !matches!(request, RuntimeClientRequest::Shutdown { .. }) {
             if matches!(request, RuntimeClientRequest::CompactContext { .. }) {
                 let result = inner.compact_context().await;
-                return match result {
-                    Ok(result) => RuntimeClientResponse {
-                        id,
-                        result: Some(result),
-                        error: None,
-                    },
-                    Err(error) => Self::error_response(id, error),
-                };
-            }
-            if matches!(request, RuntimeClientRequest::ReloadConfiguration { .. }) {
-                let result = inner.reload_configuration().await;
                 return match result {
                     Ok(result) => RuntimeClientResponse {
                         id,
@@ -466,19 +445,18 @@ impl RuntimeAttachment {
     /// previous registration. Without this, that consumer's
     /// [`EventDelivery::Closed`] would be indistinguishable from the end of
     /// residency, and repairing a projection would retire the attachment that
-    /// asked for the repair.
+    /// asked for the repair. The host registration is authoritative: its
+    /// replacement precedes publication of the attachment's local delivery
+    /// handle, and consumers may wake inside that publication interval.
     ///
     /// # Panics
     ///
-    /// Panics only if the attachment subscription lock is poisoned, which
-    /// would mean a previous operation panicked while holding the lock.
+    /// Panics only if the native host state lock is poisoned.
     #[must_use]
     pub fn superseded(&self, observed: &EventSubscription) -> bool {
-        self.subscription
-            .lock()
-            .expect("attachment subscription lock poisoned")
-            .as_ref()
-            .is_some_and(|current| !current.same_registration(observed))
+        self.inner
+            .upgrade()
+            .is_some_and(|inner| inner.subscription_superseded(&self.attachment_id, observed))
     }
 
     /// Waits for the next delivery of the active subscription.

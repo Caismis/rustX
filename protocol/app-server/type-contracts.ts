@@ -1,6 +1,6 @@
 // Regressions for fields contributed by draft-2020-12 $ref siblings.
 // These must be usable through the public union, not a handwritten DTO.
-import type {MessageBlock, UserContentBlock, RuntimeClientSnapshot} from './v13.js';
+import type {MessageBlock, UserContentBlock, RuntimeClientSnapshot} from './v14.js';
 
 const text = {type: 'text', text: 'Native content'} satisfies UserContentBlock;
 const user = {role: 'user', id: 'user-1', content: [text], source: 'human'} satisfies MessageBlock;
@@ -33,8 +33,8 @@ const invalidTool: MessageBlock = missingOwner;
 void nativeOwner;
 void invalidTool;
 
-// Native response projections and explicit cut side are the mandatory v13 contract.
-import type {CompletedResponseView, Request1} from './v13.js';
+// Native response projections and explicit cut side are the mandatory v14 contract.
+import type {CompletedResponseView, Request1} from './v14.js';
 const completed = {
   closing_message_id: 'destination-assistant',
   origin: {conversation_id: 'source-conversation', attempt_id: 'source-attempt', closing_message_id: 'source-assistant'},

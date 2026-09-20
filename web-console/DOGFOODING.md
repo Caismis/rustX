@@ -86,11 +86,10 @@ exploration intentionally leaves the provider script unconsumed.
 6. Send `Publish while detached`. After `Preparing a question.`, close A's view. Release
    `publish-question` using the same gate URL pattern. Open A; answer the native
    question and observe `Detached question completed.`.
-7. In Settings save User model `fixture/second-model`. Current runtime remains
-   unchanged. Use Settings → Reload for safe live configuration publication,
-   then verify the selected model in Inspector. Safe live publication preserves the
-   current incarnation and history. Automatic idle eviction is tested with the
-   native manual clock, not a wall-clock wait in this guide.
+7. In Settings save a global default model. Existing Sessions retain their selected
+   model. Deliberately change the current Session through its model selector while
+   idle. Instruction changes prepare automatically and require **Adopt prepared
+   context**. External file edits enter through **Rescan configuration files**.
 8. Search Session metadata, try grouped/flat navigation, rename/reorder and
    unregister Workspace B. Its Session still exists and can be opened as an
    authorized unregistered cwd. No unregister operation cancels/deletes it.
@@ -158,7 +157,7 @@ interrupt guarantee). There is no Delivery selector. At desktop and 390px widths
 check the 36px resting editor, multiline growth, internal text scrolling at the
 configured cap and shrinkage on deletion. `+` opens commands; the quiet paperclip,
 paste and drop all retain upload intake. Effective permission is available on the
-control tooltip, with pending policy/reload information still visible.
+control tooltip, with native policy/application information still visible.
 Edit the pending row, save, remove, and queue the original text again. Open its
 editor, release `goal-round`, and wait for `Queued input handled.`. The claimed
 row's obsolete draft must not be sendable. Cancel the draft. Pause/resume Goal;
@@ -208,11 +207,11 @@ Use a fresh fixture without prompts. Open **Effective | User | Workspace**.
   model inheritance, independent Tools/Skills/Plugins, timeout and worktree policy.
   Root's delegation allowlist is separate. Skill, Python and Workflow source
   editors are outside this UI; their native inventory remains available.
-- Save and confirm pending reload while generation N stays loaded. Reload and
+- Save and confirm automatic policy application or native pending adoption. Adopt and
   verify N → N+1. Invalid source or busy ownership retains N with native diagnostics.
 - Create an external-editor CAS conflict. The draft survives; review the current
   revision before another deliberate Save. Lost responses trigger authoritative
-  rereads without replay. Reconnect is not an automatic Save or Reload.
+  rereads without replay. Reconnect rereads authority without replaying Save or adoption.
 - Invalid Workspace content must be diagnosed, never treated as an inactive trust
   scope. Host picker authorization remains separate from native configuration.
 

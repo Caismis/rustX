@@ -67,6 +67,12 @@ pub struct SessionController {
     pub(crate) copy_publication_gate:
         Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
     pub(crate) catalog: Arc<tokio::sync::Mutex<SessionCatalog>>,
+    /// Process-local adopted descriptors belong to Session identity, not residency.
+    pub(crate) configuration_bindings: Arc<
+        std::sync::Mutex<
+            std::collections::BTreeMap<SessionId, super::configuration::AdmittedSessionConfig>,
+        >,
+    >,
     // Allocation of the one process runtime owner, not ownership of its registry.
     pub(crate) runtime_owner: Arc<std::sync::OnceLock<()>>,
     pub(crate) preparation: Arc<tokio::sync::Mutex<()>>,
@@ -199,6 +205,7 @@ impl SessionController {
             #[cfg(test)]
             copy_publication_gate: Arc::default(),
             catalog: Arc::new(tokio::sync::Mutex::new(catalog)),
+            configuration_bindings: Arc::default(),
             runtime_owner: Arc::default(),
             preparation: Arc::new(tokio::sync::Mutex::new(())),
             #[cfg(test)]

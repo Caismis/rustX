@@ -1,4 +1,4 @@
-//! Bounded two-scope Workflow discovery, shared by prospective analysis and reload.
+//! Bounded two-scope Workflow discovery, shared by prospective analysis and immutable input capture.
 use super::configuration::settings::SourceScope;
 use crate::runtime::resources::RuntimeResourceLoadError;
 use crate::runtime::workflow::{
