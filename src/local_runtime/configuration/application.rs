@@ -135,7 +135,7 @@ pub(crate) struct ApplicationState {
 
 #[derive(Clone)]
 pub(crate) struct CapturedApplication {
-    pub(crate) policy: crate::local_runtime::config::CurrentRuntimeConfig,
+    pub(crate) policy: super::IndependentPolicy,
     pub(crate) process: super::super::app_server_policy::AppServerPolicy,
     pub(crate) revision: String,
     pub(crate) context: Result<super::ProspectiveSessionConfig, String>,
@@ -267,6 +267,21 @@ impl ApplicationState {
                 && let Ok(context) = &mut captured.context
             {
                 context.input.model = Some(adopted.session_model().clone());
+            }
+            // Membership is unconditional; only unresolved Session-owned units
+            // require an application. Failed capture remains unresolved, while
+            // process restart alone never creates allocation work.
+            if let Ok(captured) = &input
+                && let Ok(context) = &captured.context
+                && context.same_capabilities(adopted)
+                && context.same_context(adopted)
+                && context.same_provider(adopted)
+                && captured.policy.approval_mode == adopted.config.approval_mode
+                && captured.policy.model_timeout_policy == adopted.config.model_timeout_policy
+                && captured.policy.tool_deadline_policy == adopted.config.tool_deadline_policy
+                && captured.policy.subagents == adopted.config.subagents
+            {
+                return;
             }
             self.capture_binding(scope.clone(), input);
             self.pending.remove(&scope);

@@ -4485,7 +4485,7 @@ impl ConversationRuntime {
 
     pub(crate) fn apply_shared_capacity(
         &self,
-        desired: &crate::local_runtime::config::CurrentRuntimeConfig,
+        desired: &crate::local_runtime::configuration::IndependentPolicy,
     ) {
         if let Some(subagents) = &self.inner.subagents {
             subagents.publish_configuration(desired);
@@ -4516,7 +4516,7 @@ impl ConversationRuntime {
     /// across this call; this lock orders the swap against Attempt capture.
     pub(crate) fn apply_execution_policy(
         &self,
-        desired: &crate::local_runtime::config::CurrentRuntimeConfig,
+        desired: &crate::local_runtime::configuration::IndependentPolicy,
     ) -> Result<bool, String> {
         desired.timeout_policy().map_err(|e| e.to_string())?;
         desired.tool_deadline_policy().map_err(|e| e.to_string())?;

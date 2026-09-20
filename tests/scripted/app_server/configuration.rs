@@ -952,16 +952,29 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         "---\nname: retained\ndescription: Retained guidance\n---\nC1 skill guidance\n",
     )
     .unwrap();
+    let (initial_source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
+    let mut initial: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&initial_source.user.path).unwrap()).unwrap();
+    initial["agent"]
+        .as_table_mut()
+        .unwrap()
+        .insert("instructions".into(), "User I1".into());
+    std::fs::write(
+        &initial_source.user.path,
+        toml::to_string(&initial).unwrap(),
+    )
+    .unwrap();
     fixture.manager.load(id, None).await.unwrap();
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     let before = runtime.runtime_resources();
     let (source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
     let mut document: toml::Value =
         toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
-    document["agent"]
-        .as_table_mut()
-        .unwrap()
-        .insert("instructions".into(), "independent instructions P2".into());
+    std::fs::write(
+        fixture.workspaces[0].join("rustx.toml"),
+        "approval_mode='full_access'\n[subagents]\nmax_concurrent=3\n[agent]\ninstructions='independent instructions P2'\n",
+    )
+    .unwrap();
     document["agent"]["tools"]["builtin"] = toml::Value::try_from(vec!["read"]).unwrap();
     std::fs::write(&source.user.path, toml::to_string(&document).unwrap()).unwrap();
     fixture
@@ -1051,6 +1064,72 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
     };
     let c1i2 = retained(&second);
     assert_eq!(
+        c1i2.config.approval_mode,
+        crate::runtime::ApprovalMode::FullAccess
+    );
+    assert_eq!(
+        c1i2.effective.approval_mode,
+        Some(c1i2.config.approval_mode)
+    );
+    assert!(matches!(
+        c1i2.provenance["approval_mode"],
+        crate::local_runtime::configuration::Origin::Workspace { .. }
+    ));
+    assert_eq!(c1i2.config.subagents.max_concurrent, 3);
+    assert_eq!(
+        c1i2.effective.subagents.as_ref().unwrap().max_concurrent,
+        Some(3)
+    );
+    assert!(matches!(
+        c1i2.provenance["subagents.max_concurrent"],
+        crate::local_runtime::configuration::Origin::Workspace { .. }
+    ));
+    for unit in [ApplyUnit::ExecutionPolicy, ApplyUnit::SharedCapacity] {
+        assert_ne!(
+            c1i2.component_revisions[&unit],
+            c1i2.component_revisions[&ApplyUnit::Capabilities]
+        );
+        assert_eq!(
+            c1i2.component_revisions[&unit],
+            after.configuration().unwrap().component_revisions[&unit]
+        );
+    }
+
+    assert!(fixture.manager.applications.is_deferred(second.as_str()));
+    assert!(matches!(
+        before.configuration().unwrap().provenance["agent.instructions"],
+        crate::local_runtime::configuration::Origin::User { .. }
+    ));
+    assert!(matches!(
+        c1i2.provenance["agent.instructions"],
+        crate::local_runtime::configuration::Origin::Workspace { .. }
+    ));
+    assert!(matches!(
+        after.configuration().unwrap().provenance["agent.instructions"],
+        crate::local_runtime::configuration::Origin::Workspace { .. }
+    ));
+    assert_eq!(
+        c1i2.effective
+            .agent
+            .as_ref()
+            .unwrap()
+            .instructions
+            .as_deref(),
+        Some("independent instructions P2")
+    );
+    assert_eq!(
+        c1i2.component_revisions[&ApplyUnit::Instructions],
+        after.configuration().unwrap().component_revisions[&ApplyUnit::Instructions]
+    );
+    assert_eq!(
+        c1i2.source_revisions,
+        before.configuration().unwrap().source_revisions
+    );
+    assert_eq!(
+        after.configuration().unwrap().source_revisions,
+        before.configuration().unwrap().source_revisions
+    );
+    assert_eq!(
         c1i2.config.agent.instructions,
         "independent instructions P2"
     );
@@ -1105,6 +1184,15 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         c1i2.component_revisions[&ApplyUnit::Capabilities]
     );
     assert_ne!(c2i2.config.native_tools, c1i2.config.native_tools);
+    assert!(Arc::ptr_eq(
+        &second_resources,
+        &fixture
+            .manager
+            .configuration_runtime(&second)
+            .unwrap()
+            .runtime_resources()
+    ));
+
     assert_eq!(
         retained(&second).component_revisions,
         c1i2.component_revisions
@@ -1684,4 +1772,262 @@ async fn t05_t09_workflow_only_agent_content_rebuilds_frozen_execution() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t05_t09_workflow_only_agent_model_rebuilds_frozen_execution() {
     workflow_only_agent_change(true).await;
+}
+
+#[tokio::test]
+async fn t03_t06_t09_t15_t16_healthy_registration_preserves_complete_policy_authority() {
+    let fixture = Fixture::new().await;
+    let id = &fixture.sessions[0].id;
+    fixture.manager.load(id, None).await.unwrap();
+    let runtime = fixture.manager.configuration_runtime(id).unwrap();
+    let probe = fixture
+        .manager
+        .probe(&fixture.sessions[0].active_conversation_id);
+    std::fs::write(fixture.workspaces[0].join("rustx.toml"),
+        "approval_mode='full_access'\n[model_timeout_policy]\nresponse_start_timeout_ms=12345\nstream_idle_timeout_ms=23456\n[tool_deadline_policy]\nhard_deadline_ms=34567\n[subagents]\nmax_concurrent=3\n").unwrap();
+    // Save publishes policy independently; Instructions then explicitly adopt.
+    write(
+        &fixture,
+        0,
+        ConfigMutation::Instructions {
+            authored: Some("healthy N+1".into()),
+        },
+    )
+    .await;
+    let application = settled(&fixture, 0).await;
+    let independent = runtime.configuration_view().unwrap();
+    assert_eq!(
+        independent.approval_mode,
+        crate::runtime::ApprovalMode::FullAccess
+    );
+    assert_eq!(
+        independent.document.approval_mode,
+        Some(independent.approval_mode)
+    );
+    assert!(matches!(
+        independent.provenance["approval_mode"],
+        crate::local_runtime::configuration::Origin::Workspace { .. }
+    ));
+    assert_eq!(
+        independent
+            .document
+            .model_timeout_policy
+            .as_ref()
+            .unwrap()
+            .response_start_timeout_ms,
+        Some(12345)
+    );
+    assert_eq!(
+        independent
+            .document
+            .tool_deadline_policy
+            .as_ref()
+            .unwrap()
+            .hard_deadline_ms,
+        Some(34567)
+    );
+    assert_eq!(
+        independent
+            .document
+            .subagents
+            .as_ref()
+            .unwrap()
+            .max_concurrent,
+        Some(3)
+    );
+    let candidate = application.candidate.unwrap();
+    fixture
+        .manager
+        .adopt_configuration(id, &candidate.identity, candidate.expected_binding)
+        .unwrap();
+    let healthy = fixture.manager.configuration_application(id).unwrap();
+    assert!(
+        healthy
+            .units
+            .values()
+            .all(|unit| *unit == UnitApplication::Applied)
+    );
+    let resources = runtime.runtime_resources();
+    let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+    let created = fixture
+        .manager
+        .create_session(SessionPersistentState {
+            cwd: fixture.workspaces[0].clone(),
+            model: None,
+        })
+        .await
+        .unwrap()
+        .session;
+    let second = &created.id;
+    let adopted = fixture
+        .manager
+        .sessions
+        .configuration_bindings
+        .lock()
+        .unwrap()[second]
+        .clone();
+    assert_eq!(adopted.config.agent.instructions, "healthy N+1");
+    assert!(!fixture.manager.applications.is_deferred(second.as_str()));
+    assert!(fixture.manager.configuration_application(second).is_none());
+    let second_probe = fixture.manager.probe(&created.active_conversation_id);
+    assert_eq!(
+        second_probe
+            .configuration_preparations
+            .load(Ordering::SeqCst),
+        0
+    );
+    fixture.manager.load(second, None).await.unwrap();
+    let second_runtime = fixture.manager.configuration_runtime(second).unwrap();
+    let second_resources = second_runtime.runtime_resources();
+    let view = second_runtime.configuration_view().unwrap();
+    assert_eq!(view.approval_mode, crate::runtime::ApprovalMode::FullAccess);
+    assert_eq!(adopted.config.approval_mode, view.approval_mode);
+    assert_eq!(view.document.approval_mode, Some(view.approval_mode));
+    assert_eq!(view.model_timeout.response_start_timeout_ms, 12345);
+    assert_eq!(
+        view.document
+            .model_timeout_policy
+            .as_ref()
+            .unwrap()
+            .response_start_timeout_ms,
+        Some(12345)
+    );
+    assert_eq!(view.model_timeout.stream_idle_timeout_ms, 23456);
+    assert_eq!(
+        view.document
+            .model_timeout_policy
+            .as_ref()
+            .unwrap()
+            .stream_idle_timeout_ms,
+        Some(23456)
+    );
+    assert_eq!(view.tool_deadline.hard_deadline_ms, 34567);
+    assert_eq!(
+        view.document
+            .tool_deadline_policy
+            .as_ref()
+            .unwrap()
+            .hard_deadline_ms,
+        Some(34567)
+    );
+    assert_eq!(view.child_capacity.max_concurrent, 3);
+    assert_eq!(
+        view.document.subagents.as_ref().unwrap().max_concurrent,
+        Some(3)
+    );
+    for field in [
+        "approval_mode",
+        "model_timeout_policy.response_start_timeout_ms",
+        "model_timeout_policy.stream_idle_timeout_ms",
+        "tool_deadline_policy.hard_deadline_ms",
+        "subagents.max_concurrent",
+    ] {
+        assert!(
+            matches!(
+                view.provenance[field],
+                crate::local_runtime::configuration::Origin::Workspace { .. }
+            ),
+            "{field}"
+        );
+        assert_eq!(view.provenance[field], adopted.provenance[field]);
+        assert_eq!(
+            view.provenance[field],
+            resources.configuration().unwrap().provenance[field]
+        );
+    }
+    for unit in [
+        ApplyUnit::ExecutionPolicy,
+        ApplyUnit::SharedCapacity,
+        ApplyUnit::Instructions,
+    ] {
+        assert_eq!(
+            adopted.component_revisions[&unit],
+            second_resources
+                .configuration()
+                .unwrap()
+                .component_revisions[&unit]
+        );
+    }
+    assert!(fixture.manager.configuration_application(second).is_none());
+    assert_eq!(
+        second_probe
+            .configuration_preparations
+            .load(Ordering::SeqCst),
+        0
+    );
+    assert_eq!(
+        probe.configuration_preparations.load(Ordering::SeqCst),
+        preparations
+    );
+    assert!(Arc::ptr_eq(&resources, &runtime.runtime_resources()));
+    fixture.manager.load(second, None).await.unwrap();
+    assert!(Arc::ptr_eq(
+        &second_resources,
+        &second_runtime.runtime_resources()
+    ));
+    assert_eq!(
+        second_probe
+            .configuration_preparations
+            .load(Ordering::SeqCst),
+        0
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn t06_t09_t16_process_restart_alone_does_not_defer_new_session() {
+    let fixture = Fixture::new().await;
+    let id = &fixture.sessions[0].id;
+    fixture.manager.load(id, None).await.unwrap();
+    let mut policy = fixture.manager.process_policy();
+    policy.shutdown_deadline_ms += 1;
+    write(
+        &fixture,
+        0,
+        ConfigMutation::AppServer {
+            authored: Some(policy),
+        },
+    )
+    .await;
+    assert_eq!(
+        settled(&fixture, 0).await.units[&ApplyUnit::ProcessBindings],
+        UnitApplication::ProcessRestart
+    );
+    let created = fixture
+        .manager
+        .create_session(SessionPersistentState {
+            cwd: fixture.workspaces[0].clone(),
+            model: None,
+        })
+        .await
+        .unwrap()
+        .session;
+    assert!(
+        !fixture
+            .manager
+            .applications
+            .is_deferred(created.id.as_str())
+    );
+    assert!(
+        fixture
+            .manager
+            .configuration_application(&created.id)
+            .is_none()
+    );
+    fixture.manager.load(&created.id, None).await.unwrap();
+    assert!(
+        fixture
+            .manager
+            .configuration_application(&created.id)
+            .is_none()
+    );
+    assert_eq!(
+        fixture
+            .manager
+            .probe(&created.active_conversation_id)
+            .configuration_preparations
+            .load(Ordering::SeqCst),
+        0
+    );
+    fixture.close().await;
 }

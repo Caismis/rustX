@@ -184,6 +184,7 @@ impl RuntimeResourceSnapshot {
             .agents_md
             .clone_from(&capture.config.agent.agents_md);
         config.context = capture.config.context;
+        config.agent.model.clone_from(&capture.config.agent.model);
         configuration.models = models;
         for unit in [
             crate::local_runtime::configuration::application::ApplyUnit::Instructions,
@@ -192,6 +193,11 @@ impl RuntimeResourceSnapshot {
             configuration
                 .component_revisions
                 .insert(unit, capture.component_revisions[&unit].clone());
+            crate::local_runtime::configuration::copy_unit_provenance(
+                &mut configuration.provenance,
+                &capture.provenance,
+                unit,
+            );
         }
         let context = configuration
             .effective
@@ -207,6 +213,11 @@ impl RuntimeResourceSnapshot {
             .agent
             .as_ref()
             .and_then(|agent| agent.agents_md.clone());
+        context.model = capture
+            .effective
+            .agent
+            .as_ref()
+            .and_then(|agent| agent.model.clone());
         configuration
             .effective
             .context
@@ -220,6 +231,8 @@ impl RuntimeResourceSnapshot {
             .clone()
             .map_providers(Into::into)
             .providers;
+        // The capture may itself be composed (C1+I2); carry its diagnostic
+        // baseline, never substitute the newest authored source manifest.
         configuration
             .source_revisions
             .clone_from(&capture.source_revisions);
@@ -261,17 +274,22 @@ impl RuntimeResourceSnapshot {
     /// The old snapshot and all of its physical resources remain immutable.
     pub(crate) fn with_shared_capacity(
         &self,
-        desired: &crate::local_runtime::config::CurrentRuntimeConfig,
+        desired: &crate::local_runtime::configuration::IndependentPolicy,
     ) -> Option<Self> {
         let old = self.configuration.as_ref()?;
-        if old.config.subagents == desired.subagents {
+        let mut configuration = old.as_ref().clone();
+        desired.compose_shared_capacity(
+            Arc::make_mut(&mut configuration.config),
+            &mut configuration.effective,
+            &mut configuration.provenance,
+            &mut configuration.component_revisions,
+        );
+        if configuration.config == old.config
+            && configuration.effective == old.effective
+            && configuration.provenance == old.provenance
+        {
             return None;
         }
-        let mut configuration = old.as_ref().clone();
-        Arc::make_mut(&mut configuration.config).subagents = desired.subagents.clone();
-        configuration.effective.subagents = Some(crate::local_runtime::authoring::SubagentsLayer {
-            max_concurrent: Some(desired.subagents.max_concurrent),
-        });
         let mut snapshot = self.clone();
         snapshot.configuration = Some(Arc::new(configuration));
         Some(snapshot)
@@ -279,38 +297,22 @@ impl RuntimeResourceSnapshot {
 
     pub(crate) fn with_execution_policy(
         &self,
-        desired: &crate::local_runtime::config::CurrentRuntimeConfig,
+        desired: &crate::local_runtime::configuration::IndependentPolicy,
     ) -> Option<Self> {
         let old = self.configuration.as_ref()?;
-        if old.config.approval_mode == desired.approval_mode
-            && old.config.model_timeout_policy == desired.model_timeout_policy
-            && old.config.tool_deadline_policy == desired.tool_deadline_policy
+        let mut configuration = (**old).clone();
+        desired.compose_execution_policy(
+            Arc::make_mut(&mut configuration.config),
+            &mut configuration.effective,
+            &mut configuration.provenance,
+            &mut configuration.component_revisions,
+        );
+        if configuration.config == old.config
+            && configuration.effective == old.effective
+            && configuration.provenance == old.provenance
         {
             return None;
         }
-        let mut configuration = (**old).clone();
-        let config = Arc::make_mut(&mut configuration.config);
-        config.approval_mode = desired.approval_mode;
-        config.model_timeout_policy = desired.model_timeout_policy;
-        config.tool_deadline_policy = desired.tool_deadline_policy;
-        configuration.effective.approval_mode = Some(desired.approval_mode);
-        configuration.effective.model_timeout_policy =
-            Some(crate::local_runtime::authoring::TimeoutLayer {
-                response_start_timeout_ms: Some(
-                    desired.model_timeout_policy.response_start_timeout_ms,
-                ),
-                stream_idle_timeout_ms: Some(desired.model_timeout_policy.stream_idle_timeout_ms),
-            });
-        configuration.effective.tool_deadline_policy =
-            Some(crate::local_runtime::authoring::ToolDeadlineLayer {
-                hard_deadline_ms: Some(desired.tool_deadline_policy.hard_deadline_ms),
-                idle_liveness_ms: Some(desired.tool_deadline_policy.idle_liveness_ms.map_or(
-                    crate::local_runtime::authoring::IdleLiveness::Disabled {},
-                    |milliseconds| crate::local_runtime::authoring::IdleLiveness::Window {
-                        milliseconds,
-                    },
-                )),
-            });
         let mut snapshot = self.clone();
         snapshot.configuration = Some(Arc::new(configuration));
         snapshot.revision = self.revision.next();
@@ -766,6 +768,7 @@ impl PreparedRuntimeResourceData {
                 .component_revisions
                 .clone_from(&capture.component_revisions);
             configuration.effective = capture.effective.clone().map_providers(Into::into);
+            configuration.provenance.clone_from(&capture.provenance);
             configuration
                 .source_revisions
                 .clone_from(&capture.source_revisions);

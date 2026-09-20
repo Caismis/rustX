@@ -110,14 +110,21 @@ impl ConfigurationApplications {
                     _ => UnitApplication::Applied,
                 },
             );
-            if state.scopes[scope].units[&ApplyUnit::ExecutionPolicy] == UnitApplication::Applied {
+            for unit in [ApplyUnit::ExecutionPolicy, ApplyUnit::SharedCapacity] {
+                if state.scopes[scope].units[&unit] != UnitApplication::Applied {
+                    continue;
+                }
                 let mut bindings = manager
                     .sessions
                     .configuration_bindings
                     .lock()
                     .expect("Session configuration bindings");
                 if let Some(retained) = bindings.get_mut(&session) {
-                    *retained = retained.with_execution_policy(&policy);
+                    *retained = match unit {
+                        ApplyUnit::ExecutionPolicy => retained.with_execution_policy(&policy),
+                        ApplyUnit::SharedCapacity => retained.with_shared_capacity(&policy),
+                        _ => unreachable!(),
+                    };
                 }
                 if let Some(source) = state.scope_sources.get(scope).cloned()
                     && state
@@ -129,7 +136,11 @@ impl ConfigurationApplications {
                         })
                     && let Some(available) = state.available.get_mut(&source)
                 {
-                    available.apply_execution_policy(&policy);
+                    match unit {
+                        ApplyUnit::ExecutionPolicy => available.compose_execution_policy(&policy),
+                        ApplyUnit::SharedCapacity => available.compose_shared_capacity(&policy),
+                        _ => unreachable!(),
+                    }
                 }
             }
             self.notify(&state);
