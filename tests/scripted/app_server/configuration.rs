@@ -142,7 +142,7 @@ async fn t04_session_relative_prefix_and_t09_policy_noop() {
 }
 
 #[tokio::test]
-async fn t11_concrete_candidate_conflict_and_t13_same_source_retry() {
+async fn t11_concrete_candidate_conflict_and_t09_healthy_rescan_preserves_candidate() {
     let fixture = Fixture::new().await;
     let id = &fixture.sessions[0].id;
     fixture.manager.load(id, None).await.unwrap();
@@ -154,10 +154,28 @@ async fn t11_concrete_candidate_conflict_and_t13_same_source_retry() {
         },
     )
     .await;
-    let old = settled(&fixture, 0).await.candidate.unwrap();
+    let inspected = settled(&fixture, 0).await;
+    let old = inspected.candidate.clone().unwrap();
+    let probe = fixture
+        .manager
+        .probe(&fixture.sessions[0].active_conversation_id);
+    let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
     fixture.manager.reconcile_configuration(id).await.unwrap();
+    assert_eq!(settled(&fixture, 0).await, inspected);
+    assert_eq!(
+        probe.configuration_preparations.load(Ordering::SeqCst),
+        preparations
+    );
+    write(
+        &fixture,
+        0,
+        ConfigMutation::Instructions {
+            authored: Some("candidate two".into()),
+        },
+    )
+    .await;
     let newer = settled(&fixture, 0).await.candidate.unwrap();
-    assert_eq!(old.identity.input_revision, newer.identity.input_revision);
+    assert_ne!(old.identity.input_revision, newer.identity.input_revision);
     assert_ne!(old.identity.attempt, newer.identity.attempt);
     assert_eq!(
         fixture

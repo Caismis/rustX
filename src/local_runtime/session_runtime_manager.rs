@@ -1046,7 +1046,7 @@ impl SessionRuntimeManager {
                 Ok(())
             })?;
             drop(catalog);
-            application.capture(
+            application.capture_binding(
                 session.to_string(),
                 owner.configuration.capture_application(&retained.input),
             );

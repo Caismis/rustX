@@ -270,7 +270,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                     version: EXACT,
                     desired:
                         crate::local_runtime::configuration::application::ApplicationIdentity {
-                            input_revision: "input".into(),
+                            input_revision: Some("input".into()),
                             attempt: EXACT,
                         },
                     units: std::collections::BTreeMap::default(),

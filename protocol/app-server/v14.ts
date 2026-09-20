@@ -3852,7 +3852,10 @@ export interface GoalExtensionDocument1 {
  * Source attempt identity is independent of both content and execution version.
  */
 export interface ApplicationIdentity {
-  input_revision: string;
+  /**
+   * None means immutable input capture failed; no source revision is fabricated.
+   */
+  input_revision?: string | null;
   attempt: string;
 }
 export interface Success {

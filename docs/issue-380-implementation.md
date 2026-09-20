@@ -45,8 +45,10 @@ requires adoption. Preservation makes no cache-hit promise.
 Source CAS, stable input capture, application identity replacement and final
 publication share the configuration state mutex. A source capture verifies its
 finite file/directory manifest; external edits cannot be overwritten by a stale
-CAS or assembled into an accepted mixed capture. A same-revision retry gets a new
-attempt identity. The final identity check, runtime pointer commit and native
+CAS or assembled into an accepted mixed capture. A same-revision retry after failure gets a new
+attempt identity. Unchanged healthy inputs retain their candidate and state without
+preparation. Failed immutable capture reports an unavailable input revision, never
+a fabricated manifest identity. The final identity check, runtime pointer commit and native
 unit-state update remain under this fence.
 
 The runtime coordinator gate orders complete binding publication and Attempt
@@ -72,9 +74,9 @@ guards only.
 | T08 | Headless `t08_model_baseline_change_rejects_prepared_context`, `t08_model_capture_ignores_unrelated_resource_directories_t09_same_selection_noop`; `src/local_runtime/settings_e2e.rs::t08_capture_rejects_external_change_between_layers_and_resource_manifest`. Publication gate pauses after preparation; model commit advances baseline before release. Capture hook edits the source after layer capture and before final manifest validation. |
 | T09 | Headless `t04_session_relative_prefix_and_t09_policy_noop`, `t09_unselected_model_and_default_edits_are_noop_for_existing_session_t15_new_default`, model-selection no-op above; MCP `an_unchanged_binding_and_definitions_is_a_true_noop`. |
 | T10 | `src/model/request_shape.rs::t10_configuration_evidence_matches_all_actual_adapter_prefixes`: actual wire constructors cover history exclusion, instructions, Tool order, namespace and unproven parameters for all three adapters. |
-| T11 | Headless `t11_admission_gate_orders_busy_adoption_without_cancelling_attempt`, `t11_concrete_candidate_conflict_and_t13_same_source_retry`, `t12_lost_source_write_response_does_not_cancel_native_application`. Admission gate owns the runtime mutex before adoption arrives; Busy leaves A running. Explicit idle adoption then commits the inspected binding. |
+| T11 | Headless `t11_admission_gate_orders_busy_adoption_without_cancelling_attempt`, `t11_concrete_candidate_conflict_and_t09_healthy_rescan_preserves_candidate`, `t12_lost_source_write_response_does_not_cancel_native_application`. Admission gate owns the runtime mutex before adoption arrives; Busy leaves A running. Explicit idle adoption then commits the inspected binding. |
 | T12 | Headless `t12_lost_source_write_response_does_not_cancel_native_application`: persistence acknowledgement hook parks the RPC, caller is aborted, native worker finishes; Web `test/client.test.ts` test `T12 native configuration notifications reject stale versions independently per Session`; TUI `test/convergence.test.ts` test `T12/T16 native application notifications reject reorder and adoption sends the inspected identity`; real Web `test/e2e/recovery.spec.ts`. |
-| T13 | Headless `t13_failed_preparation_retries_same_input_and_t14_latest_pending_is_bounded`, `t11_concrete_candidate_conflict_and_t13_same_source_retry`; coordinator `t13_same_revision_retry_has_a_new_identity`. |
+| T13 | Headless `t13_failed_preparation_retries_same_input_and_t14_latest_pending_is_bounded`, `t11_concrete_candidate_conflict_and_t09_healthy_rescan_preserves_candidate`; coordinator `t13_same_revision_retry_has_a_new_identity`. |
 | T14 | Same headless test parks the sole preparation worker, commits twelve sources and observes only the active and latest pending preparations; coordinator `t14_pending_work_is_latest_wins_with_one_worker`; MCP `dropped_mcp_preparation_still_owes_physical_settlement`, `one_failed_mcp_close_never_abandons_a_sibling_runtime`, and old-lease test above cover physical settlement/retirement. |
 | T15 | Headless `t15_unload_load_does_not_adopt_pending_context`, `t09_unselected_model_and_default_edits_are_noop_for_existing_session_t15_new_default`; `tests/process/app_server.rs::app_server_current_sources_and_persisted_selection_survive_process_reconstruction`. |
 | T16 | Headless tests above; Web `test/settings.test.tsx` test `T03/T16 renders simultaneous native application outcomes without inferring field impact`; TUI `test/convergence.test.ts` test `T03/T16 permissions render native mixed application state`; TUI `test/commands.test.ts` test `T16 rescans only through native reconciliation`; real Web settings, integrations, console and recovery acceptance. |

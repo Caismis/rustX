@@ -70,7 +70,8 @@ pub enum UnitApplication {
     Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 pub struct ApplicationIdentity {
-    pub input_revision: String,
+    /// None means immutable input capture failed; no source revision is fabricated.
+    pub input_revision: Option<String>,
     pub attempt: u64,
 }
 
@@ -166,7 +167,7 @@ impl ConfigurationApplications {
             return false;
         }
         let input = state.captured_input(scope);
-        state.capture(scope.to_owned(), input);
+        state.capture_binding(scope.to_owned(), input);
         self.notify(&state);
         true
     }
@@ -196,7 +197,11 @@ impl ConfigurationApplications {
 impl ApplicationState {
     /// Called while the native source commit lock is held. Retry deliberately
     /// allocates a new identity even when the input digest did not change.
-    pub(crate) fn desire(&mut self, scope: String, input_revision: String) -> ApplicationIdentity {
+    pub(crate) fn desire(
+        &mut self,
+        scope: String,
+        input_revision: Option<String>,
+    ) -> ApplicationIdentity {
         self.next_attempt = self
             .next_attempt
             .checked_add(1)
@@ -238,11 +243,27 @@ impl ApplicationState {
         scope: String,
         input: Result<CapturedApplication, String>,
     ) -> ApplicationIdentity {
-        use sha2::{Digest, Sha256};
-        let revision = match &input {
-            Ok(capture) => capture.revision.clone(),
-            Err(diagnostic) => format!("{:x}", Sha256::digest(diagnostic.as_bytes())),
-        };
+        if let Ok(capture) = &input
+            && let Some(current) = self.scopes.get(&scope)
+            && current.desired.input_revision.as_ref() == Some(&capture.revision)
+            && !current
+                .units
+                .values()
+                .any(|unit| matches!(unit, UnitApplication::Failed { .. }))
+        {
+            return current.desired.clone();
+        }
+        self.capture_binding(scope, input)
+    }
+
+    /// A different Session model or physical allocation needs a new fenced
+    /// application even when its source manifest is unchanged.
+    pub(crate) fn capture_binding(
+        &mut self,
+        scope: String,
+        input: Result<CapturedApplication, String>,
+    ) -> ApplicationIdentity {
+        let revision = input.as_ref().ok().map(|capture| capture.revision.clone());
         let identity = self.desire(scope.clone(), revision);
         self.inputs.insert(scope, input);
         identity
@@ -314,11 +335,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn t08_failed_capture_has_no_manufactured_input_revision() {
+        let mut state = ApplicationState::default();
+        let identity = state.capture("s".into(), Err("input changed during capture".into()));
+        assert_eq!(identity.input_revision, None);
+        assert_eq!(state.view("s").unwrap().desired, identity);
+        assert!(state.ready.is_empty());
+    }
+
+    #[test]
     fn t07_newer_failure_does_not_authorize_old_success_or_failure() {
         let owner = ConfigurationApplications::default();
         let mut state = owner.lock();
-        let a = state.desire("s".into(), "a".into());
-        let b = state.desire("s".into(), "b".into());
+        let a = state.desire("s".into(), Some("a".into()));
+        let b = state.desire("s".into(), Some("b".into()));
         assert!(state.publish("s", &b, ApplyUnit::Instructions, || {
             UnitApplication::Failed {
                 diagnostic: "failed".into(),
@@ -338,8 +368,8 @@ mod tests {
     #[test]
     fn t13_same_revision_retry_has_a_new_identity() {
         let mut state = ApplicationState::default();
-        let a = state.desire("s".into(), "same".into());
-        let b = state.desire("s".into(), "same".into());
+        let a = state.desire("s".into(), Some("same".into()));
+        let b = state.desire("s".into(), Some("same".into()));
         assert_eq!(a.input_revision, b.input_revision);
         assert_ne!(a.attempt, b.attempt);
         assert!(!state.current("s", &a));
@@ -350,11 +380,14 @@ mod tests {
         let mut state = ApplicationState::default();
         assert!(state.start_worker());
         for n in 0..1000 {
-            state.desire("s".into(), n.to_string());
+            state.desire("s".into(), Some(n.to_string()));
             assert!(!state.start_worker());
             assert_eq!(state.pending.len(), 1);
         }
-        assert_eq!(state.next().unwrap().1.input_revision, "999");
+        assert_eq!(
+            state.next().unwrap().1.input_revision.as_deref(),
+            Some("999")
+        );
         assert!(state.next().is_none());
         assert!(state.start_worker());
     }
@@ -362,7 +395,7 @@ mod tests {
     #[test]
     fn t03_units_have_simultaneous_independent_outcomes() {
         let mut state = ApplicationState::default();
-        let id = state.desire("s".into(), "input".into());
+        let id = state.desire("s".into(), Some("input".into()));
         for (unit, outcome) in [
             (ApplyUnit::ExecutionPolicy, UnitApplication::Applied),
             (

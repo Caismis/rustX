@@ -4799,7 +4799,11 @@
       "type": "object",
       "properties": {
         "input_revision": {
-          "type": "string"
+          "description": "None means immutable input capture failed; no source revision is fabricated.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "attempt": {
           "type": "string",
@@ -4807,7 +4811,6 @@
         }
       },
       "required": [
-        "input_revision",
         "attempt"
       ]
     },
