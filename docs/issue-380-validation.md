@@ -23,9 +23,10 @@ Commands were executed in this worktree on Linux. Directories are relative to it
 | root | `cargo clippy --all-targets --all-features -- -D warnings` | PASS |
 | root | `git diff --check` | PASS |
 | root | `cargo build --bins` | PASS |
+| root | `cargo test --lib --all-features resubscription_is_superseded_before_local_handle_publication` | PASS; deterministic native registration/publication boundary |
 | root | `cargo test --lib --all-features local_runtime::session_runtime_manager::tests::configuration -- --nocapture` | PASS; 18 deterministic configuration tests |
 | root | `cargo test --lib --all-features local_runtime::session_runtime_manager::tests:: -- --nocapture` | PASS; 111 manager, protocol and transport tests |
-| root | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | PASS; 2,969 tests, one intentional fixture-generator ignore |
+| root | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | PASS; 2,970 tests, one intentional fixture-generator ignore |
 | root | `cargo test --test contracts --test provider --all-features` | PASS; 27 contracts and 166 provider tests; five opt-in live-provider tests ignored |
 | root | `cargo test --lib --all-features -- boundary_suites::` | PASS; 223 tests |
 | root | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | PASS; 407 tests |
@@ -59,6 +60,15 @@ single-pixel screenshot mismatch in unchanged presentation fixtures (Agent error
 then Settings inventory). Image comparison found only small antialiasing deltas;
 the Agent reference passed unchanged on the next run, and the final complete run passed all 51 tests. No screenshot references,
 thresholds, client code or browser dependencies were changed for this repair.
+
+The first repaired CI run, [35493020460](https://github.com/Caismis/rustX/actions/runs/35493020460),
+exposed a TUI integration resubscription race: `session/boundaries` received
+`stale_attachment`. The native host closes the previous subscription before the
+attachment stores its replacement delivery handle; a consumer waking in that gap
+could mistake resync for retirement. Retirement now checks the host's authoritative
+registration under its existing lock. A deterministic regression holds that exact
+publication interval open without a timer. The client protocol and TUI implementation
+remain unchanged. All applicable local Rust, protocol, TUI and browser lanes were rerun successfully after this correction.
 
 ## Environment limits
 

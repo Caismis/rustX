@@ -445,19 +445,18 @@ impl RuntimeAttachment {
     /// previous registration. Without this, that consumer's
     /// [`EventDelivery::Closed`] would be indistinguishable from the end of
     /// residency, and repairing a projection would retire the attachment that
-    /// asked for the repair.
+    /// asked for the repair. The host registration is authoritative: its
+    /// replacement precedes publication of the attachment's local delivery
+    /// handle, and consumers may wake inside that publication interval.
     ///
     /// # Panics
     ///
-    /// Panics only if the attachment subscription lock is poisoned, which
-    /// would mean a previous operation panicked while holding the lock.
+    /// Panics only if the native host state lock is poisoned.
     #[must_use]
     pub fn superseded(&self, observed: &EventSubscription) -> bool {
-        self.subscription
-            .lock()
-            .expect("attachment subscription lock poisoned")
-            .as_ref()
-            .is_some_and(|current| !current.same_registration(observed))
+        self.inner
+            .upgrade()
+            .is_some_and(|inner| inner.subscription_superseded(&self.attachment_id, observed))
     }
 
     /// Waits for the next delivery of the active subscription.

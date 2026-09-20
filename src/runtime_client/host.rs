@@ -1351,6 +1351,28 @@ impl ClientInner {
         ))
     }
 
+    /// Subscription replacement and removal of the previous registration
+    /// share this host lock. A transport can observe the old handle closing
+    /// before the attachment has stored its new handle, so retirement must
+    /// consult this owner rather than the attachment's delivery-handle cache.
+    pub(crate) fn subscription_superseded(
+        &self,
+        attachment_id: &AttachmentId,
+        observed: &EventSubscription,
+    ) -> bool {
+        if !std::ptr::eq(self, observed.inner.host.as_ptr()) {
+            return false;
+        }
+        let state = self.lock_state();
+        state
+            .control_attachment
+            .as_ref()
+            .filter(|attachment| attachment.attachment_id == *attachment_id)
+            .or_else(|| state.read_only_attachments.get(attachment_id))
+            .and_then(|attachment| attachment.subscriber_id)
+            .is_some_and(|current| current != observed.inner.subscriber_id)
+    }
+
     /// Read the loaded configuration through the native publication owner.
     pub(crate) fn configuration(
         &self,
@@ -5878,6 +5900,40 @@ mod tests {
             )),
             "the snapshot reflects the transition state"
         );
+    }
+
+    #[tokio::test]
+    async fn resubscription_is_superseded_before_local_handle_publication() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let (_, cursor) = fixture.host.snapshot().unwrap();
+        let old = attachment.subscribe_events(cursor).unwrap();
+        // Split the native transaction from local handle publication, exactly
+        // the interval in which a waiting notification consumer can wake. No
+        // timer or scheduler race is needed to hold this boundary open.
+        let (new, _) = fixture
+            .host
+            .subscribe_events(attachment.attachment_id(), cursor)
+            .unwrap();
+        assert!(matches!(old.try_next(), EventDelivery::Closed));
+        assert!(attachment.subscription().unwrap().same_registration(&old));
+        assert!(
+            attachment.superseded(&old),
+            "resync must not retire the live attachment"
+        );
+        assert!(!attachment.superseded(&new));
+        attachment.store_subscription(new.clone());
+        assert!(attachment.subscription().unwrap().same_registration(&new));
+        assert!(attachment.superseded(&old));
+        attachment.detach();
+        assert!(
+            !attachment.superseded(&new),
+            "real detach is not replacement"
+        );
+        assert!(matches!(new.try_next(), EventDelivery::Closed));
     }
 
     /// The bounded replay/resync contract: a serviceable resume has no
