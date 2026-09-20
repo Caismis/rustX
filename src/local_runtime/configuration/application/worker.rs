@@ -470,9 +470,19 @@ impl ConfigurationApplications {
         if !state.current(scope, identity) {
             return;
         }
-        if !capability_failed
+        // Availability composes from source-owned validated units, never from
+        // an arbitrary Session's retained capability/provider selection.
+        let available = if capability_failed {
+            state
+                .available
+                .get(&capture.input.cwd)
+                .map(|old| old.clone().retaining_context_from(&capture))
+        } else {
+            Some(capture.clone())
+        };
+        if let Some(available) = available
             && let Err(diagnostic) =
-                state.make_available(scope, identity, &capture, &manager.credentials)
+                state.make_available(scope, identity, &available, &manager.credentials)
         {
             drop(state);
             self.fail_units(

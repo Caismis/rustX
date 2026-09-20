@@ -287,6 +287,28 @@ impl ProspectiveSessionConfig {
         config.tool_deadline_policy = desired.tool_deadline_policy;
     }
 
+    /// The physical/profile closure admitted by Root selection and Workflow
+    /// Agent nodes (including nested nodes and invocation overrides). Unrelated
+    /// catalog entries remain inert.
+    fn admitted_agent_dependencies(
+        &self,
+    ) -> std::collections::BTreeSet<crate::runtime::subagent::SubagentName> {
+        let mut names: std::collections::BTreeSet<_> =
+            self.config.agent.agents.iter().cloned().collect();
+        for id in &self.config.agent.workflows {
+            if let Some(entry) = self.workflows.entries().get(id) {
+                names.extend(
+                    entry
+                        .source
+                        .agent_nodes()
+                        .iter()
+                        .map(|node| node.profile.clone()),
+                );
+            }
+        }
+        names
+    }
+
     /// Compare independently prepared capability inputs, excluding context and
     /// provider units. Authored revisions and shadowed/unselected metadata are
     /// not effective resource identities.
@@ -320,10 +342,11 @@ impl ProspectiveSessionConfig {
         if a != b || demand_a != demand_b {
             return false;
         }
-        if a.agent
-            .agents
-            .iter()
-            .any(|name| self.subagents.get(name) != other.subagents.get(name))
+        let agents = self.admitted_agent_dependencies();
+        if agents != other.admitted_agent_dependencies()
+            || agents
+                .iter()
+                .any(|name| self.subagents.get(name) != other.subagents.get(name))
         {
             return false;
         }
@@ -364,11 +387,22 @@ impl ProspectiveSessionConfig {
             && selection
                 .summary_selection()
                 .is_none_or(|summary| self.models.same_binding(&other.models, &summary.model))
-            && self.config.agent.agents.iter().all(|name| {
-                self.subagents
-                    .get(name)
-                    .and_then(|definition| definition.profile().model.as_ref())
-                    .is_none_or(|model| self.models.same_binding(&other.models, &model.model))
+            && self.admitted_agent_dependencies() == other.admitted_agent_dependencies()
+            && self.admitted_agent_dependencies().iter().all(|name| {
+                let model = |source: &Self| {
+                    source
+                        .subagents
+                        .get(name)
+                        .and_then(|definition| definition.profile().model.clone())
+                };
+                let selected = model(self);
+                selected == model(other)
+                    && selected.as_ref().is_none_or(|model| {
+                        self.models.same_binding(&other.models, &model.model)
+                            && model.summary_selection().is_none_or(|summary| {
+                                self.models.same_binding(&other.models, &summary.model)
+                            })
+                    })
             })
     }
 
@@ -428,10 +462,11 @@ impl ProspectiveSessionConfig {
         if std::fs::canonicalize(&self.workspace).as_ref().ok() != Some(&self.workspace) {
             return Err("Workspace physical binding changed after capture".into());
         }
+        let agents = self.admitted_agent_dependencies();
         for role in self
             .role_sources
             .values()
-            .filter(|role| self.config.agent.agents.contains(&role.identity))
+            .filter(|role| agents.contains(&role.identity))
         {
             let boundary = if role.layer == "workspace" {
                 &self.workspace

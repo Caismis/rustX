@@ -2,6 +2,7 @@
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Settings } from '../src/app/settings/Settings';
+import { TextField, UnitForm } from '../src/app/settings/controls';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
 import { cfg3Application } from './cfg3-data';
 import { cfg3Client, cfg3Session } from './cfg3-fixture';
@@ -287,4 +288,32 @@ it('T03/T16 renders simultaneous native application outcomes without inferring f
   expect(screen.getByRole('button', { name: 'Retry application' })).toBeTruthy();
   expect(screen.getByText(/Process restart required/)).toBeTruthy();
   expect(subject.request.mock.calls.every(([op]) => !['configuration/reconcile', 'session/adoptConfiguration', 'configuration/sourceWrite'].includes(op.method))).toBe(true);
+});
+
+
+it.each(['before acknowledgement', 'after acknowledgement', 'after the next edit'] as const)('T12/T16 source projection %s preserves subsequent drafts', async order => {
+  let acknowledge!: (revision: string) => void;
+  const pending = new Promise<string>(resolve => { acknowledge = resolve; });
+  const save = async () => pending;
+  const form = (initial: { command: string }, revision: string) => <UnitForm
+    title="MCP acknowledgement" initial={initial} revision={revision} save={save}
+    mutation={value => ({ kind: 'mcp', scope: 'workspace', id: 'fixture', authored: value ? { definition: { type: 'stdio', command: value.command } } : null })}>
+    {(value, change) => <TextField label="Acknowledged command" value={value.command} change={command => change({ command })} />}
+  </UnitForm>;
+  const ui = render(form({ command: 'original' }, 'r1'));
+  fireEvent.change(screen.getByLabelText('Acknowledged command'), { target: { value: 'submitted-literal' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save MCP acknowledgement' }));
+  // Hold source publication and save return independently; no timers establish order.
+  if (order === 'before acknowledgement') ui.rerender(form({ command: 'native-redacted' }, 'r2'));
+  await act(async () => { acknowledge('r2'); await pending; });
+  if (order === 'after acknowledgement') ui.rerender(form({ command: 'native-redacted' }, 'r2'));
+  if (order !== 'after the next edit') expect((screen.getByLabelText('Acknowledged command') as HTMLInputElement).value).toBe('native-redacted');
+  fireEvent.change(screen.getByLabelText('Acknowledged command'), { target: { value: 'preserved-draft' } });
+  // A later native application notification rereads the same source, then a
+  // conflict reread advances its revision. Neither owns this subsequent edit.
+  ui.rerender(form({ command: 'native-redacted' }, 'r2'));
+  ui.rerender(form({ command: 'external' }, 'r3'));
+  expect((screen.getByLabelText('Acknowledged command') as HTMLInputElement).value).toBe('preserved-draft');
+  expect(screen.getByText(/Draft base revision:/).textContent).toContain('r2');
+  expect(screen.getByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();
 });

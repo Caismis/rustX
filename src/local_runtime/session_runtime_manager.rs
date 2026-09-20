@@ -926,11 +926,14 @@ impl SessionRuntimeManager {
         .map_err(|detail| super::session::SessionError::Catalog { detail })?;
         settings.model = capture.input.model.clone();
         let result = self.sessions.create_session(settings).await?;
+        let mut application = self.applications.lock();
+        application.register_session_scope(result.session.id.to_string(), &capture);
         self.sessions
             .configuration_bindings
             .lock()
             .expect("Session configuration bindings")
             .insert(result.session.id.clone(), capture);
+        self.applications.notify(&application);
         Ok(result)
     }
 

@@ -251,6 +251,29 @@ impl ApplicationState {
         capture.admit(|| credentials.clone())
     }
 
+    /// Join the captured desired source without rereading authored files. The
+    /// caller publishes the retained binding under this same coordinator lock.
+    /// Allocation work waits for natural residency, including when creation
+    /// straddles source preparation/publication.
+    pub(crate) fn register_session_scope(
+        &mut self,
+        scope: String,
+        adopted: &super::AdmittedSessionConfig,
+    ) {
+        let source = adopted.input.cwd.clone();
+        self.scope_sources.insert(scope.clone(), source.clone());
+        if let Some(mut input) = self.desired_sources.get(&source).cloned() {
+            if let Ok(captured) = &mut input
+                && let Ok(context) = &mut captured.context
+            {
+                context.input.model = Some(adopted.session_model().clone());
+            }
+            self.capture_binding(scope.clone(), input);
+            self.pending.remove(&scope);
+            self.deferred.insert(scope);
+        }
+    }
+
     fn validate_selection(
         capture: &super::ProspectiveSessionConfig,
         credentials: &crate::credentials::CredentialSnapshot,
@@ -264,7 +287,7 @@ impl ApplicationState {
                 return Err(format!("unknown Workflow {name}"));
             }
         }
-        for name in &capture.config.agent.agents {
+        for name in &capture.admitted_agent_dependencies() {
             if capture.subagents.get(name).is_none() {
                 return Err(format!("unknown Agent {name}"));
             }
@@ -304,6 +327,7 @@ impl ApplicationState {
         credentials: &crate::credentials::CredentialSnapshot,
     ) -> Result<(), String> {
         Self::validate_default(capture, credentials)?;
+        capture.validate_resource_authority()?;
         if self.current(scope, identity)
             && self
                 .desired_sources

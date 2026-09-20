@@ -945,6 +945,13 @@ async fn t08_model_capture_ignores_unrelated_resource_directories_t09_same_selec
 async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adopted() {
     let fixture = Fixture::new().await;
     let id = &fixture.sessions[0].id;
+    let skill = fixture.workspaces[0].join(".agents/skills/retained");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: retained\ndescription: Retained guidance\n---\nC1 skill guidance\n",
+    )
+    .unwrap();
     fixture.manager.load(id, None).await.unwrap();
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     let before = runtime.runtime_resources();
@@ -955,6 +962,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         .as_table_mut()
         .unwrap()
         .insert("instructions".into(), "independent instructions P2".into());
+    document["agent"]["tools"]["builtin"] = toml::Value::try_from(vec!["read"]).unwrap();
     std::fs::write(&source.user.path, toml::to_string(&document).unwrap()).unwrap();
     fixture
         .manager
@@ -1025,6 +1033,97 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         before.configuration().unwrap().config.native_tools,
         after.configuration().unwrap().config.native_tools
     );
+    let create = || {
+        fixture.manager.create_session(SessionPersistentState {
+            cwd: fixture.workspaces[0].clone(),
+            model: None,
+        })
+    };
+    let second = create().await.unwrap().session.id;
+    let retained = |id: &SessionId| {
+        fixture
+            .manager
+            .sessions
+            .configuration_bindings
+            .lock()
+            .unwrap()[id]
+            .clone()
+    };
+    let c1i2 = retained(&second);
+    assert_eq!(
+        c1i2.config.agent.instructions,
+        "independent instructions P2"
+    );
+    assert_eq!(
+        c1i2.component_revisions[&ApplyUnit::Capabilities],
+        before.configuration().unwrap().component_revisions[&ApplyUnit::Capabilities]
+    );
+    assert_eq!(
+        c1i2.config.native_tools,
+        before.configuration().unwrap().config.native_tools
+    );
+    assert_eq!(
+        c1i2.skill_discovery.packages,
+        retained(id).skill_discovery.packages
+    );
+    fixture.manager.load(&second, None).await.unwrap();
+    let second_resources = fixture
+        .manager
+        .configuration_runtime(&second)
+        .unwrap()
+        .runtime_resources();
+    assert_eq!(
+        second_resources
+            .configuration()
+            .unwrap()
+            .config
+            .native_tools,
+        c1i2.config.native_tools
+    );
+    assert_eq!(
+        second_resources
+            .capability()
+            .tool_registry()
+            .model_definitions(),
+        before.capability().tool_registry().model_definitions()
+    );
+    assert_eq!(
+        second_resources.capability().skills().packages(),
+        before.capability().skills().packages()
+    );
+    // Retry the same authored C2; S1/S2 retain their explicit compositions.
+    fixture.manager.reconcile_configuration(id).await.unwrap();
+    settled(&fixture, 0).await;
+    let third = create().await.unwrap().session.id;
+    let c2i2 = retained(&third);
+    assert_eq!(
+        c2i2.config.agent.instructions,
+        "independent instructions P2"
+    );
+    assert_ne!(
+        c2i2.component_revisions[&ApplyUnit::Capabilities],
+        c1i2.component_revisions[&ApplyUnit::Capabilities]
+    );
+    assert_ne!(c2i2.config.native_tools, c1i2.config.native_tools);
+    assert_eq!(
+        retained(&second).component_revisions,
+        c1i2.component_revisions
+    );
+    assert_eq!(
+        runtime
+            .runtime_resources()
+            .configuration()
+            .unwrap()
+            .config
+            .agent
+            .instructions,
+        "independent instructions P2"
+    );
+    assert_eq!(
+        runtime.runtime_resources().capability().revision(),
+        before.capability().revision()
+    );
+    assert!(!before.capability().skills().packages().is_empty());
     fixture.close().await;
 }
 
@@ -1360,7 +1459,7 @@ async fn t09_t15_new_session_during_preparation_keeps_available_binding_after_su
             retained(&during).component_revisions,
             before.component_revisions
         );
-        fixture.manager.load(&during, None).await.unwrap();
+        let loaded = fixture.manager.load(&during, None).await.unwrap();
         assert_eq!(
             fixture
                 .manager
@@ -1374,6 +1473,56 @@ async fn t09_t15_new_session_during_preparation_keeps_available_binding_after_su
                 .instructions,
             before.config.agent.instructions
         );
+        let runtime = fixture.manager.configuration_runtime(&during).unwrap();
+        let history = loaded
+            .inspect_runtime()
+            .unwrap()
+            .historical_canonical_history()
+            .unwrap();
+        let mut changed = fixture.manager.configuration_changes();
+        let candidate = loop {
+            if let Some(candidate) = fixture
+                .manager
+                .configuration_application(&during)
+                .and_then(|view| view.candidate)
+            {
+                break candidate;
+            }
+            changed.changed().await.unwrap();
+        };
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .configuration()
+                .unwrap()
+                .config
+                .agent
+                .instructions,
+            before.config.agent.instructions
+        );
+        fixture
+            .manager
+            .adopt_configuration(&during, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .configuration()
+                .unwrap()
+                .config
+                .agent
+                .instructions,
+            "P2 available"
+        );
+        assert_eq!(
+            loaded
+                .inspect_runtime()
+                .unwrap()
+                .historical_canonical_history()
+                .unwrap(),
+            history
+        );
+        assert!(fixture.provider.request_bodies().is_empty());
         fixture.close().await;
     }))
     .await;
@@ -1444,4 +1593,95 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
     );
     assert_eq!(runtime.model_view().configured.model.to_string(), "local/a");
     fixture.close().await;
+}
+
+async fn workflow_only_agent_change(model_change: bool) {
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_tool(Some("review")).await;
+        let id = &fixture.sessions[0].id;
+        let workspace = &fixture.workspaces[0];
+        let agent = workspace.join(".agents/agents/reviewer.toml");
+        let workflow = workspace.join(".agents/workflows/review.yaml");
+        std::fs::create_dir_all(agent.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+        let profile = |instructions: &str, model: &str| format!("description='Review'\ninstructions='{instructions}'\n[model]\nmodel='local/{model}'\n");
+        std::fs::write(&agent, profile("reviewer A", "a")).unwrap();
+        let schema = serde_json::json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
+        std::fs::write(&workflow, serde_json::to_string(&serde_json::json!({
+            "description":"Review", "block": {"input":schema,"output":schema,"entry":"agent",
+            "nodes":{"agent":{"type":"agent","profile":"reviewer","task":"Review","output":schema},
+                     "done":{"type":"return","output":{"type":"literal","value":{}}}},
+            "edges":[{"from":"agent","to":"done"}]}
+        })).unwrap()).unwrap();
+        std::fs::write(workspace.join("rustx.toml"), "[agent]\nworkflows=['review']\n").unwrap();
+        let loaded = fixture.manager.load(id, None).await.unwrap();
+        let live = loaded.inspect_runtime().unwrap();
+        let before = live.runtime_resources();
+        let retained_before = fixture.manager.sessions.configuration_bindings.lock().unwrap()[id].clone();
+        assert!(before.configuration().unwrap().config.agent.agents.is_empty());
+        let probe = fixture.manager.probe(&fixture.sessions[0].active_conversation_id);
+        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+        std::fs::write(agent.parent().unwrap().join("unused.toml"), profile("unrelated", "b")).unwrap();
+        fixture.manager.reconcile_configuration(id).await.unwrap();
+        settled(&fixture, 0).await;
+        assert_eq!(probe.configuration_preparations.load(Ordering::SeqCst), preparations);
+        assert!(Arc::ptr_eq(&before, &live.runtime_resources()));
+        live.submit_inbound(input("request-A old workflow")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        let probe = fixture.manager.probe(&fixture.sessions[0].active_conversation_id);
+        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+        let (source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
+        let authored = if model_change { profile("reviewer A", "b") } else { profile("reviewer B", "a") };
+        fixture.manager.source_settings(id, Some((
+            source.agents.iter().find(|entry| entry.source.path == agent).unwrap().source.revision.clone(),
+            SourceMutation::Agent {
+                scope: SourceScope::Workspace,
+                name: crate::runtime::subagent::SubagentName::parse("reviewer").unwrap(),
+                authored: Some(crate::local_runtime::agent_resources::parse(&authored).unwrap()),
+            },
+        ))).await.unwrap();
+        let application = settled(&fixture, 0).await;
+        assert!(probe.configuration_preparations.load(Ordering::SeqCst) > preparations);
+        assert_ne!(live.runtime_resources().capability().revision(), before.capability().revision());
+        let done = live.settlement_signal().notified();
+        fixture.gates[0].release();
+        done.await;
+        if let Some(candidate) = application.candidate {
+            fixture.manager.adopt_configuration(id, &candidate.identity, candidate.expected_binding).unwrap();
+        }
+        let requests = fixture.provider.request_bodies();
+        assert!(requests.iter().any(|body| body.contains("reviewer A")), "{requests:?}");
+        assert!(!requests.iter().any(|body| body.contains("reviewer B")));
+        let old_child = requests.iter().map(|body| serde_json::from_str::<serde_json::Value>(body).unwrap())
+            .find(|body| body["tools"].as_array().unwrap().iter().any(|tool| tool["function"]["name"] == "workflow_output")).unwrap();
+        assert_eq!(old_child["model"], "a");
+        let old_count = requests.len();
+        let done = live.settlement_signal().notified();
+        live.submit_inbound(input("request-A new workflow")).unwrap();
+        done.await;
+        let requests = fixture.provider.request_bodies();
+        let child = requests[old_count..].iter().map(|body| serde_json::from_str::<serde_json::Value>(body).unwrap())
+            .find(|body| body["tools"].as_array().unwrap().iter().any(|tool| tool["function"]["name"] == "workflow_output")).expect("real Workflow Agent request");
+        assert_eq!(child["model"], if model_change { "b" } else { "a" });
+        assert!(child.to_string().contains(if model_change { "reviewer A" } else { "reviewer B" }));
+        let retained = fixture.manager.sessions.configuration_bindings.lock().unwrap()[id].clone();
+        assert_eq!(retained.same_provider(&retained_before), !model_change);
+        // The same dependency closure protects the physical profile selected
+        // during immutable capture, even though Root does not expose it.
+        let moved = workspace.parent().unwrap().join("outside-agents");
+        std::fs::rename(agent.parent().unwrap(), &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, agent.parent().unwrap()).unwrap();
+        assert!(retained.validate_resource_authority().is_err());
+        fixture.close().await;
+    })).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t05_t09_workflow_only_agent_content_rebuilds_frozen_execution() {
+    workflow_only_agent_change(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t05_t09_workflow_only_agent_model_rebuilds_frozen_execution() {
+    workflow_only_agent_change(true).await;
 }

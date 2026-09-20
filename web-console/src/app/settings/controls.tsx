@@ -25,7 +25,9 @@ export function UnitForm<T>({ title, initial, revision, mutation, save, children
       change(initial); setBase(revision); setDirty(false);
       drafts?.delete(identity);
     }
-  }, [initial, revision, dirty, drafts, identity]);
+    // Source publication may precede the save promise. Consume its
+    // acknowledgement even when the projection dependencies already settled.
+  }, [initial, revision, dirty, saved, drafts, identity]);
   const commit = async (remove = false) => {
     // Save and Remove both freeze the revision, including an otherwise clean form.
     // A rejected removal must never adopt the reread revision implicitly.
@@ -34,7 +36,7 @@ export function UnitForm<T>({ title, initial, revision, mutation, save, children
     finally { setBusy(false); }
   };
   return <form aria-label={title} className={css.unit} onSubmit={e => { e.preventDefault(); void commit(); }}>
-    <fieldset disabled={busy}><legend>{title}</legend>{children(value, next => { change(next); setDirty(true); setSaved(false); })}
+    <fieldset disabled={busy}><legend>{title}</legend>{children(value, next => { committed.current = undefined; change(next); setDirty(true); setSaved(false); })}
       <details><summary>Source revision & replacement</summary><p className={css.hint}>Draft base revision: {base}<br />Current revision: {revision}</p><p>Save replaces this native semantic unit. Remove omits it from this scope. Empty selections remain explicit.</p></details>
       {base !== revision && <div className={css.review}><p role="status">Source revision changed. Your draft and original revision are preserved. Review the current source before replacing it.</p><details><summary>Review current authored unit (redacted)</summary><pre>{JSON.stringify(initial, null, 2)}</pre></details></div>}
       <div className={css.actions}><Button variant="primary" type="submit">Save {title}</Button>

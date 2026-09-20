@@ -37,6 +37,31 @@ default against the available catalog at creation. Preparing or failed desired
 inputs cannot replace an existing available binding. An existing Session's resolved
 model and adopted context remain unchanged when availability advances.
 
+The coordinator's maps have distinct authorities:
+
+| State | Exact meaning |
+| --- | --- |
+| `available` | Latest complete validated component composition usable by a new Session, keyed by canonical source scope; it need not equal any whole authored revision. |
+| `desired_sources` | Newest coherently captured authored intent, including capture failure; never initial-binding authority. |
+| `scope_sources` | Session-to-source membership, retained independently of residency. |
+| Session retained binding | Exact configuration and model selection adopted by that Session. |
+| `scopes` | One Session's relationship and unit outcomes against captured desired intent. |
+| `inputs` / `pending` | Immutable input for that fenced application / latest queued work per Session. |
+| `ready` | Allocation-specific prepared candidate, fenced by application identity and expected adopted binding. |
+| `deferred` | Desired work waiting for natural residency or replacement allocation; never adopted configuration. |
+| `desired_process` / `process` | Latest process intent / one process-owned applied outcome projected into Session views. |
+
+Creation takes its initial descriptor from available authority. Once durable Session
+creation completes, `register_session_scope` publishes source membership and the
+retained binding under the same coordinator mutex. It joins the latest captured
+desired application, including any commit that raced durable creation, without
+rereading source files. Work is deferred until natural load; load first constructs
+the retained descriptor, then schedules allocation-specific preparation. A Session
+created while N+1 prepares therefore keeps N and obtains a concrete N+1 candidate
+without another Save or reconcile. Context-changing/unproven candidates require
+exact-identity explicit adoption. Cache-preserving publication retains the existing
+independent Attempt-boundary contract.
+
 Session applications have one bounded preparation worker and latest pending input
 per Session. A two-minute preparation deadline requests cancellation and retains
 the slot until physical preparation settles. Existing resource owners provide
@@ -65,11 +90,28 @@ Instructions can still be prepared from the retained adopted capabilities and
 provider plus the new instruction/context input and independently applied execution
 policy. Its candidate is a complete immutable snapshot. Explicit adoption changes
 only Ready units, preserving failed capability/provider outcomes for retry.
+After independent Instructions preparation succeeds, source availability composes
+its Instructions component with the source's available Capabilities and Provider,
+plus already-applied execution policy. This uses source availability rather than
+an arbitrary Session's older selection. Default model/context-budget and physical
+authority validation fence publication. Component revisions preserve C1/P1 and
+advance I2; no failed C2 or fictitious whole-source success is published. A later
+successful C2 preparation makes C2+I2 available without rewriting context-changing
+retained S1/S2 bindings. This is one explicit fixed-unit composition, not subset search.
 Conversely, cache-preserving capability changes can publish while independent
 instructions remain Ready. Failure reporting names the finite units whose
 preparation failed; it does not enumerate and fail all Preparing units. Component
 manifest identities follow Capabilities, Instructions and Provider through mixed
 composition in both the retained descriptor and execution resource snapshot.
+
+`ProspectiveSessionConfig::admitted_agent_dependencies` owns the Agent dependency
+set: directly selected Root Agents plus profiles referenced by every selected
+Workflow's Agent nodes, including nested nodes and invocation overrides. Capability
+equality compares those definitions; provider equality compares their explicit
+primary/summary model selections and catalog bindings. Workflow program identity
+already covers static invocation overrides (which cannot override instructions or
+models). Physical resource validation uses the same set at immutable admission and
+preparation. Unselected unrelated catalog definitions remain inert.
 
 The dedicated `settings/setModel` operation uses the same preparation and atomic
 binding commit, with durable selection CAS. It does not import unrelated pending
@@ -112,20 +154,26 @@ guards only.
 | --- | --- |
 | T01 | `tests/scripted/app_server/configuration.rs::t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture`: provider gate holds A across approval/timeout publication; B captures the new generation after A settles. |
 | T02 | Same file `t02_later_tool_batch_and_model_step_keep_admitted_registry_policy`; `tests/scripted/agent/retry.rs::transient_retry_uses_shared_identity_and_frozen_request`, `transient_and_overflow_recovery_share_ordinal_and_budgets`; `src/tools/native/subagent/mod.rs::t02_subagent_created_after_publication_inherits_admitted_policy`; `tests/boundary/subagent/conformance.rs::the_child_spec_carries_the_frozen_timeout_policy`; `src/runtime/workflow.rs::workflow_run_and_future_invocation_keep_separate_program_snapshots`. Provider/child gates and the manual retry clock prove later derived work retains captured inputs. |
-| T03 | Headless `t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adopted`: failure injected after construction retires the uncommitted capability candidate; instruction adoption retains the exact registry and Skill lease identities and failed capability status. Also `t03_mixed_application_and_true_process_binding_restart`; coordinator `t03_units_have_simultaneous_independent_outcomes`; Web/TUI mixed-state tests below. |
+| T03 | Strengthened `t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adopted` proves C1+I2 availability for a brand-new Session and C2+I2 after retry. Headless `t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adopted`: failure injected after construction retires the uncommitted capability candidate; instruction adoption retains the exact registry and Skill lease identities and failed capability status. Also `t03_mixed_application_and_true_process_binding_restart`; coordinator `t03_units_have_simultaneous_independent_outcomes`; Web/TUI mixed-state tests below. |
 | T04 | Headless `t04_session_relative_prefix_and_t09_policy_noop`: two Sessions retain different prefixes through one global policy edit. |
-| T05 | Both directions: `t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adopted` and `t05_complete_policy_registry_publishes_while_instructions_remain_pending`: policy-only registry closure publishes while the unrelated context candidate remains explicit. |
-| T06 | `t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget`: five cold Sessions, resident limit one, native worker acknowledgements, no added resident/loading entries, and successful natural load/rebind. Also `t06_offside_preparation_allows_admission_and_t07_new_failure_supersedes_old_candidate`: preparation gate parks off-side while admission proceeds; `src/capabilities/coordinator.rs::mcp_race_tests::an_old_lease_keeps_serving_its_generation_while_future_leases_resolve_to_the_new_one`. |
+| T05 | Real-child `t05_t09_workflow_only_agent_content_rebuilds_frozen_execution` and `t05_t09_workflow_only_agent_model_rebuilds_frozen_execution` verify old admitted execution and later Workflow execution. Both directions: `t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adopted` and `t05_complete_policy_registry_publishes_while_instructions_remain_pending`: policy-only registry closure publishes while the unrelated context candidate remains explicit. |
+| T06 | Creation registration queues no residency and natural load first uses the retained binding. `t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget`: five cold Sessions, resident limit one, native worker acknowledgements, no added resident/loading entries, and successful natural load/rebind. Also `t06_offside_preparation_allows_admission_and_t07_new_failure_supersedes_old_candidate`: preparation gate parks off-side while admission proceeds; `src/capabilities/coordinator.rs::mcp_race_tests::an_old_lease_keeps_serving_its_generation_while_future_leases_resolve_to_the_new_one`. |
 | T07 | Same headless gate test and `application.rs::t07_newer_failure_does_not_authorize_old_success_or_failure`: newer input/failure wins the source fence before old work resumes. |
 | T08 | Headless `t08_model_baseline_change_rejects_prepared_context`, `t08_model_capture_ignores_unrelated_resource_directories_t09_same_selection_noop`; `src/local_runtime/settings_e2e.rs::t08_capture_rejects_external_change_between_layers_and_resource_manifest`; coordinator `t08_failed_capture_has_no_manufactured_input_revision`. Publication gate pauses after preparation; model commit advances baseline before release. Capture hook edits the source after layer capture and before final manifest validation. |
-| T09 | `t09_available_default_preparation_is_independent_of_retained_session_selection` proves a new default and capability definition become available even when the old Session retains a removed model and its exact registry. `t09_t15_new_session_during_preparation_keeps_available_binding_after_success` and `t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_retry`: deterministic preparation gates prove actual retained model/context/component identity, unchanged S2, and new availability only after success. Also `t11_concrete_candidate_conflict_and_t09_healthy_rescan_preserves_candidate`, `t04_session_relative_prefix_and_t09_policy_noop`, `t09_unselected_model_and_default_edits_are_noop_for_existing_session_t15_new_default`, model-selection no-op above; MCP `an_unchanged_binding_and_definitions_is_a_true_noop`. |
+| T09 | The preparation-window test now waits for S2’s concrete candidate and explicitly adopts it with no second Save/reconcile, no model request and unchanged history. Workflow-only dependencies invalidate false no-ops. `t09_available_default_preparation_is_independent_of_retained_session_selection` proves a new default and capability definition become available even when the old Session retains a removed model and its exact registry. `t09_t15_new_session_during_preparation_keeps_available_binding_after_success` and `t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_retry`: deterministic preparation gates prove actual retained model/context/component identity, unchanged S2, and new availability only after success. Also `t11_concrete_candidate_conflict_and_t09_healthy_rescan_preserves_candidate`, `t04_session_relative_prefix_and_t09_policy_noop`, `t09_unselected_model_and_default_edits_are_noop_for_existing_session_t15_new_default`, model-selection no-op above; MCP `an_unchanged_binding_and_definitions_is_a_true_noop`. |
 | T10 | `src/model/request_shape.rs::t10_configuration_evidence_matches_all_actual_adapter_prefixes`: actual wire constructors cover history exclusion, instructions, Tool order, namespace, model context-window changes and unproven parameters for all three adapters. |
 | T11 | Headless `t11_admission_gate_orders_busy_adoption_without_cancelling_attempt`, `t11_concrete_candidate_conflict_and_t09_healthy_rescan_preserves_candidate`, `t12_lost_source_write_response_does_not_cancel_native_application`. Admission gate owns the runtime mutex before adoption arrives; Busy leaves A running. Explicit idle adoption then commits the inspected binding. |
-| T12 | `src/runtime_client/host.rs::resubscription_is_superseded_before_local_handle_publication` deterministically holds the host-registration/local-handle publication interval and proves resync cannot retire a live attachment. Also `t12_lost_source_write_response_does_not_cancel_native_application`: persistence acknowledgement hook parks the RPC, caller is aborted, native worker finishes; Web `test/client.test.ts` test `T12 native configuration notifications reject stale versions independently per Session`; TUI `test/convergence.test.ts` test `T12/T16 native application notifications reject reorder and adoption sends the inspected identity`; real Web `test/e2e/recovery.spec.ts`. |
-| T13 | `t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_retry`: the same desired revision fails then succeeds; only subsequently created Sessions obtain its new default and instructions. Also `t13_failed_preparation_retries_same_input_and_t14_latest_pending_is_bounded`, `t11_concrete_candidate_conflict_and_t09_healthy_rescan_preserves_candidate`; coordinator `t13_same_revision_retry_has_a_new_identity`. |
+| T12 | Web `test/settings.test.tsx` parameterized `T12/T16 source projection %s preserves subsequent drafts` (before acknowledgement, after acknowledgement, after the next edit). `src/runtime_client/host.rs::resubscription_is_superseded_before_local_handle_publication` deterministically holds the host-registration/local-handle publication interval and proves resync cannot retire a live attachment. Also `t12_lost_source_write_response_does_not_cancel_native_application`: persistence acknowledgement hook parks the RPC, caller is aborted, native worker finishes; Web `test/client.test.ts` test `T12 native configuration notifications reject stale versions independently per Session`; TUI `test/convergence.test.ts` test `T12/T16 native application notifications reject reorder and adoption sends the inspected identity`; real Web `test/e2e/recovery.spec.ts`. |
+| T13 | The partial-capability-failure test also checks independently available Instructions, then successful C2 retry. `t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_retry`: the same desired revision fails then succeeds; only subsequently created Sessions obtain its new default and instructions. Also `t13_failed_preparation_retries_same_input_and_t14_latest_pending_is_bounded`, `t11_concrete_candidate_conflict_and_t09_healthy_rescan_preserves_candidate`; coordinator `t13_same_revision_retry_has_a_new_identity`. |
 | T14 | Same headless test parks the sole preparation worker, commits twelve sources and observes only the active and latest pending preparations; coordinator `t14_pending_work_is_latest_wins_with_one_worker`; MCP `dropped_mcp_preparation_still_owes_physical_settlement`, `one_failed_mcp_close_never_abandons_a_sibling_runtime`, and old-lease test above cover physical settlement/retirement. |
-| T15 | `t09_available_default_preparation_is_independent_of_retained_session_selection`, `t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget`, `t09_t15_new_session_during_preparation_keeps_available_binding_after_success`, `t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_retry`, `t15_unload_load_does_not_adopt_pending_context`, `t09_unselected_model_and_default_edits_are_noop_for_existing_session_t15_new_default`; `tests/process/app_server.rs::app_server_current_sources_and_persisted_selection_survive_process_reconstruction`. |
-| T16 | Headless tests above; protocol `web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolution` waits for native availability before new Session creation; Web `test/settings.test.tsx` test `T03/T16 renders simultaneous native application outcomes without inferring field impact`; TUI `test/convergence.test.ts` test `T03/T16 permissions render native mixed application state`; TUI `test/commands.test.ts` test `T16 rescans only through native reconciliation`; real Web settings, integrations, console and recovery acceptance. |
+| T15 | The strengthened preparation-window test proves eventual explicit adoption; the partial-failure test checks new S2=C1+I2 and S3=C2+I2. `t09_available_default_preparation_is_independent_of_retained_session_selection`, `t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget`, `t09_t15_new_session_during_preparation_keeps_available_binding_after_success`, `t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_retry`, `t15_unload_load_does_not_adopt_pending_context`, `t09_unselected_model_and_default_edits_are_noop_for_existing_session_t15_new_default`; `tests/process/app_server.rs::app_server_current_sources_and_persisted_selection_survive_process_reconstruction`. |
+| T16 | The same three source-projection/draft ordering regressions in T12. Headless tests above; protocol `web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolution` waits for native availability before new Session creation; Web `test/settings.test.tsx` test `T03/T16 renders simultaneous native application outcomes without inferring field impact`; TUI `test/convergence.test.ts` test `T03/T16 permissions render native mixed application state`; TUI `test/commands.test.ts` test `T16 rescans only through native reconciliation`; real Web settings, integrations, console and recovery acceptance. |
+
+Settings editors consume their own save acknowledgement whether source publication
+arrives before or after it. A subsequent edit clears that acknowledgement; later
+configuration notifications cannot overwrite the new draft or adopt a newer CAS
+revision. Three promise-controlled tests exercise both response orders and a
+projection delayed until after the next edit.
 
 ## Protocol and clients
 

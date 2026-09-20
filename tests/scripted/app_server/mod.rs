@@ -128,7 +128,20 @@ impl Fixture {
         let provider = FixtureServer::start_with_body(move |_, _, body| {
             let index = usize::from(body.contains("request-B"));
             let request: serde_json::Value = serde_json::from_str(body).unwrap();
+            if tool == Some("review") {
+                let child = request["tools"].as_array().unwrap().iter().any(|tool| tool["function"]["name"] == "workflow_output");
+                let messages = request["messages"].as_array().unwrap();
+                if child || messages.last().is_some_and(|message| message["role"] == "user") {
+                    let name = if child { "workflow_output" } else { "review" };
+                    let chunk = serde_json::json!({"id":"workflow","object":"chat.completion.chunk","created":1,"model":"a",
+                        "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"workflow-call","type":"function",
+                            "function":{"name":name,"arguments":"{}"}}]},"finish_reason":"tool_calls"}]});
+                    return FixtureReply::body(200,"OK","text/event-stream",format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+                        .with_header_gate(server_gates[index].clone());
+                }
+            }
             if let Some(name) = tool
+                && name != "review"
                 && !request["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool") {
                 let arguments = if name == "ask_user" {
                     serde_json::json!({"questions":[{"question":"Continue?", "header":"Decision", "options":[
@@ -222,7 +235,18 @@ impl Fixture {
             controller,
             UserConfigManager::new(paths.sources.clone()).unwrap(),
             CredentialSnapshot::new([("TEST_KEY".into(), "fixture".into())]),
-            LocalRuntimeDependencies::default(),
+            LocalRuntimeDependencies {
+                child_program: (tool == Some("review")).then(|| {
+                    std::env::current_exe()
+                        .unwrap()
+                        .parent()
+                        .unwrap()
+                        .parent()
+                        .unwrap()
+                        .join("rustx")
+                }),
+                ..LocalRuntimeDependencies::default()
+            },
             RuntimeResidencyPolicy {
                 max_resident_runtimes: 8,
                 idle_grace_ms: 300_000,
