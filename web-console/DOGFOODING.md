@@ -86,11 +86,10 @@ exploration intentionally leaves the provider script unconsumed.
 6. Send `Publish while detached`. After `Preparing a question.`, close A's view. Release
    `publish-question` using the same gate URL pattern. Open A; answer the native
    question and observe `Detached question completed.`.
-7. In Settings save User model `fixture/second-model`. Current runtime remains
-   unchanged. Use Settings → Reload for safe live configuration publication,
-   then verify the selected model in Inspector. Safe live publication preserves the
-   current incarnation and history. Automatic idle eviction is tested with the
-   native manual clock, not a wall-clock wait in this guide.
+7. In Settings save a global default model. Existing Sessions retain their selected
+   model. Deliberately change the current Session through its model selector while
+   idle. Instruction changes prepare automatically and require **Adopt prepared
+   context**. External file edits enter through **Rescan configuration files**.
 8. Search Session metadata, try grouped/flat navigation, rename/reorder and
    unregister Workspace B. Its Session still exists and can be opened as an
    authorized unregistered cwd. No unregister operation cancels/deletes it.

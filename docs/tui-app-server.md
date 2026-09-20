@@ -19,7 +19,7 @@ it does not replay Save, adoption or other prior side effects.
 See [configuration](configuration.md) and [development](../DEVELOPMENT.md) for launch
 commands, and [the protocol](app-server-protocol.md) for transport/attachment semantics.
 
-## Durable Session lifecycle (v13)
+## Durable Session lifecycle (v14)
 
 `/resume` opens a durable Session and implicitly ensures a compatible runtime.
 Closing a view only detaches. No manual unload command or ordinary residency
@@ -41,4 +41,4 @@ generations fence late reads and paging. Reconnect/resync remembers only the
 selected SubagentId and reconstructs through `subagent/transcript` on the current
 parent AttachmentTarget, displaying explicit unavailable history when needed.
 No child Session/Composer or HITL owner is created. See the
-[protocol contract](app-server-protocol.md#read-only-native-subagent-conversations-v13).
+[protocol contract](app-server-protocol.md#read-only-native-subagent-conversations-v14).

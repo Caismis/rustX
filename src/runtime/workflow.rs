@@ -4040,6 +4040,23 @@ chat_reasoning_replay = "omit"
             "old generation"
         );
 
+        let old_policy = old_context.execution_policy();
+        let mut future = crate::local_runtime::config::CurrentRuntimeConfig::from_toml_slice(
+            b"[agent.model]\nmodel = \"local/model\"\n",
+        )
+        .unwrap();
+        future.model_timeout_policy.response_start_timeout_ms = 41_000;
+        future.tool_deadline_policy.hard_deadline_ms = 42_000;
+        future.context.reserve_tokens = 123;
+        // Capture precedes publication; the Workflow's child is not prepared
+        // until after this native registry publication has completed.
+        plane.registry.publish_configuration(&future);
+        let new_policy = crate::runtime::subagent::InheritedExecutionPolicy {
+            model_timeout: future.timeout_policy().unwrap(),
+            tool_deadline: future.tool_deadline_policy().unwrap(),
+            context: future.context_policy(),
+        };
+        assert_ne!(old_policy, new_policy);
         let (_, old_cancellation) = workflow_cancellation();
         let old_task = tokio::spawn({
             let runtime = runtime.clone();
@@ -4056,6 +4073,10 @@ chat_reasoning_replay = "omit"
             }
         });
         old_child.expect_delegate().await;
+        assert_eq!(
+            plane.registry.prepared_execution_policies(),
+            vec![old_policy]
+        );
 
         // Construct the replacement immutable generation while the first run
         // is still parked at its native child. The run owns the old Arc and
@@ -4073,7 +4094,8 @@ chat_reasoning_replay = "omit"
             2,
             "new generation instructions",
             new_catalog.clone(),
-        );
+        )
+        .with_test_policy(new_policy);
         assert_eq!(new_context.resources().revision().get(), 2);
         assert_eq!(
             new_context
@@ -4113,6 +4135,10 @@ chat_reasoning_replay = "omit"
             }
         });
         new_child.expect_delegate().await;
+        assert_eq!(
+            plane.registry.prepared_execution_policies(),
+            vec![old_policy, new_policy]
+        );
         new_child
             .send_result(
                 crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,

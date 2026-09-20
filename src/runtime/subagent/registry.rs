@@ -505,6 +505,8 @@ struct RegistryState {
     /// spawning the real child binary.
     #[cfg(test)]
     staged_overrides: std::collections::VecDeque<StagedChild>,
+    #[cfg(test)]
+    prepared_policies: Vec<super::InheritedExecutionPolicy>,
     /// Signals the production allocation attempt; substitutes only process
     /// staging AFTER the real identity/incarnation reservation has completed.
     #[cfg(test)]
@@ -702,7 +704,7 @@ pub struct SubagentSnapshot {
     /// The deterministic definition digest frozen at start (Issue #144).
     ///
     /// The snapshot reports the definition the child actually started with,
-    /// so a configuration reload that redefines the same agent name can never
+    /// so a configuration adoption that redefines the same agent name can never
     /// make an already-running child appear to have the new definition.
     pub definition_digest: String,
     /// The deterministic **effective execution profile** digest frozen at
@@ -1455,6 +1457,8 @@ impl SubagentRegistry {
                 #[cfg(test)]
                 staged_overrides: std::collections::VecDeque::new(),
                 #[cfg(test)]
+                prepared_policies: Vec::new(),
+                #[cfg(test)]
                 allocation_test_hook: None,
             })),
             state_version: tokio::sync::watch::Sender::new(0),
@@ -1509,8 +1513,8 @@ impl SubagentRegistry {
         self.config.mailbox.shares_domain_with(other)
     }
 
-    /// Called only under the configuration publication gate after quiescence.
-    /// Previously admitted child specs already own copies of these values.
+    /// Updates the shared admission limit under the native publication fence.
+    /// Existing execution retains its separate immutable policy.
     pub(crate) fn publish_configuration(
         &self,
         config: &crate::local_runtime::config::CurrentRuntimeConfig,
@@ -1975,6 +1979,12 @@ impl SubagentRegistry {
         preparation_cancellation: &CancellationSignal,
         access: &mut Option<WorkspaceAccess>,
     ) -> Result<PreparedSubagent, SubagentStartError> {
+        #[cfg(test)]
+        self.state
+            .lock()
+            .unwrap()
+            .prepared_policies
+            .push(spec.execution_policy);
         if let Some(access) = access.as_ref() {
             let matches = matches!(&spec.terminal, SubagentTerminalMode::WorkflowOutput { node_id, .. } if node_id.as_ref() == access.node());
             if !matches || spec.resolved.workspace_policy != access.policy() {
@@ -2220,6 +2230,11 @@ impl SubagentRegistry {
 
     /// Installs a pre-staged child `prepare` consumes instead of spawning
     /// (tests only).
+    #[cfg(test)]
+    pub(crate) fn prepared_execution_policies(&self) -> Vec<super::InheritedExecutionPolicy> {
+        self.state.lock().unwrap().prepared_policies.clone()
+    }
+
     #[cfg(test)]
     pub(crate) fn push_staged_override(&self, staged: StagedChild) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);

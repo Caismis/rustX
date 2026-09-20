@@ -5417,6 +5417,11 @@ impl ConversationRuntime {
             .is_some()
     }
 
+    #[cfg(test)]
+    pub(crate) async fn wait_for_configuration_admissions(&self) {
+        self.inner.lifecycle.wait_for_no_admissions().await;
+    }
+
     pub(crate) fn idle_epoch(&self) -> Result<u64, IdleBusyReason> {
         self.inner.idle_epoch_locked(&self.inner.lock_state())
     }

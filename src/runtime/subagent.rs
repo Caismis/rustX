@@ -305,6 +305,14 @@ impl core::fmt::Debug for AttemptSubagentContext {
 
 impl AttemptSubagentContext {
     #[cfg(test)]
+    pub(crate) fn with_test_policy(mut self, policy: InheritedExecutionPolicy) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("unique test context")
+            .policy = policy;
+        self
+    }
+
+    #[cfg(test)]
     pub(crate) fn test_context(
         attempt_id: crate::runtime::identity::AttemptId,
         resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,

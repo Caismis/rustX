@@ -1670,7 +1670,7 @@ fn compaction_surface_replace_is_atomic() {
     );
 }
 
-/// Compaction is not a configuration reload boundary: the request issued after a
+/// Compaction is not a configuration publication boundary: the request issued after a
 /// committed compaction still carries the generation the runtime loaded, even
 /// though the project instructions and the Skill catalog changed on disk in
 /// between.
@@ -1706,7 +1706,7 @@ fn compaction_never_refreshes_resource_derived_authority() {
     assert_eq!(
         snapshots[0].runtime_resource_revision,
         snapshots[snapshots.len() - 1].runtime_resource_revision,
-        "compaction is not a configuration reload boundary"
+        "compaction is not a configuration publication boundary"
     );
 }
 

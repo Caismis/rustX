@@ -163,7 +163,7 @@ use super::inbox::{
 /// durable `SubagentOwnershipCommitted` fact carries `(agent,
 /// definition_digest)` instead of a profile name, so an already-committed
 /// child stays bound to the definition it actually started with even after a
-/// configuration reload redefines that agent name.
+/// configuration publication redefines that agent name.
 ///
 /// Version 18 freezes Issue #146's workspace authority facts: a committed
 /// child records its exact workspace snapshot, including the committed base

@@ -91,13 +91,13 @@ actual destructive exclusion.
 ## Protocol and clients
 
 The original Session lifecycle transition was App Server v7 → v8; the current
-mandatory protocol is **v13**. `rustx.app-server.v14` is the only WebSocket
+mandatory protocol is **v14**. `rustx.app-server.v14` is the only WebSocket
 subprotocol. Rust initialization, TUI initialization/decoder/transport, Web
-initialization/transport, fixtures, schema generation and drift checking all use v13.
+initialization/transport, fixtures, schema generation and drift checking all use v14.
 The previous version is rejected, with no fallback.
 
 - Removed `session/unload`, its `unloaded` result, list `residencies`, and deletion blockers `current_session` / residency-only `in_use`.
-- Added semantic `session/switchNode`. The speculative `session/restart` method was removed during review because neither product client consumes it. Internal manager replacement and safe live configuration reload remain.
+- Added semantic `session/switchNode`. The speculative `session/restart` method was removed during review because neither product client consumes it. Internal manager replacement and native configuration application remain.
 - Generated `protocol/app-server/v14.ts`, `v14.schema.json`, `fixtures.ts`, `fixtures.json`; removed v7 files under the single-current-version convention.
 - TUI: removed `/unload`, registration/help/completion, selector residency badges and switch-away deletion restriction; branch confirmation says “Switch to this branch”. Focused deletion and reconnect verification use native outcomes.
 - Web: removed public unload/advanced residency controls and `sessionResidencies`; Close view only detaches, Open Session implicitly acquires residency. Current deletion disables controls and removes the view after authoritative completion. Settings uses semantic Open/Reload wording.
@@ -154,7 +154,7 @@ Reviewed [delete confirmation](../web-console/test/e2e/shell.spec.ts-snapshots/s
 and [Inspector](../web-console/test/e2e/shell.spec.ts-snapshots/desktop-right-panel-linux.png)
 references preserve the current layout. Full acceptance exercises responsive/keyboard
 navigation, shared-server TUI, real native work, branch switching, focused deletion,
-configuration reload and reconnect.
+configuration adoption and reconnect.
 
 Development checks initially found obsolete unload/residency test expectations,
 old v7 process initialization payloads, client type/fixture mismatches, a focused-TUI

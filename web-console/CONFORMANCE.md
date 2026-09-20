@@ -90,7 +90,8 @@ admitted demand drives MCP/Python preparation. Current Todo/Goal/Queue state bel
 to its conversation/domain owner, outside configuration.
 
 Web owns drafts/forms; Effective is a native read-only projection. Save commits
-source bytes by CAS; Reload publishes one coherent generation. Named-Agent and MCP
+source bytes by CAS and transfers reconciliation to the native coordinator. Complete
+cache-preserving units apply automatically; prepared context changes need explicit Session adoption. Named-Agent and MCP
 editors are structured; full Skill/Python/Workflow source editors are not required.
 
 ## Synchronization and fault injection

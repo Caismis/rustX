@@ -78,14 +78,11 @@ Both variants park while the store's connection mutex is held, so a parked
 child cannot commit anything durable from any other thread. "Killed before P"
 therefore means the durable authority provably contains no P.
 
-Two durable planes outside the conversation store use the same seam with their
-own exclusion, because the fact they linearize is not a SQLite transaction:
-`reload:prepared` / `reload:published` sit under the runtime's own
-one-reload-at-a-time gate, and `before/after:publish_session` /
-`before/after:publish_node` bracket the Session catalog's visibility rename
-under the supervisor state mutex the whole publish operation holds. In each
-case the parked thread owns the only path that can advance that plane, so the
-durable world is frozen for the same reason.
+The Session catalog uses `before/after:publish_session` and
+`before/after:publish_node` to bracket its visibility rename under its publication
+mutex. The parked thread owns the path that can advance this durable plane.
+Configuration application is process-local; its publication and adoption races
+are covered by the [deterministic configuration matrix](issue-380-implementation.md).
 
 The second rendezvous kind is a **control rendezvous**: the child announces a
 fact and blocks reading its next command, so it is executing nothing at all.

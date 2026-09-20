@@ -1008,7 +1008,8 @@ impl LocalConversationCore {
                     detail: error.to_string(),
                 })?,
         );
-        let state = SessionPersistentState::from_input(&paths.input);
+        let mut state = SessionPersistentState::from_input(&paths.input);
+        state.model = Some(paths.config.initial_model().clone());
         let mut catalog = match SessionCatalog::open_existing(lifecycle.root())? {
             Some(catalog) => catalog,
             None => SessionCatalog::create_unpublished(lifecycle.root(), &state)?,
@@ -1974,7 +1975,8 @@ impl LocalSessionClient {
     ) -> Result<Self, LocalRuntimeError> {
         // /new uses this client's explicit launch inputs, not settings copied
         // from the Session that a cold resume is about to resolve.
-        let new_session_settings = SessionPersistentState::from_input(&paths.input);
+        let mut new_session_settings = SessionPersistentState::from_input(&paths.input);
+        new_session_settings.model = Some(paths.config.initial_model().clone());
         // Admit the one native catalog owner before reading any persisted input.
         // Retain it through resolution/composition, without a catalog mutex.
         let lifecycle = Arc::new(
@@ -2018,7 +2020,8 @@ impl LocalSessionClient {
         let runtime_config = paths.config.as_ref().clone();
         let registry = load_model_registry(paths, dependencies)?;
         SessionModelState::new(registry.clone(), runtime_config.initial_model().clone())?;
-        let state = SessionPersistentState::from_input(&paths.input);
+        let mut state = SessionPersistentState::from_input(&paths.input);
+        state.model = Some(paths.config.initial_model().clone());
         // A first launch builds the root Session in memory and publishes
         // nothing yet. `catalog.json` is written by the one startup
         // transaction below, together with whatever else this launch

@@ -46,7 +46,6 @@ These captures come from the real App Server/provider-emulator acceptance suite:
 - [Effective values and native provenance](images/cfg3-effective-provenance.png)
 - [Named-Agent source editor (historical layout)](images/cfg3-named-agent.png)
 - [External-edit CAS conflict preserving the draft](images/cfg3-cas-conflict.png)
-- [Failed reload retaining the published generation](images/cfg3-reload-failed.png)
 - [Mobile named-Agent editor after publication](images/cfg3-settings-mobile.png)
 
 ## Harness integration

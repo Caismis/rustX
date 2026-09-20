@@ -33,7 +33,7 @@ const invalidTool: MessageBlock = missingOwner;
 void nativeOwner;
 void invalidTool;
 
-// Native response projections and explicit cut side are the mandatory v13 contract.
+// Native response projections and explicit cut side are the mandatory v14 contract.
 import type {CompletedResponseView, Request1} from './v14.js';
 const completed = {
   closing_message_id: 'destination-assistant',

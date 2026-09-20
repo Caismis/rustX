@@ -426,6 +426,7 @@ async fn t11_admission_gate_orders_busy_adoption_without_cancelling_attempt() {
         let settlement = runtime.settlement_signal();
         fixture.gates[0].release();
         settlement.notified().await;
+        runtime.wait_for_configuration_admissions().await;
         fixture
             .manager
             .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)

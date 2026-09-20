@@ -198,7 +198,7 @@ async fn app_server_websocket_real_process_shared_conformance_and_listener_survi
         replacement.send(INITIALIZE.into()).await.unwrap();
         assert_eq!(
             json_response(&mut replacement).await["result"]["protocol_version"],
-            13
+            14
         );
         kill(
             Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
@@ -213,10 +213,15 @@ async fn app_server_websocket_real_process_shared_conformance_and_listener_survi
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 async fn json_response(socket: &mut Socket) -> serde_json::Value {
-    let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
-        panic!("text response");
-    };
-    serde_json::from_str(text.as_str()).unwrap()
+    loop {
+        let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+            panic!("text response");
+        };
+        let value: serde_json::Value = serde_json::from_str(text.as_str()).unwrap();
+        if value.get("id").is_some() {
+            return value;
+        }
+    }
 }
 
 #[tokio::test]
@@ -975,8 +980,22 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
         let client = driver::websocket(&url).await;
         initialize_client(&client).await;
         let a = attach(&client, f.sessions[0].clone(), 2).await;
+        let mut selected: rustx::model::session::SessionModelConfig =
+            serde_json::from_value(snapshot(&client, &a).await["model"]["configured"].clone())
+                .unwrap();
+        selected
+            .request_params
+            .insert("temperature".into(), serde_json::json!(0.42));
+        result(
+            &client,
+            Method::ModelSet {
+                target: a.clone(),
+                config: Box::new(selected),
+            },
+        )
+        .await;
         let a_initial = snapshot(&client, &a).await;
-        // Session creation already pins the resolved model selection.
+        // Deliberate Session selection survives process reconstruction.
         start_turn(&client, &a, "tui multi-session: session A long task").await;
         provider.await_gate("session-a-holding").await;
         let admitted = snapshot(&client, &a).await["attempt"].clone();
@@ -1120,6 +1139,8 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         assert_ne!(processes[0].id(), processes[1].id());
         // IDs are scoped to a user's root (and may have identical spellings).
         // Even that spelling on the other process reads only its own metadata.
+        // IDs are scoped to a user's root (and may have identical spellings).
+        // Even that spelling on the other process reads only its own metadata.
         for (index, client) in clients.iter().enumerate() {
             let other = 1 - index;
             let list = result(client, Method::SessionList { query: Some(format!("user-{}-private", users[other].0)), offset: 0, limit: 32 }).await;
@@ -1141,17 +1162,12 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             assert_eq!(failure.error.data, Some(ErrorData::UnknownSession { session_id: id }));
         }
         for (index, client) in clients.iter().enumerate() {
-            use app_server_conformance::AppServerConformanceDriver;
             let mut model: rustx::model::session::SessionModelConfig = serde_json::from_value(snapshot(client, &targets[index]).await["model"]["configured"].clone()).unwrap();
             model.request_params.insert("temperature".into(), serde_json::json!(0.42));
-            result(client, Method::ModelSet { target: targets[index].clone(), config: Box::new(model) }).await;
-            loop {
-                let notification = client.next_notification().await;
-                let NotificationMethod::Event { target, event, .. } = notification.notification else { panic!("unexpected invalidation") };
-                assert_eq!(target, targets[index]);
-                assert!(!serde_json::to_string(&event).unwrap().contains(&format!("{}:unset", users[1 - index].0)));
-                if matches!(*event, rustx::runtime_client::event::RuntimeClientEvent::SessionModelChanged { .. }) { break; }
-            }
+            let Response::Failure(failure) = rpc(client, 100, Method::ModelSet { target: targets[index].clone(), config: Box::new(model) }).await else { panic!("busy model change accepted") };
+            assert_eq!(failure.error.data, Some(ErrorData::ConfigurationAdoption {
+                rejection: rustx::local_runtime::configuration::application::AdoptionError::Busy
+            }));
         }
         let a_pid = processes[0].id();
         let a_before = snapshot(&clients[0], &targets[0]).await;

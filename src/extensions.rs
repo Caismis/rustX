@@ -5,7 +5,7 @@
 //! Plugins compose through the existing Context Assembly, Tool Plane, and
 //! Conversation owners; there is no dynamic loader or third-party lifecycle API.
 //!
-//! A configuration generation freezes composition. Reload prepares and publishes
+//! A configuration generation freezes composition. Native preparation stages and publishes
 //! the complete next generation at a safe boundary. Admitted work keeps its old
 //! composition. Todo lists and Goal state remain Conversation domain state.
 //! Named Agents own independent composition; Root authorizes their names, not

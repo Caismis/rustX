@@ -430,8 +430,8 @@ async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
     let catalog = std::fs::read_to_string(startup.runtime_root.join("sessions/catalog.json"))
         .expect("corrected startup published a root Session");
     assert!(
-        !catalog.contains("local/model-a"),
-        "source defaults remain omitted durable input"
+        catalog.contains("local/model-a"),
+        "Session creation pins the successfully resolved model default"
     );
     assert!(!catalog.contains("local/missing"));
 }

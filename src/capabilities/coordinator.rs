@@ -169,7 +169,7 @@ struct CoordinatorInner {
     /// Closed Plugin Tool registrations backed by this conversation's domain owners.
     /// The owner-backed registration set is stable. Each candidate's resolved
     /// profile independently selects explicitly enabled Plugins from that set;
-    /// configuration reload can change that selection at the safe publication
+    /// configuration publication can change that selection at the safe publication
     /// boundary without replacing Todo/Goal current state.
     extension_tools: crate::extensions::ExtensionToolPlane,
     environment_store: EnvironmentStore,
@@ -293,7 +293,7 @@ pub struct CapabilityCoordinator {
 }
 
 /// The unforgeable capability-publication authority held by a live
-/// `ConversationRuntime`. A runtime configuration reload must present this token
+/// `ConversationRuntime`. A runtime configuration publication must present this token
 /// to advance the capability generation; ordinary callers only retain the
 /// standalone coordinator commit API.
 pub(crate) struct RuntimeCapabilityPublication {
@@ -336,7 +336,7 @@ pub struct CapabilityResourceInputs {
 ///
 /// **Exception.** A commit made by the claiming `ConversationRuntime`
 /// (see [`CapabilityCoordinator::commit_runtime`]) fires no callback at
-/// all. That commit is one half of a runtime configuration reload, and the
+/// all. That commit is one half of a runtime configuration publication, and the
 /// runtime publishes the whole generation — capability, availability, and
 /// resources — as a single observation. Firing here as well would let a
 /// consumer fold the capability half on its own and briefly present a
@@ -393,7 +393,7 @@ pub struct PreparedCapabilityCandidate {
     /// publishes back as the coordinator's authoritative reload state.
     effective_mcp_servers: crate::tools::mcp::McpServerBindings,
     resource_inputs: CapabilityResourceInputs,
-    /// Explicit runtime-configuration reload must publish the candidate registry
+    /// Explicit runtime-configuration publication must publish the candidate registry
     /// even when model-facing definitions are byte-identical: executor
     /// configuration is not represented by those definitions.
     force_publish: bool,

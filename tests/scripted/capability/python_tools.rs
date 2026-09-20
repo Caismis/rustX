@@ -305,7 +305,7 @@ fn assert_demo_connect_failed(candidate: &rustx::capabilities::PreparedCapabilit
     );
 }
 
-/// Explicit reload capture: the already-published candidate never rereads files itself.
+/// Immutable resource capture: the already-published candidate never rereads files itself.
 fn reread_demo(fixture: &Fixture) -> rustx::capabilities::CapabilityResourceInputs {
     rustx::capabilities::CapabilityResourceInputs {
         source_demand: common::source_demand(&fixture.workspace_root, ["python:demo"]),

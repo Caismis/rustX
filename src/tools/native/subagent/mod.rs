@@ -1096,6 +1096,39 @@ chat_reasoning_replay = "omit"
         );
     }
 
+    /// T02: registry publication precedes the model-created delegation, but
+    /// the actual intrinsic forwards the admitting Attempt's immutable policy.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn t02_subagent_created_after_publication_inherits_admitted_policy() {
+        let mut plane = delegation_plane();
+        let old = plane.subagent_context.execution_policy();
+        let mut future = crate::local_runtime::config::CurrentRuntimeConfig::from_toml_slice(
+            b"[agent.model]\nmodel = \"local/model\"\n",
+        )
+        .unwrap();
+        future.model_timeout_policy.response_start_timeout_ms = 41_000;
+        future.tool_deadline_policy.hard_deadline_ms = 42_000;
+        future.context.reserve_tokens = 123;
+        plane.subagents.publish_configuration(&future);
+        let new = crate::runtime::subagent::InheritedExecutionPolicy {
+            model_timeout: future.timeout_policy().unwrap(),
+            tool_deadline: future.tool_deadline_policy().unwrap(),
+            context: future.context_policy(),
+        };
+        assert_ne!(old, new);
+        let arguments = serde_json::json!({"agent":"reviewer", "task":"review"});
+        let _ = invoke_subagent(&plane, arguments.clone()).await;
+        assert_eq!(plane.subagents.prepared_execution_policies(), vec![old]);
+        plane.subagent_context = plane.subagent_context.with_test_policy(new);
+        let _ = invoke_subagent(&plane, arguments).await;
+        assert_eq!(
+            plane.subagents.prepared_execution_policies(),
+            vec![old, new]
+        );
+        assert!(plane.subagents.listing(false, 16).snapshots.is_empty());
+    }
+
     /// Issue #188 — the model-facing regression.
     ///
     /// This drives the real `subagent` intrinsic against a real registry and

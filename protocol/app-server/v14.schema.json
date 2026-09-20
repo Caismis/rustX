@@ -11429,7 +11429,7 @@
           "type": "string"
         },
         "definition_digest": {
-          "description": "The deterministic definition digest frozen at start (Issue #144).\n\nA client observing an already-running child sees the definition it\nactually started with, so a later configuration reload that redefines the\nsame agent name can never be mistaken for a change to that child.",
+          "description": "The deterministic definition digest frozen at start (Issue #144).\n\nA client observing an already-running child sees the definition it\nactually started with, so a later configuration adoption that redefines the\nsame agent name can never be mistaken for a change to that child.",
           "type": "string"
         },
         "profile_digest": {
@@ -12788,7 +12788,7 @@
           "$ref": "#/$defs/CapabilityView"
         },
         "resources": {
-          "description": "The active runtime resource generation: the project context files\nthe runtime actually loaded, and whether an agent profile is frozen\ninto the generation.\n\nThis is deliberately separate from [`CapabilityView`]: a\nresource-only reload advances the resource revision while the\ncapability revision stays put. Nothing here is conversation content\n— a project context file is request input the runtime assembles into\nthe Effective System Prompt, never a canonical Ledger message.",
+          "description": "The active runtime resource generation: the project context files\nthe runtime actually loaded, and whether an agent profile is frozen\ninto the generation.\n\nThis is deliberately separate from [`CapabilityView`]: a\nresource publication advances the resource revision while the\ncapability revision stays put. Nothing here is conversation content\n— a project context file is request input the runtime assembles into\nthe Effective System Prompt, never a canonical Ledger message.",
           "$ref": "#/$defs/RuntimeClientResourcesView",
           "default": {
             "inspection": {
@@ -19074,7 +19074,7 @@
           ]
         },
         {
-          "description": "The runtime published a new immutable resource generation: the\nproject context files it loaded **and** the capability generation\nthey were composed against, as one fact.\n\nA reload commits both halves together, so it publishes one event\ncarrying both. Splitting it into a capability event beside a\nresource event would allocate two cursors, and an incremental client\nthat folds events — rather than re-reading `snapshot_get` — would\nthen hold the new capability generation beside the resource\ngeneration the same reload retired. That pairing never existed in\nthe runtime, so it is never published.\n\nBoth halves travel even when only one moved: a reload that changes\nonly an `AGENTS.md` advances the resource revision and repeats the\nunchanged capability view, and a reload that only rebuilds tools\ndoes the converse. The carried revisions, not the event's presence,\ntell a client what changed.\n\n[`Self::CapabilityUpdated`] remains the observation for a capability\ncommit that is *not* a resource generation — an availability\ntransition or an activation committed on its own authority.",
+          "description": "The runtime published a new immutable resource generation: the\nproject context files it loaded **and** the capability generation\nthey were composed against, as one fact.\n\nA configuration commit commits both halves together, so it publishes one event\ncarrying both. Splitting it into a capability event beside a\nresource event would allocate two cursors, and an incremental client\nthat folds events — rather than re-reading `snapshot_get` — would\nthen hold the new capability generation beside the resource\ngeneration the same commit retired. That pairing never existed in\nthe runtime, so it is never published.\n\nBoth halves travel even when only one moved: a configuration commit that changes\nonly an `AGENTS.md` advances the resource revision and repeats the\nunchanged capability view, and a configuration commit that only rebuilds tools\ndoes the converse. The carried revisions, not the event's presence,\ntell a client what changed.\n\n[`Self::CapabilityUpdated`] remains the observation for a capability\ncommit that is *not* a resource generation — an availability\ntransition or an activation committed on its own authority.",
           "type": "object",
           "properties": {
             "plugins": {
@@ -19098,7 +19098,7 @@
               "$ref": "#/$defs/CapabilityView"
             },
             "resources": {
-              "description": "The active runtime resource projection after the reload.",
+              "description": "The active runtime resource projection after the commit.",
               "$ref": "#/$defs/RuntimeClientResourcesView"
             },
             "type": {

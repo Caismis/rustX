@@ -4636,7 +4636,7 @@ The outermost layer exposes the runtime to humans and other systems:
 - Runtime command interface
 - Runtime projection/event streaming
 
-See [App Server protocol v13](app-server-protocol.md) for the method vocabulary,
+See [App Server protocol v14](app-server-protocol.md) for the method vocabulary,
 generated client schemas, connection multiplexing, weak attachment lifetime and
 headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
 local TUI-owned child and WebSocket for browser/remote/existing-server clients;
@@ -4661,7 +4661,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v13
+       App Server protocol v14
 ```
 
 The governing invariant is that all authoritative execution and
@@ -6940,7 +6940,7 @@ See [Session-owned workspace uploads](session-uploads.md) for receipt admission,
 
 ### Pending inbound mutation and committed claim receipts
 
-The exact pending controls described in [App Server protocol v13](app-server-protocol.md#exact-pending-inbound-controls-web-06)
+The exact pending controls described in [App Server protocol v14](app-server-protocol.md#exact-pending-inbound-controls-web-06)
 remain native `ConversationStore` transitions. Sequence + MessageId identify one
 occurrence, and a monotonic pending revision prevents lost updates. The durable
 mutation transaction and canonical adoption transaction are the only ownership
@@ -7012,4 +7012,4 @@ and retained workspace facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-subagent-conversations-v13).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-subagent-conversations-v14).

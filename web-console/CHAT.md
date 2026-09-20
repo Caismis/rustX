@@ -251,7 +251,7 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v13 (`rustx.app-server.v14` and generated
+The mandatory App Server vocabulary is v14 (`rustx.app-server.v14` and generated
 `protocol/app-server/v14.ts` / `v14.schema.json`). v12 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
@@ -332,7 +332,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v14, Runtime Client v43, SQLite v42, and Session catalog v12, with no
+App Server v14, Runtime Client v44, SQLite v42, and Session catalog v12, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
