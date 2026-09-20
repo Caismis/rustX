@@ -22,6 +22,7 @@ pub struct ConfigurationRequestShape {
     binding: FrozenProviderBinding,
     request: ModelRequest,
     wire: serde_json::Value,
+    context_window: u64,
     summary: Option<Box<Self>>,
 }
 
@@ -32,6 +33,7 @@ impl ConfigurationRequestShape {
     /// Returns the same validation/translation error as actual construction.
     pub fn capture(
         binding: FrozenProviderBinding,
+        context_window: u64,
         mut request: ModelRequest,
     ) -> Result<Self, crate::model::ModelError> {
         request.messages.clear();
@@ -55,6 +57,7 @@ impl ConfigurationRequestShape {
         };
         Ok(Self {
             binding,
+            context_window,
             request,
             wire,
             summary: None,
@@ -75,6 +78,11 @@ impl ConfigurationRequestShape {
             || self.request.model() != candidate.request.model()
         {
             return CacheImpact::CacheNamespaceChanged;
+        }
+        // Context budgeting can change the prepared history even when the
+        // configuration-only wire probe is identical.
+        if self.context_window != candidate.context_window {
+            return CacheImpact::Unproven;
         }
         // Compat can change translation of existing history even when the empty
         // configuration probe emits identical JSON. Never infer preservation.
@@ -164,7 +172,12 @@ mod tests {
                     .unwrap()
                 })
                 .collect();
-            let baseline = ConfigurationRequestShape::capture(binding(), request.clone()).unwrap();
+            let baseline =
+                ConfigurationRequestShape::capture(binding(), 128_000, request.clone()).unwrap();
+            let changed_window =
+                ConfigurationRequestShape::capture(binding(), 64_000, request.clone()).unwrap();
+            assert_eq!(baseline.wire, changed_window.wire);
+            assert_eq!(baseline.compare(&changed_window), CacheImpact::Unproven);
             let wire = actual(&request);
             assert_eq!(wire.get("tools"), baseline.wire.get("tools"));
             let field = match protocol {
@@ -181,29 +194,35 @@ mod tests {
             changed.effective_system_prompt = "instructions P2".into();
             assert_ne!(actual(&changed).get(field), wire.get(field));
             assert_eq!(
-                baseline.compare(&ConfigurationRequestShape::capture(binding(), changed).unwrap()),
+                baseline.compare(
+                    &ConfigurationRequestShape::capture(binding(), 128_000, changed).unwrap()
+                ),
                 CacheImpact::PrefixChanged
             );
             let mut reordered = request.clone();
             reordered.tools.reverse();
             assert_ne!(actual(&reordered).get("tools"), wire.get("tools"));
             assert_eq!(
-                baseline
-                    .compare(&ConfigurationRequestShape::capture(binding(), reordered).unwrap()),
+                baseline.compare(
+                    &ConfigurationRequestShape::capture(binding(), 128_000, reordered).unwrap()
+                ),
                 CacheImpact::PrefixChanged
             );
             let mut grown = request.clone();
             grown.messages.extend(request.messages.clone());
             assert_ne!(actual(&grown), wire);
             assert_eq!(
-                baseline.compare(&ConfigurationRequestShape::capture(binding(), grown).unwrap()),
+                baseline.compare(
+                    &ConfigurationRequestShape::capture(binding(), 128_000, grown).unwrap()
+                ),
                 CacheImpact::Preserved
             );
             let mut endpoint = binding();
             endpoint.base_url = "http://another.invalid/v1".into();
             assert_eq!(
                 baseline.compare(
-                    &ConfigurationRequestShape::capture(endpoint, request.clone()).unwrap()
+                    &ConfigurationRequestShape::capture(endpoint, 128_000, request.clone())
+                        .unwrap()
                 ),
                 CacheImpact::CacheNamespaceChanged
             );
@@ -211,7 +230,9 @@ mod tests {
             budget.invocation.max_output_tokens += 1;
             assert_ne!(actual(&budget), wire);
             assert_eq!(
-                baseline.compare(&ConfigurationRequestShape::capture(binding(), budget).unwrap()),
+                baseline.compare(
+                    &ConfigurationRequestShape::capture(binding(), 128_000, budget).unwrap()
+                ),
                 CacheImpact::Unproven
             );
         }

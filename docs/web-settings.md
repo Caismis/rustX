@@ -44,8 +44,9 @@ stdio. Ordinary edits preserve that authored omission and retained credentials.
 These captures come from the real App Server/provider-emulator acceptance suite:
 
 - [Effective values and native provenance](images/cfg3-effective-provenance.png)
-- [Named-Agent source editor (historical layout)](images/cfg3-named-agent.png)
+- [Named-Agent source editor](images/cfg3-named-agent.png)
 - [External-edit CAS conflict preserving the draft](images/cfg3-cas-conflict.png)
+- [Failed application retaining the effective configuration](images/cfg3-application-failed.png)
 - [Mobile named-Agent editor after publication](images/cfg3-settings-mobile.png)
 
 ## Harness integration

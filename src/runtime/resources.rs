@@ -335,6 +335,7 @@ impl RuntimeResourceSnapshot {
             .map_err(|e| e.to_string())?;
         let primary = crate::model::request_shape::ConfigurationRequestShape::capture(
             binding,
+            model.snapshot().primary().context_window(),
             crate::model::ModelRequest {
                 invocation: model.snapshot().primary().invocation_config(),
                 messages: Vec::new(),
@@ -355,6 +356,7 @@ impl RuntimeResourceSnapshot {
             .binding;
         let summary = crate::model::request_shape::ConfigurationRequestShape::capture(
             summary_binding,
+            model.snapshot().summary_invocation().context_window(),
             crate::model::ModelRequest {
                 invocation: model.snapshot().summary_invocation().invocation_config(),
                 messages: Vec::new(),
