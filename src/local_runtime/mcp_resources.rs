@@ -68,12 +68,12 @@ fn parse_entries(
         .collect())
 }
 
-pub(crate) fn load(user_root: &Path, workspace: &Path) -> McpCatalog {
+/// Read only the supplied owners. User-only discovery never inspects a Workspace.
+pub(crate) fn load(user_root: &Path, workspace: Option<&Path>) -> McpCatalog {
     let mut catalog = McpCatalog::default();
-    for (path, user) in [
-        (user_root.join("mcp.toml"), true),
-        (workspace.join(".agents/mcp.toml"), false),
-    ] {
+    for (path, user) in std::iter::once((user_root.join("mcp.toml"), true))
+        .chain(workspace.map(|workspace| (workspace.join(".agents/mcp.toml"), false)))
+    {
         let captured = super::settings::read_document(&path).map_err(|_| {
             RuntimeResourceLoadError::new("cannot read MCP definitions").at(&path, "mcp_servers")
         });
@@ -157,4 +157,31 @@ pub(crate) fn load(user_root: &Path, workspace: &Path) -> McpCatalog {
         }
     }
     catalog
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_discovery_does_not_read_workspace_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("user");
+        std::fs::create_dir_all(&user).unwrap();
+        std::fs::create_dir_all(dir.path().join(".agents")).unwrap();
+        std::fs::write(
+            user.join("mcp.toml"),
+            "[mcp_servers.docs]\nurl = 'https://user.example/mcp'",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join(".agents/mcp.toml"), "invalid = [").unwrap();
+        let (catalog, effects) = super::super::static_effects::measure(|| load(&user, None));
+        let id = McpServerId::new("docs");
+        assert!(catalog.definitions[&id].is_ok());
+        assert!(catalog.invalid_scopes.is_empty());
+        assert_eq!(catalog.revisions.len(), 1);
+        assert!(matches!(catalog.origins[&id], Origin::User { .. }));
+        assert_eq!(effects, [0; 12]);
+        assert!(load(&user, Some(dir.path())).definitions[&id].is_err());
+    }
 }

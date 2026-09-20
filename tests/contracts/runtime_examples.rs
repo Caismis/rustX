@@ -194,9 +194,11 @@ fn committed_echo_package_is_discovered_by_production_python_discovery() {
     let workspace_path = examples_root();
     let workspace = Workspace::new(&workspace_path).expect("example workspace");
     let user = tempfile::tempdir().unwrap();
-    let catalog =
-        rustx::local_runtime::managed_python_resources::discover(workspace.root(), user.path())
-            .unwrap();
+    let catalog = rustx::local_runtime::managed_python_resources::discover(
+        Some(workspace.root()),
+        user.path(),
+    )
+    .unwrap();
     assert_eq!(catalog.packages().len(), 1);
     let package = catalog.packages()
         [&rustx::capabilities::ToolSourceId::ManagedPython("echo".into())]

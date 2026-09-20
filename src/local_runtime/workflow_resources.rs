@@ -7,23 +7,27 @@ use crate::runtime::workflow::{
 use std::path::Path;
 
 /// Discover and compile canonical Workflow files before resource publication.
+/// A missing Workspace means User-only discovery, with no cwd-derived authority.
 #[allow(clippy::too_many_lines)] // One deterministic compile transaction with structured diagnostics.
 pub(crate) fn load(
-    workspace: &Path,
+    workspace: Option<&Path>,
     user_root: &Path,
 ) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
     let mut programs = Vec::new();
     let mut diagnostics = Vec::new();
     let mut candidates = std::collections::BTreeMap::new();
     let mut locations = std::collections::BTreeMap::new();
-    for (boundary, root, scope) in [
-        (user_root, user_root.join("workflows"), SourceScope::User),
-        (
-            workspace,
-            workspace.join(".agents/workflows"),
-            SourceScope::Workspace,
-        ),
-    ] {
+    for (boundary, root, scope) in
+        std::iter::once((user_root, user_root.join("workflows"), SourceScope::User)).chain(
+            workspace.map(|workspace| {
+                (
+                    workspace,
+                    workspace.join(".agents/workflows"),
+                    SourceScope::Workspace,
+                )
+            }),
+        )
+    {
         let paths = match super::resource_directory::files(boundary, &root, "yaml") {
             Ok(paths) => paths,
             Err(error) => {
@@ -62,8 +66,13 @@ pub(crate) fn load(
     let mut invalid = std::collections::BTreeMap::new();
     if candidates.len() > crate::runtime::workflow::MAX_WORKFLOW_DEFINITIONS {
         diagnostics.push(
-            RuntimeResourceLoadError::new("Workflow catalog exceeds its definition bound")
-                .at(&workspace.join(".agents/workflows"), "workflows"),
+            RuntimeResourceLoadError::new("Workflow catalog exceeds its definition bound").at(
+                &workspace.map_or_else(
+                    || user_root.join("workflows"),
+                    |workspace| workspace.join(".agents/workflows"),
+                ),
+                "workflows",
+            ),
         );
         candidates.clear();
         locations.clear();
@@ -205,6 +214,32 @@ mod tests {
     use super::*;
     const PROGRAM: &str = "description: Return a literal\nblock:\n  input: {type: object, properties: {}, additionalProperties: false}\n  output: {type: object, properties: {}, additionalProperties: false}\n  entry: done\n  nodes:\n    done:\n      type: return\n      output: {type: literal, value: {}}\n";
     #[test]
+    fn user_discovery_does_not_read_workspace_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("user");
+        std::fs::create_dir_all(user.join("workflows")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".agents/workflows")).unwrap();
+        std::fs::write(user.join("workflows/literal.yaml"), PROGRAM).unwrap();
+        std::fs::write(
+            dir.path().join(".agents/workflows/literal.yaml"),
+            "invalid: [",
+        )
+        .unwrap();
+        let (catalog, effects) =
+            super::super::static_effects::measure(|| load(None, &user).unwrap());
+        let id = crate::runtime::workflow::WorkflowId::parse("literal").unwrap();
+        assert!(catalog.entries().contains_key(&id));
+        assert!(catalog.invalid().is_empty());
+        assert_eq!(effects, [0; 12]);
+        assert!(
+            load(Some(dir.path()), &user)
+                .unwrap()
+                .invalid()
+                .contains_key(&id)
+        );
+    }
+
+    #[test]
     fn workflow_discovery_and_errors_are_independent_of_creation_order() {
         for names in [["zeta", "alpha"], ["alpha", "zeta"]] {
             let dir = tempfile::tempdir().unwrap();
@@ -215,7 +250,7 @@ mod tests {
                 std::fs::write(root.join(format!("{name}.yaml")), PROGRAM).unwrap();
             }
             std::fs::write(root.join("incidental.txt"), "invalid YAML: [").unwrap();
-            let catalog = load(&workspace, &workspace.join("user/.agents")).unwrap();
+            let catalog = load(Some(&workspace), &workspace.join("user/.agents")).unwrap();
             assert_eq!(
                 catalog
                     .entries()
@@ -228,12 +263,12 @@ mod tests {
             for name in names {
                 std::fs::write(root.join(format!("{name}.yaml")), "invalid: [").unwrap();
             }
-            let invalid = load(&workspace, &workspace.join("user/.agents")).unwrap();
+            let invalid = load(Some(&workspace), &workspace.join("user/.agents")).unwrap();
             let error = invalid.invalid().values().next().unwrap();
             assert_eq!(error.source_file, Some(root.join("alpha.yaml")));
             assert_eq!(
                 invalid.invalid(),
-                load(&workspace, &workspace.join("user/.agents"))
+                load(Some(&workspace), &workspace.join("user/.agents"))
                     .unwrap()
                     .invalid()
             );

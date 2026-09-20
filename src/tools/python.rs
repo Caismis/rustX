@@ -1275,7 +1275,7 @@ mod tests {
         workspace: &Workspace,
     ) -> Result<Vec<DiscoveredPythonPackage>, PythonToolError> {
         crate::local_runtime::managed_python_resources::discover(
-            workspace.root(),
+            Some(workspace.root()),
             &workspace.root().join("absent-user/.agents"),
         )
         .map(|catalog| {
