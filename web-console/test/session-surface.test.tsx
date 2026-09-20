@@ -7,7 +7,7 @@ import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v14';
+import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v15';
 
 let server: Server;
 beforeEach(() => {

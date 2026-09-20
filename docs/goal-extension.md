@@ -122,7 +122,7 @@ enabled Goal fails `unsupported_child_scope` before child spawn. Workflow applie
 that same check; root Goal is never implicitly inherited.
 
 `goal_state` is one native singleton record inside the existing conversation
-SQLite database (schema 42; Goal storage introduced in schema 34). Its bounded JSON snapshot stores GoalRef, objective,
+SQLite database (schema 43; Goal storage introduced in schema 34). Its bounded JSON snapshot stores GoalRef, objective,
 phase, blocked reason, origin, autonomous budget/consumed count and the last
 round's ordinary MessageId. Identity is conversation-scoped. Complete is terminal;
 a subsequent create starts a new identity. Revision increases exactly once for
@@ -195,12 +195,16 @@ polling attempt merely to discover whether owned work finished.
 
 ## Context, controls and recovery
 
-Every relevant new root model step samples GoalDomain and contributes a boxed
-typed `ContextKind::GoalStatus` snapshot through native Context Assembly. Its
-User role preserves objective instruction priority. Request Snapshot freezes
-this observation along with normal request inputs. History may show older
-observations; those never supply current Goal authority. Provider adapters only
-project the existing provider-neutral messages and Tool definitions.
+The registered `GoalContextContributor` captures a read-only Goal projection at
+each new logical step and owns Goal wording, JSON serialization, and typed
+`ContextKind::GoalStatus` metadata. Its User role keeps Goal as task data, never
+System instructions. The common accepted contribution freezes content and
+revision together. Transport retry, overflow recovery, and corrective requests
+reuse that value; the next logical step captures the current revision even when
+older Goal history remains visible. Generic Context Assembly contains no Goal
+rendering branch. Live Goal UI reads durable Goal authority, not historical
+contribution metadata. Provider adapters translate provider-neutral messages.
+See [native contribution lifecycle](native-context-contributions.md).
 
 Runtime Client protocol 42 includes the typed `goal` operation (Show/Create/Mutate)
 and bounded `goal_changed { view: GoalView }` event. `GoalView` carries durable

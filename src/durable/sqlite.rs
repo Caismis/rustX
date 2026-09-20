@@ -31,12 +31,12 @@ use crate::events::interaction::{
     validate_interaction_subject,
 };
 use crate::events::types::{
-    EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, agent_status_emission_event_id,
+    EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, contribution_emission_event_id,
 };
 use crate::message::content::TextBlock;
 use crate::message::types::{
-    AgentStatusEmission, AgentStatusModuleId, AssistantContentBlock, ContentBlockIndex,
-    InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    AssistantContentBlock, ContentBlockIndex, ContributionEmission, InboundKind, MessageBlock,
+    UserContentBlock, UserMessageBlock, UserSource,
 };
 use crate::model::snapshot::RequestSnapshot;
 use crate::model::types::ModelRequest;
@@ -53,7 +53,7 @@ use crate::runtime::inbound::InboundSequence;
 use crate::runtime::process_death;
 
 use super::inbox::{
-    AcceptedInbound, AgentStatusEmissionRecord, CanonicalMessagePage, CompactionCommitInput,
+    AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ContributionEmissionRecord,
     ConversationStore, ConversationStoreError, DurableConversationHead, EventPage, InboundDraft,
     LineageSeed, ModelTurnStartCommit, ModelTurnStartCommitDisposition, PendingBatch,
     PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
@@ -132,7 +132,7 @@ use super::inbox::{
 /// Version 12 freezes the complete Issue #130 Todo Agent Status durability
 /// contract: semantic emission facts and their bounded latest-emission heads
 /// are committed with model-turn start, and the conversation-owned
-/// `todo_progress_sequence` records one unit for each newly committed first
+/// `logical_step_sequence` records one unit for each newly committed first
 /// request of a logical primary model step. A v11 database has neither this
 /// final suppression format nor the request-snapshot emission binding, so it
 /// is refused.
@@ -191,7 +191,7 @@ use super::inbox::{
 /// recovery of the unresolved resource state, so it is rejected rather than
 /// guessed.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14/v15/v16/v17/v18/v19/v20/v21 database
+/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v15/v15/v16/v17/v18/v19/v20/v21 database
 /// must fail at store open; there is no migration or compatibility path.
 /// Version 23 preserves Denied in detached terminal facts (Issue #206).
 /// Version 24 adds Workflow block/node instance lifecycle facts (Issue #217).
@@ -252,10 +252,7 @@ use super::inbox::{
 /// Version 40 makes Tool-result occurrence ownership canonical; prior shapes are refused.
 /// Version 41 adds generation evidence to persisted request terminal events.
 /// Version 42 retains immutable completed-response provenance in lineage bootstrap.
-pub const SQLITE_SCHEMA_VERSION: i64 = 42;
-
-const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
-const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
+pub const SQLITE_SCHEMA_VERSION: i64 = 43;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -298,10 +295,10 @@ pub(crate) enum RequestStartFaultOperation {
     AfterSnapshotInsert,
     /// Fail after the `ModelRequestStarted` Event Journal fact has staged.
     AfterEventInsert,
-    /// Fail after the Agent Status emission fact has staged.
-    AfterAgentStatusEventInsert,
+    /// Fail after the contribution emission fact has staged.
+    AfterContributionEventInsert,
     /// Fail after the latest-emission head has staged.
-    AfterAgentStatusHeadUpsert,
+    AfterContributionHeadUpsert,
 }
 
 /// The native durable conversation authority for one conversation.
@@ -336,7 +333,7 @@ pub struct SqliteConversationStore {
     #[cfg(test)]
     pub(crate) request_snapshot_page_reads: Arc<AtomicUsize>,
     #[cfg(test)]
-    pub(crate) agent_status_head_lookup_reads: Arc<AtomicUsize>,
+    pub(crate) contribution_head_lookup_reads: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) admission_fault_script: Arc<Mutex<VecDeque<AdmissionFaultOperation>>>,
     #[cfg(test)]
@@ -631,7 +628,7 @@ impl SqliteConversationStore {
             #[cfg(test)]
             request_snapshot_page_reads: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
-            agent_status_head_lookup_reads: Arc::new(AtomicUsize::new(0)),
+            contribution_head_lookup_reads: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             admission_fault_script: Arc::new(Mutex::new(VecDeque::new())),
             #[cfg(test)]
@@ -737,8 +734,8 @@ impl SqliteConversationStore {
 
     /// Returns how many bounded latest-emission head reads the test exercised.
     #[cfg(test)]
-    pub(crate) fn agent_status_head_lookup_reads(&self) -> usize {
-        self.agent_status_head_lookup_reads.load(Ordering::SeqCst)
+    pub(crate) fn contribution_head_lookup_reads(&self) -> usize {
+        self.contribution_head_lookup_reads.load(Ordering::SeqCst)
     }
 
     #[cfg(test)]
@@ -807,11 +804,11 @@ impl SqliteConversationStore {
     /// identity but do not represent new semantic progress, so they reuse the
     /// current sequence. This value is durable only as part of the enclosing
     /// model-turn-start transaction.
-    fn advance_todo_progress_tx(
+    fn advance_logical_step_progress_tx(
         transaction: &rusqlite::Transaction<'_>,
         snapshot: &RequestSnapshot,
     ) -> Result<u64, ConversationStoreError> {
-        let current = read_todo_progress_tx(transaction)?;
+        let current = read_logical_step_progress_tx(transaction)?;
         if snapshot.identity.retry_number != 0 {
             return Ok(current);
         }
@@ -820,7 +817,7 @@ impl SqliteConversationStore {
             .ok_or(ConversationStoreError::SequenceExhausted)?;
         transaction
             .execute(
-                "UPDATE rustx_store SET todo_progress_sequence=?1 WHERE id=1",
+                "UPDATE rustx_store SET logical_step_sequence=?1 WHERE id=1",
                 [seq_to_i64(next)?],
             )
             .map_err(|error| storage(format!("update Todo progress sequence: {error}")))?;
@@ -922,71 +919,76 @@ impl SqliteConversationStore {
         // and ModelRequestStarted fact have staged. The enclosing transaction
         // makes the resulting value the exact origin of any Todo emission
         // committed below; a failed or cancelled start rolls it back.
-        Self::advance_todo_progress_tx(transaction, snapshot)?;
-        // Agent Status emissions are semantic observations of the logical
+        Self::advance_logical_step_progress_tx(transaction, snapshot)?;
+        // contribution emissions are semantic observations of the logical
         // step, not one emission per transport attempt. A transient or
         // overflow retry may carry the same status metadata in its snapshot
         // when the canonical status message remains on the frozen Surface,
         // but only the initial request owns the durable emission facts.
-        let agent_status_emissions = if snapshot.identity.retry_number == 0 {
-            self.insert_agent_status_emissions_tx(transaction, snapshot, timestamp)?
+        let contribution_emissions = if snapshot.identity.retry_number == 0 {
+            self.insert_contribution_emissions_tx(transaction, snapshot, timestamp)?
         } else {
             Vec::new()
         };
         consume_pending_carryover_tx(transaction, snapshot)?;
         Ok(ModelTurnStartCommit {
             started: persisted.event,
-            agent_status_emissions,
+            contribution_emissions,
             disposition: ModelTurnStartCommitDisposition::NewlyCommitted,
         })
     }
 
-    fn insert_agent_status_emissions_tx(
+    fn insert_contribution_emissions_tx(
         &self,
         transaction: &rusqlite::Transaction<'_>,
         snapshot: &RequestSnapshot,
         timestamp: DateTime<Utc>,
     ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError> {
-        let Some(agent_status) = &snapshot.agent_status else {
-            return Ok(Vec::new());
-        };
-        let todo_progress_origin = read_todo_progress_tx(transaction)?;
-        let mut persisted_emissions = Vec::with_capacity(agent_status.emissions.len());
-        for emission in &agent_status.emissions {
-            let emission_event = RuntimeEventEnvelope {
-                schema_version: EVENT_SCHEMA_VERSION,
-                event_id: agent_status_emission_event_id(&snapshot.request_id, emission),
-                sequence: 0,
-                conversation_id: self.conversation_id.clone(),
-                attempt_id: Some(snapshot.identity.attempt_id.clone()),
-                turn_id: Some(snapshot.identity.turn.clone()),
-                timestamp,
-                event: RuntimeEvent::AgentStatusEmitted {
-                    request_id: snapshot.request_id.clone(),
-                    message_id: agent_status.message_id.clone(),
-                    emission: emission.clone(),
-                    todo_progress_origin,
-                },
-            };
-            let persisted = persist_event_tx(transaction, &self.conversation_id, emission_event)?;
-            #[cfg(test)]
-            if self.consume_request_start_fault(
-                RequestStartFaultOperation::AfterAgentStatusEventInsert,
-            ) {
-                return Err(storage(
-                    "fault injected: after Agent Status emission event insert",
-                ));
+        let logical_step_origin = read_logical_step_progress_tx(transaction)?;
+        let mut persisted_emissions = Vec::new();
+        for contribution in &snapshot.contributions {
+            for emission in &contribution.emissions {
+                let emission_event = RuntimeEventEnvelope {
+                    schema_version: EVENT_SCHEMA_VERSION,
+                    event_id: contribution_emission_event_id(
+                        &snapshot.request_id,
+                        &contribution.producer,
+                        emission,
+                    ),
+                    sequence: 0,
+                    conversation_id: self.conversation_id.clone(),
+                    attempt_id: Some(snapshot.identity.attempt_id.clone()),
+                    turn_id: Some(snapshot.identity.turn.clone()),
+                    timestamp,
+                    event: RuntimeEvent::ContextContributionEmitted {
+                        producer: contribution.producer.clone(),
+                        request_id: snapshot.request_id.clone(),
+                        message_id: contribution.message_id.clone(),
+                        emission: emission.clone(),
+                        logical_step_origin,
+                    },
+                };
+                let persisted =
+                    persist_event_tx(transaction, &self.conversation_id, emission_event)?;
+                #[cfg(test)]
+                if self.consume_request_start_fault(
+                    RequestStartFaultOperation::AfterContributionEventInsert,
+                ) {
+                    return Err(storage(
+                        "fault injected: after contribution emission event insert",
+                    ));
+                }
+                upsert_contribution_head_tx(transaction, &persisted.event)?;
+                #[cfg(test)]
+                if self.consume_request_start_fault(
+                    RequestStartFaultOperation::AfterContributionHeadUpsert,
+                ) {
+                    return Err(storage(
+                        "fault injected: after contribution emission head upsert",
+                    ));
+                }
+                persisted_emissions.push(persisted.event);
             }
-            upsert_agent_status_head_tx(transaction, &persisted.event)?;
-            #[cfg(test)]
-            if self
-                .consume_request_start_fault(RequestStartFaultOperation::AfterAgentStatusHeadUpsert)
-            {
-                return Err(storage(
-                    "fault injected: after Agent Status emission head upsert",
-                ));
-            }
-            persisted_emissions.push(persisted.event);
         }
         Ok(persisted_emissions)
     }
@@ -2052,7 +2054,7 @@ impl ConversationStore for SqliteConversationStore {
         // context while persisting a snapshot whose `request_context_ids`
         // disagrees with what it just appended.
         validate_request_context(snapshot, context)?;
-        validate_agent_status_start(snapshot, context)?;
+        validate_contribution_start(snapshot, context)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -2079,7 +2081,7 @@ impl ConversationStore for SqliteConversationStore {
             return Ok(verified);
         }
         if snapshot.identity.retry_number != 0 {
-            verify_frozen_agent_status_tx(&transaction, snapshot)?;
+            verify_frozen_contributions_tx(&transaction, snapshot)?;
         }
         // The request-scoped canonical context commits first, inside the
         // same transaction as the snapshot and the start fact: a failure
@@ -2094,16 +2096,16 @@ impl ConversationStore for SqliteConversationStore {
         Ok(persisted)
     }
 
-    fn latest_agent_status_emission(
+    fn latest_contribution_emission(
         &self,
-        module_id: AgentStatusModuleId,
+        producer: &crate::runtime::identity::ContextContributorIdentity,
         key: &str,
-    ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError> {
+    ) -> Result<Option<ContributionEmissionRecord>, ConversationStoreError> {
         #[cfg(test)]
-        self.agent_status_head_lookup_reads
+        self.contribution_head_lookup_reads
             .fetch_add(1, Ordering::SeqCst);
         let connection = self.lock()?;
-        read_agent_status_head(&connection, module_id, key)
+        read_contribution_head(&connection, producer, key)
     }
 
     fn load_pending_unresolved_output_stream_id(
@@ -2171,11 +2173,11 @@ impl ConversationStore for SqliteConversationStore {
         Ok(persisted.event)
     }
 
-    fn current_todo_progress(&self) -> Result<u64, ConversationStoreError> {
+    fn current_logical_step_progress(&self) -> Result<u64, ConversationStoreError> {
         let connection = self.lock()?;
         let value: i64 = connection
             .query_row(
-                "SELECT todo_progress_sequence FROM rustx_store WHERE id=1",
+                "SELECT logical_step_sequence FROM rustx_store WHERE id=1",
                 [],
                 |row| row.get(0),
             )
@@ -4323,15 +4325,6 @@ fn append_canonical_messages(
     if messages.is_empty() {
         return Ok(Vec::new());
     }
-    if messages.iter().any(|message| {
-        message
-            .agent_status_metadata()
-            .is_some_and(|metadata| metadata.contains(AgentStatusModuleId::Todo))
-    }) {
-        return Err(ConversationStoreError::InvalidReference(
-            "Todo Agent Status must use the atomic model-turn-start transition".to_owned(),
-        ));
-    }
     let mut connection = store.lock()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -4424,296 +4417,210 @@ fn verify_committed_start_tx(
         )));
     }
     validate_request_start_metadata(&stored, &started)?;
-    let agent_status_emissions =
-        verify_agent_status_start_tx(transaction, context, &stored, &started)?;
+    let contribution_emissions =
+        verify_contribution_start_tx(transaction, context, &stored, &started)?;
     Ok(ModelTurnStartCommit {
         started,
-        agent_status_emissions,
+        contribution_emissions,
         disposition: ModelTurnStartCommitDisposition::IdempotentReplay,
     })
 }
 
-fn validate_agent_status_emission_shape(
-    emission: &AgentStatusEmission,
+fn validate_contribution_emission_shape(
+    emission: &ContributionEmission,
 ) -> Result<(), ConversationStoreError> {
-    if emission.key.is_empty()
-        || emission.key.len() > MAX_AGENT_STATUS_EMISSION_KEY_BYTES
-        || emission.fingerprint.is_empty()
-        || emission.fingerprint.len() > MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES
-    {
-        return Err(ConversationStoreError::InvalidReference(
-            "Agent Status emission key and fingerprint must be non-empty and bounded".to_owned(),
-        ));
-    }
-    Ok(())
+    emission
+        .validate()
+        .map_err(ConversationStoreError::InvalidReference)
 }
 
 /// Validates the exact status message/emission binding before a start chooses
 /// its fresh or idempotent path. This is the construction boundary that keeps
 /// a free-standing emission vector from entering durable storage.
-fn validate_agent_status_start(
+fn validate_contribution_start(
     snapshot: &RequestSnapshot,
     context: &[MessageBlock],
 ) -> Result<(), ConversationStoreError> {
-    let status_messages = context
-        .iter()
-        .filter(|message| message.is_agent_status())
-        .collect::<Vec<_>>();
-    match snapshot.agent_status.as_ref() {
-        None => {
-            if !status_messages.is_empty() {
-                return Err(ConversationStoreError::InvalidReference(
-                    "request context contains Agent Status without its prepared start metadata"
-                        .to_owned(),
-                ));
-            }
-        }
-        Some(agent_status) if snapshot.identity.retry_number == 0 => {
-            let [message] = status_messages.as_slice() else {
-                return Err(ConversationStoreError::InvalidReference(
-                    "a fresh Agent Status start must contain exactly one canonical status message"
-                        .to_owned(),
-                ));
-            };
-            if message.id() != &agent_status.message_id {
-                return Err(ConversationStoreError::InvalidReference(
-                    "prepared Agent Status metadata names a different canonical message".to_owned(),
-                ));
-            }
-            let metadata = message.agent_status_metadata().ok_or_else(|| {
-                ConversationStoreError::InvalidReference(
-                    "prepared Agent Status context has no structured generation metadata"
-                        .to_owned(),
-                )
-            })?;
-            validate_agent_status_emissions(agent_status, Some(metadata))?;
-        }
-        Some(agent_status) => {
-            if !status_messages.is_empty() {
-                return Err(ConversationStoreError::InvalidReference(
-                    "a retry must reuse the canonical Agent Status message instead of re-emitting it"
-                        .to_owned(),
-                ));
-            }
-            // The canonical message and its prior emission facts are checked
-            // inside the request-start transaction. This pre-transaction
-            // validation still bounds the retry metadata and rejects a
-            // second non-Todo durable emission before touching the store.
-            validate_agent_status_emissions(agent_status, None)?;
-        }
-    }
-    Ok(())
-}
-
-/// Validates the bounded emission list carried by one Agent Status start.
-/// When `metadata` is present this is a fresh start and the list must match
-/// the exact modules represented by the supplied canonical message. A retry
-/// has no newly supplied message, so its metadata binding is completed by the
-/// transaction that resolves the already-committed canonical message.
-fn validate_agent_status_emissions(
-    agent_status: &crate::model::snapshot::AgentStatusStart,
-    metadata: Option<&crate::message::types::AgentStatusGenerationMetadata>,
-) -> Result<(), ConversationStoreError> {
-    let mut seen = BTreeSet::new();
-    let mut todo_emissions = 0usize;
-    for emission in &agent_status.emissions {
-        validate_agent_status_emission_shape(emission)?;
-        if emission.module_id != AgentStatusModuleId::Todo {
+    let mut ids = BTreeSet::new();
+    let mut keys = BTreeSet::new();
+    for contribution in &snapshot.contributions {
+        if !ids.insert(&contribution.message_id) {
             return Err(ConversationStoreError::InvalidReference(
-                "only Todo Agent Status emissions have a durable settlement".to_owned(),
+                "duplicate accepted contribution identity".to_owned(),
             ));
         }
-        todo_emissions = todo_emissions.saturating_add(1);
-        if let Some(metadata) = metadata
-            && !metadata.contains(emission.module_id)
+        if !snapshot
+            .context_generation
+            .contributors
+            .iter()
+            .any(|generation| generation.identity == contribution.producer)
         {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "Agent Status emission module {} is absent from the canonical status metadata",
-                emission.module_id.as_str()
-            )));
-        }
-        if !seen.insert((emission.module_id, emission.key.clone())) {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "Agent Status emission key {} is duplicated for module {}",
-                emission.key,
-                emission.module_id.as_str()
-            )));
-        }
-    }
-    if let Some(metadata) = metadata {
-        let todo_in_metadata = metadata.contains(AgentStatusModuleId::Todo);
-        if todo_in_metadata != (todo_emissions == 1) {
             return Err(ConversationStoreError::InvalidReference(
-                "Todo Agent Status metadata and its exact emission settlement disagree".to_owned(),
+                "contribution producer is absent from the accepted generation".to_owned(),
             ));
         }
+        for emission in &contribution.emissions {
+            validate_contribution_emission_shape(emission)?;
+            if !keys.insert((&contribution.producer, &emission.key)) {
+                return Err(ConversationStoreError::InvalidReference(
+                    "duplicate producer-scoped contribution key".to_owned(),
+                ));
+            }
+        }
+        if snapshot.identity.retry_number == 0 {
+            let message = context
+                .iter()
+                .find(|message| message.id() == &contribution.message_id)
+                .ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(
+                        "accepted contribution has no canonical context".to_owned(),
+                    )
+                })?;
+            contribution.validate_message(message)?;
+        } else if context
+            .iter()
+            .any(|message| message.id() == &contribution.message_id)
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "retry must not recommit an accepted contribution".to_owned(),
+            ));
+        }
+    }
+    if snapshot.identity.retry_number == 0
+        && context.iter().any(|message| !ids.contains(message.id()))
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "canonical context has no accepted contribution record".to_owned(),
+        ));
     }
     Ok(())
 }
 
-/// Verifies the status generation reused by a new actual request. The
-/// canonical status message and its Todo emission were committed by the
-/// logical step's initial request; a retry must prove those facts exist on
-/// its frozen Surface without creating another emission under the retry's
-/// request identity.
-fn verify_frozen_agent_status_tx(
+fn verify_frozen_contributions_tx(
     transaction: &Transaction<'_>,
     snapshot: &RequestSnapshot,
 ) -> Result<(), ConversationStoreError> {
-    let Some(agent_status) = snapshot.agent_status.as_ref() else {
-        return Ok(());
-    };
-    let message = load_message_tx(transaction, &agent_status.message_id)?;
-    if !message.is_agent_status() {
-        return Err(ConversationStoreError::InvalidReference(format!(
-            "retry request {} reuses non-Agent-Status message {}",
-            snapshot.request_id, agent_status.message_id
-        )));
-    }
-    let metadata = message.agent_status_metadata().ok_or_else(|| {
-        ConversationStoreError::InvalidReference(format!(
-            "retry request {} reuses an Agent Status message without structured metadata",
-            snapshot.request_id
-        ))
-    })?;
-    validate_agent_status_emissions(agent_status, Some(metadata))?;
     let active = reconstruct_surface_tx(transaction, snapshot.surface_revision)?;
-    if !active.iter().any(|id| id == &agent_status.message_id) {
-        return Err(ConversationStoreError::InvalidReference(format!(
-            "retry request {} does not contain its frozen Agent Status message on the Surface",
-            snapshot.request_id
-        )));
-    }
-    for emission in &agent_status.emissions {
-        let Some(head) = read_agent_status_head_tx(transaction, emission.module_id, &emission.key)?
-        else {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "retry request {} reuses Agent Status emission {} without a durable head",
-                snapshot.request_id, emission.key
-            )));
-        };
-        if head.fingerprint != emission.fingerprint
-            || head.canonical_message_id != agent_status.message_id
-        {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "retry request {} reuses a different durable Agent Status emission {}",
-                snapshot.request_id, emission.key
-            )));
+    for contribution in &snapshot.contributions {
+        contribution.validate_message(&load_message_tx(transaction, &contribution.message_id)?)?;
+        if !active.contains(&contribution.message_id) {
+            return Err(ConversationStoreError::InvalidReference(
+                "frozen contribution is absent from request Surface".to_owned(),
+            ));
         }
-        let Some(event) = find_event_at_sequence(transaction, head.event_sequence)? else {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "retry request {} reuses Agent Status emission {} without its event fact",
-                snapshot.request_id, emission.key
-            )));
-        };
-        if !matches!(
-            event.event,
-            RuntimeEvent::AgentStatusEmitted {
-                message_id,
-                emission: ref committed,
-                ..
-            } if message_id == agent_status.message_id && committed == emission
-        ) {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "retry request {} reuses a contradictory Agent Status emission {}",
-                snapshot.request_id, emission.key
-            )));
+        // The original snapshot is immutable even if a newer head for this
+        // producer/key exists. A retry verifies its own logical-step receipt.
+        let mut origin = snapshot.identity.clone();
+        origin.retry_number = 0;
+        let (original, started, _) = read_request_snapshot_tx(transaction, &origin.request_id())?
+            .ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "retry has no original accepted contribution state".to_owned(),
+            )
+        })?;
+        if started.is_none() || !original.contributions.contains(contribution) {
+            return Err(ConversationStoreError::InvalidReference(
+                "retry changed its frozen accepted contribution".to_owned(),
+            ));
+        }
+        for emission in &contribution.emissions {
+            let event_id = contribution_emission_event_id(
+                &origin.request_id(),
+                &contribution.producer,
+                emission,
+            );
+            let event = find_event_by_id(transaction, &event_id)?.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "frozen contribution has no committed receipt".to_owned(),
+                )
+            })?;
+            if !matches!(&event.event, RuntimeEvent::ContextContributionEmitted { producer, message_id, emission: committed, .. } if producer == &contribution.producer && message_id == &contribution.message_id && committed == emission)
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "frozen contribution receipt disagrees".to_owned(),
+                ));
+            }
         }
     }
     Ok(())
 }
 
-/// Verifies all status facts on an idempotent start retry. The direct event
-/// identity lookup stays bounded and the latest head may legitimately point
-/// at a newer emission of the same semantic key.
-fn verify_agent_status_start_tx(
+fn verify_contribution_start_tx(
     transaction: &Transaction<'_>,
     context: &[MessageBlock],
     snapshot: &RequestSnapshot,
     started: &RuntimeEventEnvelope,
 ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError> {
-    validate_agent_status_start(snapshot, context)?;
+    validate_contribution_start(snapshot, context)?;
     if snapshot.identity.retry_number != 0 {
-        verify_frozen_agent_status_tx(transaction, snapshot)?;
+        verify_frozen_contributions_tx(transaction, snapshot)?;
         return Ok(Vec::new());
     }
-    let Some(agent_status) = snapshot.agent_status.as_ref() else {
-        return Ok(Vec::new());
-    };
-    let mut persisted_emissions = Vec::with_capacity(agent_status.emissions.len());
-    let mut expected_sequence = started.sequence;
-    for emission in &agent_status.emissions {
-        let event_id = agent_status_emission_event_id(&snapshot.request_id, emission);
-        let event = find_event_by_id(transaction, &event_id)?.ok_or_else(|| {
-            ConversationStoreError::InvalidReference(format!(
-                "request {} has status metadata without emission fact {}",
-                snapshot.request_id, event_id
-            ))
-        })?;
-        if event.event_id != event_id {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "request {} emission lookup returned a different event identity than {event_id}",
-                snapshot.request_id
-            )));
+    let mut events = Vec::new();
+    let mut sequence = started.sequence;
+    for contribution in &snapshot.contributions {
+        for emission in &contribution.emissions {
+            let event_id = contribution_emission_event_id(
+                &snapshot.request_id,
+                &contribution.producer,
+                emission,
+            );
+            let event = find_event_by_id(transaction, &event_id)?.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "committed contribution lacks receipt".to_owned(),
+                )
+            })?;
+            sequence = sequence
+                .checked_add(1)
+                .ok_or_else(|| storage("contribution sequence overflow"))?;
+            let RuntimeEvent::ContextContributionEmitted {
+                producer,
+                request_id,
+                message_id,
+                emission: committed,
+                logical_step_origin,
+            } = &event.event
+            else {
+                return Err(ConversationStoreError::InvalidReference(
+                    "contribution receipt has wrong event kind".to_owned(),
+                ));
+            };
+            if producer != &contribution.producer
+                || request_id != &snapshot.request_id
+                || message_id != &contribution.message_id
+                || committed != emission
+                || event.sequence != sequence
+                || event.conversation_id != started.conversation_id
+                || event.attempt_id != started.attempt_id
+                || event.turn_id != started.turn_id
+                || event.timestamp != started.timestamp
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "contribution receipt disagrees with startup".to_owned(),
+                ));
+            }
+            let head = read_contribution_head_tx(transaction, producer, &emission.key)?
+                .ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(
+                        "contribution receipt has no durable head".to_owned(),
+                    )
+                })?;
+            if head.event_sequence < sequence
+                || (head.event_sequence == sequence
+                    && (head.fingerprint != emission.fingerprint
+                        || head.canonical_message_id != *message_id
+                        || head.request_id != *request_id
+                        || head.logical_step_origin != *logical_step_origin
+                        || head.emitted_at != event.timestamp))
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "contribution head disagrees with receipt".to_owned(),
+                ));
+            }
+            events.push(event);
         }
-        let RuntimeEvent::AgentStatusEmitted {
-            request_id,
-            message_id,
-            emission: committed,
-            todo_progress_origin,
-        } = &event.event
-        else {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "event {event_id} is not the expected Agent Status emission fact"
-            )));
-        };
-        if request_id != &snapshot.request_id
-            || message_id != &agent_status.message_id
-            || committed != emission
-            || event.conversation_id != started.conversation_id
-            || event.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
-            || event.turn_id.as_ref() != Some(&snapshot.identity.turn)
-            || event.timestamp != started.timestamp
-        {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "request {} has contradictory Agent Status emission fact {event_id}",
-                snapshot.request_id
-            )));
-        }
-        let Some(head) = read_agent_status_head_tx(transaction, emission.module_id, &emission.key)?
-        else {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "request {} has emission fact {event_id} without its latest-emission head",
-                snapshot.request_id
-            )));
-        };
-        expected_sequence = expected_sequence.checked_add(1).ok_or_else(|| {
-            ConversationStoreError::InvalidReference(format!(
-                "request {} Agent Status emission sequence overflow",
-                snapshot.request_id
-            ))
-        })?;
-        if event.sequence != expected_sequence {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "request {} Agent Status emission {event_id} is not immediately after its start sequence",
-                snapshot.request_id
-            )));
-        }
-        if head.event_sequence < event.sequence
-            || (head.event_sequence == event.sequence
-                && (head.fingerprint != emission.fingerprint
-                    || head.emitted_at != event.timestamp
-                    || head.request_id != snapshot.request_id
-                    || head.canonical_message_id != agent_status.message_id
-                    || head.todo_progress_origin != *todo_progress_origin))
-        {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "Agent Status latest-emission head disagrees with fact {event_id}"
-            )));
-        }
-        persisted_emissions.push(event);
     }
-    Ok(persisted_emissions)
+    Ok(events)
 }
 
 fn configure_connection(
@@ -4935,7 +4842,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 next_inbound_sequence INTEGER NOT NULL CHECK(next_inbound_sequence >= 0),
                 next_event_sequence INTEGER NOT NULL CHECK(next_event_sequence >= 0),
                 next_transcript_position INTEGER NOT NULL CHECK(next_transcript_position >= 0),
-                todo_progress_sequence INTEGER NOT NULL CHECK(todo_progress_sequence >= 0),
+                logical_step_sequence INTEGER NOT NULL CHECK(logical_step_sequence >= 0),
                 pending_unresolved_output_stream_id TEXT
             );
             CREATE TABLE IF NOT EXISTS goal_state (
@@ -5004,16 +4911,16 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 started_sequence INTEGER,
                 completed_sequence INTEGER
             );
-            CREATE TABLE IF NOT EXISTS agent_status_emission_heads (
-                module_id TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS contribution_emission_heads (
+                producer TEXT NOT NULL,
                 semantic_key TEXT NOT NULL,
                 fingerprint TEXT NOT NULL,
                 emitted_at TEXT NOT NULL,
                 request_id TEXT NOT NULL,
                 message_id TEXT NOT NULL,
-                todo_progress_origin INTEGER NOT NULL CHECK(todo_progress_origin >= 0),
+                logical_step_origin INTEGER NOT NULL CHECK(logical_step_origin >= 0),
                 event_sequence INTEGER NOT NULL CHECK(event_sequence >= 0),
-                PRIMARY KEY(module_id, semantic_key)
+                PRIMARY KEY(producer, semantic_key)
             );
             CREATE TABLE IF NOT EXISTS publication_streams (
                 stream_id TEXT PRIMARY KEY,
@@ -5067,7 +4974,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
 
             CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence);
             CREATE INDEX IF NOT EXISTS request_snapshots_surface_idx ON request_snapshots(surface_revision);
-            CREATE INDEX IF NOT EXISTS agent_status_emission_heads_lookup_idx ON agent_status_emission_heads(module_id, semantic_key);
+            CREATE INDEX IF NOT EXISTS contribution_emission_heads_lookup_idx ON contribution_emission_heads(producer, semantic_key);
             CREATE INDEX IF NOT EXISTS publication_frames_stream_idx ON publication_frames(stream_id, sequence);
             CREATE INDEX IF NOT EXISTS publication_streams_settlement_idx ON publication_streams(settlement);",
         )
@@ -5079,7 +4986,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
     }
     connection
         .execute(
-            "INSERT OR IGNORE INTO rustx_store(id,schema_version,conversation_id,next_inbound_sequence,next_event_sequence,next_transcript_position,todo_progress_sequence,pending_unresolved_output_stream_id) VALUES(1,?1,'',0,0,0,0,NULL)",
+            "INSERT OR IGNORE INTO rustx_store(id,schema_version,conversation_id,next_inbound_sequence,next_event_sequence,next_transcript_position,logical_step_sequence,pending_unresolved_output_stream_id) VALUES(1,?1,'',0,0,0,0,NULL)",
             params![SQLITE_SCHEMA_VERSION],
         )
         .map_err(|error| storage(format!("create schema root: {error}")))?;
@@ -5119,7 +5026,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "next_inbound_sequence",
                 "next_event_sequence",
                 "next_transcript_position",
-                "todo_progress_sequence",
+                "logical_step_sequence",
                 "pending_unresolved_output_stream_id",
             ] as &[&str],
         ),
@@ -5176,15 +5083,15 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             ],
         ),
         (
-            "agent_status_emission_heads",
+            "contribution_emission_heads",
             &[
-                "module_id",
+                "producer",
                 "semantic_key",
                 "fingerprint",
                 "emitted_at",
                 "request_id",
                 "message_id",
-                "todo_progress_origin",
+                "logical_step_origin",
                 "event_sequence",
             ],
         ),
@@ -5284,8 +5191,8 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
     )?;
     verify_unique_columns(
         connection,
-        "agent_status_emission_heads",
-        &["module_id", "semantic_key"],
+        "contribution_emission_heads",
+        &["producer", "semantic_key"],
     )?;
     Ok(())
 }
@@ -7152,21 +7059,12 @@ fn find_event_at_sequence(
     Ok(Some(decode(&json, "event sequence")?))
 }
 
-fn decode_agent_status_module(value: &str) -> Result<AgentStatusModuleId, ConversationStoreError> {
-    match value {
-        "time" => Ok(AgentStatusModuleId::Time),
-        "background" => Ok(AgentStatusModuleId::Background),
-        "todo" => Ok(AgentStatusModuleId::Todo),
-        _ => Err(ConversationStoreError::InvalidReference(format!(
-            "unknown Agent Status module {value:?} in latest-emission head"
-        ))),
-    }
-}
-
-fn read_todo_progress_tx(transaction: &Transaction<'_>) -> Result<u64, ConversationStoreError> {
+fn read_logical_step_progress_tx(
+    transaction: &Transaction<'_>,
+) -> Result<u64, ConversationStoreError> {
     let value: i64 = transaction
         .query_row(
-            "SELECT todo_progress_sequence FROM rustx_store WHERE id=1",
+            "SELECT logical_step_sequence FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
         )
@@ -7174,33 +7072,33 @@ fn read_todo_progress_tx(transaction: &Transaction<'_>) -> Result<u64, Conversat
     nonnegative(value, "Todo progress sequence")
 }
 
-struct AgentStatusHeadRow {
-    module: String,
+struct ContributionHeadRow {
+    producer: String,
     key: String,
     fingerprint: String,
     emitted_at: String,
     request_id: String,
     message_id: String,
-    todo_progress_origin: i64,
+    logical_step_origin: i64,
     event_sequence: i64,
 }
 
-fn read_agent_status_head_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentStatusHeadRow> {
-    Ok(AgentStatusHeadRow {
-        module: row.get(0)?,
+fn read_contribution_head_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ContributionHeadRow> {
+    Ok(ContributionHeadRow {
+        producer: row.get(0)?,
         key: row.get(1)?,
         fingerprint: row.get(2)?,
         emitted_at: row.get(3)?,
         request_id: row.get(4)?,
         message_id: row.get(5)?,
-        todo_progress_origin: row.get(6)?,
+        logical_step_origin: row.get(6)?,
         event_sequence: row.get(7)?,
     })
 }
 
 fn head_record_from_row(
-    row: AgentStatusHeadRow,
-) -> Result<AgentStatusEmissionRecord, ConversationStoreError> {
+    row: ContributionHeadRow,
+) -> Result<ContributionEmissionRecord, ConversationStoreError> {
     let emitted_at = DateTime::parse_from_rfc3339(&row.emitted_at)
         .map_err(|error| {
             ConversationStoreError::InvalidReference(format!(
@@ -7209,33 +7107,33 @@ fn head_record_from_row(
             ))
         })?
         .with_timezone(&Utc);
-    Ok(AgentStatusEmissionRecord {
-        module_id: decode_agent_status_module(&row.module)?,
+    Ok(ContributionEmissionRecord {
+        producer: decode(&row.producer, "contribution producer")?,
         key: row.key,
         fingerprint: row.fingerprint,
         emitted_at,
         request_id: RequestId::new(row.request_id),
         canonical_message_id: MessageId::new(row.message_id),
-        todo_progress_origin: nonnegative(
-            row.todo_progress_origin,
-            "Agent Status Todo progress origin",
+        logical_step_origin: nonnegative(
+            row.logical_step_origin,
+            "Agent Status logical-step origin",
         )?,
         event_sequence: sequence_from_i64(row.event_sequence)?,
     })
 }
 
-fn read_agent_status_head(
+fn read_contribution_head(
     connection: &Connection,
-    module_id: AgentStatusModuleId,
+    producer: &crate::runtime::identity::ContextContributorIdentity,
     key: &str,
-) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError> {
+) -> Result<Option<ContributionEmissionRecord>, ConversationStoreError> {
     connection
         .query_row(
-            "SELECT module_id,semantic_key,fingerprint,emitted_at,request_id,message_id,todo_progress_origin,event_sequence
-             FROM agent_status_emission_heads
-             WHERE module_id=?1 AND semantic_key=?2",
-            params![module_id.as_str(), key],
-            read_agent_status_head_row,
+            "SELECT producer,semantic_key,fingerprint,emitted_at,request_id,message_id,logical_step_origin,event_sequence
+             FROM contribution_emission_heads
+             WHERE producer=?1 AND semantic_key=?2",
+            params![producer.durable_key(), key],
+            read_contribution_head_row,
         )
         .optional()
         .map_err(|error| storage(format!("Agent Status head lookup: {error}")))?
@@ -7243,18 +7141,18 @@ fn read_agent_status_head(
         .transpose()
 }
 
-fn read_agent_status_head_tx(
+fn read_contribution_head_tx(
     transaction: &Transaction<'_>,
-    module_id: AgentStatusModuleId,
+    producer: &crate::runtime::identity::ContextContributorIdentity,
     key: &str,
-) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError> {
+) -> Result<Option<ContributionEmissionRecord>, ConversationStoreError> {
     transaction
         .query_row(
-            "SELECT module_id,semantic_key,fingerprint,emitted_at,request_id,message_id,todo_progress_origin,event_sequence
-             FROM agent_status_emission_heads
-             WHERE module_id=?1 AND semantic_key=?2",
-            params![module_id.as_str(), key],
-            read_agent_status_head_row,
+            "SELECT producer,semantic_key,fingerprint,emitted_at,request_id,message_id,logical_step_origin,event_sequence
+             FROM contribution_emission_heads
+             WHERE producer=?1 AND semantic_key=?2",
+            params![producer.durable_key(), key],
+            read_contribution_head_row,
         )
         .optional()
         .map_err(|error| storage(format!("Agent Status head lookup: {error}")))?
@@ -7262,27 +7160,28 @@ fn read_agent_status_head_tx(
         .transpose()
 }
 
-fn upsert_agent_status_head_tx(
+fn upsert_contribution_head_tx(
     transaction: &Transaction<'_>,
     event: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
-    let RuntimeEvent::AgentStatusEmitted {
+    let RuntimeEvent::ContextContributionEmitted {
+        producer,
         request_id,
         message_id,
         emission,
-        todo_progress_origin,
+        logical_step_origin,
     } = &event.event
     else {
         return Err(ConversationStoreError::InvalidReference(
-            "latest-emission head update requires an Agent Status emission fact".to_owned(),
+            "latest-emission head update requires an contribution emission fact".to_owned(),
         ));
     };
-    let existing = read_agent_status_head_tx(transaction, emission.module_id, &emission.key)?;
+    let existing = read_contribution_head_tx(transaction, producer, &emission.key)?;
     if let Some(existing) = existing {
         if existing.event_sequence > event.sequence {
             return Err(ConversationStoreError::InvalidReference(format!(
                 "Agent Status head for {}:{} is newer than event {}",
-                emission.module_id.as_str(),
+                producer.durable_key(),
                 emission.key,
                 event.sequence
             )));
@@ -7291,7 +7190,7 @@ fn upsert_agent_status_head_tx(
             if existing.fingerprint == emission.fingerprint
                 && existing.request_id == *request_id
                 && existing.canonical_message_id == *message_id
-                && existing.todo_progress_origin == *todo_progress_origin
+                && existing.logical_step_origin == *logical_step_origin
                 && existing.emitted_at == event.timestamp
             {
                 return Ok(());
@@ -7300,25 +7199,25 @@ fn upsert_agent_status_head_tx(
                 "Agent Status latest-emission head conflicts at one event sequence".to_owned(),
             ));
         }
-        if existing.todo_progress_origin > *todo_progress_origin {
+        if existing.logical_step_origin > *logical_step_origin {
             return Err(ConversationStoreError::InvalidReference(
-                "Agent Status latest-emission head regresses the committed Todo progress origin"
+                "Agent Status latest-emission head regresses the committed logical-step origin"
                     .to_owned(),
             ));
         }
         transaction
             .execute(
-                "UPDATE agent_status_emission_heads
-                 SET fingerprint=?1,emitted_at=?2,request_id=?3,message_id=?4,todo_progress_origin=?5,event_sequence=?6
-                 WHERE module_id=?7 AND semantic_key=?8",
+                "UPDATE contribution_emission_heads
+                 SET fingerprint=?1,emitted_at=?2,request_id=?3,message_id=?4,logical_step_origin=?5,event_sequence=?6
+                 WHERE producer=?7 AND semantic_key=?8",
                 params![
                     emission.fingerprint,
                     event.timestamp.to_rfc3339(),
                     request_id.as_str(),
                     message_id.as_str(),
-                    seq_to_i64(*todo_progress_origin)?,
+                    seq_to_i64(*logical_step_origin)?,
                     seq_to_i64(event.sequence)?,
-                    emission.module_id.as_str(),
+                    producer.durable_key(),
                     emission.key,
                 ],
             )
@@ -7326,17 +7225,17 @@ fn upsert_agent_status_head_tx(
     } else {
         transaction
             .execute(
-                "INSERT INTO agent_status_emission_heads
-                 (module_id,semantic_key,fingerprint,emitted_at,request_id,message_id,todo_progress_origin,event_sequence)
+                "INSERT INTO contribution_emission_heads
+                 (producer,semantic_key,fingerprint,emitted_at,request_id,message_id,logical_step_origin,event_sequence)
                  VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
                 params![
-                    emission.module_id.as_str(),
+                    producer.durable_key(),
                     emission.key,
                     emission.fingerprint,
                     event.timestamp.to_rfc3339(),
                     request_id.as_str(),
                     message_id.as_str(),
-                    seq_to_i64(*todo_progress_origin)?,
+                    seq_to_i64(*logical_step_origin)?,
                     seq_to_i64(event.sequence)?,
                 ],
             )
@@ -7850,18 +7749,19 @@ fn validate_event_reference(
                 ));
             }
         }
-        RuntimeEvent::AgentStatusEmitted {
+        RuntimeEvent::ContextContributionEmitted {
+            producer,
             request_id,
             message_id,
             emission,
-            todo_progress_origin,
+            logical_step_origin,
         } => {
-            validate_agent_status_emission_shape(emission)?;
+            validate_contribution_emission_shape(emission)?;
             let Some((snapshot, Some(started_sequence), _)) =
                 read_request_snapshot_tx(transaction, request_id)?
             else {
                 return Err(ConversationStoreError::InvalidReference(format!(
-                    "Agent Status emission references request {request_id}, which has not started"
+                    "contribution emission references request {request_id}, which has not started"
                 )));
             };
             let started =
@@ -7871,55 +7771,46 @@ fn validate_event_reference(
                     ))
                 })?;
             validate_request_start_metadata(&snapshot, &started)?;
-            let Some(agent_status) = snapshot.agent_status.as_ref() else {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "Agent Status emission for request {request_id} has no prepared status context"
-                )));
-            };
+            let contribution = snapshot
+                .contributions
+                .iter()
+                .find(|candidate| {
+                    candidate.message_id == *message_id && candidate.producer == *producer
+                })
+                .ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(format!(
+                        "emission for request {request_id} has no accepted contribution"
+                    ))
+                })?;
             if snapshot.identity.retry_number != 0 {
                 return Err(ConversationStoreError::InvalidReference(
-                    "Todo Agent Status emission must belong to the first request of its logical primary step"
+                    "contribution emission must belong to the first request of its logical primary step"
                         .to_owned(),
                 ));
             }
-            let current_todo_progress = read_todo_progress_tx(transaction)?;
-            if *todo_progress_origin != current_todo_progress {
+            let current_logical_step_progress = read_logical_step_progress_tx(transaction)?;
+            if *logical_step_origin != current_logical_step_progress {
                 return Err(ConversationStoreError::InvalidReference(
-                    "Agent Status emission Todo progress origin is not the store-owned start boundary"
+                    "contribution emission logical-step origin is not the store-owned start boundary"
                         .to_owned(),
                 ));
             }
             if envelope.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
                 || envelope.turn_id.as_ref() != Some(&snapshot.identity.turn)
-                || envelope.event_id != agent_status_emission_event_id(request_id, emission)
+                || envelope.event_id
+                    != contribution_emission_event_id(request_id, producer, emission)
                 || envelope.timestamp != started.timestamp
-                || message_id != &agent_status.message_id
-                || !agent_status
+                || !contribution
                     .emissions
                     .iter()
                     .any(|candidate| candidate == emission)
             {
                 return Err(ConversationStoreError::InvalidReference(format!(
-                    "Agent Status emission for request {request_id} does not match its prepared start"
+                    "contribution emission for request {request_id} does not match its prepared start"
                 )));
             }
             let message = load_message_tx(transaction, message_id)?;
-            let Some(metadata) = message.agent_status_metadata() else {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "Agent Status emission references non-status message {message_id}"
-                )));
-            };
-            if !metadata.contains(emission.module_id) {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "Agent Status emission module {} is absent from message {message_id}",
-                    emission.module_id.as_str()
-                )));
-            }
-            if message.id() != message_id {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "Agent Status emission message reference {message_id} disagrees with its body"
-                )));
-            }
+            contribution.validate_message(&message)?;
         }
         // A retry schedule is correlated by the failed request identity, not
         // by event position. It is valid only after that exact actual request
@@ -8744,7 +8635,7 @@ fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::ToolMessageCommitted { .. }
             | RuntimeEvent::CompactionCompleted { .. }
             | RuntimeEvent::ModelRequestStarted { .. }
-            | RuntimeEvent::AgentStatusEmitted { .. }
+            | RuntimeEvent::ContextContributionEmitted { .. }
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalSettled { .. }
@@ -9216,8 +9107,8 @@ mod tests {
     use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope, SubagentTerminalState};
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AgentStatusEmission, AgentStatusGenerationMetadata, AgentStatusModuleId,
-        AssistantContentBlock, AssistantMessageBlock, CompactionSummaryMetadata, ContextKind,
+        AgentStatusGenerationMetadata, AgentStatusModuleId, AssistantContentBlock,
+        AssistantMessageBlock, CompactionSummaryMetadata, ContextKind, ContributionEmission,
         InboundKind, MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
         UserSource,
     };
@@ -9225,7 +9116,7 @@ mod tests {
     use crate::model::catalog::ModelCompat;
     use crate::model::finish::ModelFinishReason;
     use crate::model::invocation::{ModelInvocationConfig, RequestParams};
-    use crate::model::snapshot::{AgentStatusStart, RequestIdentity, RequestSnapshot};
+    use crate::model::snapshot::{ContributionStart, RequestIdentity, RequestSnapshot};
     use crate::model::types::{ModelProtocol, ModelRequest};
     use crate::runtime::identity::{AttemptId, EventId, TurnId};
     use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
@@ -9730,23 +9621,34 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_canonical_append_rejects_unbound_agent_status() {
+    fn historical_context_alone_cannot_advance_contribution_receipts() {
         let store = store();
-        let base = user_message("base", "base");
-        store.initialize(std::slice::from_ref(&base)).unwrap();
+        store.initialize(&[user_message("base", "base")]).unwrap();
         let status = agent_status_message(
-            "status-unbound",
+            "historical-status",
             Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
             &[AgentStatusModuleId::Todo],
         );
-
-        assert!(matches!(
-            store.append_canonical(&status),
-            Err(ConversationStoreError::InvalidReference(message))
-                if message.contains("atomic model-turn-start")
-        ));
-        assert_eq!(store.load_canonical().unwrap(), vec![base]);
-        assert!(store.read_events(None, 10).unwrap().events.is_empty());
+        store.append_canonical(&status).unwrap();
+        assert_eq!(store.current_logical_step_progress().unwrap(), 0);
+        assert!(
+            store
+                .read_request_snapshots(None, 10)
+                .unwrap()
+                .snapshots
+                .is_empty()
+        );
+        assert!(
+            store
+                .latest_contribution_emission(
+                    &crate::runtime::identity::ContextContributorIdentity::Native(
+                        crate::runtime::identity::NativeContextContributor::AgentStatus
+                    ),
+                    "active_actionable"
+                )
+                .unwrap()
+                .is_none()
+        );
     }
 
     fn envelope(
@@ -10287,14 +10189,45 @@ mod tests {
         turn: &str,
         revision: crate::conversation::SurfaceRevision,
         message_id: MessageId,
-        emissions: Vec<AgentStatusEmission>,
+        emissions: Vec<ContributionEmission>,
         request_context_ids: Vec<MessageId>,
     ) -> RequestSnapshot {
         let mut snapshot =
             progress_request_snapshot(attempt_id, turn, 0, revision, request_context_ids);
-        snapshot.agent_status = Some(AgentStatusStart {
+        let producer = crate::runtime::identity::ContextContributorIdentity::Native(
+            crate::runtime::identity::NativeContextContributor::AgentStatus,
+        );
+        snapshot
+            .context_generation
+            .contributors
+            .push(crate::context::ContributorGeneration {
+                identity: producer.clone(),
+                attestation: None,
+            });
+        for id in snapshot.request_context_ids.clone() {
+            if id != message_id {
+                test_bind_contribution(
+                    &mut snapshot,
+                    id,
+                    ContextKind::RuntimeToolObservation,
+                    vec![],
+                );
+            }
+        }
+        snapshot.contributions.push(ContributionStart {
             message_id,
+            producer,
+            metadata: ContextKind::AgentStatus(
+                AgentStatusGenerationMetadata::new(
+                    Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
+                    vec![AgentStatusModuleId::Todo],
+                )
+                .unwrap(),
+            ),
+            presentation: None,
             emissions,
+            opportunities: crate::context::ContributionOpportunities::default(),
+            post_tool_batch_anchor: None,
         });
         snapshot
     }
@@ -10304,35 +10237,57 @@ mod tests {
         revision: crate::conversation::SurfaceRevision,
         request_context_ids: Vec<MessageId>,
     ) -> RequestSnapshot {
-        RequestSnapshot::new(
-            RequestIdentity {
-                attempt_id: AttemptId::new("attempt-1"),
-                turn: TurnId::new("1"),
-                retry_number: 0,
-            },
-            revision,
-            "frozen".to_owned(),
-            Vec::new(),
-            crate::runtime::RuntimeResourceRevision::new(1),
-            invocation(),
-            1024,
-            None,
-            false,
-            Vec::new(),
-            crate::runtime::identity::CapabilityRevision::new(1),
-            ContextGeneration {
-                id: 1,
-                contributors: Vec::new(),
-            },
-            None,
-            request_context_ids,
-        )
+        let mut snapshot =
+            progress_request_snapshot("attempt-1", "1", 0, revision, request_context_ids.clone());
+        for message_id in request_context_ids {
+            test_bind_contribution(
+                &mut snapshot,
+                message_id,
+                ContextKind::RuntimeToolObservation,
+                vec![],
+            );
+        }
+        snapshot
+    }
+
+    fn test_bind_contribution(
+        snapshot: &mut RequestSnapshot,
+        message_id: MessageId,
+        metadata: ContextKind,
+        emissions: Vec<ContributionEmission>,
+    ) {
+        let producer = crate::runtime::identity::ContextContributorIdentity::Native(
+            metadata.native_contribution_owner().unwrap().0,
+        );
+        if !snapshot
+            .context_generation
+            .contributors
+            .iter()
+            .any(|entry| entry.identity == producer)
+        {
+            snapshot
+                .context_generation
+                .contributors
+                .push(crate::context::ContributorGeneration {
+                    identity: producer.clone(),
+                    attestation: None,
+                });
+        }
+        snapshot.contributions.push(ContributionStart {
+            message_id,
+            producer,
+            metadata,
+            presentation: None,
+            emissions,
+            opportunities: crate::context::ContributionOpportunities::default(),
+            post_tool_batch_anchor: None,
+        });
     }
 
     fn status_start_snapshot(
         revision: crate::conversation::SurfaceRevision,
         message_id: MessageId,
-        emissions: Vec<AgentStatusEmission>,
+        emissions: Vec<ContributionEmission>,
     ) -> RequestSnapshot {
         status_start_snapshot_for(
             "attempt-1",
@@ -10442,7 +10397,8 @@ mod tests {
     }
 
     #[test]
-    fn agent_status_emission_is_atomic_with_start_and_exactly_replayed() {
+    #[allow(clippy::too_many_lines)] // One atomicity/replay scenario and its complete durable observations.
+    fn contribution_emission_is_atomic_with_start_and_exactly_replayed() {
         let store = store();
         let base = user_message("base", "base");
         store.initialize(std::slice::from_ref(&base)).unwrap();
@@ -10453,8 +10409,7 @@ mod tests {
             Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
             &[AgentStatusModuleId::Todo],
         );
-        let emission = AgentStatusEmission {
-            module_id: AgentStatusModuleId::Todo,
+        let emission = ContributionEmission {
             key: "active_actionable".to_owned(),
             fingerprint: "todo-fingerprint-1".to_owned(),
         };
@@ -10472,7 +10427,7 @@ mod tests {
         let events = store.read_events(None, 10).unwrap().events;
         assert_eq!(events.len(), 2);
         assert_eq!(
-            started.agent_status_emissions,
+            started.contribution_emissions,
             vec![events[1].clone()],
             "the typed receipt owns the exact emission fact after the start fact"
         );
@@ -10482,24 +10437,35 @@ mod tests {
             "the receipt exposes the durable sequence in order"
         );
         match &events[1].event {
-            RuntimeEvent::AgentStatusEmitted {
+            RuntimeEvent::ContextContributionEmitted {
                 request_id,
                 message_id: stored_message_id,
                 emission: stored_emission,
-                todo_progress_origin,
+                logical_step_origin,
+                ..
             } => {
                 assert_eq!(request_id, &snapshot.request_id);
                 assert_eq!(stored_message_id, &message_id);
                 assert_eq!(stored_emission, &emission);
-                assert_eq!(*todo_progress_origin, 1);
+                assert_eq!(*logical_step_origin, 1);
             }
-            other => panic!("expected Agent Status emission fact, got {other:?}"),
+            other => panic!("expected contribution emission fact, got {other:?}"),
         }
         let head = store
-            .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+            .latest_contribution_emission(
+                &crate::runtime::identity::ContextContributorIdentity::Native(
+                    crate::runtime::identity::NativeContextContributor::AgentStatus,
+                ),
+                "active_actionable",
+            )
             .unwrap()
             .expect("durable latest-emission head");
-        assert_eq!(head.module_id, AgentStatusModuleId::Todo);
+        assert_eq!(
+            head.producer,
+            crate::runtime::identity::ContextContributorIdentity::Native(
+                crate::runtime::identity::NativeContextContributor::AgentStatus
+            )
+        );
         assert_eq!(head.key, emission.key);
         assert_eq!(head.fingerprint, emission.fingerprint);
         assert_eq!(head.request_id, snapshot.request_id);
@@ -10511,8 +10477,8 @@ mod tests {
             .expect("exact start replay is idempotent");
         assert_eq!(retried.started, started.started);
         assert_eq!(
-            retried.agent_status_emissions,
-            started.agent_status_emissions
+            retried.contribution_emissions,
+            started.contribution_emissions
         );
         assert_eq!(
             retried.disposition,
@@ -10522,9 +10488,9 @@ mod tests {
 
         let mut contradictory = snapshot.clone();
         contradictory
-            .agent_status
-            .as_mut()
-            .expect("status metadata")
+            .contributions
+            .first_mut()
+            .expect("contribution")
             .emissions[0]
             .fingerprint = "contradictory-fingerprint".to_owned();
         assert!(matches!(
@@ -10538,7 +10504,12 @@ mod tests {
         assert_eq!(store.read_events(None, 10).unwrap().events.len(), 2);
         assert_eq!(
             store
-                .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                .latest_contribution_emission(
+                    &crate::runtime::identity::ContextContributorIdentity::Native(
+                        crate::runtime::identity::NativeContextContributor::AgentStatus
+                    ),
+                    "active_actionable"
+                )
                 .unwrap()
                 .expect("head remains committed")
                 .fingerprint,
@@ -10563,8 +10534,7 @@ mod tests {
             Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
             &[AgentStatusModuleId::Todo],
         );
-        let emission = AgentStatusEmission {
-            module_id: AgentStatusModuleId::Todo,
+        let emission = ContributionEmission {
             key: "active_actionable".to_owned(),
             fingerprint: "origin-fingerprint".to_owned(),
         };
@@ -10585,25 +10555,30 @@ mod tests {
             )
             .expect("same-start RuntimeToolObservation and Agent Status commit");
 
-        assert_eq!(store.current_todo_progress().unwrap(), 1);
+        assert_eq!(store.current_logical_step_progress().unwrap(), 1);
         let head = store
-            .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+            .latest_contribution_emission(
+                &crate::runtime::identity::ContextContributorIdentity::Native(
+                    crate::runtime::identity::NativeContextContributor::AgentStatus,
+                ),
+                "active_actionable",
+            )
             .unwrap()
             .expect("latest Todo head");
-        assert_eq!(head.todo_progress_origin, 1);
+        assert_eq!(head.logical_step_origin, 1);
         assert_eq!(
-            head.todo_progress_origin,
-            store.current_todo_progress().unwrap()
+            head.logical_step_origin,
+            store.current_logical_step_progress().unwrap()
         );
         assert_eq!(head.canonical_message_id, status_message_id);
         assert_eq!(
             head.event_sequence,
-            started.agent_status_emissions[0].sequence
+            started.contribution_emissions[0].sequence
         );
         assert!(matches!(
-            started.agent_status_emissions[0].event,
-            RuntimeEvent::AgentStatusEmitted {
-                todo_progress_origin: 1,
+            started.contribution_emissions[0].event,
+            RuntimeEvent::ContextContributionEmitted {
+                logical_step_origin: 1,
                 emission: ref committed,
                 ..
             } if committed == &emission
@@ -10630,10 +10605,10 @@ mod tests {
             ModelTurnStartCommitDisposition::IdempotentReplay
         );
         assert_eq!(
-            replay.agent_status_emissions,
-            started.agent_status_emissions
+            replay.contribution_emissions,
+            started.contribution_emissions
         );
-        assert_eq!(store.current_todo_progress().unwrap(), 1);
+        assert_eq!(store.current_logical_step_progress().unwrap(), 1);
     }
 
     /// Todo's four-unit window is measured from the committed origin, not
@@ -10641,13 +10616,12 @@ mod tests {
     /// exactly one unit each; an overflow retry, a status-free retry, and
     /// request-scoped context do not create another unit.
     #[test]
-    fn todo_progress_counts_later_fresh_starts_once_and_overflow_retries_zero() {
+    fn logical_step_progress_counts_later_fresh_starts_once_and_overflow_retries_zero() {
         let store = store();
         let base = user_message("base", "base");
         store.initialize(std::slice::from_ref(&base)).unwrap();
         let status_message_id = MessageId::new("status-progress");
-        let emission = AgentStatusEmission {
-            module_id: AgentStatusModuleId::Todo,
+        let emission = ContributionEmission {
             key: "active_actionable".to_owned(),
             fingerprint: "progress-fingerprint".to_owned(),
         };
@@ -10669,10 +10643,15 @@ mod tests {
             )
             .unwrap();
         let origin = store
-            .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+            .latest_contribution_emission(
+                &crate::runtime::identity::ContextContributorIdentity::Native(
+                    crate::runtime::identity::NativeContextContributor::AgentStatus,
+                ),
+                "active_actionable",
+            )
             .unwrap()
             .expect("first Todo head")
-            .todo_progress_origin;
+            .logical_step_origin;
         assert_eq!(origin, 1);
 
         // The overflow request belongs to the already-started first logical
@@ -10684,7 +10663,7 @@ mod tests {
         store
             .commit_model_turn_start(&[], &overflow_retry, Utc::now())
             .expect("overflow retry start");
-        assert_eq!(store.current_todo_progress().unwrap(), origin);
+        assert_eq!(store.current_logical_step_progress().unwrap(), origin);
 
         for index in 0..3 {
             let revision = store.load_head().unwrap().revision;
@@ -10700,16 +10679,21 @@ mod tests {
                 .expect("later fresh primary start");
         }
         assert_eq!(
-            store.current_todo_progress().unwrap() - origin,
+            store.current_logical_step_progress().unwrap() - origin,
             3,
             "three later fresh starts are strictly before the inclusive boundary"
         );
         assert_eq!(
             store
-                .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                .latest_contribution_emission(
+                    &crate::runtime::identity::ContextContributorIdentity::Native(
+                        crate::runtime::identity::NativeContextContributor::AgentStatus
+                    ),
+                    "active_actionable"
+                )
                 .unwrap()
                 .expect("Todo head remains the first emission")
-                .todo_progress_origin,
+                .logical_step_origin,
             origin
         );
 
@@ -10719,13 +10703,18 @@ mod tests {
         store
             .commit_model_turn_start(&[], &fourth, Utc::now())
             .expect("fourth later fresh primary start");
-        assert_eq!(store.current_todo_progress().unwrap() - origin, 4);
+        assert_eq!(store.current_logical_step_progress().unwrap() - origin, 4);
         assert_eq!(
             store
-                .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                .latest_contribution_emission(
+                    &crate::runtime::identity::ContextContributorIdentity::Native(
+                        crate::runtime::identity::NativeContextContributor::AgentStatus
+                    ),
+                    "active_actionable"
+                )
                 .unwrap()
                 .expect("Todo head remains unchanged without a status")
-                .todo_progress_origin,
+                .logical_step_origin,
             origin
         );
     }
@@ -10734,7 +10723,7 @@ mod tests {
     /// progress. In particular, retiring the Agent Status message does not
     /// reset or consume the durable reminder window.
     #[test]
-    fn compaction_does_not_reset_or_advance_todo_progress() {
+    fn compaction_does_not_reset_or_advance_logical_step_progress() {
         let store = store();
         let base = user_message("base", "base");
         store.initialize(std::slice::from_ref(&base)).unwrap();
@@ -10744,8 +10733,7 @@ mod tests {
             Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
             &[AgentStatusModuleId::Todo],
         );
-        let emission = AgentStatusEmission {
-            module_id: AgentStatusModuleId::Todo,
+        let emission = ContributionEmission {
             key: "active_actionable".to_owned(),
             fingerprint: "compaction-fingerprint".to_owned(),
         };
@@ -10762,10 +10750,15 @@ mod tests {
             )
             .unwrap();
         let origin = store
-            .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+            .latest_contribution_emission(
+                &crate::runtime::identity::ContextContributorIdentity::Native(
+                    crate::runtime::identity::NativeContextContributor::AgentStatus,
+                ),
+                "active_actionable",
+            )
             .unwrap()
             .expect("Todo head")
-            .todo_progress_origin;
+            .logical_step_origin;
         let before = store.load_head().unwrap();
         assert_eq!(origin, 1);
 
@@ -10786,13 +10779,18 @@ mod tests {
             })
             .expect("compaction commits");
 
-        assert_eq!(store.current_todo_progress().unwrap(), origin);
+        assert_eq!(store.current_logical_step_progress().unwrap(), origin);
         assert_eq!(
             store
-                .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                .latest_contribution_emission(
+                    &crate::runtime::identity::ContextContributorIdentity::Native(
+                        crate::runtime::identity::NativeContextContributor::AgentStatus
+                    ),
+                    "active_actionable"
+                )
                 .unwrap()
                 .expect("durable Todo head survives compaction")
-                .todo_progress_origin,
+                .logical_step_origin,
             origin
         );
     }
@@ -10801,7 +10799,7 @@ mod tests {
     /// generation. Their canonical status membership is not another logical
     /// primary start, so enabling either one cannot move Todo's cadence.
     #[test]
-    fn optional_status_modules_do_not_add_todo_progress_units() {
+    fn optional_status_modules_do_not_add_logical_step_progress_units() {
         let store = store();
         let base = user_message("base", "base");
         store.initialize(std::slice::from_ref(&base)).unwrap();
@@ -10816,18 +10814,19 @@ mod tests {
                 AgentStatusModuleId::Todo,
             ],
         );
-        let snapshot = status_start_snapshot_for(
+        let mut snapshot = status_start_snapshot_for(
             "all-modules-attempt",
             "1",
             store.load_head().unwrap().revision.next().next(),
             status_id.clone(),
-            vec![AgentStatusEmission {
-                module_id: AgentStatusModuleId::Todo,
+            vec![ContributionEmission {
                 key: "active_actionable".to_owned(),
                 fingerprint: "all-modules-fingerprint".to_owned(),
             }],
             vec![runtime_context.id().clone(), status_id],
         );
+        snapshot.contributions.last_mut().unwrap().metadata =
+            ContextKind::AgentStatus(status.agent_status_metadata().unwrap().clone());
         store
             .commit_model_turn_start(
                 &[runtime_context, status],
@@ -10837,16 +10836,21 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            store.current_todo_progress().unwrap(),
+            store.current_logical_step_progress().unwrap(),
             1,
             "all optional status sections and same-start context share one start unit"
         );
         assert_eq!(
             store
-                .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                .latest_contribution_emission(
+                    &crate::runtime::identity::ContextContributorIdentity::Native(
+                        crate::runtime::identity::NativeContextContributor::AgentStatus
+                    ),
+                    "active_actionable"
+                )
                 .unwrap()
                 .expect("Todo head")
-                .todo_progress_origin,
+                .logical_step_origin,
             1
         );
     }
@@ -10854,8 +10858,8 @@ mod tests {
     #[test]
     fn agent_status_start_faults_roll_back_message_emission_and_head_together() {
         for fault in [
-            RequestStartFaultOperation::AfterAgentStatusEventInsert,
-            RequestStartFaultOperation::AfterAgentStatusHeadUpsert,
+            RequestStartFaultOperation::AfterContributionEventInsert,
+            RequestStartFaultOperation::AfterContributionHeadUpsert,
         ] {
             let store = store();
             let base = user_message("base", "base");
@@ -10866,8 +10870,7 @@ mod tests {
                 Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
                 &[AgentStatusModuleId::Todo],
             );
-            let emission = AgentStatusEmission {
-                module_id: AgentStatusModuleId::Todo,
+            let emission = ContributionEmission {
                 key: "active_actionable".to_owned(),
                 fingerprint: "fault-fingerprint".to_owned(),
             };
@@ -10901,13 +10904,18 @@ mod tests {
             );
             assert!(store.read_events(None, 10).unwrap().events.is_empty());
             assert_eq!(
-                store.current_todo_progress().unwrap(),
+                store.current_logical_step_progress().unwrap(),
                 0,
                 "a failed status start does not advance Todo progress"
             );
             assert!(
                 store
-                    .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                    .latest_contribution_emission(
+                        &crate::runtime::identity::ContextContributorIdentity::Native(
+                            crate::runtime::identity::NativeContextContributor::AgentStatus
+                        ),
+                        "active_actionable"
+                    )
                     .unwrap()
                     .is_none()
             );
@@ -10919,8 +10927,7 @@ mod tests {
         let store = store();
         let base = user_message("base", "base");
         store.initialize(std::slice::from_ref(&base)).unwrap();
-        let emission = AgentStatusEmission {
-            module_id: AgentStatusModuleId::Todo,
+        let emission = ContributionEmission {
             key: "active_actionable".to_owned(),
             fingerprint: "fingerprint".to_owned(),
         };
@@ -10948,12 +10955,11 @@ mod tests {
     }
 
     #[test]
-    fn agent_status_head_resume_uses_one_bounded_lookup() {
+    fn contribution_head_resume_uses_one_bounded_lookup() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("conversation.sqlite");
         let conversation_id = ConversationId::new("conv_f9113f99-5f0f-7b59-8f83-495e254f63f1");
-        let emission = AgentStatusEmission {
-            module_id: AgentStatusModuleId::Todo,
+        let emission = ContributionEmission {
             key: "active_actionable".to_owned(),
             fingerprint: "resume-fingerprint".to_owned(),
         };
@@ -10982,13 +10988,18 @@ mod tests {
         }
         let reopened = SqliteConversationStore::open(conversation_id, &path).unwrap();
         let found = reopened
-            .latest_agent_status_emission(AgentStatusModuleId::Todo, &emission.key)
+            .latest_contribution_emission(
+                &crate::runtime::identity::ContextContributorIdentity::Native(
+                    crate::runtime::identity::NativeContextContributor::AgentStatus,
+                ),
+                &emission.key,
+            )
             .unwrap()
             .expect("committed suppression survives reopen");
         assert_eq!(found.fingerprint, emission.fingerprint);
-        assert_eq!(found.todo_progress_origin, 1);
-        assert_eq!(reopened.current_todo_progress().unwrap(), 1);
-        assert_eq!(reopened.agent_status_head_lookup_reads(), 1);
+        assert_eq!(found.logical_step_origin, 1);
+        assert_eq!(reopened.current_logical_step_progress().unwrap(), 1);
+        assert_eq!(reopened.contribution_head_lookup_reads(), 1);
     }
 
     #[test]
@@ -11044,29 +11055,7 @@ mod tests {
         store.initialize(std::slice::from_ref(&a)).unwrap();
         let base_revision = store.load_head().unwrap().revision;
         let context = request_context_message("ctx-1", "request-scoped context");
-        let snapshot = RequestSnapshot::new(
-            RequestIdentity {
-                attempt_id: AttemptId::new("attempt-1"),
-                turn: TurnId::new("1"),
-                retry_number: 0,
-            },
-            base_revision.next(),
-            "frozen".to_owned(),
-            Vec::new(),
-            crate::runtime::RuntimeResourceRevision::new(1),
-            invocation(),
-            1024,
-            None,
-            false,
-            Vec::new(),
-            crate::runtime::identity::CapabilityRevision::new(1),
-            ContextGeneration {
-                id: 1,
-                contributors: Vec::new(),
-            },
-            None,
-            vec![MessageId::new("ctx-1")],
-        );
+        let snapshot = context_start_snapshot(base_revision.next(), vec![MessageId::new("ctx-1")]);
         let started = store
             .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, Utc::now())
             .expect("start commits");
@@ -11119,27 +11108,8 @@ mod tests {
         let base_revision = store.load_head().unwrap().revision;
         let ctx1 = request_context_message("ctx-1", "first context");
         let ctx2 = request_context_message("ctx-2", "second context");
-        let snapshot = RequestSnapshot::new(
-            RequestIdentity {
-                attempt_id: AttemptId::new("attempt-1"),
-                turn: TurnId::new("1"),
-                retry_number: 0,
-            },
+        let snapshot = context_start_snapshot(
             base_revision.next().next(),
-            "frozen".to_owned(),
-            Vec::new(),
-            crate::runtime::RuntimeResourceRevision::new(1),
-            invocation(),
-            1024,
-            None,
-            false,
-            Vec::new(),
-            crate::runtime::identity::CapabilityRevision::new(1),
-            ContextGeneration {
-                id: 1,
-                contributors: Vec::new(),
-            },
-            None,
             vec![MessageId::new("ctx-1"), MessageId::new("ctx-2")],
         );
         let started = store
@@ -11296,29 +11266,8 @@ mod tests {
             store.initialize(std::slice::from_ref(&a)).unwrap();
             let base_revision = store.load_head().unwrap().revision;
             let context = request_context_message("ctx-1", "request-scoped context");
-            let snapshot = RequestSnapshot::new(
-                RequestIdentity {
-                    attempt_id: AttemptId::new("attempt-1"),
-                    turn: TurnId::new("1"),
-                    retry_number: 0,
-                },
-                base_revision.next(),
-                "frozen".to_owned(),
-                Vec::new(),
-                crate::runtime::RuntimeResourceRevision::new(1),
-                invocation(),
-                1024,
-                None,
-                false,
-                Vec::new(),
-                crate::runtime::identity::CapabilityRevision::new(1),
-                ContextGeneration {
-                    id: 1,
-                    contributors: Vec::new(),
-                },
-                None,
-                vec![MessageId::new("ctx-1")],
-            );
+            let snapshot =
+                context_start_snapshot(base_revision.next(), vec![MessageId::new("ctx-1")]);
             store.arm_request_start_fault_script([fault]);
             assert!(
                 store
@@ -13505,7 +13454,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 42);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 43);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -13574,7 +13523,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 42);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 43);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

@@ -288,7 +288,7 @@ pub struct CompactionRecord {
 /// `ConversationState::freeze_active_surface` obtains the Surface head once,
 /// then hydrates exactly those active identities from the Message Ledger. It
 /// is a transient read value, never a second mutable visibility authority.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConversationSurfaceSnapshot {
     /// The exact Surface revision represented by this snapshot.
     pub revision: SurfaceRevision,

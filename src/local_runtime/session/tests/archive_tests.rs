@@ -38,6 +38,69 @@ fn records(
 }
 
 #[tokio::test]
+async fn archive_v2_contract_preserves_accepted_contributions_and_journal_vocabulary() {
+    let (directory, catalog, _) = open_catalog();
+    let (conversation, session, _) = append_history(&catalog, &[]);
+    let store = store_for(&catalog, &session, &conversation);
+    let status_id = MessageId::new("archive-v2-status");
+    let snapshot = todo_status_start_snapshot(
+        store.load_head().unwrap().revision.next(),
+        status_id.clone(),
+        ContributionEmission {
+            key: "active_actionable".into(),
+            fingerprint: "archive-v2-fingerprint".into(),
+        },
+    );
+    store
+        .commit_model_turn_start(&[todo_status(status_id.as_str())], &snapshot, Utc::now())
+        .unwrap();
+    let cut =
+        SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
+            .unwrap();
+    let files = decode(cut).await;
+    let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+    assert_eq!(manifest["format"], "rustx-session-archive/v2");
+    assert_eq!(
+        manifest["schemas"],
+        serde_json::json!({
+            "journal": 2, "messages": 1, "surface": 1, "requests": 2,
+            "generations": 1, "publication_audits": 1, "inherited_responses": 1,
+        })
+    );
+    let requests = records(&files, &conversation, "requests");
+    assert_eq!(requests.len(), 1);
+    assert!(!snapshot.contributions.is_empty());
+    assert_eq!(
+        requests[0]["contributions"],
+        serde_json::json!(snapshot.contributions)
+    );
+    assert!(requests[0].get("agent_status").is_none());
+    let journal = records(&files, &conversation, "journal");
+    assert!(
+        journal
+            .iter()
+            .all(|row| row["event"]["type"] != "agent_status_emitted")
+    );
+    let emissions: Vec<_> = journal
+        .iter()
+        .filter(|row| row["event"]["type"] == "context_contribution_emitted")
+        .collect();
+    assert_eq!(emissions.len(), 1);
+    let event = &emissions[0]["event"];
+    let contribution = &snapshot.contributions[0];
+    assert_eq!(event["request_id"], serde_json::json!(snapshot.request_id));
+    assert_eq!(
+        event["message_id"],
+        serde_json::json!(contribution.message_id)
+    );
+    assert_eq!(event["producer"], serde_json::json!(contribution.producer));
+    assert_eq!(
+        event["emission"],
+        serde_json::json!(contribution.emissions[0])
+    );
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)] // One gated cross-authority history cut.
 async fn archive_cut_excludes_live_writes_and_later_descendants() {
     let (directory, catalog, _) = open_catalog();
@@ -49,8 +112,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     let snapshot = todo_status_start_snapshot(
         store.load_head().unwrap().revision.next(),
         status_id.clone(),
-        AgentStatusEmission {
-            module_id: AgentStatusModuleId::Todo,
+        ContributionEmission {
             key: "active_actionable".into(),
             fingerprint: "archive-fingerprint".into(),
         },
@@ -111,7 +173,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     later_request.provisional_message_id = later_request.identity.provisional_message_id();
     later_request.surface_revision = store.load_head().unwrap().revision;
     later_request.request_context_ids.clear();
-    later_request.agent_status = None;
+    later_request.contributions.clear();
     let later_receipt = store
         .commit_model_turn_start(&[], &later_request, Utc::now())
         .unwrap();
@@ -133,7 +195,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     release.send(()).unwrap();
     let files = decode_bytes(producing.await.unwrap());
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v1");
+    assert_eq!(manifest["format"], "rustx-session-archive/v2");
     assert_eq!(manifest["conversations"].as_array().unwrap().len(), 2);
     assert!(files.contains_key(&format!("sessions/{child}/journal.jsonl")));
     assert!(!files.contains_key(&format!("sessions/{later}/journal.jsonl")));
@@ -337,8 +399,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
     let mut snapshot = todo_status_start_snapshot(
         store.load_head().unwrap().revision.next(),
         status_id.clone(),
-        AgentStatusEmission {
-            module_id: AgentStatusModuleId::Todo,
+        ContributionEmission {
             key: "active_actionable".into(),
             fingerprint: "safe".into(),
         },

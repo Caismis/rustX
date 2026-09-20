@@ -402,7 +402,9 @@ id_type! {
 /// The identity is independent from registration order, process-local object
 /// identity, and package/content generation.  The Context Assembly boundary
 /// derives trusted native provenance itself; contributors never provide it.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub enum ContextContributorIdentity {
     /// A rustX-native semantic owner.
     Native(NativeContextContributor),
@@ -410,11 +412,26 @@ pub enum ContextContributorIdentity {
     CertifiedExtension(CertifiedExtensionIdentity),
 }
 
+impl ContextContributorIdentity {
+    /// Stable, unambiguous durable producer namespace.
+    ///
+    /// # Panics
+    /// Only if serializing the closed string-only identity fails.
+    #[must_use]
+    pub fn durable_key(&self) -> String {
+        serde_json::to_string(self).expect("producer identity is serializable")
+    }
+}
+
 /// Native semantic owners that may publish model-visible context or
 /// request-time system guidance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeContextContributor {
+    #[cfg(test)]
+    TestAlpha,
+    #[cfg(test)]
+    TestBeta,
     /// The current revisioned Goal observation owner.
     GoalStatus,
     /// Workspace/project instructions.
@@ -439,6 +456,21 @@ pub enum NativeContextContributor {
     RuntimeToolObservation,
 }
 
+impl schemars::JsonSchema for NativeContextContributor {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "NativeContextContributor".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // The production identity inventory is also the schema inventory.
+        // Test-only composed domains never alter the published wire contract.
+        schemars::json_schema!({
+            "type": "string",
+            "enum": Self::ALL,
+        })
+    }
+}
+
 impl NativeContextContributor {
     /// Every native semantic owner, in contract order. This is the source
     /// used by the compatibility manifest and reserved-identity validation;
@@ -457,6 +489,10 @@ impl NativeContextContributor {
     #[must_use]
     pub const fn logical_key(self) -> &'static str {
         match self {
+            #[cfg(test)]
+            Self::TestAlpha => "test-alpha",
+            #[cfg(test)]
+            Self::TestBeta => "test-beta",
             Self::GoalStatus => "goal-status",
             Self::WorkspaceInstructions => "workspace-instructions",
             Self::SkillGuidance => "skill-guidance",
@@ -471,6 +507,10 @@ impl NativeContextContributor {
     #[must_use]
     pub const fn manifest_name(self) -> &'static str {
         match self {
+            #[cfg(test)]
+            Self::TestAlpha => "test_alpha",
+            #[cfg(test)]
+            Self::TestBeta => "test_beta",
             Self::GoalStatus => "goal_status",
             Self::WorkspaceInstructions => "workspace_instructions",
             Self::SkillGuidance => "skill_guidance",

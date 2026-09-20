@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from MessageIconActions and TurnUsagePanel; see PROVENANCE.md. */
 import { useState } from 'react';
-import type { CompletedResponseView, CompletedResponseTiming, ModelUsage } from '../../../../protocol/app-server/v14';
+import type { CompletedResponseView, CompletedResponseTiming, ModelUsage } from '../../../../protocol/app-server/v15';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { Modal } from '../../presentation/primitives/Modal';

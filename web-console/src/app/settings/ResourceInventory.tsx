@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { CapabilityInspection, ResourceFamily, SourceScope } from '../../../../protocol/app-server/v14';
+import type { CapabilityInspection, ResourceFamily, SourceScope } from '../../../../protocol/app-server/v15';
 import { Badge, Facts, SettingsCard } from '../../presentation/settings/SettingsContent';
 import css from '../../presentation/settings/SettingsContent.module.css';
 import { NativeFacts } from '../components/NativeFacts';

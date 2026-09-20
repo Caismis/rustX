@@ -180,7 +180,7 @@ it('reconnect rereads native sources without replaying a dirty draft', async () 
 });
 
 it('an older authoritative read cannot replace a newer read', async () => {
-  let release: (value: import('../../protocol/app-server/v14').MethodResult) => void = () => {};
+  let release: (value: import('../../protocol/app-server/v15').MethodResult) => void = () => {};
   let count = 0;
   const subject = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++count === 2) return new Promise(resolve => { release = resolve; }); });
   render(<Settings client={subject.client} sessionId={cfg3Session} />); await screen.findByText('server-frozen-model');
@@ -239,7 +239,7 @@ it.each([
   ['effect', 'refresh'], ['effect', 'write'], ['refresh', 'refresh'], ['refresh', 'write'],
 ] as const)('fences an obsolete %s read rejection after a newer %s', async (readKind, successor) => {
   let rejectRead!: (error: Error) => void;
-  const pending = new Promise<import('../../protocol/app-server/v14').MethodResult>((_, reject) => { rejectRead = reject; });
+  const pending = new Promise<import('../../protocol/app-server/v15').MethodResult>((_, reject) => { rejectRead = reject; });
   let reads = 0;
   const subject = cfg3Client(async op => {
     if (op.method === 'configuration/sourcesRead' && ++reads === 2) return pending;

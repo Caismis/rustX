@@ -1,4 +1,4 @@
-import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask } from '../../../protocol/app-server/v14';
+import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask } from '../../../protocol/app-server/v15';
 
 /** Agent Status is historical, request-scoped model context. Nothing here is a
  * current-state authority: current Todo is `snapshot.todos`, current Goal is

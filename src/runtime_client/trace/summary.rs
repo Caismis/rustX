@@ -153,8 +153,15 @@ impl TraceProjection<'_> {
             }
             let (attachments, attachments_truncated) =
                 user_artifacts(&user.content, TRACE_SUMMARY_CONTEXT_ARTIFACTS);
+            let contribution = frozen
+                .contributions
+                .iter()
+                .find(|record| record.message_id == *id)
+                .ok_or_else(|| context_invariant(frozen, id))?;
+            contribution.validate_message(&message)?;
             additions.push(TraceContextPresentation {
                 message_id: id.clone(),
+                producer: contribution.producer.clone(),
                 context_kind,
                 source,
                 preview: message_preview(&message),
@@ -191,6 +198,10 @@ fn context_semantics(
     kind: &ContextKind,
 ) -> Option<(TraceContextSource, TraceContextKind)> {
     match (source, kind) {
+        (UserSource::Runtime, ContextKind::NativeEnvironment) => Some((
+            TraceContextSource::Runtime,
+            TraceContextKind::NativeEnvironment,
+        )),
         (UserSource::Runtime, ContextKind::GoalStatus(_)) => {
             Some((TraceContextSource::Runtime, TraceContextKind::GoalStatus))
         }

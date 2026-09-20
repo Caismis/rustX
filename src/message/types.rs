@@ -460,7 +460,7 @@ impl AgentStatusModuleId {
     }
 }
 
-/// One semantic Agent Status emission carried by a prepared model-turn start.
+/// One producer-local semantic receipt carried by an accepted contribution.
 ///
 /// `key` identifies the reminder meaning (for example, the active Todo
 /// reminder), while `fingerprint` identifies the bounded relevant state that
@@ -468,13 +468,27 @@ impl AgentStatusModuleId {
 /// state does not become a different reminder kind.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AgentStatusEmission {
-    /// Stable semantic reminder identity owned by the status module.
-    pub module_id: AgentStatusModuleId,
+pub struct ContributionEmission {
     /// Stable key for the reminder meaning.
     pub key: String,
     /// Fingerprint of the exact bounded relevant content.
     pub fingerprint: String,
+}
+
+impl ContributionEmission {
+    /// Validates the bounded producer-local receipt before acceptance or commit.
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.key.is_empty()
+            || self.key.len() > 128
+            || self.fingerprint.is_empty()
+            || self.fingerprint.len() > 128
+        {
+            return Err(
+                "contribution key and fingerprint must be non-empty and at most 128 bytes".into(),
+            );
+        }
+        Ok(())
+    }
 }
 
 /// An invalid canonical Agent Status module membership.
@@ -610,6 +624,8 @@ impl AgentStatusGenerationMetadata {
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum ContextKind {
+    /// Bounded task data from a composition-bound native producer.
+    NativeEnvironment,
     /// Frozen current Goal observation; objective text remains user data.
     GoalStatus(Box<crate::goal::GoalSnapshot>),
     /// The rustX runtime's own observation of a structurally settled tool
@@ -628,6 +644,31 @@ pub enum ContextKind {
 }
 
 impl ContextKind {
+    pub(crate) fn native_contribution_owner(
+        &self,
+    ) -> Option<(
+        crate::runtime::identity::NativeContextContributor,
+        crate::context::assembly::UserContextLane,
+    )> {
+        use crate::context::assembly::UserContextLane;
+        use crate::runtime::identity::NativeContextContributor;
+        match self {
+            Self::GoalStatus(_) => Some((
+                NativeContextContributor::GoalStatus,
+                UserContextLane::TaskData,
+            )),
+            Self::AgentStatus(_) => Some((
+                NativeContextContributor::AgentStatus,
+                UserContextLane::TaskData,
+            )),
+            Self::RuntimeToolObservation => Some((
+                NativeContextContributor::RuntimeToolObservation,
+                UserContextLane::RuntimeToolObservation,
+            )),
+            Self::ExtensionEnvironment | Self::NativeEnvironment => None,
+        }
+    }
+
     /// Returns the durable Agent Status generation metadata when this is an
     /// Agent Status context fact.
     #[must_use]

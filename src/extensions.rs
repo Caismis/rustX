@@ -13,6 +13,90 @@
 
 use std::sync::Arc;
 
+#[cfg(test)]
+pub(crate) mod probe;
+
+/// Native capability composition awaiting its Conversation bindings at admission.
+/// This value only installs contributors; all step work uses `ContextAssembly`.
+pub(crate) struct NativeContextComposition {
+    status: Option<AgentStatusEngine>,
+}
+
+impl NativeContextComposition {
+    pub(crate) fn new(status: Option<AgentStatusEngine>) -> Self {
+        Self { status }
+    }
+
+    pub(crate) fn bind(
+        &mut self,
+        assembly: &mut crate::context::ContextAssembly,
+        composition: Option<&NativeAgentExtensions>,
+        runtime: &crate::tools::runtime::ConversationToolRuntime,
+        lifecycle: crate::agent::lifecycle::AttemptLifecycle,
+    ) -> Result<crate::agent::lifecycle::AttemptLifecycle, crate::context::ContextAssemblyError>
+    {
+        if let Some(composition) = composition {
+            composition.register_domain_context(assembly, runtime)?;
+        }
+        if let Some(engine) = self.status.take() {
+            let background = runtime.background().clone();
+            let todos = composition
+                .filter(|c| c.todo().is_some())
+                .and_then(|_| runtime.todos())
+                .cloned();
+            assembly.register_native(
+                crate::runtime::identity::NativeContextContributor::AgentStatus,
+                Arc::new(crate::context::status::StatusContextContributor {
+                    engine: std::sync::Mutex::new(engine),
+                    background: Arc::new(move || background.active_snapshot()),
+                    todo: Arc::new(move || {
+                        todos
+                            .as_ref()
+                            .map(|todos| todos.committed().status_presentation())
+                    }),
+                    reminders: Arc::new(ContributionReminderReader(runtime.durable_store())),
+                }),
+            )?;
+        }
+        #[cfg(test)]
+        let lifecycle = composition
+            .into_iter()
+            .flat_map(|c| &c.test_contributors)
+            .filter(|probe| probe.observe_tools)
+            .try_fold(lifecycle, |lifecycle, probe| {
+                lifecycle
+                    .bind_tool_result_observer(
+                        crate::context::DeferredContextProducer::Native {
+                            identity: probe.identity,
+                        },
+                        Arc::new(probe.clone()),
+                    )
+                    .map_err(|error| {
+                        crate::context::ContextAssemblyError::InvalidProposal(error.to_string())
+                    })
+            })?;
+        Ok(lifecycle)
+    }
+}
+
+struct ContributionReminderReader(Arc<dyn crate::durable::ConversationStore>);
+
+impl crate::durable::ContributionEmissionLookup for ContributionReminderReader {
+    fn latest_contribution_emission(
+        &self,
+        producer: &crate::runtime::identity::ContextContributorIdentity,
+        key: &str,
+    ) -> Result<
+        Option<crate::durable::ContributionEmissionRecord>,
+        crate::durable::ConversationStoreError,
+    > {
+        self.0.latest_contribution_emission(producer, key)
+    }
+    fn current_logical_step_progress(&self) -> Result<u64, crate::durable::ConversationStoreError> {
+        self.0.current_logical_step_progress()
+    }
+}
+
 use serde::{Deserialize, Serialize};
 
 use crate::context::{
@@ -30,6 +114,10 @@ use crate::context::{
 #[serde(rename_all = "snake_case", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
 pub struct NativeAgentExtensionsDocument {
+    #[cfg(test)]
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) test_contributors: Vec<probe::ProbeConfig>,
     /// The Agent Status extension: optional provider-independent runtime
     /// context for an already-established model step.
     pub agent_status: AgentStatusExtensionDocument,
@@ -44,6 +132,8 @@ pub struct NativeAgentExtensionsDocument {
 impl Default for NativeAgentExtensionsDocument {
     fn default() -> Self {
         Self {
+            #[cfg(test)]
+            test_contributors: Vec::new(),
             agent_status: AgentStatusExtensionDocument {
                 enabled: false,
                 ..AgentStatusExtensionDocument::default()
@@ -129,6 +219,28 @@ pub struct TodoExtensionDocument {
 pub struct TodoExtensionConfig {}
 
 impl NativeAgentExtensionsDocument {
+    /// Re-express a frozen composition at the native authoring boundary.
+    #[must_use]
+    pub fn from_composition(composition: &NativeAgentExtensions) -> Self {
+        Self {
+            #[cfg(test)]
+            test_contributors: composition.test_contributors.clone(),
+            agent_status: composition
+                .agent_status()
+                .map_or_else(Default::default, |status| AgentStatusExtensionDocument {
+                    enabled: true,
+                    time: status.time.clone(),
+                    background: status.background.clone(),
+                }),
+            todo: TodoExtensionDocument {
+                enabled: composition.todo().is_some(),
+            },
+            goal: GoalExtensionDocument {
+                enabled: composition.goal().is_some(),
+            },
+        }
+    }
+
     /// Freezes this authored document into the composition one launch runs
     /// against.
     ///
@@ -139,6 +251,8 @@ impl NativeAgentExtensionsDocument {
     #[must_use]
     pub fn resolve(&self) -> NativeAgentExtensions {
         NativeAgentExtensions {
+            #[cfg(test)]
+            test_contributors: self.test_contributors.clone(),
             agent_status: self.agent_status.enabled.then(|| AgentStatusConfig {
                 time: self.agent_status.time.clone(),
                 background: self.agent_status.background.clone(),
@@ -232,6 +346,8 @@ impl NativeAgentExtensionSelection {
     #[must_use]
     pub fn resolve(&self) -> NativeAgentExtensions {
         NativeAgentExtensions {
+            #[cfg(test)]
+            test_contributors: Vec::new(),
             agent_status: self
                 .agent_status
                 .as_ref()
@@ -298,6 +414,8 @@ pub fn unsupported_child_scope(
     // composition without deciding its child scope does not compile.
     match composition {
         NativeAgentExtensions {
+            #[cfg(test)]
+                test_contributors: _,
             goal: Some(GoalExtensionConfig {}),
             agent_status: _,
             todo: _,
@@ -317,6 +435,8 @@ pub fn unsupported_child_scope(
         // The child's bounded final report is unchanged: a list is working
         // state of the child conversation, never part of its result.
         NativeAgentExtensions {
+            #[cfg(test)]
+                test_contributors: _,
             agent_status: None | Some(AgentStatusConfig { .. }),
             todo: None | Some(TodoExtensionConfig { .. }),
             goal: None,
@@ -332,6 +452,8 @@ pub fn unsupported_child_scope(
 #[must_use]
 pub fn composed_extension_names(composition: &NativeAgentExtensions) -> Vec<&'static str> {
     let NativeAgentExtensions {
+        #[cfg(test)]
+            test_contributors: _,
         agent_status,
         todo,
         goal,
@@ -396,6 +518,9 @@ pub struct UnsupportedChildScope {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeAgentExtensions {
+    #[cfg(test)]
+    #[serde(skip)]
+    pub(crate) test_contributors: Vec<probe::ProbeConfig>,
     /// The frozen Agent Status extension configuration, when this
     /// composition includes the extension.
     #[serde(default)]
@@ -409,6 +534,32 @@ pub struct NativeAgentExtensions {
 }
 
 impl NativeAgentExtensions {
+    /// Installs the context capabilities selected by this admitted composition.
+    pub(crate) fn register_domain_context(
+        &self,
+        assembly: &mut crate::context::ContextAssembly,
+        runtime: &crate::tools::runtime::ConversationToolRuntime,
+    ) -> Result<(), crate::context::ContextAssemblyError> {
+        #[cfg(test)]
+        for probe in &self.test_contributors {
+            assembly.register_native(probe.identity, Arc::new(probe.clone()))?;
+        }
+        if self.goal.is_some() {
+            let domain = runtime.goal().ok_or_else(|| {
+                crate::context::ContextAssemblyError::InvalidProposal(
+                    "Goal context requires its composed domain authority".to_owned(),
+                )
+            })?;
+            assembly.register_native(
+                crate::runtime::identity::NativeContextContributor::GoalStatus,
+                Arc::new(crate::goal::GoalContextContributor::new(
+                    domain.context_reader(),
+                )),
+            )?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn without_goal(mut self) -> Self {
         self.goal = None;
         self
@@ -418,6 +569,8 @@ impl NativeAgentExtensions {
     #[must_use]
     pub const fn none() -> Self {
         Self {
+            #[cfg(test)]
+            test_contributors: Vec::new(),
             agent_status: None,
             todo: None,
             goal: None,
@@ -429,6 +582,8 @@ impl NativeAgentExtensions {
     #[must_use]
     pub const fn with_agent_status(agent_status: AgentStatusConfig) -> Self {
         Self {
+            #[cfg(test)]
+            test_contributors: Vec::new(),
             agent_status: Some(agent_status),
             todo: None,
             goal: None,
@@ -439,6 +594,8 @@ impl NativeAgentExtensions {
     #[must_use]
     pub const fn with_todo() -> Self {
         Self {
+            #[cfg(test)]
+            test_contributors: Vec::new(),
             agent_status: None,
             todo: Some(TodoExtensionConfig {}),
             goal: None,
@@ -527,6 +684,8 @@ impl NativeAgentExtensions {
         goal: Option<&crate::goal::GoalDomain>,
     ) -> Self {
         Self {
+            #[cfg(test)]
+            test_contributors: Vec::new(),
             agent_status: status_engine.map(|engine| engine.config().clone()),
             todo: todos.map(|_| TodoExtensionConfig {}),
             goal: goal.map(|_| GoalExtensionConfig {}),
@@ -571,6 +730,8 @@ impl NativeAgentExtensions {
     #[must_use]
     pub(crate) fn prospective_tool_names(&self) -> Vec<&'static str> {
         let NativeAgentExtensions {
+            #[cfg(test)]
+                test_contributors: _,
             // Agent Status contributes context, never a Tool.
             agent_status: _,
             todo,

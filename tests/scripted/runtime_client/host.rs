@@ -765,7 +765,7 @@ async fn agent_status_shares_one_composition() {
             .filter(|event| matches!(event.event, RuntimeClientEvent::AgentStatusComposed { .. }))
             .count(),
         1,
-        "AgentStatusEmitted remains an internal fact; one composition is the only client status event"
+        "ContextContributionEmitted remains an internal fact; one composition is the only client status event"
     );
     let (status_view, evicted_status_message_id) = events
         .iter()

@@ -60,7 +60,7 @@ native workspace managers derive storage from their composed Conversation access
 `SessionArchiveProducer` in the native library reads catalog/lineage, immutable
 SQLite history and ArtifactStore bytes. It owns one finite cut and one versioned
 inspection archive, without loading runtimes or depending on transport/Trace.
-App Server v14 prepares a scoped streaming-download capability; Web consumes it
+App Server v15 prepares a scoped streaming-download capability; Web consumes it
 through the browser download manager and TUI writes bytes to a client-local file.
 Neither client composes the archive. Execution coordination ends before history
 serialization, compression or transport backpressure. See the exact authority,
@@ -245,7 +245,7 @@ The physical tables are deliberately semantic rather than generic:
 | `context_checkpoints` | Current structural/index checkpoint matching `surface_head`; it is not message history. |
 | `request_snapshots` | One immutable non-history snapshot per `RequestId`, its frozen provisional Assistant identity, Surface revision, committed start sequence, and optional request-only carryover source/representation/anchor. |
 | `events` | Append-only typed envelopes keyed by per-conversation Event Journal sequence and unique `EventId`. |
-| `agent_status_emission_heads` | One materialized latest-emission record per `(AgentStatusModuleId, semantic key)`, including the store-assigned Todo cooldown origin, maintained only by the combined model-turn-start transaction. |
+| `contribution_emission_heads` | One materialized latest-emission record per `(producer identity, semantic key)`, including the store-assigned logical-step origin, maintained only by the combined model-turn-start transaction. |
 | `lifecycle_state` | Durable terminal markers enforcing zero-or-one terminal event and terminal absorption for attempt, turn, and background-execution lifecycles. |
 | `publication_streams` | One frozen publication generation per provider request, with terminal marker and one of the three settlements. |
 | `publication_frames` | Contiguous transient release staging for one publication stream. |
@@ -2000,12 +2000,11 @@ Key contracts:
   separate lifecycle boundaries.
 - Agent Status is an optional delivery opportunity, not an automatic emission
   rule. One logical primary step owns one finite
-  `AgentStatusOpportunitySet`; its independent FreshInbound and PostToolBatch
-  members may coexist. At preparation, execution freezes one finite Pre-Status
-  Surface from active identities plus keyed Message Ledger hydration, samples
-  the clock once, and captures one immutable authoritative Background and
-  committed Todo snapshot. The closed engine evaluates each interested module
-  once against that set, then admits any contributing sections as one
+  `ContributionOpportunities`; its independent FreshInbound and PostToolBatch
+  members may coexist. Runtime preparation freezes finite execution facts and
+  a pre-contribution Surface. The registered Status contributor captures its
+  clock and read-only Background/Todo projections. Its section contract
+  evaluates each interested section once against that set, then admits any contributing sections as one
   canonical `UserSource::Runtime` context message with
   `InboundKind::Context(ContextKind::AgentStatus(metadata))`. The metadata is
   the durable typed membership/timestamp descriptor tied to that canonical
@@ -2020,8 +2019,8 @@ Key contracts:
 - Todo status reads only the bounded presentation `ConversationTodoList`
   derives from its own `committed()` snapshot, and only when the Todo
   extension is composed at all. The derivation happens at the runtime capture
-  boundary — `ConversationToolRuntime::todo_status_presentation`, beside the
-  owner — so the strongest Todo value the Agent Status engine can receive is
+  boundary through the composition-bound read closure calling
+  `ConversationTodoList::committed().status_presentation()` — so the strongest Todo value the Agent Status engine can receive is
   `Option<TodoStatusPresentation>`: a finite immutable value carrying its own
   Todo-owned fingerprint. Production `context/status.rs` names no
   `ConversationTodoList`, `TodoSnapshot`, or `TodoWriter` at all, so Agent
@@ -2034,8 +2033,8 @@ Key contracts:
   model steps follow the reminder's store-assigned origin, then permits it
   again at exactly four. Changed state is eligible at the next opportunity.
   The head is updated atomically with the canonical status message and its
-  `AgentStatusEmitted` fact at model-turn start. The bounded
-  `todo_progress_sequence` advances once for each successful
+  `ContextContributionEmitted` fact at model-turn start. The bounded
+  `logical_step_sequence` advances once for each successful
   `retry_number == 0` start; same-start context/status, Time, Background,
   RuntimeToolObservation, compaction, and overflow retries do not advance or
   reset it.
@@ -4636,7 +4635,7 @@ The outermost layer exposes the runtime to humans and other systems:
 - Runtime command interface
 - Runtime projection/event streaming
 
-See [App Server protocol v14](app-server-protocol.md) for the method vocabulary,
+See [App Server protocol v15](app-server-protocol.md) for the method vocabulary,
 generated client schemas, connection multiplexing, weak attachment lifetime and
 headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
 local TUI-owned child and WebSocket for browser/remote/existing-server clients;
@@ -4661,7 +4660,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v14
+       App Server protocol v15
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4678,7 +4677,7 @@ point. Neither binding owns domain semantics. The existing `src/protocol` bounda
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
 The following version history describes the local Runtime Client stdio contract,
-which after #290 has no external client: `rustx-tui` speaks App Server v14, and
+which after #290 has no external client: `rustx-tui` speaks App Server v15, and
 `src/runtime_client` is an internal projection foundation the App Server reuses.
 App Server clients never negotiate or nest it. Its local version is
 `RUNTIME_CLIENT_PROTOCOL_VERSION`.
@@ -6940,7 +6939,7 @@ See [Session-owned workspace uploads](session-uploads.md) for receipt admission,
 
 ### Pending inbound mutation and committed claim receipts
 
-The exact pending controls described in [App Server protocol v14](app-server-protocol.md#exact-pending-inbound-controls-web-06)
+The exact pending controls described in [App Server protocol v15](app-server-protocol.md#exact-pending-inbound-controls-web-06)
 remain native `ConversationStore` transitions. Sequence + MessageId identify one
 occurrence, and a monotonic pending revision prevents lost updates. The durable
 mutation transaction and canonical adoption transaction are the only ownership
@@ -6981,7 +6980,7 @@ resolves missing results against exact canonical Assistant blocks; synthesized
 results carry that occurrence before commit. Canonical history alone therefore
 contains every call/result relationship, without source execution events.
 
-SQLite schema **42** retains `canonical_tool_calls` only as a derived index. Its
+SQLite schema **43** retains `canonical_tool_calls` only as a derived index. Its
 primary key is `(assistant_message_id, block_index)`; Assistant/call and result
 MessageId uniqueness constraints prevent duplicate provider IDs within one
 Assistant and duplicate settlement. Tool commits validate the exact indexed
@@ -7012,4 +7011,4 @@ and retained workspace facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-subagent-conversations-v14).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-subagent-conversations-v15).

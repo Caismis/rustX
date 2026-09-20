@@ -43,6 +43,93 @@ async fn write(fixture: &Fixture, index: usize, mutation: ConfigMutation) {
         .unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue383_disabled_extension_keeps_admitted_configuration_until_settlement() {
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_tool(Some("read")).await;
+        let id = &fixture.sessions[0].id;
+        fixture.manager.load(id, None).await.unwrap();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Todo {
+                authored: Some(crate::extensions::TodoExtensionDocument { enabled: true }),
+            },
+        )
+        .await;
+        let enabled = settled(&fixture, 0).await;
+        if let Some(candidate) = enabled.candidate {
+            fixture
+                .manager
+                .adopt_configuration(id, &candidate.identity, candidate.expected_binding)
+                .unwrap();
+        }
+        let runtime = fixture.manager.configuration_runtime(id).unwrap();
+        runtime.submit_inbound(input("request-A")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        let admitted = runtime
+            .configuration_view()
+            .unwrap()
+            .admitted_attempt
+            .unwrap();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Todo {
+                authored: Some(crate::extensions::TodoExtensionDocument { enabled: false }),
+            },
+        )
+        .await;
+        let disabled = settled(&fixture, 0).await;
+        assert_eq!(
+            runtime
+                .configuration_view()
+                .unwrap()
+                .admitted_attempt
+                .unwrap(),
+            admitted
+        );
+        let settlement = runtime.settlement_signal();
+        fixture.gates[0].release();
+        settlement.notified().await;
+        let requests = fixture.provider.request_bodies();
+        assert_eq!(requests.len(), 2);
+        for body in &requests {
+            let request: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert!(
+                request["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|tool| tool["function"]["name"] == "todo"),
+                "old admitted steps retain Todo"
+            );
+        }
+        if let Some(candidate) = disabled.candidate {
+            fixture
+                .manager
+                .adopt_configuration(id, &candidate.identity, candidate.expected_binding)
+                .unwrap();
+        }
+        runtime.submit_inbound(input("request-B")).unwrap();
+        fixture.gates[1].wait_entered().await;
+        let future: serde_json::Value =
+            serde_json::from_str(fixture.provider.request_bodies().last().unwrap()).unwrap();
+        assert!(
+            !future["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["function"]["name"] == "todo")
+        );
+        let settlement = runtime.settlement_signal();
+        fixture.gates[1].release();
+        settlement.notified().await;
+        fixture.close().await;
+    }))
+    .await;
+}
+
 #[tokio::test]
 async fn t04_session_relative_prefix_and_t09_policy_noop() {
     let fixture = Fixture::new().await;

@@ -165,8 +165,8 @@ fn todo_emission_count(durable: &Durable) -> usize {
     durable.count_events(|event| {
         matches!(
             event,
-            RuntimeEvent::AgentStatusEmitted { emission, .. }
-                if emission.module_id == AgentStatusModuleId::Todo
+            RuntimeEvent::ContextContributionEmitted { emission, .. }
+                if emission.key == crate::context::status::TODO_STATUS_EMISSION_KEY
         )
     })
 }
@@ -266,8 +266,10 @@ fn committed_todo_suppression_survives_process_death() {
     assert_eq!(todo_emission_count(&durable), 1);
     let head_before = durable
         .store()
-        .latest_agent_status_emission(
-            AgentStatusModuleId::Todo,
+        .latest_contribution_emission(
+            &crate::runtime::identity::ContextContributorIdentity::Native(
+                crate::runtime::identity::NativeContextContributor::AgentStatus,
+            ),
             crate::context::TODO_STATUS_EMISSION_KEY,
         )
         .expect("Todo suppression head lookup")
@@ -296,8 +298,10 @@ fn committed_todo_suppression_survives_process_death() {
     assert_eq!(todo_emission_count(&durable), 1);
     let head_after = durable
         .store()
-        .latest_agent_status_emission(
-            AgentStatusModuleId::Todo,
+        .latest_contribution_emission(
+            &crate::runtime::identity::ContextContributorIdentity::Native(
+                crate::runtime::identity::NativeContextContributor::AgentStatus,
+            ),
             crate::context::TODO_STATUS_EMISSION_KEY,
         )
         .expect("Todo suppression head lookup")
@@ -307,7 +311,7 @@ fn committed_todo_suppression_survives_process_death() {
         "the identical semantic reminder remains suppressed after reopen"
     );
     assert_eq!(
-        head_after.todo_progress_origin, head_before.todo_progress_origin,
+        head_after.logical_step_origin, head_before.logical_step_origin,
         "restart does not reset or advance Todo cooldown progress"
     );
 }
@@ -333,8 +337,10 @@ fn uncommitted_todo_emission_does_not_survive_process_death() {
     assert!(
         durable
             .store()
-            .latest_agent_status_emission(
-                AgentStatusModuleId::Todo,
+            .latest_contribution_emission(
+                &crate::runtime::identity::ContextContributorIdentity::Native(
+                    crate::runtime::identity::NativeContextContributor::AgentStatus
+                ),
                 crate::context::TODO_STATUS_EMISSION_KEY,
             )
             .expect("Todo suppression head lookup")
@@ -360,8 +366,10 @@ fn uncommitted_todo_emission_does_not_survive_process_death() {
     assert!(
         durable
             .store()
-            .latest_agent_status_emission(
-                AgentStatusModuleId::Todo,
+            .latest_contribution_emission(
+                &crate::runtime::identity::ContextContributorIdentity::Native(
+                    crate::runtime::identity::NativeContextContributor::AgentStatus
+                ),
                 crate::context::TODO_STATUS_EMISSION_KEY,
             )
             .expect("Todo suppression head lookup")

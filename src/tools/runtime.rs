@@ -565,19 +565,6 @@ impl ConversationToolRuntime {
         self.goal.as_ref()
     }
 
-    pub(crate) fn goal_context(
-        &self,
-    ) -> Result<Option<Box<crate::goal::GoalSnapshot>>, crate::durable::ConversationStoreError>
-    {
-        Ok(self
-            .goal()
-            .map(crate::goal::GoalDomain::view)
-            .transpose()?
-            .and_then(|view| view.current)
-            .filter(|goal| goal.phase != crate::goal::GoalPhase::Complete)
-            .map(Box::new))
-    }
-
     /// The conversation's committed task list, when Todo is composed.
     ///
     /// The authoritative list as canonical history left it: what a restart
@@ -592,23 +579,6 @@ impl ConversationToolRuntime {
     #[must_use]
     pub fn todo_snapshot(&self) -> Option<crate::tools::todo::TodoSnapshot> {
         self.todos.as_ref().map(ConversationTodoList::committed)
-    }
-
-    /// The bounded read-only Todo presentation Agent Status consumes, when
-    /// this conversation composes the Todo extension (Issue #259).
-    ///
-    /// This is the Todo-side **capture boundary**: the derivation
-    /// `committed() -> status_presentation()` happens here, beside the
-    /// owner, so the value that leaves this runtime for the Agent Status
-    /// engine is already finite and immutable. Agent Status never receives
-    /// the list, a snapshot authority, a writer, or canonical history.
-    #[must_use]
-    pub(crate) fn todo_status_presentation(
-        &self,
-    ) -> Option<crate::tools::todo::TodoStatusPresentation> {
-        self.todos
-            .as_ref()
-            .map(|todos| todos.committed().status_presentation())
     }
 
     /// The one frozen Native Agent Extension composition this runtime

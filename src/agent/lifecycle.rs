@@ -147,7 +147,7 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 
-use crate::context::{AcceptedContext, DeferredContextProducer, UserMessageProposal};
+use crate::context::{AcceptedContext, DeferredContextProducer};
 use crate::conversation::SurfaceRevision;
 use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{
@@ -558,7 +558,7 @@ pub struct ToolResultObservation<'a> {
 /// The observer runs once per settled call, in canonical `ToolCall` batch
 /// order, **after** the complete owning batch has reached structural
 /// settlement. It may return zero or more bounded transient
-/// [`UserMessageProposal`]s; the Agent Loop validates them at the transaction
+/// [`crate::context::ContextProposal`]s; the Agent Loop validates them at the transaction
 /// boundary, stamps its registered producer reference onto each, and stages
 /// them. They become canonical only if the next Context Assembly, the pre-step
 /// policy, and the admission boundary all accept them.
@@ -599,7 +599,7 @@ pub trait ToolResultObserver: Send + Sync {
     fn observe_tool_result<'a>(
         &'a self,
         observation: &'a ToolResultObservation<'a>,
-    ) -> BoxFuture<'a, Result<Vec<UserMessageProposal>, LifecycleError>>;
+    ) -> BoxFuture<'a, Result<Vec<crate::context::ContextProposal>, LifecycleError>>;
 }
 
 /// The identity tool-result observer: no deferred context is ever produced.
@@ -610,7 +610,7 @@ impl ToolResultObserver for NoDeferredContext {
     fn observe_tool_result<'a>(
         &'a self,
         _observation: &'a ToolResultObservation<'a>,
-    ) -> BoxFuture<'a, Result<Vec<UserMessageProposal>, LifecycleError>> {
+    ) -> BoxFuture<'a, Result<Vec<crate::context::ContextProposal>, LifecycleError>> {
         Box::pin(async { Ok(Vec::new()) })
     }
 }
@@ -793,7 +793,13 @@ impl AttemptLifecycle {
         self,
         observer: Arc<dyn ToolResultObserver>,
     ) -> Result<Self, LifecycleError> {
-        self.bind_tool_result_observer(DeferredContextProducer::NativeRuntimeObservation, observer)
+        self.bind_tool_result_observer(
+            DeferredContextProducer::Native {
+                identity:
+                    crate::runtime::identity::NativeContextContributor::RuntimeToolObservation,
+            },
+            observer,
+        )
     }
 
     /// Binds an observer that speaks for one **certified extension**.
@@ -833,7 +839,7 @@ impl AttemptLifecycle {
     /// would read like a second registry even though Context Assembly still
     /// has the final say. The two narrow constructors above are the whole
     /// surface.
-    fn bind_tool_result_observer(
+    pub(crate) fn bind_tool_result_observer(
         mut self,
         producer: DeferredContextProducer,
         observer: Arc<dyn ToolResultObserver>,

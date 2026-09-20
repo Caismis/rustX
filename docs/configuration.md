@@ -429,7 +429,7 @@ CAS conflicts preserve drafts. Rescan is a diagnostics action.
 TUI `/settings` presents native effective/source facts; `/configuration` inspects
 application state and provides explicit rescan, retry and inspected-candidate
 adoption. `/model` changes Session selection. Neither client parses, merges or
-classifies configuration. App Server protocol 14 is generated from Rust; obsolete
+classifies configuration. App Server protocol 15 is generated from Rust; obsolete
 development protocols are rejected without compatibility decoding.
 
 CFG3 intentionally replaces the previous development configuration and durable

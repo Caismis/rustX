@@ -1,16 +1,23 @@
 # Session archive export
 
-`rustx-session-archive/v1` is a ZIP64/DEFLATE inspection archive produced by
+`rustx-session-archive/v2` is a ZIP64/DEFLATE inspection archive produced by
 `src/session_archive.rs`. `SessionArchiveProducer` is a native library owner,
 independent of App Server, Web, TUI and Trace. This is neither a canonical log nor
-an import, recovery or persistence format. SQLite uses schema 42 inherited from main; export changes no durable encoding.
+an import, recovery or persistence format. SQLite schema 43 stores the common accepted contributions; export projects those
+historical records without creating a second persistence authority.
+
+In v2, request snapshots expose common accepted contribution records instead of
+the dedicated Agent Status start record. Journal contribution facts use the generic
+`context_contribution_emitted` vocabulary. Archive versions are independent of
+SQLite, App Server, Context ABI and Runtime Client versions.
 
 ## Logical files and authority
 
-All JSON is UTF-8. JSONL entries contain one archive-v1 logical value per
+All JSON is UTF-8. JSONL entries contain one archive-v2 logical value per
 line, ordered by the corresponding native immutable append coordinate. Mixed
 historical/private native types cross explicit archive projections, not raw serde. Empty
-histories have empty entries. Logical file schemas are version 1 in this archive;
+histories have empty entries. Journal schema = 2 and requests schema = 2. Messages, surface, generations,
+publication_audits and inherited_responses remain at schema version 1;
 the manifest also identifies the rustX package version and native durable schema.
 
 | Entry | Authority |
@@ -19,7 +26,7 @@ the manifest also identifies the rustX package version and native durable schema
 | `sessions/<ConversationId>/journal.jsonl` | Projected Event Journal envelopes, including exact sequence and request-owned settled generation evidence; infrastructure diagnostics excluded |
 | `sessions/<ConversationId>/messages.jsonl` | Accepted Message Ledger values, including messages no longer on the active Surface |
 | `sessions/<ConversationId>/surface.jsonl` | Immutable Conversation Surface operations/revisions |
-| `sessions/<ConversationId>/requests.jsonl` | Explicit `ArchiveRequestSnapshotV1` projection of immutable Request Snapshots |
+| `sessions/<ConversationId>/requests.jsonl` | Explicit `ArchiveRequestSnapshotV2` projection of immutable Request Snapshots |
 | `sessions/<ConversationId>/generations.jsonl` | Request ID, source Journal sequence and existing `GenerationEvidence`; a convenience index of Journal-owned facts |
 | `sessions/<ConversationId>/publication_audits.jsonl` | Settled noncanonical publication audit values |
 | `sessions/<ConversationId>/inherited_responses.jsonl` | Immutable native completed-response lineage provenance from bootstrap, never reconstructed destination execution |
@@ -167,9 +174,9 @@ success is reported for the failed export.
 
 ## Safety and native authority audit
 
-Archive v1 is a deliberate historical inspection contract. Adding fields to
+Archive v2 is a deliberate historical inspection contract. Adding fields to
 `RequestSnapshot` or its invocation does not add archive fields: the private
-`ArchiveRequestSnapshotV1` / invocation DTOs in `src/session_archive/projection.rs`
+`ArchiveRequestSnapshotV2` / invocation DTOs in `src/session_archive/projection.rs`
 name each exported field. They include request/Attempt/Step/retry and provisional
 Assistant identity, Surface revision, frozen prompt/System sections, model/protocol,
 context/output limits, reasoning state/profile, historical Tool definitions,
@@ -185,19 +192,19 @@ exporting their names or values. Unknown future opaque keys stay excluded.
 Request continuation, raw request_params, invocation capabilities/adapter compat
 configuration and process-local runtime_resource_revision are deliberately absent.
 
-| Authority | v1 boundary and ownership rationale |
+| Authority | Current boundary and ownership rationale |
 | --- | --- |
 | Journal | Explicit envelope and exhaustive event classification. Pure identity/measurement/control facts use native encoding. Tool execution results explicitly retain Tool-owned content and structured facts while projecting their status and managed-output continuation. Mixed events project typed model failure/retry/timing evidence and runtime failure classes, excluding raw ModelError message/provider_code, unnormalized provider finish codes, runtime/executor diagnostic prose, workspace cleanup diagnostics and recovery comparison guards. New event variants require an explicit classification. |
 | Ledger | User and Tool native values are accepted model-visible historical content, including authored JSON and Tool failure feedback. Assistant projection names identity/content and reasoning text; provider_state is never serialized. Other Assistant blocks contain authored text, Tool calls or artifact references. |
 | Surface | Direct native encoding: only structural operations over canonical message identities. |
-| Requests | Explicit v1 DTO and shared closed option allowlist described above. No durable snapshot or invocation flattening. |
+| Requests | Explicit v2 request DTO and shared closed option allowlist described above. No durable snapshot or invocation flattening. |
 | Publication audits | Direct native encoding: settled identities, timestamps and committed-for-release text/reasoning/refusal/Tool proposal content; no continuation or provider bindings. |
 | Generations | Explicit index of request ID, Journal sequence and native GenerationEvidence, whose fields are provider-independent numeric offsets. |
 | Inherited responses | Direct native CompletedResponseProvenance: lineage identities, timestamp, normalized token counts and timing measurements only; no provider binding or destination execution claim. |
 | Manifest/lineage | Explicit manifest fields and archive metadata structs; native SessionSnapshot/SessionNode contain public identity, topology, authored name and timestamps only. No Session configuration is read. |
 | Artifact metadata/bytes | Native File/Image/Tool artifact descriptors contain artifact identity and authored display metadata; bytes are Session-owned tool content. Paths never become identity. |
 
-Journal `ToolExecutionStatus` values all cross one exhaustive v1 projection:
+Journal `ToolExecutionStatus` values all cross one exhaustive restricted projection:
 `success` and `timed_out` retain their kinds; `cancelled` retains its typed
 `reason` and `phase`; `failed`, `denied` and `outcome_unknown` retain their distinct
 kinds with `diagnostic_unavailable: "executor diagnostic excluded"`. Their native
@@ -210,7 +217,7 @@ historical fields; both status and lifecycle matches require new variants to
 receive an archive decision.
 
 Journal `ToolExecutionCompleted.result.managed_output` also uses an exhaustive
-v1 projection. `complete` preserves its exact locator; `partial` preserves its
+restricted projection. `complete` preserves its exact locator; `partial` preserves its
 exact locator and state; `unavailable` preserves its state. The latter two carry
 `diagnostic_unavailable: "output-storage diagnostic excluded"` instead of native
 output-storage diagnostic prose. No locator is normalized or redacted. Absent

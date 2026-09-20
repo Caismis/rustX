@@ -38,6 +38,8 @@
 //! recreate either execution primitive.
 
 pub mod assembly;
+pub mod contribution;
+
 pub(crate) mod compaction;
 pub(crate) mod compaction_metadata;
 pub mod engine;
@@ -75,13 +77,14 @@ pub use projection::ContextProjection;
 #[cfg(test)]
 pub(crate) use status::AgentStatusTestSeam;
 pub use status::{
-    AgentStatus, AgentStatusClock, AgentStatusConfig, AgentStatusEngine, AgentStatusOpportunitySet,
-    AgentStatusSection, AgentStatusSectionData, AgentStatusSectionId, AgentStatusSurfaceView,
+    AgentStatus, AgentStatusClock, AgentStatusConfig, AgentStatusEngine, AgentStatusSection,
+    AgentStatusSectionData, AgentStatusSectionId, AgentStatusSurfaceView,
     AgentStatusSurfaceViewError, BACKGROUND_REMINDER_MESSAGE_INTERVAL, BackgroundStatusConfig,
-    FreshInboundStatusOpportunity, GLOBAL_AGENT_STATUS_BYTE_CAP, MAX_BACKGROUND_STATUS_EXECUTIONS,
-    MAX_BACKGROUND_STATUS_TEXT_BYTES, PostToolBatchStatusOpportunity, SystemClock,
-    TIME_REFRESH_INTERVAL, TODO_STATUS_EMISSION_KEY, TODO_STATUS_REMINDER_PROGRESS_INTERVAL,
-    TimeStatusConfig, effective_status_timezone, render_agent_status,
+    ContributionOpportunities, FreshInboundOpportunity, GLOBAL_AGENT_STATUS_BYTE_CAP,
+    MAX_BACKGROUND_STATUS_EXECUTIONS, MAX_BACKGROUND_STATUS_TEXT_BYTES, PostToolBatchOpportunity,
+    SystemClock, TIME_REFRESH_INTERVAL, TODO_STATUS_EMISSION_KEY,
+    TODO_STATUS_REMINDER_PROGRESS_INTERVAL, TimeStatusConfig, effective_status_timezone,
+    render_agent_status,
 };
 pub use summarizer::{ContextSummarizer, ModelBackedSummarizer, SummaryModelInput, SummaryRequest};
 pub use tokens::{
@@ -93,7 +96,7 @@ pub use tokens::{
 /// The context runtime bundle handed to an `AgentExecution`.
 ///
 /// The bundle owns the deterministic engine, the summary service, and the
-/// attempt-owned Agent Status engine; `AgentExecution` owns the integration point and
+/// frozen native capability binding; `AgentExecution` owns the integration point and
 /// the attempt's [`ConversationState`](crate::conversation::ConversationState).
 /// There is deliberately no separate summary store: compaction lineage is
 /// derived from Conversation Surface history, so no second authority can
@@ -104,11 +107,9 @@ pub struct ContextRuntime {
     pub(crate) engine: ContextEngine,
     /// The provider-neutral summary service.
     pub(crate) summarizer: Arc<dyn ContextSummarizer>,
-    /// The attempt-owned closed Agent Status engine, present exactly when
-    /// the launch's frozen native Agent Extension composition contains the
-    /// Agent Status extension (Issue #256). It contains the compile-time
-    /// module set and attempt-scoped quarantine state.
-    pub(crate) status_engine: Option<AgentStatusEngine>,
+    /// Frozen composition bindings installed at Attempt admission, never a
+    /// separate per-step preparation or commit pipeline.
+    pub(crate) native_composition: crate::extensions::NativeContextComposition,
     /// The one rustX-owned finite context-assembly contract. Extensions only
     /// receive immutable invocation snapshots through this value.
     pub(crate) assembly: ContextAssembly,
@@ -116,7 +117,7 @@ pub struct ContextRuntime {
     /// frozen at attempt admission.
     pub(crate) compaction_budgets: CompactionBudgets,
     /// Static request-time System inputs frozen from the admitted resource
-    /// generation. Agent Status is composed separately per primary request.
+    /// generation. Dynamic domain content enters through registered contributors.
     pub(crate) native_system: NativeContextInput,
     /// Process-local resource generation that supplied `native_system`.
     pub(crate) resource_revision: crate::runtime::RuntimeResourceRevision,
@@ -220,7 +221,7 @@ impl ContextRuntime {
                 model_timeout_policy,
                 monotonic_clock,
             )),
-            status_engine,
+            native_composition: crate::extensions::NativeContextComposition::new(status_engine),
             assembly,
             compaction_budgets,
             native_system: NativeContextInput::default(),
@@ -277,7 +278,7 @@ impl ContextRuntime {
         Self {
             engine,
             summarizer,
-            status_engine,
+            native_composition: crate::extensions::NativeContextComposition::new(status_engine),
             assembly,
             compaction_budgets,
             native_system: NativeContextInput::default(),

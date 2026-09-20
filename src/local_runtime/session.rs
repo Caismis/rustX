@@ -2814,14 +2814,14 @@ pub(crate) mod tests {
     use crate::local_runtime::CurrentRuntimeConfig;
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AgentStatusEmission, AgentStatusGenerationMetadata, AgentStatusModuleId,
-        AssistantContentBlock, AssistantMessageBlock, CompactionSummaryMetadata, ContextKind,
+        AgentStatusGenerationMetadata, AgentStatusModuleId, AssistantContentBlock,
+        AssistantMessageBlock, CompactionSummaryMetadata, ContextKind, ContributionEmission,
         InboundKind, MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
         UserSource,
     };
     use crate::model::catalog::{ModelCapabilities, ModelCompat};
     use crate::model::invocation::{ModelInvocationConfig, RequestParams};
-    use crate::model::snapshot::{AgentStatusStart, RequestIdentity, RequestSnapshot};
+    use crate::model::snapshot::{ContributionStart, RequestIdentity, RequestSnapshot};
     use crate::model::types::ModelProtocol;
     use crate::runtime::identity::{
         AttemptId, CapabilityRevision, ConversationId, MessageId, ToolCallId, ToolId, TurnId,
@@ -2907,7 +2907,7 @@ model = "provider/model"
     fn todo_status_start_snapshot(
         revision: SurfaceRevision,
         message_id: MessageId,
-        emission: AgentStatusEmission,
+        emission: ContributionEmission,
     ) -> RequestSnapshot {
         let identity = RequestIdentity {
             attempt_id: AttemptId::new("clone-source-attempt"),
@@ -2940,10 +2940,31 @@ model = "provider/model"
             None,
             vec![message_id.clone()],
         );
-        snapshot.agent_status = Some(AgentStatusStart {
+        let producer = crate::runtime::identity::ContextContributorIdentity::Native(
+            crate::runtime::identity::NativeContextContributor::AgentStatus,
+        );
+        snapshot
+            .context_generation
+            .contributors
+            .push(crate::context::ContributorGeneration {
+                identity: producer.clone(),
+                attestation: None,
+            });
+        snapshot.contributions = vec![ContributionStart {
             message_id,
+            producer,
+            metadata: ContextKind::AgentStatus(
+                AgentStatusGenerationMetadata::new(
+                    chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                    vec![AgentStatusModuleId::Todo],
+                )
+                .unwrap(),
+            ),
+            presentation: None,
             emissions: vec![emission],
-        });
+            opportunities: crate::context::ContributionOpportunities::default(),
+            post_tool_batch_anchor: None,
+        }];
         snapshot
     }
 
@@ -4488,8 +4509,7 @@ model = "provider/model"
         let expected_todo = todo_list_of(&source_store);
         let status_id = MessageId::new("source-todo-status");
         let status = todo_status(status_id.as_str());
-        let emission = AgentStatusEmission {
-            module_id: AgentStatusModuleId::Todo,
+        let emission = ContributionEmission {
             key: "active_actionable".to_owned(),
             fingerprint: "source-todo-fingerprint".to_owned(),
         };
@@ -4509,10 +4529,15 @@ model = "provider/model"
                 Utc.with_ymd_and_hms(2026, 8, 27, 6, 1, 0).unwrap(),
             )
             .expect("source status start");
-        assert_eq!(source_store.current_todo_progress().unwrap(), 1);
+        assert_eq!(source_store.current_logical_step_progress().unwrap(), 1);
         assert!(
             source_store
-                .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                .latest_contribution_emission(
+                    &crate::runtime::identity::ContextContributorIdentity::Native(
+                        crate::runtime::identity::NativeContextContributor::AgentStatus
+                    ),
+                    "active_actionable"
+                )
                 .unwrap()
                 .is_some()
         );
@@ -4533,10 +4558,18 @@ model = "provider/model"
         );
 
         assert_eq!(todo_list_of(&destination_store), expected_todo);
-        assert_eq!(destination_store.current_todo_progress().unwrap(), 0);
+        assert_eq!(
+            destination_store.current_logical_step_progress().unwrap(),
+            0
+        );
         assert!(
             destination_store
-                .latest_agent_status_emission(AgentStatusModuleId::Todo, "active_actionable")
+                .latest_contribution_emission(
+                    &crate::runtime::identity::ContextContributorIdentity::Native(
+                        crate::runtime::identity::NativeContextContributor::AgentStatus
+                    ),
+                    "active_actionable"
+                )
                 .unwrap()
                 .is_none()
         );

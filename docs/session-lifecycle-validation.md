@@ -91,14 +91,14 @@ actual destructive exclusion.
 ## Protocol and clients
 
 The original Session lifecycle transition was App Server v7 → v8; the current
-mandatory protocol is **v14**. `rustx.app-server.v14` is the only WebSocket
+mandatory protocol is **v15**. `rustx.app-server.v15` is the only WebSocket
 subprotocol. Rust initialization, TUI initialization/decoder/transport, Web
-initialization/transport, fixtures, schema generation and drift checking all use v14.
+initialization/transport, fixtures, schema generation and drift checking all use v15.
 The previous version is rejected, with no fallback.
 
 - Removed `session/unload`, its `unloaded` result, list `residencies`, and deletion blockers `current_session` / residency-only `in_use`.
 - Added semantic `session/switchNode`. The speculative `session/restart` method was removed during review because neither product client consumes it. Internal manager replacement and native configuration application remain.
-- Generated `protocol/app-server/v14.ts`, `v14.schema.json`, `fixtures.ts`, `fixtures.json`; removed v7 files under the single-current-version convention.
+- Generated `protocol/app-server/v15.ts`, `v15.schema.json`, `fixtures.ts`, `fixtures.json`; removed v7 files under the single-current-version convention.
 - TUI: removed `/unload`, registration/help/completion, selector residency badges and switch-away deletion restriction; branch confirmation says “Switch to this branch”. Focused deletion and reconnect verification use native outcomes.
 - Web: removed public unload/advanced residency controls and `sessionResidencies`; Close view only detaches, Open Session implicitly acquires residency. Current deletion disables controls and removes the view after authoritative completion. Settings uses semantic Open/Reload wording.
 - Inspector retains attachment/incarnation and observed runtime facts; explicit server diagnostics retain internal residency. Harness-first Sidebar/navigation and naming are preserved.
@@ -268,7 +268,7 @@ Deleted, confirmed NotFound, and CommittedCleanupPending release the provisional
 manager fence idempotently. Durable absence/retired identities or the durably
 published frozen record now reject runtime/allocation resurrection. Continued
 CommittedDurabilityUncertain retains the fence. A remaining managed writer slot
-cannot be overridden by durable recovery. Runtime Client v40, App Server v14 and
+cannot be overridden by durable recovery. Runtime Client v40, App Server v15 and
 all wire shapes remain unchanged.
 
 | Regression | Exact boundary and outcome |
@@ -352,7 +352,7 @@ Each test retains exactly one delete submission throughout reconnect:
 
 No backend, protocol or Web implementation changes are included in this correction.
 Web already reads deletePreview on reconnect before reattachment and has no explicit
-cleanup-recovery caller; its behavior remains unchanged. App Server v14 and Runtime
+cleanup-recovery caller; its behavior remains unchanged. App Server v15 and Runtime
 Client v40 remain strict and unchanged. Unknown transport outcome alone still grants
 no cleanup authority, and reconnect never replays session/delete.
 
@@ -438,7 +438,7 @@ Deleted/NotFound terminal settlement, continued uncertainty requiring another
 explicit gesture, unknown-only rejection, committed reconnect promotion, lost
 recovery replies without replay, and live recovery reconciliation.
 
-No backend or protocol changes were made: App Server v14 and Runtime Client v40,
+No backend or protocol changes were made: App Server v15 and Runtime Client v40,
 writer certainty, manager admission/fence ownership, and durable recovery remain
 unchanged. The existing real App Server browser deletion acceptance remains the
 end-to-end check. Deliberate catalog durability faults are native `cfg(test)` hooks;

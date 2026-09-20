@@ -719,6 +719,7 @@ const withContext = (n: number, truncated = false) =>
       context_additions: [
         {
           message_id: 'ctx-goal',
+          producer: { Native: 'goal_status' },
           context_kind: 'goal_status',
           source: { type: 'runtime' },
           preview: { text: 'Goal: active', truncated: false },
@@ -727,6 +728,7 @@ const withContext = (n: number, truncated = false) =>
         },
         {
           message_id: 'ctx-observation',
+          producer: { Native: 'runtime_tool_observation' },
           context_kind: 'runtime_tool_observation',
           source: { type: 'runtime' },
           preview: { text: 'The tool batch settled.', truncated: false },
@@ -789,6 +791,7 @@ it('renders each certified extension’s exact contributor, never the family alo
       context_additions: [
         {
           message_id: 'ctx-extension-a',
+          producer: { CertifiedExtension: 'vendor-a.environment' },
           context_kind: 'extension_environment',
           source: { type: 'certified_extension', contributor: 'vendor-a.environment' },
           preview: { text: 'Facts from A.', truncated: false },
@@ -797,6 +800,7 @@ it('renders each certified extension’s exact contributor, never the family alo
         },
         {
           message_id: 'ctx-extension-b',
+          producer: { CertifiedExtension: 'vendor-b.environment' },
           context_kind: 'extension_environment',
           source: { type: 'certified_extension', contributor: 'vendor-b.environment' },
           preview: { text: 'Facts from B.', truncated: false },

@@ -167,7 +167,9 @@ froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
 descriptor introduced by Issue #131. Version 12 added the complete
 canonical-message-coupled Agent Status emission facts, bounded latest-emission
-heads, and the Todo-specific durable progress sequence. Version 14 freezes
+heads, and the Todo-specific durable progress sequence. Current schema 43
+replaces these with producer-scoped contribution receipts, generic logical-step
+progress, and typed accepted RequestSnapshot contributions; no old reader remains. Version 14 freezes
 the typed `ToolCancellationPhase` carried by canonical cancelled tool
 results. Version 15 adds the one-shot unresolved-output carryover pointer and
 the frozen request-only carryover/anchor fields in Request Snapshots. Version
@@ -5015,7 +5017,7 @@ message role, history shape, or timestamps:
   configurable Time and Background modules, while the closed Todo policy
   remains enabled and emits only for committed actionable work.
 - One logical primary step owns exactly one finite
-  `AgentStatusOpportunitySet`. Its independent `fresh_inbound` and
+  `ContributionOpportunities`. Its independent `fresh_inbound` and
   `post_tool_batch` members may coexist; they are not enum alternatives. A
   settled finite sibling-tool batch sets the attempt-local `PostToolBatch`
   member only after the canonical ToolResult batch commits. The marker is
@@ -5128,7 +5130,7 @@ message role, history shape, or timestamps:
   identical fingerprint is eligible again at exactly four later starts. A
   changed fingerprint bypasses that duplicate window at the next eligible
   opportunity. The progress coordinate is the store-owned
-  `todo_progress_sequence`, not a Surface revision: one successful
+  `logical_step_sequence`, not a Surface revision: one successful
   `retry_number == 0` model-turn-start transaction advances it once, while
   request-scoped context, Agent Status (including Time and Background),
   RuntimeToolObservation, compaction, provider-overflow retries, cancellation,
@@ -5205,9 +5207,9 @@ message role, history shape, or timestamps:
   frozen Effective System Prompt + `ModelRequestStarted` + sequence binding).
   When the prepared context contains Agent Status, that same transaction also
   commits the exact canonical status message, its canonical-message-bound
-  `AgentStatusEmitted` fact(s), and the materialized latest-emission head(s).
+  `ContextContributionEmitted` fact(s), and the materialized latest-emission head(s).
   The typed commit receipt contains `ModelRequestStarted` followed by every
-  newly committed `AgentStatusEmitted` fact in durable sequence order. An
+  newly committed `ContextContributionEmitted` fact in durable sequence order. An
   idempotent replay returns the historical facts as a verification but does
   not republish them through the live observer.
   The head is a bounded projection of durable emission facts, not an
@@ -5466,7 +5468,7 @@ The load-bearing split of this seam:
   registration, then derives lane, provenance, and semantic family from the
   resolved identity alone, through the same table it applies to that owner's
   request-time proposals:
-  - `NativeRuntimeObservation` → the native-reserved
+  - `Native { identity: RuntimeToolObservation }` → the native-reserved
     `UserContextLane::RuntimeToolObservation` (immediately after
     `ClaimedInbound` and before `ExtensionEnvironment` and `AgentStatus`),
     `UserSource::Runtime`,
@@ -6062,16 +6064,16 @@ semantic normalization boundary. The frozen invariants:
   proof and Git processes: its own calls serialize, the proof is immediately
   before mutation, and Git/compare-delete preserve fail-closed behavior for
   external concurrent mutation.
-- **Runtime Client protocol v14 introduces the Issue #194 Agent Status
+- **Runtime Client protocol v15 introduces the Issue #194 Agent Status
   contextual annotation projection.** The snapshot's latest-only `status` is
   replaced by the bounded window `statuses`; each status opportunity carries
   the durable identity it was established against (`FreshInbound` the inbound
   message, `PostToolBatch` its settled tool batch's `transcript_anchor`); and
   `agent_status_composed` publishes the whole window transition, including the
   `evicted_status_message_id` that admission caused. The retention bound stays
-  Runtime Client projection policy and never reaches the wire. v14 carries the
+  Runtime Client projection policy and never reaches the wire. v15 carries the
   v13 workspace authority projection unchanged; it does not replace it. There
-  is no v13 -> v14 conversion and no legacy `status` decoding: a v13 client is
+  is no v13 -> v15 conversion and no legacy `status` decoding: a v13 client is
   rejected explicitly at negotiation.
 - **Runtime Client protocol v13 introduces the Issue #187 subagent
   workspace representation.** The workspace projection separates logical
@@ -6199,10 +6201,10 @@ semantic normalization boundary. The frozen invariants:
   terminal settlement: the Agent Loop remains the settlement authority,
   and the coordinator holds the exact cancellation trigger the attempt
   task runs against.
-- **One frozen Agent Status input per primary step.** The context preparation
-  boundary creates exactly one finite immutable Pre-Status Surface view, one
-  clock instant, one authoritative active-Background snapshot, and one
-  committed Todo snapshot for one `AgentStatusOpportunitySet`. Its independent
+- **One accepted contribution freeze per primary step.** Generic preparation
+  supplies a finite Surface and `ContributionOpportunities`. Registered producers
+  capture their own read-only domain inputs. Agent Status captures one clock,
+  Background projection, and committed Todo presentation within that lifecycle. Its independent
   FreshInbound and PostToolBatch members may coexist. The closed Agent Status
   engine traverses its code-owned `Time -> Background -> Todo` modules once:
   each interested module captures at most one module snapshot and evaluates it

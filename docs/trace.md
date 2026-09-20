@@ -1,5 +1,11 @@
 # Native Trace and Web Trajectory
 
+Request detail carries `contributions`: producer-bound typed metadata from the
+exact committed RequestSnapshot subset. Context additions also carry their
+stable producer identity. Agent Status presentation is historical; live Todo,
+Goal, and Background UI continues to use current domain projections. Trace
+never parses rendered status text. See [native lifecycle](native-context-contributions.md).
+
 Trace is a read-only presentation projection. It is never canonical history,
 execution authority, cancellation/settlement authority, recovery input, or a raw
 Event Journal API. Deleting every Trajectory component changes none of those
@@ -37,7 +43,7 @@ ToolCall ID and Tool ID; parallel physical completion never changes start order.
 Detached executions, Subagents and Workflows retain their own native identities.
 
 Native Runtime Client version 43 and App Server version 13 carry this mandatory
-summary/detail vocabulary. SQLite schema 42 gates the persisted request terminal vocabulary including
+summary/detail vocabulary. SQLite schema 43 gates the persisted request terminal vocabulary including
 generation evidence. The Event Journal envelope framing is unchanged; this is
 request terminal event data, not a new Trace store.
 
@@ -340,7 +346,7 @@ bounded diagnostics, plus the exact recorded continuation locator when present.
 
 ## Durable schema contract
 
-SQLite schema **42** retains the indexed Trace presentation seeks. Older stores
+SQLite schema **43** retains the indexed Trace presentation seeks. Older stores
 are rejected without migration. Reads use existing indexed Journal rows and
 immutable native joins, with no Trace persistence table.
 

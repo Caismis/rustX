@@ -516,7 +516,7 @@ impl ToolResultObserver for RecordingObserver {
     fn observe_tool_result<'a>(
         &'a self,
         observation: &'a ToolResultObservation<'a>,
-    ) -> BoxFuture<'a, Result<Vec<UserMessageProposal>, LifecycleError>> {
+    ) -> BoxFuture<'a, Result<Vec<crate::context::ContextProposal>, LifecycleError>> {
         self.recorded
             .lock()
             .expect("recorded observations lock")
@@ -535,7 +535,7 @@ impl ToolResultObserver for RecordingObserver {
             .iter()
             .filter(|(id, _)| *id == call_id)
             .flat_map(|(_, texts)| texts.iter().copied())
-            .map(proposal)
+            .map(|text| rustx::context::ContextProposal::UserMessage(proposal(text)))
             .collect::<Vec<_>>();
         Box::pin(async move {
             if let Some((entered, release)) = &self.gate {
@@ -580,13 +580,17 @@ impl ToolResultObserver for BulkObserver {
     fn observe_tool_result<'a>(
         &'a self,
         observation: &'a ToolResultObservation<'a>,
-    ) -> BoxFuture<'a, Result<Vec<UserMessageProposal>, LifecycleError>> {
+    ) -> BoxFuture<'a, Result<Vec<crate::context::ContextProposal>, LifecycleError>> {
         self.observations.fetch_add(1, Ordering::SeqCst);
         let call_id = observation.call_id.as_str().to_owned();
         let per_call = self.per_call;
         Box::pin(async move {
             Ok((0..per_call)
-                .map(|index| proposal(&format!("{call_id}-{index}")))
+                .map(|index| {
+                    rustx::context::ContextProposal::UserMessage(proposal(&format!(
+                        "{call_id}-{index}"
+                    )))
+                })
                 .collect())
         })
     }

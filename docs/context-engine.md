@@ -1,12 +1,9 @@
 # Context Engine and Context Assembly (M7.5b + Issue #137)
 
-The Goal extension contributes `ContextKind::GoalStatus` through the native
-`GoalStatus` User lane. Each new model step samples GoalDomain and freezes that
-bounded observation through normal Context Assembly and Request Snapshot storage.
-Older Surface observations never suppress a new revision. Goal objective text
-remains user task data, even though `UserSource::Runtime` identifies its projection;
-it never becomes a system section. Provider adapters need no Goal policy.
-See [Goal extension](goal-extension.md).
+Goal and Agent Status use the common `ContextContributor` lifecycle and the
+shared `TaskData` placement lane. The domain producer owns capture and rendering;
+one accepted state freezes content, typed metadata, and receipts. See
+[native contributions](native-context-contributions.md) and [Goal](goal-extension.md).
 
 This document defines the implemented Issue #54 conversation model and the
 Issue #55 context/request boundary. The important separation is:
@@ -138,19 +135,17 @@ Certified-extension System Sections are registered as immutable resource
 values in the owning Runtime Resource Snapshot. They are not dynamically
 proposed by an extension on every request.
 
-Proposals contain no MessageId, UserSource, ContextKind, priority, surface
-operation, admission command, or provider data. A proposal is transient and
-cannot mutate committed history. RustX assigns the semantic kind/lane,
-trusted provenance, canonical identity, and commit operation.
+Proposals are transient bounded User context, not commits. They contain no
+MessageId, trusted producer identity, surface operation, or provider payload.
+Native domain proposals may include typed metadata and producer-local receipts;
+assembly validates those against the identity bound by frozen composition.
+Certified-extension proposals receive their provenance from registration.
 
-Native inputs currently include project/workspace instructions, Skill
-capability guidance, Agent Status, core runtime identity, and agent profile.
-Project instructions and Skill capability guidance are request-time System
-Sections, while Agent Status is a canonical User context fact. Native
-identities use
-ContextContributorIdentity::Native; extensions use
-CertifiedExtensionIdentity, which is canonicalized and validated by rustX.
-Native logical keys cannot be claimed by an extension.
+`NativeContextInput` contains only resource-frozen System Sections: workspace
+instructions, Skill guidance, core identity, and agent profile. Goal and Agent
+Status are ordinary registered `ContextContributor` implementations. Their
+domains own capture and model-facing rendering; assembly never serializes Goal.
+See [native contribution lifecycle](native-context-contributions.md).
 
 The logical extension identity is stable and serializable. An optional
 attestation/package/content generation is recorded separately in
@@ -168,12 +163,11 @@ The finite user lanes are ordered as:
    owner** (`NativeContextContributor::RuntimeToolObservation`);
    native-reserved, never extension-owned;
 3. ExtensionEnvironment — multiple certified extensions;
-4. AgentStatus — one native-reserved owner.
+4. TaskData — native domain contributors, including Agent Status and Goal.
 
-This is a semantic lane order, not a physical adjacency promise: the
-request-scoped AgentStatus message is the final User-context lane even when
-other canonical messages or provider-specific wire encoding occur between
-the inbound fact and its presentation.
+Lanes express placement semantics, not one lane per extension. Within a lane,
+order is stable producer identity, deferred/request-time phase, authoritative
+originating-fact order, then contributor-local proposal order.
 
 The native observation lane sits directly after claimed inbound because that
 owner's facts describe what the environment just did for the *preceding* tool
@@ -181,7 +175,8 @@ batch, while every later lane describes the *current* request.
 
 ### Timing is not ownership
 
-A lane names *who owns a fact*, never *when the fact became eligible*. The
+A lane expresses common placement semantics; producer identity names its owner.
+Neither derives from when the fact became eligible. The
 Issue #56 `ToolResultObserver` seam establishes eligibility — a proposal it
 returns is *deferred*, admitted at the next primary step rather than this one —
 and eligibility is a lifecycle-timing property owned by the Agent Loop.
@@ -196,7 +191,7 @@ proposals:
 | producer identity | lane | `UserSource` | `ContextKind` |
 | --- | --- | --- | --- |
 | `Native(RuntimeToolObservation)` | `RuntimeToolObservation` | `Runtime` | `RuntimeToolObservation` |
-| `Native(AgentStatus)` | `AgentStatus` | `Runtime` | `AgentStatus` |
+| `Native(AgentStatus)` | `TaskData` | `Runtime` | `AgentStatus` |
 | `CertifiedExtension(key)` | `ExtensionEnvironment` | `Extension { key }` | `ExtensionEnvironment` |
 
 So a certified extension that produces deferred post-tool context keeps its
@@ -216,15 +211,14 @@ Snapshot; Skill catalog text contains routing metadata only.
 A deferred proposal does not arrive with a trusted identity. It arrives with a
 `DeferredContextProducer`, which is a **reference**:
 
-- `NativeRuntimeObservation` — rustX owns this semantic owner, so it needs no
-  registration and carries no attestation;
-- `CertifiedExtension { identity }` — a logical key and nothing more. Any
-  caller can construct a `CertifiedExtensionIdentity`; the string proves
-  nothing.
+- `Native { identity }` — a closed native identity resolved against the frozen
+  composition registration, including the built-in runtime observation owner;
+- `CertifiedExtension { identity }` — a logical key resolved against its certified
+  registration. Neither reference is an independent provenance authority.
 
 `ContextAssembly::assemble` resolves the reference against the extensions
-registered through `ContextAssembly::register_extension` — the one place an
-extension becomes trusted — and uses that registration's own
+installed by native composition or `ContextAssembly::register_extension` — the
+single registration table where a producer becomes trusted — and uses that registration's own
 `ContributorGeneration`, attestation included. An unknown key is rejected with
 `ContextAssemblyError::UnregisteredContributor`: no lane, no
 `UserSource::Extension`, no synthesized generation, and no partially admitted
@@ -235,12 +229,10 @@ anything at request time.
 
 ### Deferred proposals are User context
 
-A deferred proposal is a `UserMessageProposal`, never the full
-`ContextProposal` vocabulary. The post-tool seam publishes conversational
-context about a settled tool batch; the Effective System Prompt stays owned by
-the request-time contributor path. The restriction is carried by the
-`ToolResultObserver` return type, so a deferred system section is
-unrepresentable rather than rejected at runtime.
+Deferred and request-time proposals use the same bounded `ContextProposal`
+vocabulary. Neither supports dynamic System Sections. `ToolResultObserver`
+observes settled facts and returns proposals, never canonical history writes,
+tool replacement, or model execution.
 
 Inside one `(lane, contributor)` bucket, a deferred fact precedes the same
 owner's request-time fact, because it describes the batch that precedes the
@@ -293,15 +285,13 @@ admission ownership — Context Assembly remains the request-time owner, and
 Agent Status never becomes a second Context Engine, message authority, or
 admission path.
 
-Agent Status remains structured runtime-owned data before rendering. At the
-single primary-model-step preparation boundary, the Agent Loop freezes one
-finite Pre-Status Surface view by copying the active Surface identities and
-hydrating only those identities from the Message Ledger. It samples the clock
-once and captures one immutable authoritative Background registry snapshot and,
-when the Todo Agent Extension is composed, one bounded read-only Todo
-presentation its owner derived from its committed list; the closed, rustX-owned
-Time, Background, and Todo contributors then evaluate those shared inputs once
-against one finite `AgentStatusOpportunitySet`. FreshInbound and PostToolBatch are independent
+Agent Status remains structured runtime-owned data before rendering. At each logical-step preparation boundary, the runtime freezes finite execution
+facts and the pre-contribution Surface. The registered Status contributor
+captures its clock and read-only domain inputs once. Time, Background, and Todo
+implement `AgentStatusSectionProducer`: each captures its finite input and
+returns an owned evaluation. The aggregator orders, validates, isolates optional
+acquisition failures, and admits whole sections against one finite
+`ContributionOpportunities`. FreshInbound and PostToolBatch are independent
 members of that set and may coexist; neither opportunity makes a module
 contribute automatically.
 The engine validates `Time <-> Temporal`, `Background <-> BackgroundExecution`,
@@ -317,9 +307,9 @@ recovery, or fingerprint, and contributes nothing at all when no Todo extension
 is composed.
 Two status generations with identical bytes at different admitted steps are
 different facts and receive different MessageIds; Todo's separate semantic
-fingerprint is about suppression, not canonical message identity. A failed
-module is quarantined for the current attempt while surviving modules
-continue. Overflow compaction retries reuse the accepted generation and do not
+fingerprint is about suppression, not canonical message identity. An optional acquisition/evaluation failure quarantines its section for this
+Attempt while surviving sections continue. Invalid typed payloads, inconsistent
+provenance, and persistence failures fail preparation; they are not optional. Overflow compaction retries reuse the accepted generation and do not
 rescan, recapture, or reevaluate it.
 
 The complete canonical ToolResult batch is committed before the Agent Loop
@@ -344,7 +334,7 @@ later newly committed first requests of logical primary model steps have
 followed the reminder's store-assigned origin; the identical state is eligible
 again at exactly four, while a changed fingerprint is eligible at the next
 opportunity. The progress coordinate is the durable
-`todo_progress_sequence`, which advances once per successful
+`logical_step_sequence`, which advances once per successful
 `retry_number == 0` model-turn start. Same-start context/status,
 RuntimeToolObservation, Time, Background, compaction, overflow retries,
 cancellation, and failed transactions do not advance it. It is not a
@@ -419,7 +409,7 @@ struct RequestSnapshot {
     unresolved_output_carryover_source: Option<PublicationStreamId>,
     unresolved_output_carryover: Option<RenderedUnresolvedOutputCarryover>,
     unresolved_output_carryover_anchor: Option<RequestOnlyInsertionAnchor>,
-    agent_status: Option<AgentStatusStart>,
+    contributions: Vec<ContributionStart>,
 }
 ~~~
 
@@ -766,7 +756,7 @@ extension invocation, logical ordering, contributor generation, and staging
 happen once for a logical primary step. Transient retries reuse the staged
 ContextGeneration and the canonical
 context facts committed at the first start, including the one
-canonical-message-bound Agent Status emission settlement. It never reinvokes
+producer-scoped contribution receipt settlement. It never reinvokes
 contributors, rereads Todo authority, reevaluates the opportunity set, or
 stages a duplicate context batch, but it passes through the same
 cancellation-vs-start arbitration as every model turn: cancellation that
@@ -870,12 +860,12 @@ history.
 
 For a status-bearing primary request, the successful durable start commit is
 also the publication boundary: the canonical status User message, its
-canonical-message-bound `AgentStatusEmitted` fact(s), and the latest-emission
+canonical-message-bound `ContextContributionEmitted` fact(s), and the latest-emission
 head(s) are committed atomically with the Request Snapshot and
 `ModelRequestStarted`. The canonical status message is observed first, then
 the structured Agent Status observation is published, and only then is the
 provider invoked. The typed start receipt exposes the newly committed
-`ModelRequestStarted` followed by every `AgentStatusEmitted` fact in durable
+`ModelRequestStarted` followed by every `ContextContributionEmitted` fact in durable
 sequence order; the live `AgentExecutionObserver` receives that same order
 after COMMIT, while the Runtime Client projection intentionally folds the
 internal emission fact into the one structured status observation. If
@@ -924,9 +914,9 @@ hidden adapter injection.
 `ContextAssembly::compatibility_manifest()` returns
 ContextCompatibilityManifest with:
 
-- `abi_version` (currently `4`; native revisioned Goal observations occupy a
-  typed User lane. Certified-extension System Sections remain resource-frozen,
-  and dynamic proposals remain conversational User facts);
+- `abi_version` (currently `5`; shared TaskData lane, composition-bound native
+  contributors, and typed accepted contribution receipts; System Sections remain
+  resource-frozen and dynamic proposals remain conversational User facts);
 - canonical user_context_lanes;
 - canonical system_section_lanes;
 - native-reserved slots;

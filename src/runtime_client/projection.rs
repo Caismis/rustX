@@ -100,9 +100,9 @@ use tokio::sync::Notify;
 use super::event::{RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome};
 use super::snapshot::{
     AGENT_STATUS_WINDOW, AgentStatusOpportunityView, AgentStatusView, CapabilityView,
-    ForegroundToolExecution, ForegroundToolState, FreshInboundStatusOpportunityView,
+    ForegroundToolExecution, ForegroundToolState, FreshInboundOpportunityView,
     InFlightAssistantMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,
-    PostToolBatchStatusOpportunityView, RuntimeClientAttempt, RuntimeClientAttemptPhase,
+    PostToolBatchOpportunityView, RuntimeClientAttempt, RuntimeClientAttemptPhase,
     RuntimeClientBackgroundExecution, RuntimeClientCompactionView, RuntimeClientContextView,
     RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask,
     RuntimeClientTranscriptCursor,
@@ -1152,7 +1152,7 @@ impl RuntimeClientProjection {
             | RuntimeEvent::ModelRequestStarted { .. }
             | RuntimeEvent::ModelRequestFailed { .. }
             | RuntimeEvent::ModelRetryScheduled { .. } => vec![RuntimeClientEvent::TraceChanged],
-            RuntimeEvent::AgentStatusEmitted { .. } => Vec::new(),
+            RuntimeEvent::ContextContributionEmitted { .. } => Vec::new(),
             RuntimeEvent::ModelRequestCompleted { usage, .. } => {
                 if let Some(usage) = usage
                     && let Some(attempt) = &mut self.snapshot.attempt
@@ -2253,7 +2253,7 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
         .opportunities
         .fresh_inbound
         .as_ref()
-        .map(|fresh| FreshInboundStatusOpportunityView {
+        .map(|fresh| FreshInboundOpportunityView {
             target_message_id: fresh.target_message_id.clone(),
         });
     // The placement fact of a `PostToolBatch` composition is carried by the
@@ -2263,7 +2263,7 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
         observation
             .opportunities
             .post_tool_batch
-            .map(|_| PostToolBatchStatusOpportunityView {
+            .map(|_| PostToolBatchOpportunityView {
                 transcript_anchor: observation
                     .post_tool_batch_anchor
                     .map(RuntimeClientTranscriptCursor::from),
@@ -2325,9 +2325,9 @@ mod tests {
         AgentExecution, AgentExecutionObserver, AgentExecutionRequest, AgentStatusObservation,
     };
     use crate::context::{
-        AgentStatus, AgentStatusEngine, AgentStatusOpportunitySet, CompactionBudgets,
-        ContextEngine, ContextError, ContextErrorKind, ContextRuntime,
-        FreshInboundStatusOpportunity, PostToolBatchStatusOpportunity,
+        AgentStatus, AgentStatusEngine, CompactionBudgets, ContextEngine, ContextError,
+        ContextErrorKind, ContextRuntime, ContributionOpportunities, FreshInboundOpportunity,
+        PostToolBatchOpportunity,
     };
     use crate::conversation::ConversationState;
     use crate::events::interaction::{InteractionSettlement, InteractionSubject};
@@ -2569,7 +2569,7 @@ mod tests {
     fn status_observation(
         status_message_id: &str,
         turn: u32,
-        opportunities: AgentStatusOpportunitySet,
+        opportunities: ContributionOpportunities,
         post_tool_batch_anchor: Option<crate::durable::TranscriptCursor>,
     ) -> AgentStatusObservation {
         AgentStatusObservation {
@@ -2595,8 +2595,8 @@ mod tests {
         status_observation(
             status_message_id,
             turn,
-            AgentStatusOpportunitySet {
-                fresh_inbound: Some(FreshInboundStatusOpportunity {
+            ContributionOpportunities {
+                fresh_inbound: Some(FreshInboundOpportunity {
                     target_message_id: MessageId::new(target),
                 }),
                 post_tool_batch: None,
@@ -2615,9 +2615,9 @@ mod tests {
         status_observation(
             status_message_id,
             turn,
-            AgentStatusOpportunitySet {
+            ContributionOpportunities {
                 fresh_inbound: None,
-                post_tool_batch: Some(PostToolBatchStatusOpportunity),
+                post_tool_batch: Some(PostToolBatchOpportunity),
             },
             Some(crate::durable::TranscriptCursor::new(batch_cursor)),
         )
@@ -3435,7 +3435,7 @@ mod tests {
             attempt_id: attempt(),
             turn: 1,
             status_message_id: MessageId::new("status-1"),
-            opportunities: AgentStatusOpportunitySet::default(),
+            opportunities: ContributionOpportunities::default(),
             post_tool_batch_anchor: None,
             status: AgentStatus {
                 generated_at: chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
@@ -3460,11 +3460,11 @@ mod tests {
             attempt_id: attempt(),
             turn: 2,
             status_message_id: status_message_id.clone(),
-            opportunities: AgentStatusOpportunitySet {
-                fresh_inbound: Some(FreshInboundStatusOpportunity {
+            opportunities: ContributionOpportunities {
+                fresh_inbound: Some(FreshInboundOpportunity {
                     target_message_id: MessageId::new("fresh-inbound"),
                 }),
-                post_tool_batch: Some(PostToolBatchStatusOpportunity),
+                post_tool_batch: Some(PostToolBatchOpportunity),
             },
             post_tool_batch_anchor: Some(crate::durable::TranscriptCursor::new(6)),
             status: AgentStatus {

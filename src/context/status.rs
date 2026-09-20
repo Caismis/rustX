@@ -2,7 +2,7 @@
 //!
 //! Agent Status is optional, provider-independent runtime context for an
 //! already-established primary model turn. A settled tool batch can add
-//! [`PostToolBatchStatusOpportunity`] to the next already-existing primary
+//! [`PostToolBatchOpportunity`] to the next already-existing primary
 //! step; it never schedules that step. The engine does not schedule work,
 //! create a turn, or prolong an attempt:
 //!
@@ -16,13 +16,12 @@
 //!     -> optional AgentStatus User context message
 //! ```
 //!
-//! The known modules are deliberately represented by a closed Rust enum. This
-//! is not a provider registry or an extension SDK: adding a module requires an
-//! intentional source change to the enum and its semantic source order.
+//! Built-in sections implement one internal capture/evaluation contract.
+//! Composition supplies the section implementations, and the aggregator orders
+//! them by their typed section identities. This is not an extension SDK.
 //!
-//! Module failures are optional-context failures. A failed module is
-//! quarantined in the attempt-local engine and the surviving modules continue;
-//! the failure never becomes a Context Assembly or model-turn failure.
+//! Optional acquisition/evaluation failures quarantine a section for the Attempt.
+//! Invalid payloads, provenance, and persistence failures fail preparation.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -32,12 +31,14 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::ConversationSurfaceSnapshot;
-use crate::durable::{AgentStatusEmissionLookup, AgentStatusEmissionRecord};
+use crate::durable::{ContributionEmissionLookup, ContributionEmissionRecord};
 use crate::message::types::{
-    AgentStatusEmission, AgentStatusGenerationMetadata, AgentStatusModuleId, MessageBlock,
+    AgentStatusGenerationMetadata, AgentStatusModuleId, ContributionEmission, MessageBlock,
 };
 use crate::runtime::identity::MessageId;
-use crate::tools::background::{BackgroundExecutionSnapshot, ConversationBackgroundRegistry};
+use crate::tools::background::BackgroundExecutionSnapshot;
+#[cfg(test)]
+use crate::tools::background::ConversationBackgroundRegistry;
 use crate::tools::execution::ExecutionKind;
 use crate::tools::todo::{TodoStatus, TodoStatusPresentation, TodoStatusTask};
 
@@ -207,42 +208,12 @@ impl AgentStatusModuleId {
     }
 }
 
-/// The inbound Agent Status delivery opportunity. Its inbound identity is
-/// retained separately from the status message identity, which does not exist
-/// until Context Assembly stages it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FreshInboundStatusOpportunity {
-    /// The final canonical inbound message that made this opportunity
-    /// eligible.
-    pub target_message_id: MessageId,
-}
-
-/// The batch-level `PostToolBatch` opportunity.
-///
-/// The marker intentionally carries no durable identity or payload. Its
-/// existence means only that one complete canonical `ToolResult` batch settled
-/// before this primary step; it cannot be reconstructed after an attempt
-/// dies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct PostToolBatchStatusOpportunity;
-
-/// The opportunities available to one logical primary step.
-///
-/// `FreshInbound` and `PostToolBatch` are independent members rather than
-/// mutually exclusive alternatives. A module receives this whole set once,
-/// so matching multiple present opportunities still produces one capture and
-/// one evaluation.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct AgentStatusOpportunitySet {
-    /// The `FreshInbound` opportunity, when one is present.
-    pub fresh_inbound: Option<FreshInboundStatusOpportunity>,
-    /// The complete settled tool-batch opportunity, when one is pending for
-    /// this attempt's next primary step.
-    pub post_tool_batch: Option<PostToolBatchStatusOpportunity>,
-}
+pub use super::contribution::{
+    ContributionOpportunities, FreshInboundOpportunity, PostToolBatchOpportunity,
+};
 
 /// The structured data of one accepted Agent Status section.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AgentStatusSectionData {
     /// The Time module's typed presentation payload.
     Temporal {
@@ -298,7 +269,7 @@ impl core::fmt::Display for AgentStatusSectionId {
 }
 
 /// One accepted structured Agent Status section.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentStatusSection {
     /// The stable section identity.
     pub id: AgentStatusSectionId,
@@ -307,7 +278,7 @@ pub struct AgentStatusSection {
 }
 
 /// One accepted Agent Status generation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentStatus {
     /// The one Agent Status clock instant used for this generation.
     pub generated_at: DateTime<Utc>,
@@ -326,30 +297,32 @@ impl AgentStatus {
     /// the closed engine and always satisfy this invariant.
     #[must_use]
     pub fn generation_metadata(&self) -> AgentStatusGenerationMetadata {
-        let modules: Vec<AgentStatusModuleId> = self
+        self.checked_generation_metadata()
+            .expect("validated Agent Status generation")
+    }
+
+    pub(crate) fn checked_generation_metadata(
+        &self,
+    ) -> Result<AgentStatusGenerationMetadata, String> {
+        let modules = self
             .sections
             .iter()
-            .map(|section| match section.id.as_str() {
-                AgentStatusSectionId::TEMPORAL => AgentStatusModuleId::Time,
-                AgentStatusSectionId::BACKGROUND_EXECUTION => AgentStatusModuleId::Background,
-                AgentStatusSectionId::TODO => AgentStatusModuleId::Todo,
-                _ => unreachable!("the closed Agent Status engine emitted an unknown section"),
+            .map(|section| match (section.id.as_str(), &section.data) {
+                (AgentStatusSectionId::TEMPORAL, AgentStatusSectionData::Temporal { .. }) => {
+                    Ok(AgentStatusModuleId::Time)
+                }
+                (
+                    AgentStatusSectionId::BACKGROUND_EXECUTION,
+                    AgentStatusSectionData::BackgroundExecution { .. },
+                ) => Ok(AgentStatusModuleId::Background),
+                (AgentStatusSectionId::TODO, AgentStatusSectionData::Todo { .. }) => {
+                    Ok(AgentStatusModuleId::Todo)
+                }
+                _ => Err("unknown or inconsistent typed status section".to_owned()),
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         AgentStatusGenerationMetadata::new(self.generated_at, modules)
-            .expect("the closed Agent Status engine emits a valid generation")
-    }
-}
-
-impl AgentStatusOpportunitySet {
-    /// Whether this logical step has no Agent Status delivery opportunity.
-    ///
-    /// Delivery opportunity is deliberately independent from module trigger
-    /// policy. Both members may be present in one set, and the set is consumed
-    /// once by the closed engine.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.fresh_inbound.is_none() && self.post_tool_batch.is_none()
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -625,113 +598,78 @@ impl AgentStatusClock for SystemClock {
     }
 }
 
-/// One closed internal Agent Status module.
-///
-/// The array in [`AgentStatusEngine`] is the semantic source order. No map,
-/// registration sequence, or lexical sort participates in composition.
-enum AgentStatusModule {
-    /// The built-in Time module.
-    Time(TimeStatusModule),
-    /// The built-in Background module.
-    Background(BackgroundStatusModule),
-    /// The built-in conversation-owned Todo module.
-    Todo(TodoStatusModule),
-}
-
-impl AgentStatusModule {
-    fn id(&self) -> AgentStatusModuleId {
-        match self {
-            Self::Time(_) => AgentStatusModuleId::Time,
-            Self::Background(_) => AgentStatusModuleId::Background,
-            Self::Todo(_) => AgentStatusModuleId::Todo,
-        }
-    }
-
-    fn enabled(&self) -> bool {
-        match self {
-            Self::Time(module) => module.config.enabled,
-            Self::Background(module) => module.config.enabled,
-            Self::Todo(_) => true,
-        }
-    }
-
-    fn interested_in(&self, opportunities: &AgentStatusOpportunitySet) -> bool {
-        // The production modules all inspect the same finite opportunity set
-        // once. Time and Background retain #131's FreshInbound-only policy;
-        // Todo is the first module whose reminder policy uses both delivery
-        // opportunities. This is a set intersection, never one invocation per
-        // opportunity member.
-        match self {
-            Self::Time(_) | Self::Background(_) => opportunities.fresh_inbound.is_some(),
-            Self::Todo(_) => !opportunities.is_empty(),
-        }
-    }
-
+/// One built-in section owns capture and evaluation of its finite input.
+/// The returned closure owns its snapshot; evaluation cannot reread domains.
+/// The aggregator orders sections by their typed identities.
+trait AgentStatusSectionProducer: Send + Sync {
+    fn id(&self) -> AgentStatusModuleId;
+    fn enabled(&self) -> bool;
+    fn interested_in(&self, opportunities: &ContributionOpportunities) -> bool;
     fn capture(
         &self,
         frozen: &AgentStatusEvaluationSnapshot<'_>,
-        seam: Option<&AgentStatusTestSeam>,
-    ) -> Result<AgentStatusModuleSnapshot, ModuleFailurePhase> {
-        let id = self.id();
-        if let Some(seam) = seam {
-            seam.record_capture(id);
-            if seam.take_capture_failure(id) {
-                return Err(ModuleFailurePhase::Capture);
-            }
-        }
-        match self {
-            Self::Time(_) => Ok(AgentStatusModuleSnapshot::Time(TimeStatusModule::capture(
-                frozen,
-            ))),
-            Self::Background(_) => Ok(AgentStatusModuleSnapshot::Background(
-                BackgroundStatusModule::capture(frozen),
-            )),
-            Self::Todo(_) => Ok(AgentStatusModuleSnapshot::Todo(TodoStatusModule::capture(
-                frozen,
-            )?)),
-        }
-    }
+    ) -> Result<CapturedStatusSection, ModuleFailurePhase>;
+}
 
-    fn evaluate(
+type CapturedStatusSection = Box<dyn FnOnce() -> Option<AgentStatusPayload> + Send>;
+
+impl AgentStatusSectionProducer for TimeStatusModule {
+    fn id(&self) -> AgentStatusModuleId {
+        AgentStatusModuleId::Time
+    }
+    fn enabled(&self) -> bool {
+        self.config.enabled
+    }
+    fn interested_in(&self, opportunities: &ContributionOpportunities) -> bool {
+        opportunities.fresh_inbound.is_some()
+    }
+    fn capture(
         &self,
-        snapshot: &AgentStatusModuleSnapshot,
-        now: DateTime<Utc>,
-        seam: Option<&AgentStatusTestSeam>,
-    ) -> Result<Option<AgentStatusPayload>, ModuleFailurePhase> {
-        let id = self.id();
-        if let Some(seam) = seam {
-            seam.record_evaluate(id);
-            if seam.take_evaluate_failure(id) {
-                return Err(ModuleFailurePhase::Evaluate);
-            }
-        }
-        let payload = match (self, snapshot) {
-            (Self::Time(module), AgentStatusModuleSnapshot::Time(snapshot)) => {
-                module.evaluate(snapshot)
-            }
-            (Self::Background(_), AgentStatusModuleSnapshot::Background(snapshot)) => {
-                BackgroundStatusModule::evaluate(snapshot)
-            }
-            (Self::Todo(_), AgentStatusModuleSnapshot::Todo(snapshot)) => {
-                TodoStatusModule::evaluate(snapshot)
-            }
-            _ => return Err(ModuleFailurePhase::Evaluate),
+        frozen: &AgentStatusEvaluationSnapshot<'_>,
+    ) -> Result<CapturedStatusSection, ModuleFailurePhase> {
+        let snapshot = Self::capture(frozen);
+        let module = Self {
+            config: self.config.clone(),
         };
-        if seam.is_some_and(|value| value.take_payload_mismatch(id)) {
-            return Ok(Some(match id {
-                AgentStatusModuleId::Time => AgentStatusPayload::BackgroundExecution {
-                    executions: Vec::new(),
-                    omitted_count: 0,
-                },
-                AgentStatusModuleId::Background | AgentStatusModuleId::Todo => {
-                    AgentStatusPayload::Temporal {
-                        current_time: now,
-                        timezone: None,
-                    }
-                }
-            }));
-        }
-        Ok(payload)
+        Ok(Box::new(move || module.evaluate(&snapshot)))
+    }
+}
+
+impl AgentStatusSectionProducer for BackgroundStatusModule {
+    fn id(&self) -> AgentStatusModuleId {
+        AgentStatusModuleId::Background
+    }
+    fn enabled(&self) -> bool {
+        self.config.enabled
+    }
+    fn interested_in(&self, opportunities: &ContributionOpportunities) -> bool {
+        opportunities.fresh_inbound.is_some()
+    }
+    fn capture(
+        &self,
+        frozen: &AgentStatusEvaluationSnapshot<'_>,
+    ) -> Result<CapturedStatusSection, ModuleFailurePhase> {
+        let snapshot = Self::capture(frozen);
+        Ok(Box::new(move || Self::evaluate(&snapshot)))
+    }
+}
+
+impl AgentStatusSectionProducer for TodoStatusModule {
+    fn id(&self) -> AgentStatusModuleId {
+        AgentStatusModuleId::Todo
+    }
+    fn enabled(&self) -> bool {
+        true
+    }
+    fn interested_in(&self, opportunities: &ContributionOpportunities) -> bool {
+        !opportunities.is_empty()
+    }
+    fn capture(
+        &self,
+        frozen: &AgentStatusEvaluationSnapshot<'_>,
+    ) -> Result<CapturedStatusSection, ModuleFailurePhase> {
+        let snapshot = Self::capture(frozen)?;
+        Ok(Box::new(move || Self::evaluate(&snapshot)))
     }
 }
 
@@ -835,16 +773,21 @@ impl TodoStatusModule {
     ) -> Result<TodoStatusSnapshot, ModuleFailurePhase> {
         let latest_emission = frozen
             .emission_lookup
-            .latest_agent_status_emission(AgentStatusModuleId::Todo, TODO_STATUS_EMISSION_KEY)
+            .latest_contribution_emission(
+                &crate::runtime::identity::ContextContributorIdentity::Native(
+                    crate::runtime::identity::NativeContextContributor::AgentStatus,
+                ),
+                TODO_STATUS_EMISSION_KEY,
+            )
             .map_err(|_| ModuleFailurePhase::SuppressionLookup)?;
-        let todo_progress = frozen
+        let logical_step_progress = frozen
             .emission_lookup
-            .current_todo_progress()
+            .current_logical_step_progress()
             .map_err(|_| ModuleFailurePhase::SuppressionLookup)?;
         Ok(TodoStatusSnapshot {
             presentation: frozen.todo.clone(),
             latest_emission,
-            todo_progress,
+            logical_step_progress,
         })
     }
 
@@ -868,8 +811,8 @@ impl TodoStatusModule {
             Some(latest) => {
                 latest.fingerprint != fingerprint
                     || snapshot
-                        .todo_progress
-                        .saturating_sub(latest.todo_progress_origin)
+                        .logical_step_progress
+                        .saturating_sub(latest.logical_step_origin)
                         >= TODO_STATUS_REMINDER_PROGRESS_INTERVAL
             }
         };
@@ -878,8 +821,7 @@ impl TodoStatusModule {
         }
         Some(AgentStatusPayload::Todo {
             presentation,
-            emission: AgentStatusEmission {
-                module_id: AgentStatusModuleId::Todo,
+            emission: ContributionEmission {
                 key: TODO_STATUS_EMISSION_KEY.to_owned(),
                 fingerprint,
             },
@@ -892,15 +834,8 @@ struct TodoStatusSnapshot {
     /// The Todo owner's bounded read-only view, or `None` when this
     /// composition includes no Todo extension.
     presentation: Option<TodoStatusPresentation>,
-    latest_emission: Option<AgentStatusEmissionRecord>,
-    todo_progress: u64,
-}
-
-#[derive(Debug, Clone)]
-enum AgentStatusModuleSnapshot {
-    Time(TimeStatusSnapshot),
-    Background(BackgroundStatusSnapshot),
-    Todo(TodoStatusSnapshot),
+    latest_emission: Option<ContributionEmissionRecord>,
+    logical_step_progress: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -929,7 +864,7 @@ struct AgentStatusEvaluationSnapshot<'a> {
     /// extension owner, or `None` when this composition has no Todo
     /// extension (Issue #259).
     todo: Option<TodoStatusPresentation>,
-    emission_lookup: &'a dyn AgentStatusEmissionLookup,
+    emission_lookup: &'a dyn ContributionEmissionLookup,
 }
 
 #[derive(Debug, Clone)]
@@ -944,7 +879,7 @@ enum AgentStatusPayload {
     },
     Todo {
         presentation: TodoStatusPresentation,
-        emission: AgentStatusEmission,
+        emission: ContributionEmission,
     },
 }
 
@@ -971,7 +906,7 @@ impl ModuleFailurePhase {
 pub struct AgentStatusEngine {
     config: AgentStatusConfig,
     clock: Arc<dyn AgentStatusClock>,
-    modules: [AgentStatusModule; 3],
+    modules: Vec<Arc<dyn AgentStatusSectionProducer>>,
     quarantined: HashSet<AgentStatusModuleId>,
     #[cfg(test)]
     test_seam: Option<AgentStatusTestSeam>,
@@ -999,14 +934,14 @@ impl AgentStatusEngine {
     pub fn new(config: AgentStatusConfig, clock: Arc<dyn AgentStatusClock>) -> Self {
         Self {
             clock,
-            modules: [
-                AgentStatusModule::Time(TimeStatusModule {
+            modules: vec![
+                Arc::new(TimeStatusModule {
                     config: config.time.clone(),
                 }),
-                AgentStatusModule::Background(BackgroundStatusModule {
+                Arc::new(BackgroundStatusModule {
                     config: config.background.clone(),
                 }),
-                AgentStatusModule::Todo(TodoStatusModule),
+                Arc::new(TodoStatusModule),
             ],
             config,
             quarantined: HashSet::new(),
@@ -1024,7 +959,8 @@ impl AgentStatusEngine {
     /// attempt-owned engine (which is not supported).
     #[must_use]
     pub fn for_attempt(&self) -> Self {
-        let engine = Self::new(self.config.clone(), self.clock());
+        let mut engine = Self::new(self.config.clone(), self.clock());
+        engine.modules.clone_from(&self.modules);
         #[cfg(test)]
         let engine = {
             // Share the deterministic seam with runtime-created attempts;
@@ -1055,8 +991,8 @@ impl AgentStatusEngine {
     }
 
     /// Captures, evaluates, validates, and bounds one Agent Status generation.
-    /// The engine's module array is traversed exactly in source order: Time,
-    /// Background, then Todo. The caller supplies the one immutable Pre-Status
+    /// Sections are traversed in typed identity order: Time, Background, then
+    /// Todo. The caller supplies the one immutable Pre-Status
     /// Surface view and — when this composition includes the Todo extension —
     /// the bounded Todo presentation the Todo owner already derived. Every
     /// module sees one finite opportunity set, even when both members are
@@ -1080,22 +1016,41 @@ impl AgentStatusEngine {
     /// Todo module then contributes nothing, and Time and Background are
     /// unaffected — Agent Status never reconstructs a Todo fact from anything
     /// else.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn prepare_with_inputs(
         &mut self,
-        opportunities: &AgentStatusOpportunitySet,
+        opportunities: &ContributionOpportunities,
         surface: &AgentStatusSurfaceView,
         background: &ConversationBackgroundRegistry,
         todo: Option<TodoStatusPresentation>,
-        emission_lookup: &dyn AgentStatusEmissionLookup,
+        emission_lookup: &dyn ContributionEmissionLookup,
     ) -> Option<PreparedAgentStatus> {
+        self.prepare_captured(
+            opportunities,
+            surface,
+            background.active_snapshot(),
+            todo,
+            emission_lookup,
+        )
+        .expect("valid test contribution preparation")
+    }
+
+    fn prepare_captured(
+        &mut self,
+        opportunities: &ContributionOpportunities,
+        surface: &AgentStatusSurfaceView,
+        background: Vec<BackgroundExecutionSnapshot>,
+        todo: Option<TodoStatusPresentation>,
+        emission_lookup: &dyn ContributionEmissionLookup,
+    ) -> Result<Option<PreparedAgentStatus>, super::ContextAssemblyError> {
         if opportunities.is_empty() {
-            return None;
+            return Ok(None);
         }
         let frozen = AgentStatusEvaluationSnapshot {
             now: self.clock.now(),
             surface,
-            active_background: Arc::from(background.active_snapshot().into_boxed_slice()),
+            active_background: Arc::from(background.into_boxed_slice()),
             // Already derived, by the Todo owner, before reaching here.
             todo,
             emission_lookup,
@@ -1103,8 +1058,9 @@ impl AgentStatusEngine {
         #[cfg(test)]
         let seam = self.test_seam.clone();
         #[cfg(not(test))]
-        let seam = None;
+        let seam: Option<AgentStatusTestSeam> = None;
         let mut sections = Vec::new();
+        self.modules.sort_by_key(|module| module.id());
         for index in 0..self.modules.len() {
             let module = &self.modules[index];
             let id = module.id();
@@ -1115,12 +1071,27 @@ impl AgentStatusEngine {
                 continue;
             }
             let result = (|| {
-                let snapshot = module.capture(&frozen, seam.as_ref())?;
+                if let Some(seam) = seam.as_ref() {
+                    seam.record_capture(id);
+                    if seam.take_capture_failure(id) {
+                        return Err(ModuleFailurePhase::Capture);
+                    }
+                }
+                let evaluate = module.capture(&frozen)?;
                 #[cfg(test)]
                 if let Some(seam) = seam.as_ref() {
                     seam.run_after_capture(id);
                 }
-                let Some(payload) = module.evaluate(&snapshot, frozen.now, seam.as_ref())? else {
+                if let Some(seam) = seam.as_ref() {
+                    seam.record_evaluate(id);
+                    if seam.take_evaluate_failure(id) {
+                        return Err(ModuleFailurePhase::Evaluate);
+                    }
+                    if seam.take_payload_mismatch(id) {
+                        return Err(ModuleFailurePhase::PayloadValidation);
+                    }
+                }
+                let Some(payload) = evaluate() else {
                     return Ok(None);
                 };
                 validate_payload(id, payload)
@@ -1128,11 +1099,18 @@ impl AgentStatusEngine {
             match result {
                 Ok(Some(contribution)) => sections.push(contribution),
                 Ok(None) => {}
+                Err(
+                    ModuleFailurePhase::SuppressionLookup | ModuleFailurePhase::PayloadValidation,
+                ) => {
+                    return Err(super::ContextAssemblyError::InvalidProposal(format!(
+                        "section {id:?} failed integrity or durable receipt acquisition"
+                    )));
+                }
                 Err(phase) => self.quarantine(id, phase),
             }
         }
         let (status, emissions) = admit_sections(sections, frozen.now);
-        (!status.sections.is_empty()).then_some(PreparedAgentStatus { status, emissions })
+        Ok((!status.sections.is_empty()).then_some(PreparedAgentStatus { status, emissions }))
     }
 
     /// Test-only convenience for the pre-Todo module unit suite. Production
@@ -1141,7 +1119,7 @@ impl AgentStatusEngine {
     #[cfg(test)]
     pub(crate) fn prepare(
         &mut self,
-        opportunities: &AgentStatusOpportunitySet,
+        opportunities: &ContributionOpportunities,
         surface: &AgentStatusSurfaceView,
         background: &ConversationBackgroundRegistry,
     ) -> Option<AgentStatus> {
@@ -1175,23 +1153,79 @@ pub(crate) struct PreparedAgentStatus {
     /// The one bounded status generation.
     pub(crate) status: AgentStatus,
     /// The semantic emissions represented by admitted sections.
-    pub(crate) emissions: Vec<AgentStatusEmission>,
+    pub(crate) emissions: Vec<ContributionEmission>,
+}
+
+/// Bound read capabilities of one admitted Agent Status contributor.
+pub(crate) struct StatusContextContributor {
+    pub(crate) engine: std::sync::Mutex<AgentStatusEngine>,
+    pub(crate) background: Arc<dyn Fn() -> Vec<BackgroundExecutionSnapshot> + Send + Sync>,
+    pub(crate) todo: Arc<dyn Fn() -> Option<TodoStatusPresentation> + Send + Sync>,
+    pub(crate) reminders: Arc<dyn ContributionEmissionLookup>,
+}
+
+impl super::ContextContributor for StatusContextContributor {
+    fn requirement(&self) -> crate::context::assembly::ContributionRequirement {
+        crate::context::assembly::ContributionRequirement::Optional
+    }
+    fn contribute<'a>(
+        &'a self,
+        input: &'a super::ContributorInputSnapshot,
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        Result<Vec<super::ContextProposal>, super::ContextAssemblyError>,
+    > {
+        Box::pin(async move {
+            let surface = AgentStatusSurfaceView::from_snapshot(input.surface.clone())
+                .map_err(|error| super::ContextAssemblyError::InvalidProposal(error.to_string()))?;
+            let prepared = self
+                .engine
+                .lock()
+                .expect("status engine lock")
+                .prepare_captured(
+                    &input.opportunities,
+                    &surface,
+                    (self.background)(),
+                    (self.todo)(),
+                    self.reminders.as_ref(),
+                )?;
+            Ok(prepared
+                .map(|prepared| super::ContextProposal::NativeUserMessage {
+                    message: super::UserMessageProposal {
+                        content: vec![crate::message::UserContentBlock::Text(
+                            crate::message::content::TextBlock {
+                                text: render_agent_status(&prepared.status),
+                            },
+                        )],
+                    },
+                    metadata: crate::message::ContextKind::AgentStatus(
+                        prepared.status.generation_metadata(),
+                    ),
+                    presentation: Some(super::contribution::ContributionPresentation::AgentStatus(
+                        prepared.status,
+                    )),
+                    emissions: prepared.emissions,
+                })
+                .into_iter()
+                .collect())
+        })
+    }
 }
 
 #[cfg(test)]
 struct EmptyEmissionLookup;
 
 #[cfg(test)]
-impl AgentStatusEmissionLookup for EmptyEmissionLookup {
-    fn latest_agent_status_emission(
+impl ContributionEmissionLookup for EmptyEmissionLookup {
+    fn latest_contribution_emission(
         &self,
-        _module_id: AgentStatusModuleId,
+        _producer: &crate::runtime::identity::ContextContributorIdentity,
         _key: &str,
-    ) -> Result<Option<AgentStatusEmissionRecord>, crate::durable::ConversationStoreError> {
+    ) -> Result<Option<ContributionEmissionRecord>, crate::durable::ConversationStoreError> {
         Ok(None)
     }
 
-    fn current_todo_progress(&self) -> Result<u64, crate::durable::ConversationStoreError> {
+    fn current_logical_step_progress(&self) -> Result<u64, crate::durable::ConversationStoreError> {
         Ok(0)
     }
 }
@@ -1243,7 +1277,6 @@ fn validate_payload(
                 emission,
             },
         ) if presentation.active_count > 0
-            && emission.module_id == AgentStatusModuleId::Todo
             && emission.key == TODO_STATUS_EMISSION_KEY
             && !emission.fingerprint.is_empty() =>
         {
@@ -1261,7 +1294,7 @@ fn validate_payload(
 
 struct AgentStatusContribution {
     section: AgentStatusSection,
-    emission: Option<AgentStatusEmission>,
+    emission: Option<ContributionEmission>,
 }
 
 /// Applies the global defensive byte cap.
@@ -1273,7 +1306,7 @@ struct AgentStatusContribution {
 fn admit_sections(
     sections: Vec<AgentStatusContribution>,
     generated_at: DateTime<Utc>,
-) -> (AgentStatus, Vec<AgentStatusEmission>) {
+) -> (AgentStatus, Vec<ContributionEmission>) {
     let mut accepted = Vec::new();
     let mut emissions = Vec::new();
     for contribution in sections {
@@ -1684,13 +1717,75 @@ mod tests {
     };
     use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
-    fn opportunity() -> AgentStatusOpportunitySet {
-        AgentStatusOpportunitySet {
-            fresh_inbound: Some(FreshInboundStatusOpportunity {
+    fn opportunity() -> ContributionOpportunities {
+        ContributionOpportunities {
+            fresh_inbound: Some(FreshInboundOpportunity {
                 target_message_id: MessageId::new("inbound"),
             }),
             post_tool_batch: None,
         }
+    }
+
+    #[test]
+    fn section_contract_captures_once_and_evaluates_owned_input() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct TestSection {
+            captures: Arc<AtomicUsize>,
+            evaluations: Arc<AtomicUsize>,
+        }
+
+        impl AgentStatusSectionProducer for TestSection {
+            fn id(&self) -> AgentStatusModuleId {
+                AgentStatusModuleId::Time
+            }
+            fn enabled(&self) -> bool {
+                true
+            }
+            fn interested_in(&self, opportunities: &ContributionOpportunities) -> bool {
+                !opportunities.is_empty()
+            }
+            fn capture(
+                &self,
+                frozen: &AgentStatusEvaluationSnapshot<'_>,
+            ) -> Result<CapturedStatusSection, ModuleFailurePhase> {
+                self.captures.fetch_add(1, Ordering::SeqCst);
+                let current_time = frozen.now;
+                let evaluations = Arc::clone(&self.evaluations);
+                Ok(Box::new(move || {
+                    evaluations.fetch_add(1, Ordering::SeqCst);
+                    Some(AgentStatusPayload::Temporal {
+                        current_time,
+                        timezone: None,
+                    })
+                }))
+            }
+        }
+
+        let captures = Arc::new(AtomicUsize::new(0));
+        let evaluations = Arc::new(AtomicUsize::new(0));
+        let mut engine = engine(AgentStatusConfig::default());
+        // The test producer uses the existing typed temporal presentation.
+        // Neither capture/evaluation nor aggregation dispatch on its type.
+        engine.modules = vec![Arc::new(TestSection {
+            captures: Arc::clone(&captures),
+            evaluations: Arc::clone(&evaluations),
+        })];
+        let status = engine
+            .prepare(
+                &combined_opportunity(),
+                &empty_surface(),
+                &empty_background().1,
+            )
+            .expect("test section accepted by normal aggregator");
+        assert_eq!(captures.load(Ordering::SeqCst), 1);
+        assert_eq!(evaluations.load(Ordering::SeqCst), 1);
+        assert_eq!(status.sections.len(), 1);
+        assert!(matches!(
+            status.sections[0].data,
+            AgentStatusSectionData::Temporal { current_time, .. }
+                if current_time == status.generated_at
+        ));
     }
 
     /// Issue #259 blocker 2: the strongest Todo value Agent Status can
@@ -1716,11 +1811,11 @@ mod tests {
         #[allow(clippy::type_complexity)]
         let production_entry_point: fn(
             &mut AgentStatusEngine,
-            &AgentStatusOpportunitySet,
+            &ContributionOpportunities,
             &AgentStatusSurfaceView,
             &ConversationBackgroundRegistry,
             Option<TodoStatusPresentation>,
-            &dyn AgentStatusEmissionLookup,
+            &dyn ContributionEmissionLookup,
         ) -> Option<PreparedAgentStatus> = AgentStatusEngine::prepare_with_inputs;
         let _ = production_entry_point;
 
@@ -1899,52 +1994,54 @@ mod tests {
         }
     }
 
-    fn post_tool_opportunity() -> AgentStatusOpportunitySet {
-        AgentStatusOpportunitySet {
+    fn post_tool_opportunity() -> ContributionOpportunities {
+        ContributionOpportunities {
             fresh_inbound: None,
-            post_tool_batch: Some(PostToolBatchStatusOpportunity),
+            post_tool_batch: Some(PostToolBatchOpportunity),
         }
     }
 
-    fn combined_opportunity() -> AgentStatusOpportunitySet {
-        AgentStatusOpportunitySet {
-            fresh_inbound: Some(FreshInboundStatusOpportunity {
+    fn combined_opportunity() -> ContributionOpportunities {
+        ContributionOpportunities {
+            fresh_inbound: Some(FreshInboundOpportunity {
                 target_message_id: MessageId::new("inbound"),
             }),
-            post_tool_batch: Some(PostToolBatchStatusOpportunity),
+            post_tool_batch: Some(PostToolBatchOpportunity),
         }
     }
 
     struct FixedEmissionLookup {
         fingerprint: Option<String>,
-        todo_progress: u64,
+        logical_step_progress: u64,
         latest_emission_origin: u64,
     }
 
-    impl AgentStatusEmissionLookup for FixedEmissionLookup {
-        fn latest_agent_status_emission(
+    impl ContributionEmissionLookup for FixedEmissionLookup {
+        fn latest_contribution_emission(
             &self,
-            module_id: AgentStatusModuleId,
+            producer: &crate::runtime::identity::ContextContributorIdentity,
             key: &str,
-        ) -> Result<Option<AgentStatusEmissionRecord>, crate::durable::ConversationStoreError>
+        ) -> Result<Option<ContributionEmissionRecord>, crate::durable::ConversationStoreError>
         {
             Ok(self
                 .fingerprint
                 .as_ref()
-                .map(|fingerprint| AgentStatusEmissionRecord {
-                    module_id,
+                .map(|fingerprint| ContributionEmissionRecord {
+                    producer: producer.clone(),
                     key: key.to_owned(),
                     fingerprint: fingerprint.clone(),
                     emitted_at: DateTime::from_timestamp(1_754_000_000, 0).expect("timestamp"),
                     request_id: RequestId::new("request"),
                     canonical_message_id: MessageId::new("status"),
-                    todo_progress_origin: self.latest_emission_origin,
+                    logical_step_origin: self.latest_emission_origin,
                     event_sequence: 1,
                 }))
         }
 
-        fn current_todo_progress(&self) -> Result<u64, crate::durable::ConversationStoreError> {
-            Ok(self.todo_progress)
+        fn current_logical_step_progress(
+            &self,
+        ) -> Result<u64, crate::durable::ConversationStoreError> {
+            Ok(self.logical_step_progress)
         }
     }
 
@@ -2096,7 +2193,7 @@ mod tests {
                 Some(todos.committed().status_presentation()),
                 &FixedEmissionLookup {
                     fingerprint: None,
-                    todo_progress: 0,
+                    logical_step_progress: 0,
                     latest_emission_origin: 0,
                 },
             )
@@ -2132,7 +2229,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_failure_and_payload_mismatch_are_isolated() {
+    fn optional_evaluation_failure_is_isolated_but_payload_integrity_fails() {
         let seam = AgentStatusTestSeam::new();
         seam.fail_evaluate_once(AgentStatusModuleId::Time);
         let mut failure_engine = engine(AgentStatusConfig::default()).with_test_seam(seam.clone());
@@ -2151,8 +2248,14 @@ mod tests {
         let mut engine = engine(AgentStatusConfig::default()).with_test_seam(seam);
         assert!(
             engine
-                .prepare(&opportunity(), &surface, &registry)
-                .is_none()
+                .prepare_captured(
+                    &opportunity(),
+                    &surface,
+                    registry.active_snapshot(),
+                    None,
+                    &EmptyEmissionLookup
+                )
+                .is_err()
         );
     }
 
@@ -2712,7 +2815,7 @@ mod tests {
         assert!(
             engine
                 .prepare(
-                    &AgentStatusOpportunitySet::default(),
+                    &ContributionOpportunities::default(),
                     &empty_surface(),
                     &registry
                 )
@@ -2914,6 +3017,20 @@ mod tests {
                 }
             }
             let mut failing = engine(AgentStatusConfig::default()).with_test_seam(seam);
+            if matches!(phase, ModuleFailurePhase::PayloadValidation) {
+                assert!(
+                    failing
+                        .prepare_captured(
+                            &opportunity(),
+                            &surface,
+                            registry.active_snapshot(),
+                            None,
+                            &EmptyEmissionLookup
+                        )
+                        .is_err()
+                );
+                continue;
+            }
             let surviving = failing
                 .prepare(&opportunity(), &surface, &registry)
                 .expect("Time survives a Background failure");
@@ -2959,7 +3076,7 @@ mod tests {
                     Some(todos.committed().status_presentation()),
                     &FixedEmissionLookup {
                         fingerprint: None,
-                        todo_progress: 0,
+                        logical_step_progress: 0,
                         latest_emission_origin: 0,
                     },
                 )
@@ -2989,7 +3106,7 @@ mod tests {
         let registry = empty_background().1;
         let lookup = FixedEmissionLookup {
             fingerprint: None,
-            todo_progress: 0,
+            logical_step_progress: 0,
             latest_emission_origin: 0,
         };
         let mut before_commit = engine(todo_only_config());
@@ -3030,7 +3147,7 @@ mod tests {
         let registry = empty_background().1;
         let lookup = FixedEmissionLookup {
             fingerprint: None,
-            todo_progress: 0,
+            logical_step_progress: 0,
             latest_emission_origin: 0,
         };
         for todos in [
@@ -3089,7 +3206,7 @@ mod tests {
                 Some(todos.committed().status_presentation()),
                 &FixedEmissionLookup {
                     fingerprint: None,
-                    todo_progress: 0,
+                    logical_step_progress: 0,
                     latest_emission_origin: 0,
                 },
             )
@@ -3098,7 +3215,7 @@ mod tests {
 
         let lookup = FixedEmissionLookup {
             fingerprint: Some(fingerprint.clone()),
-            todo_progress: 1,
+            logical_step_progress: 1,
             latest_emission_origin: 1,
         };
         assert!(
@@ -3116,7 +3233,7 @@ mod tests {
 
         let before_threshold = FixedEmissionLookup {
             fingerprint: Some(fingerprint.clone()),
-            todo_progress: 1 + TODO_STATUS_REMINDER_PROGRESS_INTERVAL - 1,
+            logical_step_progress: 1 + TODO_STATUS_REMINDER_PROGRESS_INTERVAL - 1,
             latest_emission_origin: 1,
         };
         assert!(
@@ -3134,7 +3251,7 @@ mod tests {
 
         let at_threshold = FixedEmissionLookup {
             fingerprint: Some(fingerprint.clone()),
-            todo_progress: 1 + TODO_STATUS_REMINDER_PROGRESS_INTERVAL,
+            logical_step_progress: 1 + TODO_STATUS_REMINDER_PROGRESS_INTERVAL,
             latest_emission_origin: 1,
         };
         let repeated = engine(todo_only_config())
@@ -3150,7 +3267,7 @@ mod tests {
 
         let changed = FixedEmissionLookup {
             fingerprint: Some("different-fingerprint".to_owned()),
-            todo_progress: 1,
+            logical_step_progress: 1,
             latest_emission_origin: 1,
         };
         let changed_generation = engine(todo_only_config())
@@ -3180,7 +3297,7 @@ mod tests {
         let registry = empty_background().1;
         let first_lookup = FixedEmissionLookup {
             fingerprint: None,
-            todo_progress: 0,
+            logical_step_progress: 0,
             latest_emission_origin: 0,
         };
         let mut first_engine = engine(todo_only_config());
@@ -3208,13 +3325,12 @@ mod tests {
         assert!(render_agent_status(&first.status).len() <= GLOBAL_AGENT_STATUS_BYTE_CAP);
 
         let emission = &first.emissions[0];
-        assert_eq!(emission.module_id, AgentStatusModuleId::Todo);
         assert_eq!(emission.key, TODO_STATUS_EMISSION_KEY);
         assert_ne!(emission.key, emission.fingerprint);
 
         let duplicate_lookup = FixedEmissionLookup {
             fingerprint: Some(emission.fingerprint.clone()),
-            todo_progress: 0,
+            logical_step_progress: 0,
             latest_emission_origin: 0,
         };
         let mut duplicate_engine = engine(todo_only_config());

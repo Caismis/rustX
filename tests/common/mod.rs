@@ -1417,23 +1417,7 @@ pub async fn capability_lease(
 pub fn plugin_document(
     plugins: &rustx::extensions::NativeAgentExtensions,
 ) -> rustx::extensions::NativeAgentExtensionsDocument {
-    rustx::extensions::NativeAgentExtensionsDocument {
-        agent_status: plugins
-            .agent_status()
-            .map_or_else(Default::default, |status| {
-                rustx::extensions::AgentStatusExtensionDocument {
-                    enabled: true,
-                    time: status.time.clone(),
-                    background: status.background.clone(),
-                }
-            }),
-        todo: rustx::extensions::TodoExtensionDocument {
-            enabled: plugins.todo().is_some(),
-        },
-        goal: rustx::extensions::GoalExtensionDocument {
-            enabled: plugins.goal().is_some(),
-        },
-    }
+    rustx::extensions::NativeAgentExtensionsDocument::from_composition(plugins)
 }
 
 /// The same lease, composed against an explicit ordinary activation policy

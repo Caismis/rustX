@@ -202,6 +202,27 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await aligned([todo, goal]);
     await expect(goal.getByRole('button', { name: 'Resume goal' })).toBeVisible();
     await page.screenshot({ path: 'test-results/composer-mobile.png', fullPage: true });
+    // Historical typed contribution data comes from this actual request, not
+    // from the now-edited live Goal/Todo dock.
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
+    const trajectory = page.getByRole('region', { name: 'Trajectory', exact: true });
+    const history = wire.responses.filter(row => row.result?.snapshot?.trace).at(-1)!.result.snapshot.trace.records;
+    const request = history.find((row: any) => row.request?.context_additions.some((context: any) => context.context_kind === 'agent_status'));
+    expect(request).toBeTruthy();
+    await trajectory.getByLabel('Search loaded Trace').fill(request.request.model);
+    await trajectory.locator(`[data-trace-id="${request.id}"]`).click();
+    const inspector = trajectory.getByLabel('Trace record inspector');
+    await inspector.getByRole('tab', { name: 'Context', exact: true }).click();
+    await expect(inspector).toContainText('Accepted contribution');
+    await expect.poll(() => wire.responses.filter(row => row.method === 'session/traceDetail').length).toBeGreaterThan(0);
+    const detail = wire.responses.filter(row => row.method === 'session/traceDetail').at(-1)!.result.detail.request;
+    const status = detail.contributions.find((entry: any) => entry.producer.Native === 'agent_status');
+    expect(status.presentation.AgentStatus.status_message_id).toBe(status.message_id);
+    expect(status.presentation.AgentStatus.sections.length).toBeGreaterThan(0);
+    expect(status.presentation.AgentStatus.opportunities.fresh_inbound ?? status.presentation.AgentStatus.opportunities.post_tool_batch).toBeTruthy();
+    await page.screenshot({ path: '/tmp/rustx-383-accepted-contributions.png' });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]); passed = true;
   } catch (error) { console.error(fixture.diagnostics(), await page.locator('.notice').allTextContents()); throw error; }
   finally { await page.close(); await fixture.stop(passed); }
