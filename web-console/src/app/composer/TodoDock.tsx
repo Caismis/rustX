@@ -1,7 +1,10 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
-// Adapted from DeepSeek Harness ui-conversation TodoPanel: collapsed count
-// summary, bounded expanded list and status glyphs. The rustX Conversation
-// owns the list; this card owns only its disclosure state and has no mutation.
+// Adapted from DeepSeek Harness ui-conversation TodoPanel: empty renders nothing,
+// collapsed count summary, bounded expanded list and status glyphs. The rustX
+// Conversation owns the list; this card owns only its disclosure state and has no
+// mutation. Harness's turn-scoped plan lifetime is deliberately NOT adopted:
+// rustX Todo is the conversation-owned authority and is never cleared locally on
+// input, turn start, Assistant completion, navigation, reconnect or disclosure.
 import { useEffect, useId, useState } from 'react';
 import type { TodoTask } from '../../../../protocol/app-server/v13';
 import type { TodoDockState } from '../../bindings/composer-context';
@@ -36,14 +39,17 @@ export function TodoDock({ state }: { state: TodoDockState }) {
   const [collapsed, setCollapsed] = useState(true);
   const listId = useId();
   // A list that disappears and returns is a new presentation, not a restored one.
+  // Ordinary non-empty updates — a task completing, a new task arriving — leave an
+  // open disclosure open; only the visible list going away resets it.
   const listed = state.kind === 'current' && state.tasks.length > 0;
   useEffect(() => { if (!listed) setCollapsed(true); }, [listed]);
-  if (state.kind === 'absent') return null;
+  // Harness renders no panel for an empty plan, and rustX keeps that result for
+  // both native facts: extension absent and extension composed with an empty
+  // current list are distinct runtime facts with one ordinary visual outcome —
+  // no dock, no wrapper and no reserved composer-stack height. An empty card is
+  // not capability discovery; that belongs to the capability/settings surfaces.
+  if (state.kind === 'absent' || !state.tasks.length) return null;
   const { tasks } = state;
-  if (!tasks.length) return <section className={css.root} aria-label="To-dos" data-todo-state="empty">
-    <div className={css.header}><span className={css.lead}><ChecklistGlyph /></span><span className={css.title}>To-dos</span>
-      <span className={css.progress}>No current tasks</span></div>
-  </section>;
   return <section className={css.root} aria-label="To-dos" data-todo-state="current">
     <button type="button" className={css.header} aria-expanded={!collapsed} aria-controls={collapsed ? undefined : listId} onClick={() => setCollapsed(value => !value)}>
       <span className={css.lead}><ChecklistGlyph /></span><span className={css.title}>To-dos</span>

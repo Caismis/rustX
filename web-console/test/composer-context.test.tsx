@@ -8,7 +8,7 @@ import { ComposerContextStack } from '../src/app/composer/ComposerContextStack';
 import { GoalDock } from '../src/app/composer/GoalDock';
 import { QueueDock } from '../src/app/composer/QueueDock';
 import { TodoDock } from '../src/app/composer/TodoDock';
-import { goalDock, queueRows, todoDock } from '../src/bindings/composer-context';
+import { goalDock, queueRows, todoDock, type TodoDockState } from '../src/bindings/composer-context';
 import { AppServerClient, type GoalControlOutcome } from '../src/client/app-server';
 import { Server, snapshot } from './fixture';
 
@@ -23,6 +23,23 @@ const running = (base = snapshot()): RuntimeClientSnapshot => ({ ...base, attemp
 const inbound = (sequence: string, text: string, message: { id?: string; source?: 'human' | 'runtime'; kind?: { goal_continuation: { id: string; revision: string } } } = {}) =>
   ({ revision: "0", sequence, message: { id: `message-${sequence}`, source: 'human' as const, content: [{ type: 'text' as const, text }], ...message } });
 const withQueue = (rows: ReturnType<typeof inbound>[], base = snapshot()): RuntimeClientSnapshot => ({ ...base, inbound: { pending: rows } });
+/** One anchored historical Agent Status composition carrying Todo A, on a
+ * conversation whose later turn must never receive it. */
+const withStatusHistory = (base = snapshot()): RuntimeClientSnapshot => {
+  const history = withTodoHistory(base);
+  const entries = [
+    { cursor: '0', item: { type: 'message' as const, message: { role: 'user' as const, id: 'u1', source: 'human' as const, content: [{ type: 'text' as const, text: 'Plan the work' }] } } },
+    ...history.transcript.entries!,
+    { cursor: '3', item: { type: 'message' as const, message: { role: 'assistant' as const, id: 'a1', content: [{ type: 'text' as const, text: 'Planned.' }] } } },
+    { cursor: '4', item: { type: 'message' as const, message: { role: 'user' as const, id: 'u2', source: 'human' as const, content: [{ type: 'text' as const, text: 'Anything else?' }] } } },
+  ];
+  return { ...history, transcript: { entries }, statuses: [{
+    attempt_id: 'attempt-A', turn: 1, status_message_id: 'status-1', rendered: 'historical rendered prose',
+    opportunities: { fresh_inbound: { target_message_id: 'u1' } },
+    sections: [{ type: 'todo', current: { id: '1', subject: 'Todo A', status: 'in_progress', blocked: false, active_form: 'Doing Todo A' }, tasks: [], active_count: 1, blocked_count: 0, completed_count: 0, deleted_count: 0, omitted_count: 0 }],
+  }] };
+};
+
 /** Historical execution facts only: a `todo` call and its committed result. */
 const withTodoHistory = (base = snapshot()): RuntimeClientSnapshot => {
   const call = { role: 'assistant' as const, id: 'history-call', content: [{ type: 'tool_call' as const, id: 'call-todo', tool_id: 'tool-todo', name: 'todo', arguments: { action: 'create', subject: 'Historical task' } }] };
@@ -59,25 +76,96 @@ const sendQueued = async (text: string) => {
 };
 
 describe('Todo dock binds only the composed native Todo projection', () => {
-  it('distinguishes extension absent, composed empty and composed tasks', async () => {
+  it('R08/R09: absent, composed-empty and deleted-only render no dock; a mixed list is collapsed with non-zero counts', async () => {
+    // The two native facts stay distinct in the binding and share one visual result.
     expect(todoDock(snapshot())).toEqual({ kind: 'absent' });
     expect(todoDock(withTodos([]))).toEqual({ kind: 'current', tasks: [] });
+    expect(todoDock(withTodos([task('1', 'deleted')]))).toEqual({ kind: 'current', tasks: [] });
     await mount(snapshot());
     expect(region('To-dos')).toBeNull();
     await update(withTodos([]));
-    expect(dock('To-dos').getAttribute('data-todo-state')).toBe('empty');
-    expect(within(dock('To-dos')).getByText('No current tasks')).toBeTruthy();
-    expect(within(dock('To-dos')).queryByRole('button')).toBeNull();
+    expect(region('To-dos')).toBeNull();
+    // The obsolete empty strip is gone: no placeholder, no Todo-specific chrome.
+    expect(screen.queryByText('No current tasks')).toBeNull();
+    expect(document.querySelector('[data-todo-state]')).toBeNull();
+    await update(withTodos([task('1', 'deleted'), task('2', 'deleted')]));
+    expect(region('To-dos')).toBeNull();
+    expect(document.querySelector('[data-todo-state]')).toBeNull();
     await update(withTodos([task('1', 'completed'), task('2', 'in_progress', { active_form: 'Writing two' }), task('3', 'deleted'), task('4', 'pending', { blocked_by: ['2'] })]));
     const header = within(dock('To-dos')).getByRole('button', { expanded: false });
-    expect(header.textContent).toContain('1 completed · 1 in progress · 1 pending');
+    expect(header.textContent).toContain(`1 completed · 1 in progress · 1 pending`);
+    // The collapsed header is a stable count summary, never an activity ticker.
+    expect(header.textContent).not.toContain('Writing two');
+    expect(header.getAttribute('aria-controls')).toBeNull();
     fireEvent.click(header);
+    const list = within(dock('To-dos')).getByRole('list');
+    expect(header.getAttribute('aria-controls')).toBe(list.id);
     const rows = within(dock('To-dos')).getAllByRole('listitem');
     // Native order and statuses; the tombstone is not current work.
     expect(rows.map(row => [row.getAttribute('data-task-id'), row.getAttribute('data-status')])).toEqual([['1', 'completed'], ['2', 'in_progress'], ['4', 'pending']]);
     expect(rows[1].textContent).toContain('Writing two');
+    // A dependency is secondary relation text, not a fourth status.
     expect(rows[2].textContent).toContain('after #2');
+    expect(rows[2].getAttribute('data-status')).toBe('pending');
     expect(dock('To-dos').textContent).not.toContain('Task 3');
+  });
+  it('R09: every parallel in-progress task is counted and rendered, with active_form only where the runtime published one', async () => {
+    await mount(withTodos([task('1', 'completed'), task('2', 'in_progress', { active_form: 'Writing two' }), task('3', 'in_progress'), task('4', 'in_progress', { active_form: 'Reading four' }), task('5', 'pending')]));
+    const header = within(dock('To-dos')).getByRole('button', { expanded: false });
+    expect(header.textContent).toContain(`1 completed · 3 in progress · 1 pending`);
+    fireEvent.click(header);
+    const rows = within(dock('To-dos')).getAllByRole('listitem');
+    expect(rows.filter(row => row.getAttribute('data-status') === 'in_progress')).toHaveLength(3);
+    // An in-progress task without active_form keeps its subject; counts and rows
+    // describe exactly the same filtered current list.
+    expect(rows.map(row => row.querySelector('[title]')?.getAttribute('title'))).toEqual(['Task 1', 'Writing two', 'Task 3', 'Reading four', 'Task 5']);
+  });
+  it('R09: the disclosure is keyboard operable and keeps accurate accessible relationships', async () => {
+    await mount(withTodos([task('1', 'pending')]));
+    const header = within(dock('To-dos')).getByRole('button', { expanded: false });
+    // A native button carries the accessible name, Enter/Space activation and focus
+    // behaviour without a key handler or a role of its own.
+    expect(header.tagName).toBe('BUTTON');
+    header.focus();
+    expect(document.activeElement).toBe(header);
+    fireEvent.click(header);
+    expect(within(dock('To-dos')).getByRole('button', { expanded: true })).toBe(header);
+    expect(document.activeElement).toBe(header);
+    expect(within(dock('To-dos')).getByRole('list').id).toBe(header.getAttribute('aria-controls'));
+  });
+  it('R10: an all-completed list is not an empty list, and turn boundaries never clear the dock', async () => {
+    await mount(withTodos([task('1', 'completed'), task('2', 'completed')]));
+    const header = within(dock('To-dos')).getByRole('button', { expanded: false });
+    expect(header.textContent).toContain('2 completed');
+    expect(header.textContent).not.toMatch(/in progress|pending/);
+    // Unchanged native Todo: neither a started nor a settled attempt clears it.
+    await update(running(withTodos([task('1', 'completed'), task('2', 'completed')])));
+    expect(dock('To-dos').textContent).toContain('2 completed');
+    await update(withTodos([task('1', 'completed'), task('2', 'completed')]));
+    expect(dock('To-dos').textContent).toContain('2 completed');
+    // Only the authoritative current list actually becoming empty removes it.
+    await update(withTodos([]));
+    expect(region('To-dos')).toBeNull();
+  });
+  it('R11: disclosure resets when the visible list disappears and never on ordinary non-empty updates', async () => {
+    await mount(withTodos([task('1', 'pending'), task('2', 'pending')]));
+    fireEvent.click(within(dock('To-dos')).getByRole('button', { expanded: false }));
+    // A task completing is an ordinary update; an open list stays open.
+    await update(withTodos([task('1', 'completed'), task('2', 'pending')]));
+    expect(within(dock('To-dos')).getByRole('button', { expanded: true })).toBeTruthy();
+    await update(withTodos([task('1', 'completed'), task('2', 'in_progress'), task('3', 'pending')]));
+    expect(within(dock('To-dos')).getByRole('button', { expanded: true })).toBeTruthy();
+    await update(withTodos([]));
+    expect(region('To-dos')).toBeNull();
+    // A later native list is a new presentation, not a restored one.
+    await update(withTodos([task('9', 'pending')]));
+    expect(within(dock('To-dos')).getByRole('button', { expanded: false })).toBeTruthy();
+    // Extension absence resets it too.
+    fireEvent.click(within(dock('To-dos')).getByRole('button', { expanded: false }));
+    await update(snapshot());
+    expect(region('To-dos')).toBeNull();
+    await update(withTodos([task('9', 'pending')]));
+    expect(within(dock('To-dos')).getByRole('button', { expanded: false })).toBeTruthy();
   });
   it('follows native projection changes and never reconstructs from historical todo Tool facts', async () => {
     await mount(withTodoHistory(snapshot()));
@@ -85,12 +173,40 @@ describe('Todo dock binds only the composed native Todo projection', () => {
     expect(screen.getByText('Assembling todo…')).toBeTruthy();
     expect(region('To-dos')).toBeNull();
     await update(withTodoHistory(withTodos([])));
-    expect(dock('To-dos').getAttribute('data-todo-state')).toBe('empty');
+    expect(region('To-dos')).toBeNull();
     await update(withTodos([task('1', 'pending')]));
     expect(dock('To-dos').textContent).toContain('1 pending');
     await update(withTodoHistory(withTodos([task('1', 'completed')])));
     expect(dock('To-dos').textContent).toContain('1 completed');
     expect(dock('To-dos').textContent).not.toContain('Historical task');
+  });
+  it('R07: clearing current Todo retires the dock while the historical Agent Status annotation stays at its anchor', async () => {
+    // Todo A is actionable and one composed Agent Status recorded it at its turn.
+    const actionable = [task('1', 'in_progress', { subject: 'Todo A', active_form: 'Doing Todo A' })];
+    await mount(withStatusHistory(withTodos(actionable)));
+    fireEvent.click(within(dock('To-dos')).getByRole('button', { expanded: false }));
+    expect(dock('To-dos').textContent).toContain('Doing Todo A');
+    expect(screen.getByRole('note', { name: 'Agent Status' }).closest('[data-chat-anchor-key]')?.getAttribute('data-chat-anchor-key')).toBe('message:u1');
+    // Todo clear: the authoritative current list is empty and, being non-actionable,
+    // emits no new Todo Agent Status. The older composition remains a historical fact.
+    await update(withStatusHistory(withTodos([])));
+    expect(region('To-dos')).toBeNull();
+    const notes = screen.getAllByRole('note', { name: 'Agent Status' });
+    expect(notes).toHaveLength(1);
+    expect(notes[0].getAttribute('data-agent-status')).toBe('status-1');
+    expect(notes[0].closest('[data-chat-anchor-key]')?.getAttribute('data-chat-anchor-key')).toBe('message:u1');
+    // The latest messages receive nothing, and the historical Tool evidence survives.
+    for (const key of ['message:a1', 'message:u2']) {
+      expect(within(document.querySelector(`[data-chat-anchor-key="${key}"]`) as HTMLElement).queryByRole('note')).toBeNull();
+    }
+    expect(screen.getByText('Assembling todo…')).toBeTruthy();
+    // The historical annotation still carries the historical Todo section, and no
+    // current Todo selector ever reads an Agent Status section.
+    fireEvent.click(within(notes[0]).getByRole('button', { expanded: false }));
+    expect(notes[0].textContent).toContain('Doing Todo A');
+    expect(todoDock(withStatusHistory(withTodos([])))).toEqual({ kind: 'current', tasks: [] });
+    expect(todoDock(withStatusHistory(snapshot()))).toEqual({ kind: 'absent' });
+    expect(region('To-dos')).toBeNull();
   });
   it('owns no mutation and never writes current tasks into configuration or browser recovery storage', async () => {
     await mount(withTodos([task('1', 'pending', { subject: 'Current secret plan' })]));
@@ -505,10 +621,29 @@ describe('Composer context stack lifecycle', () => {
     expect(message).toHaveProperty('value', 'Independent composer draft');
     expect(within(dock('To-dos')).getByRole('button', { expanded: false })).toBeTruthy();
   });
-  it('the stack composes fixed seats regardless of which docks render', () => {
-    const ui = render(<ComposerContextStack todo={<TodoDock state={{ kind: 'current', tasks: [] }} />} goal={null}
+  it('R08: the stack composes fixed seats, and an empty or absent Todo occupies none of them', () => {
+    const stack = (state: TodoDockState) => render(<ComposerContextStack todo={<TodoDock state={state} />} goal={null}
       queue={<QueueDock rows={[inbound('1', 'row')]} submissions={[]} running={false} />} composer={<div data-composer-card />} />);
-    expect([...ui.container.firstElementChild!.children].map(node => node.getAttribute('aria-label') ?? 'Composer')).toEqual(['To-dos', 'Queue', 'Composer']);
+    const seats = (ui: ReturnType<typeof stack>) => [...ui.container.firstElementChild!.children].map(node => node.getAttribute('aria-label') ?? 'Composer');
+    expect(seats(stack({ kind: 'current', tasks: [task('1', 'pending')] }))).toEqual(['To-dos', 'Queue', 'Composer']);
+    // Composed-empty, deleted-only and absent all leave the composed layout with no
+    // Todo seat at all: no wrapper, separator or reserved stack height to lay out.
+    for (const state of [todoDock(withTodos([])), todoDock(withTodos([task('1', 'deleted')])), todoDock(snapshot())]) {
+      cleanup();
+      const empty = stack(state);
+      expect(seats(empty)).toEqual(['Queue', 'Composer']);
+      expect(empty.container.querySelector('[data-todo-state]')).toBeNull();
+      expect(empty.container.textContent).not.toContain('No current tasks');
+    }
+  });
+  it('R08: the composed composer stack reserves no Todo seat while the current list is empty', async () => {
+    const ui = await mount(withTodos([task('1', 'pending')]));
+    const seats = () => [...ui.container.querySelector('[data-composer-context-stack]')!.children].map(node => node.getAttribute('aria-label') ?? 'Composer');
+    expect(seats()).toEqual(['To-dos', 'Composer']);
+    await update(withTodos([]));
+    // Only the composer card remains; the stack gap has nothing left to separate.
+    expect(seats()).toEqual(['Composer']);
+    expect(ui.container.querySelector('[data-todo-state]')).toBeNull();
   });
   it('Session views never share dock presentation state', async () => {
     server.snapshots.set('B', withTodos([task('1', 'pending')], snapshot('B')));
