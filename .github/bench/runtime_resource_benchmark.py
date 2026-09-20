@@ -253,7 +253,7 @@ class RustX:
 
     def warm(self):
         self.request("server/info", {})
-        self.request("session/list", {"offset": 0, "limit": 100})
+        self.request("session/list", {"offset": 0, "limit": 32})
 
     def create_session(self):
         result = self.request(
@@ -267,7 +267,7 @@ class RustX:
         return self.request("session/read", {"session_id": session_id})
 
     def list_sessions(self):
-        return self.request("session/list", {"offset": 0, "limit": 100})
+        return self.request("session/list", {"offset": 0, "limit": 32})
 
     def close(self):
         if self.proc.poll() is None:
@@ -363,7 +363,7 @@ class OpenCode:
             raise RuntimeError(f"opencode {method} {path}: HTTP {error.code}: {raw}") from error
 
     def warm(self):
-        self.request("GET", "/session?limit=100")
+        self.request("GET", "/session?limit=32")
 
     def create_session(self):
         return self.request("POST", "/session", {})["id"]
@@ -372,7 +372,7 @@ class OpenCode:
         return self.request("GET", "/session/" + urllib.parse.quote(session_id, safe=""))
 
     def list_sessions(self):
-        return self.request("GET", "/session?limit=100")
+        return self.request("GET", "/session?limit=32")
 
     def close(self):
         if self.proc.poll() is None:
