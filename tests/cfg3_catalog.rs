@@ -417,19 +417,20 @@ fn skills_all_exact_and_empty_are_valid_for_both_agent_kinds() {
 #[test]
 fn stale_source_writes_and_external_edits_do_not_overwrite() {
     use rustx::local_runtime::configuration::settings::{
-        ConfigMutation, SettingsError, SourceMutation, SourceScope,
+        ConfigMutation, SettingsError, SourceMutation,
     };
     let root = tempfile::tempdir().unwrap();
     let (host, request) = sources(root.path(), &format!("{PROVIDER}{MODEL}{ROOT}"), "");
     let (owner, input) = request.session_input(&host).unwrap();
-    let before = owner.read_source_settings(&input).unwrap();
+    let before = owner
+        .read_source_settings(&rustx_target(&input.cwd))
+        .unwrap();
     let external = format!("{PROVIDER}{MODEL}{ROOT}\n[environment]\nEXTERNAL = 'won'\n");
     std::fs::write(&before.user.path, &external).unwrap();
     let result = owner.write_source_settings(
-        &input,
+        &USER_TARGET,
         &before.user.revision,
         SourceMutation::Config {
-            scope: SourceScope::User,
             mutation: ConfigMutation::Environment {
                 name: "EXTERNAL".into(),
                 authored: Some("lost".into()),
@@ -446,16 +447,19 @@ fn stale_source_writes_and_external_edits_do_not_overwrite() {
 #[test]
 fn competing_native_writers_have_exactly_one_commit_winner() {
     use rustx::local_runtime::configuration::settings::{
-        ConfigMutation, SettingsError, SourceMutation, SourceScope,
+        ConfigMutation, SettingsError, SourceMutation,
     };
     let root = tempfile::tempdir().unwrap();
     let (host, request) = sources(root.path(), &format!("{PROVIDER}{MODEL}{ROOT}"), "");
     let (owner, input) = request.session_input(&host).unwrap();
     let revision = owner
-        .read_source_settings(&input)
+        .read_source_settings(&rustx_target(&input.cwd))
         .unwrap()
         .workspace
-        .revision;
+        .as_ref()
+        .unwrap()
+        .revision
+        .clone();
     let barrier = std::sync::Barrier::new(2);
     std::thread::scope(|threads| {
         let workers: Vec<_> = ["first", "second"]
@@ -469,10 +473,9 @@ fn competing_native_writers_have_exactly_one_commit_winner() {
                     move || {
                         barrier.wait();
                         owner.write_source_settings(
-                            input,
+                            &rustx_target(&input.cwd),
                             revision,
                             SourceMutation::Config {
-                                scope: SourceScope::Workspace,
                                 mutation: ConfigMutation::Environment {
                                     name: "WINNER".into(),
                                     authored: Some(value.into()),
@@ -501,7 +504,7 @@ fn competing_native_writers_have_exactly_one_commit_winner() {
 #[test]
 fn provider_secrets_are_not_read_back_and_cannot_be_retained_from_lower_scope() {
     use rustx::local_runtime::configuration::settings::{
-        ConfigMutation, CredentialEdit, ProviderWrite, SettingsError, SourceMutation, SourceScope,
+        ConfigMutation, CredentialEdit, ProviderWrite, SettingsError, SourceMutation,
     };
     let root = tempfile::tempdir().unwrap();
     let (host, request) = sources(
@@ -513,17 +516,18 @@ fn provider_secrets_are_not_read_back_and_cannot_be_retained_from_lower_scope() 
         "",
     );
     let (owner, input) = request.session_input(&host).unwrap();
-    let view = owner.read_source_settings(&input).unwrap();
+    let view = owner
+        .read_source_settings(&rustx_target(&input.cwd))
+        .unwrap();
     assert!(
         !serde_json::to_string(&view)
             .unwrap()
             .contains("private-fixture-secret")
     );
     let result = owner.write_source_settings(
-        &input,
-        &view.workspace.revision,
+        &rustx_target(&input.cwd),
+        &view.workspace.as_ref().unwrap().revision,
         SourceMutation::Config {
-            scope: SourceScope::Workspace,
             mutation: ConfigMutation::Provider {
                 id: "transport".into(),
                 authored: Some(ProviderWrite {
@@ -855,13 +859,13 @@ async fn malformed_workspace_mcp_reserves_shadow_and_unused_definition_warns() {
 
 #[test]
 fn named_agent_save_validates_complete_definition_before_committing() {
-    use rustx::local_runtime::configuration::settings::{
-        SettingsError, SourceMutation, SourceScope,
-    };
+    use rustx::local_runtime::configuration::settings::{SettingsError, SourceMutation};
     let root = tempfile::tempdir().unwrap();
     let (host, request) = sources(root.path(), &format!("{PROVIDER}{MODEL}{ROOT}"), "");
     let (owner, input) = request.session_input(&host).unwrap();
-    let before = owner.read_source_settings(&input).unwrap();
+    let before = owner
+        .read_source_settings(&rustx_target(&input.cwd))
+        .unwrap();
     let name = rustx::runtime::subagent::SubagentName::parse("reviewer").unwrap();
     let mut profile = rustx::local_runtime::config::AgentProfileDocument {
         description: "Review changes".into(),
@@ -869,14 +873,13 @@ fn named_agent_save_validates_complete_definition_before_committing() {
         ..Default::default()
     };
     let mutation = |authored| SourceMutation::Agent {
-        scope: SourceScope::Workspace,
         name: name.clone(),
         authored: Some(authored),
     };
     let path = input.cwd.join(".agents/agents/reviewer.toml");
     assert!(matches!(
         owner.write_source_settings(
-            &input,
+            &rustx_target(&input.cwd),
             &before.absent_resource_revision,
             mutation(profile.clone())
         ),
@@ -888,7 +891,11 @@ fn named_agent_save_validates_complete_definition_before_committing() {
     );
     profile.instructions = "Read the change and report concrete findings.".into();
     let saved = owner
-        .write_source_settings(&input, &before.absent_resource_revision, mutation(profile))
+        .write_source_settings(
+            &rustx_target(&input.cwd),
+            &before.absent_resource_revision,
+            mutation(profile),
+        )
         .unwrap();
     let inventory = saved.prospective_resources.unwrap();
     assert!(
@@ -902,7 +909,7 @@ fn named_agent_save_validates_complete_definition_before_committing() {
 #[test]
 fn agent_permission_projection_uses_native_resolution_and_source_cas() {
     use rustx::local_runtime::configuration::settings::{
-        ConfigMutation, SettingsError, SourceMutation, SourceScope,
+        ConfigMutation, SettingsError, SourceMutation,
     };
     use rustx::runtime::ApprovalMode;
     let root = tempfile::tempdir().unwrap();
@@ -912,29 +919,42 @@ fn agent_permission_projection_uses_native_resolution_and_source_cas() {
         "approval_mode = \"policy\"\n",
     );
     let (owner, input) = request.session_input(&host).unwrap();
-    let before = owner.read_source_settings(&input).unwrap();
+    let before = owner
+        .read_source_settings(&rustx_target(&input.cwd))
+        .unwrap();
     assert_eq!(before.prospective_approval_mode, Some(ApprovalMode::Policy));
     let mutation = SourceMutation::Config {
-        scope: SourceScope::Workspace,
         mutation: ConfigMutation::Approval {
             authored: Some(ApprovalMode::FullAccess),
         },
     };
     let after = owner
-        .write_source_settings(&input, &before.workspace.revision, mutation.clone())
+        .write_source_settings(
+            &rustx_target(&input.cwd),
+            &before.workspace.as_ref().unwrap().revision,
+            mutation.clone(),
+        )
         .unwrap();
     assert_eq!(
         after.prospective_approval_mode,
         Some(ApprovalMode::FullAccess)
     );
     assert!(matches!(
-        owner.write_source_settings(&input, &before.workspace.revision, mutation),
+        owner.write_source_settings(
+            &rustx_target(&input.cwd),
+            &before.workspace.as_ref().unwrap().revision,
+            mutation
+        ),
         Err(SettingsError::Conflict { .. })
     ));
-    std::fs::write(&after.workspace.path, "approval_mode = 'unsupported'").unwrap();
+    std::fs::write(
+        &after.workspace.as_ref().unwrap().path,
+        "approval_mode = 'unsupported'",
+    )
+    .unwrap();
     assert_eq!(
         owner
-            .read_source_settings(&input)
+            .read_source_settings(&rustx_target(&input.cwd))
             .unwrap()
             .prospective_approval_mode,
         None
@@ -943,7 +963,7 @@ fn agent_permission_projection_uses_native_resolution_and_source_cas() {
 
 #[test]
 fn named_agent_optional_text_survives_independent_complete_profile_edits() {
-    use rustx::local_runtime::configuration::settings::{SourceMutation, SourceScope};
+    use rustx::local_runtime::configuration::settings::SourceMutation;
     use rustx::runtime::subagent::SubagentName;
     for text in ["", "description = 'Review'\n", "instructions = 'Inspect'\n"] {
         let root = tempfile::tempdir().unwrap();
@@ -952,7 +972,9 @@ fn named_agent_optional_text_survives_independent_complete_profile_edits() {
         let path = input.cwd.join(".agents/agents/optional.toml");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, text).unwrap();
-        let before = owner.read_source_settings(&input).unwrap();
+        let before = owner
+            .read_source_settings(&rustx_target(&input.cwd))
+            .unwrap();
         let definition_is_valid =
             |source: &rustx::local_runtime::configuration::settings::SourceSettings| {
                 source
@@ -984,10 +1006,9 @@ fn named_agent_optional_text_survives_independent_complete_profile_edits() {
         profile.tools.builtin = vec!["read".into()];
         let saved = owner
             .write_source_settings(
-                &input,
+                &rustx_target(&input.cwd),
                 &source.revision,
                 SourceMutation::Agent {
-                    scope: SourceScope::Workspace,
                     name: SubagentName::parse("optional").unwrap(),
                     authored: Some(profile),
                 },
@@ -1016,5 +1037,15 @@ fn named_agent_optional_text_survives_independent_complete_profile_edits() {
             saved_text.contains("instructions ="),
             !original_text.1.is_empty()
         );
+    }
+}
+
+const USER_TARGET: rustx::local_runtime::configuration::settings::SourceTarget =
+    rustx::local_runtime::configuration::settings::SourceTarget::User;
+fn rustx_target(
+    directory: &std::path::Path,
+) -> rustx::local_runtime::configuration::settings::SourceTarget {
+    rustx::local_runtime::configuration::settings::SourceTarget::Workspace {
+        directory: directory.to_path_buf(),
     }
 }

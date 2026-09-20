@@ -48,18 +48,16 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
-    await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
-    await settings.getByRole('button', { name: 'Model', exact: true }).click();
+    await settings.getByLabel('Configuration owner').selectOption({ label: 'Workspace A' });
+    await settings.getByRole('button', { name: 'Default model', exact: true }).click();
     await settings.getByRole('combobox', { name: 'Model', exact: true }).selectOption('fixture/second-model');
     await settings.getByRole('button', { name: 'Save Root model', exact: true }).click();
-    await expect(settings.getByText(/Applicable changes are applied/)).toBeVisible();
-    await settings.getByRole('tab', { name: 'Effective', exact: true }).click();
-    await settings.getByRole('button', { name: 'Overview', exact: true }).click();
-    await expect(settings.getByRole('region', { name: 'Effective configuration', exact: true })).toContainText('fixture/console-model');
-    await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
-    await settings.getByRole('button', { name: 'Model', exact: true }).click();
+    await expect(settings.getByText(/Revision:/)).toBeVisible();
+    await expect(settings.getByRole('button', { name: /Adopt/ })).toHaveCount(0);
+    await settings.getByLabel('Configuration owner').selectOption({ label: 'Workspace A' });
+    await settings.getByRole('button', { name: 'Default model', exact: true }).click();
     await settings.getByRole('button', { name: 'Remove Root model', exact: true }).click();
-    await expect(settings.getByText(/Source saved. Native application/)).toBeVisible();
+    await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 
     await page.locator(`button[data-session-id="${idB}"]`).click(); await send('Use B while A runs');
@@ -140,9 +138,9 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
-    await settings.getByRole('button', { name: 'Diagnostics & source facts', exact: true }).click();
+    await settings.getByRole('button', { name: 'Server & source diagnostics', exact: true }).click();
     await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
-    await expect(settings.getByText(/Applicable changes are applied/)).toBeVisible();
+    await expect(settings.getByText(/Revision:/)).toBeVisible();
     await closeSettings(page);
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();

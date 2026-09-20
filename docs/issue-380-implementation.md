@@ -142,7 +142,7 @@ already covers static invocation overrides (which cannot override instructions o
 models). Physical resource validation uses the same set at immutable admission and
 preparation. Unselected unrelated catalog definitions remain inert.
 
-The dedicated `settings/setModel` operation uses the same preparation and atomic
+The dedicated `session/setModel` operation uses the same preparation and atomic
 binding commit, with durable selection CAS. It does not import unrelated pending
 context.
 
@@ -206,7 +206,7 @@ projection delayed until after the next edit.
 
 ## Protocol and clients
 
-App Server v15 replaces v13; RuntimeClient v44 replaces v43. Generated artifacts
+App Server v16 replaces v13; RuntimeClient v44 replaces v43. Generated artifacts
 come from `pnpm generate`. The native API exposes `configuration/reconcile` and
 `session/adoptConfiguration`, composable application state, actual process policy,
 Session adopted binding and scope/version identified `configuration/changed`

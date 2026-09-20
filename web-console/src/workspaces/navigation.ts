@@ -21,7 +21,7 @@ export class WorkspaceSessionNavigation {
   }
   async classifySession(id: string, current: () => boolean) {
     const valid = this.fence(current);
-    const settings = await this.client.request({ method: 'settings/read', params: { session_id: id } }, 'settings');
+    const settings = await this.client.request({ method: 'session/settings', params: { session_id: id } }, 'settings');
     if (!valid()) return;
     const endpoint = this.client.getSnapshot().endpoint;
     if (!endpoint) throw new Error('No connected rustX endpoint.');

@@ -27,7 +27,7 @@ async function connected() {
   const transport = new FakeTransport();
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
-  transport.respond(request!.id, { type: "initialized", protocol_version: 15, capabilities: SERVER_CAPABILITIES });
+  transport.respond(request!.id, { type: "initialized", protocol_version: 16, capabilities: SERVER_CAPABILITIES });
   return { transport, host: new AppServerHost({ client: await pending, ownership: "external" }) };
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {
@@ -109,7 +109,7 @@ it("resume browses without control and attaches only the selected B", async (t) 
   const h = appFor(t, host, focus);
   assert.equal(h.surfaces.length, 1, "picker exists without an attached projection");
   noControl(transport);
-  assert.equal(h.editor.disableSubmit, true);
+  assert.equal(h.editor.disableSubmit, false);
   h.editor.onSubmit?.("must not reach a runtime");
   await tick();
   noControl(transport);
@@ -213,7 +213,7 @@ it("a lost first attachment response returns to unfocused browsing without repla
   assert.equal(first.transport.log.count("session/attach"), 1);
   noControl(next.transport);
   assert.equal(next.host.attached.length, 0);
-  assert.equal(h.editor.disableSubmit, true);
+  assert.equal(h.editor.disableSubmit, false);
   assert.match(h.feedback.at(-1)!, /no unanswered mutations were resent/);
   h.surfaces.at(-1)!.onSelect!(rows[1]!);
   await attachment(next.transport, SESSION_B);
@@ -226,7 +226,7 @@ async function createFromEmpty(h: ReturnType<typeof appFor>, host: AppServerHost
   assert.deepEqual(selector.selector.visibleSessions(), []);
   assert.match(selector.render(80).join("\n"), /No Sessions available.*\n.*\n.*New Session/);
   assert.match(selector.popupFooter().join(), /Enter New Session/);
-  assert.equal(h.editor.disableSubmit, true);
+  assert.equal(h.editor.disableSubmit, false);
   noControl(transport);
   selector.handleInput("\r");
   const [create] = await transport.log.awaitMethod("session/create");
@@ -304,7 +304,7 @@ it("create failure retains the authoritative empty picker without attach or retr
   assert.match(selector.render(80).join(), /New Session/);
   assert.deepEqual(h.hidden, []);
   assert.equal(host.attached.length, 0);
-  assert.equal(h.editor.disableSubmit, true);
+  assert.equal(h.editor.disableSubmit, false);
   assert.equal(transport.log.count("session/create"), 1);
   assert.equal(transport.log.count("session/attach"), 0);
   assert.equal(transport.log.count("session/delete"), 0);
@@ -323,7 +323,7 @@ it("committed create retires empty authority before failed attach; reopening rea
   await tick();
   assert.match(h.feedback.at(-1)!, /attach rejected/);
   assert.equal(host.attached.length, 0);
-  assert.equal(h.editor.disableSubmit, true);
+  assert.equal(h.editor.disableSubmit, false);
   stale.handleInput("\r");
   await stale.onCreate!();
   assert.equal(transport.log.count("session/create"), 1, "retired picker cannot create again");
@@ -368,7 +368,7 @@ for (const stage of ["create", "attach"] as const) {
     assert.equal(first.transport.log.count("session/create"), 1);
     assert.equal(first.transport.log.count("session/attach"), stage === "attach" ? 1 : 0);
     noControl(next.transport);
-    assert.equal(h.editor.disableSubmit, true);
+    assert.equal(h.editor.disableSubmit, false);
     assert.match(h.surfaces.at(-1)!.render(80).join(), /New Session/);
     assert.match(h.feedback.at(-1)!, /no unanswered mutations were resent/);
     await old.onCreate!();

@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { GoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v15';
+import type { GoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v16';
 import { App } from '../src/app/App';
 import { ComposerContextStack } from '../src/app/composer/ComposerContextStack';
 import { GoalDock } from '../src/app/composer/GoalDock';
@@ -62,7 +62,7 @@ const methods = () => server.requests.map(item => item.request.method);
 const goalControls = () => server.requests.flatMap(item => item.request.method === 'goal/control' ? [item.request.params.control] : []);
 const snapshotReads = () => methods().filter(method => method === 'session/snapshot').length;
 const goalButton = (name: string) => within(dock('Goal')).getByRole('button', { name });
-const CONFIGURATION_WRITES = ['settings/replace', 'configuration/sourceWrite', 'configuration/reconcile', 'session/adoptConfiguration', 'settings/setModel', 'session/create'];
+const CONFIGURATION_WRITES = ['settings/replace', 'configuration/sourceWrite', 'configuration/reconcile', 'session/adoptConfiguration', 'session/setModel', 'session/create'];
 const update = (next: RuntimeClientSnapshot) => act(() => server.update('A', next));
 /** Answer a held authoritative read with a transport-level failure. */
 const failRead = (request: { id: string | number }) => act(async () => {

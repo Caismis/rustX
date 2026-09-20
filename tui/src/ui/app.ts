@@ -43,7 +43,6 @@ import { open } from "node:fs/promises";
 import { basename } from "node:path";
 import { ComposerEditor, composerIntent } from "./composer.ts";
 import { PromptHistory } from "./components/prompt-history.ts";
-import { PermissionsView } from "./components/permissions.ts";
 import { ComposerContext } from "./components/composer-context.ts";
 import { PendingInputView } from "./components/pending-input.ts";
 import { isAttemptActive } from "../presentation/state.ts";
@@ -368,7 +367,7 @@ export class RustxTuiApp {
     } finally {
       this.#recovering = false;
       this.#switching = false;
-      this.#editor.disableSubmit = this.#session === undefined || this.#quitting || this.#host.client.closed !== undefined;
+      this.#editor.disableSubmit = this.#quitting || this.#host.client.closed !== undefined;
     }
   }
 
@@ -418,7 +417,7 @@ export class RustxTuiApp {
       this.#syncDeletionPresentation();
       this.#tui.requestRender();
     });
-    this.#editor.disableSubmit = session === undefined || this.#host.client.closed !== undefined;
+    this.#editor.disableSubmit = this.#host.client.closed !== undefined;
     if (session === undefined) return;
     this.#removeSnapshotListener = session.onSnapshot(() => {
       // A resync is an authoritative replacement within this attachment. It
@@ -527,7 +526,7 @@ export class RustxTuiApp {
     } finally {
       if (this.#host === host && !this.#recovering) this.#switching = false;
       if (!this.#finished) {
-        this.#editor.disableSubmit = this.#switching || this.#session === undefined || this.#quitting || this.#recovering || this.#host.client.closed !== undefined;
+        this.#editor.disableSubmit = this.#switching || this.#quitting || this.#recovering || this.#host.client.closed !== undefined;
       }
     }
   }
@@ -725,7 +724,15 @@ export class RustxTuiApp {
   }
 
   async #onSubmit(text: string, queue = false, commands = true, preserveDraft = false): Promise<void> {
-    if (this.#session === undefined || this.#switching || this.#finished) return;
+    if (this.#switching || this.#finished) return;
+    if (commands && /^\/settings(?:\s|$)/.test(text.trim())) {
+      const lease = this.#presentationLease();
+      const result = await this.#dispatcher.submit(text);
+      if (result.kind === "inspect") this.#showInspection(result.title, result.body, lease);
+      else if (result.kind === "transient") this.#showTransient(result.level, result.text);
+      return;
+    }
+    if (this.#session === undefined) return;
     if (this.#submitting || this.#uploading) { if (!preserveDraft) this.#editor.setText(text); return; }
     const lease = this.#presentationLease();
     const session = this.#session;
@@ -752,11 +759,6 @@ export class RustxTuiApp {
     }
     if (!preserveDraft) this.#editor.setText("");
     try {
-      if (line === "/permissions") {
-        const source = await session.permissionSources();
-        if (this.#isCurrentPresentationLease(lease)) this.#showPopup(new PermissionsView(session, source, () => this.#closeOverlay(), () => this.#tui.requestRender()), { width: "90%", heightPercent: 75 });
-        return;
-      }
       if (line === "/capabilities") {
         this.#showInspection("Agent capabilities", renderResourceBanner(session.state, { workspace: this.#workspace }), lease);
         return;

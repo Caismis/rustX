@@ -22,7 +22,8 @@ export function sessionObservation(state: ClientView, id: string) {
   if (state.connection === 'connected' && (!view || view.attachmentIntent === 'released')) return '';
   return product.label ?? '';
 }
-export function WorkspaceNavigation({ host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, creating, metadataChanged, wide, expand, createOpen, closeCreate }: {
+export function WorkspaceNavigation({ host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, creating, metadataChanged, wide, expand, createOpen, closeCreate, workspaceSettings }: {
+  workspaceSettings?: (id: string) => void;
   host: ProductHostWorkspaces; client: AppServerClient; state: ClientView; endpoint: string; navigation: NavigationEpoch;
   wide: boolean; expand: () => void; createOpen: boolean; closeCreate: () => void;
   creating: boolean; metadataChanged: (removed?: string) => void;
@@ -87,7 +88,7 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
   return <>
     <WorkspaceBrowser wide={wide} expand={expand} groups={groupNodes} sessions={state.sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
       query={query} search={text => connected && search(text)} open={id => connected && openSession(id)} rename={(id, title) => edit('session', id, title)} fork={forkSession} remove={deleteSession}
-      selectWorkspace={selectWorkspace} create={id => connected && !creating && createSession(id)} renameWorkspace={(id, title) => edit('workspace', id, title)} removeWorkspace={(id, title) => edit('remove', id, title)}
+      workspaceSettings={workspaceSettings} selectWorkspace={selectWorkspace} create={id => connected && !creating && createSession(id)} renameWorkspace={(id, title) => edit('workspace', id, title)} removeWorkspace={(id, title) => edit('remove', id, title)}
       addWorkspace={catalog?.picker.kind === 'configured' && bound ? () => setDialog({ kind: 'add', id: '', name: '' }) : undefined}
       refresh={() => { setReload(value => value + 1); search(query, offset); }} previous={connected && offset > 0 ? () => search(query, Math.max(0, offset - 32)) : undefined}
       next={connected && state.nextOffset != null ? () => search(query, state.nextOffset!) : undefined}

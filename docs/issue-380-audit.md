@@ -30,7 +30,7 @@ report. None of T01–T16 is claimed satisfied by this document.
 | Attempt capture | `RuntimeInner::publish_attempt`, shared by inbound and continuation admission | Preserve immutable model, policy, resources, and capability lease capture; compose applicable units before capture under the same gate |
 | Session lifetime | `SessionCatalog`/`SessionController` own identity; runtime residency is owned by `SessionRuntimeManager` | Put process-local adopted binding and its revision in the Session domain, independent of `ResidentRuntime` |
 | Loaded-runtime replacement | `SessionRuntimeManager::compose` calls `resolve_session` from current files every time | Reconstruct from the retained adopted descriptor; unload/load must not accept new context |
-| Model selection | `settings/selectModel` writes durable selection; `settings/setModel` changes loaded state through `model_set_with_persistence`; omission can re-resolve defaults | Converge mutation to one Session operation; resolve default once for Session initialization; reuse preparation/adoption foundations |
+| Model selection | `settings/selectModel` writes durable selection; `session/setModel` changes loaded state through `model_set_with_persistence`; omission can re-resolve defaults | Converge mutation to one Session operation; resolve default once for Session initialization; reuse preparation/adoption foundations |
 | App Server process policy | `app_server/process.rs` reads policy at startup; `AppServerHost` owns connection/attachment/request admission, manager owns residency | Report actual process bindings; classify concrete limits by their owner/lifetime, not by the `app_server` table name |
 
 ### Existing strengths to retain

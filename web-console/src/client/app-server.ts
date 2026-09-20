@@ -4,7 +4,7 @@ import type {
   ConfigurationApplication, RuntimeClientSessionDeletionResult, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v15';
+} from '../../../protocol/app-server/v16';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from './uploads';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, type TranscriptCache } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
@@ -127,8 +127,8 @@ function goalRefusal(error: unknown) {
 }
 const READS = new Set<Request1['method']>([
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/tree', 'session/deletePreview',
-  'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'settings/read', 'settings/model', 'settings/models',
-  'configuration/sourcesRead', 'configuration/effective', 'resources/read', 'background/status', 'subagent/status', 'session/boundaries',
+  'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
+  'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'background/status', 'subagent/status', 'session/boundaries',
 ]);
 export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conversation_id, ref.interaction_id]);
 export const sameTarget = (a?: AttachmentTarget, b?: AttachmentTarget) => !!a && !!b &&
@@ -223,7 +223,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v15', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v16', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -241,12 +241,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 15, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 16, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 15 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v15 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (hello.protocol_version !== 16 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v16 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
@@ -335,7 +335,7 @@ export class AppServerClient {
   /** Correlation only. No call is ever retried. Every payload is a generated union. */
   async request<T extends MethodResult['type']>(operation: Request1, expected: T): Promise<Extract<MethodResult, { type: T }>> {
     if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new Error('Connect and initialize first.');
-    if ('target' in operation.params && this.state.views[operation.params.target.session_id]?.deleting && !READS.has(operation.method) && operation.method !== 'session/detach') throw new Error('Session deletion has disabled controls. Verify its outcome before continuing.');
+    if ('target' in operation.params && 'session_id' in operation.params.target && this.state.views[operation.params.target.session_id]?.deleting && !READS.has(operation.method) && operation.method !== 'session/detach') throw new Error('Session deletion has disabled controls. Verify its outcome before continuing.');
     if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new Error('Artifact transfer capacity reached. Retry after current transfers finish.');
     if (this.pending.size >= 64) throw new Error('Client request capacity reached.');
     // Keep uncertain diagnostics finite without silently forgetting unresolved mutations.
@@ -347,7 +347,7 @@ export class AppServerClient {
     const result = await new Promise<MethodResult>((resolve, reject) => {
       const params = operation.params;
       const context = { method: operation.method,
-        sessionId: 'target' in params ? params.target.session_id : 'session_id' in params ? params.session_id : undefined };
+        sessionId: 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : undefined };
       this.pending.set(id, { request, context, mutation: !READS.has(operation.method), sent: false, expected, resolve, reject });
       if (operation.method === 'turn/start' || operation.method === 'turn/steer') this.publishInbound(operation.params.target.session_id);
       this.pump();
@@ -634,7 +634,7 @@ export class AppServerClient {
       if (result.target.session_id !== id || result.target.conversation_id !== result.snapshot.conversation_id) throw new Error('Mismatched attachment identity.');
       this.setSession(id, { target: result.target, snapshot: result.snapshot, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), trace: replaceTrace(result.snapshot.trace, this.state.views[id]?.trace), attachment: 'attached' });
       this.reconcileInteractions(id); this.settleSubmissions(id);
-      const settings = await this.request({ method: 'settings/read', params: { session_id: id } }, 'settings');
+      const settings = await this.request({ method: 'session/settings', params: { session_id: id } }, 'settings');
       if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
       this.setSession(id, { settings: settings.settings });
       // A restored/branched view may be outside the visible catalog page. Read
@@ -913,14 +913,14 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v15').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v16').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
     const operation = { generation, status: 'in-flight' as const };
     this.setSession(id, { modelMutation: operation });
     try {
-      await this.request({ method: 'settings/setModel', params: { target, config } }, 'model');
+      await this.request({ method: 'session/setModel', params: { target, config } }, 'model');
       if (!current()) return;
       this.setSession(id, { modelMutation: { generation, status: 'acknowledged' } });
     } catch (error) {

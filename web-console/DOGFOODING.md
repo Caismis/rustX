@@ -188,7 +188,9 @@ Agent TOML files must remain byte-identical. This is selection, not content edit
 
 ## 5. CFG3 Settings and source authoring
 
-Use a fresh fixture without prompts. Open **Effective | User | Workspace**.
+Use a fresh fixture without prompts. Open **Global Settings** for User authoring or
+the exact registered **Workspace Settings** entry; Session adoption remains in the
+focused Session header.
 
 - Add/edit/delete Providers and Models independently in both authored scopes.
   Workspace replaces the complete same-name object; omitted credentials never

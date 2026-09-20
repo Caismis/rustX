@@ -62,19 +62,19 @@ export type Request1 =
       };
     }
   | {
-      method: 'settings/model';
+      method: 'session/model';
       params: {
         target: AttachmentTarget;
       };
     }
   | {
-      method: 'settings/models';
+      method: 'session/models';
       params: {
         target: AttachmentTarget;
       };
     }
   | {
-      method: 'settings/setModel';
+      method: 'session/setModel';
       params: {
         target: AttachmentTarget;
         config: SessionModelConfig;
@@ -332,7 +332,7 @@ export type Request1 =
       };
     }
   | {
-      method: 'configuration/effective';
+      method: 'session/effectiveConfiguration';
       params: {
         target: AttachmentTarget;
       };
@@ -340,25 +340,31 @@ export type Request1 =
   | {
       method: 'configuration/sourcesRead';
       params: {
-        session_id: SessionId;
+        target: SourceTarget;
       };
     }
   | {
       method: 'configuration/sourceWrite';
       params: {
-        session_id: SessionId;
+        target: SourceTarget;
         expected_revision: string;
         mutation: SourceMutation;
       };
     }
   | {
-      method: 'settings/read';
+      method: 'session/settings';
       params: {
         session_id: SessionId;
       };
     }
   | {
       method: 'configuration/reconcile';
+      params: {
+        target: SourceTarget;
+      };
+    }
+  | {
+      method: 'session/configuration';
       params: {
         session_id: SessionId;
       };
@@ -583,25 +589,36 @@ export type ReviewDecision =
       feedback: string;
       type: 'rejected';
     };
+/**
+ * Native source authority. A Session is never an authoring target.
+ */
+export type SourceTarget =
+  | {
+      kind: 'user';
+    }
+  | {
+      directory: string;
+      kind: 'workspace';
+    };
 export type SourceMutation =
   | {
-      scope: SourceScope;
+      document: string;
+      kind: 'repair_config';
+    }
+  | {
       id: McpServerId;
       authored?: McpWrite | null;
       kind: 'mcp';
     }
   | {
-      scope: SourceScope;
       mutation: ConfigMutation;
       kind: 'config';
     }
   | {
-      scope: SourceScope;
       name: SubagentName;
       authored?: AgentProfileDocument | null;
       kind: 'agent';
     };
-export type SourceScope = 'user' | 'workspace';
 /**
  * Identifies an MCP server bound to the runtime.
  */
@@ -1051,9 +1068,11 @@ export type MethodResult =
     }
   | {
       projection: SourceSettings;
-      session_revision: string;
-      session_selection?: SessionModelConfig | null;
       type: 'source_settings';
+    }
+  | {
+      application?: ConfigurationApplication | null;
+      type: 'session_configuration';
     }
   | {
       /**
@@ -1820,6 +1839,19 @@ export type UnitApplication =
     };
 export type CacheImpact = 'preserved' | 'prefix_changed' | 'cache_namespace_changed' | 'unproven';
 /**
+ * Advisory only; adoption always revalidates the native admission gate.
+ */
+export type AdoptionEligibility =
+  | {
+      status: 'eligible';
+    }
+  | {
+      status: 'busy';
+    }
+  | {
+      status: 'unavailable';
+    };
+/**
  * Which native evidence is available for the canonical settings sections.
  */
 export type SettingsEvidence = ('live_session' | 'frozen_child') | 'historical_partial';
@@ -1948,6 +1980,7 @@ export type InFlightBlock =
       type: 'tool_call';
     };
 export type ResourceFamily = 'agent' | 'workflow' | 'managed_python' | 'mcp' | 'skill';
+export type SourceScope = 'user' | 'workspace';
 export type AgentIdentity =
   | {
       kind: 'main';
@@ -2346,6 +2379,7 @@ export type Origin =
       base: string;
       kind: 'process';
     };
+export type ProcessPolicyImpact = 'hot' | 'restart';
 export type ErrorData =
   | {
       rejection: AdoptionError;
@@ -7120,6 +7154,7 @@ export interface ConfigurationApplication {
     shared_capacity?: UnitApplication;
   };
   candidate?: AvailableConfiguration | null;
+  eligibility: AdoptionEligibility;
 }
 export interface AvailableConfiguration {
   identity: ApplicationIdentity;
@@ -8728,6 +8763,10 @@ export interface AdmittedConfiguration {
   resources: CapabilityInspection1;
 }
 export interface SourceSettings {
+  target: SourceTarget;
+  process_policy_impacts: {
+    [k: string]: ProcessPolicyImpact;
+  };
   process_bindings?: AppServerPolicy | null;
   application?: ConfigurationApplication | null;
   /**
@@ -8746,19 +8785,21 @@ export interface SourceSettings {
   resource_revisions: {
     [k: string]: string;
   };
-  loaded?: LoadedSources | null;
+  /**
+   * Read-only native source resolution; never a Session adopted binding.
+   */
+  resolved?: RuntimeLayer | null;
+  provenance: {
+    [k: string]: Origin;
+  };
   user: SourceView;
-  workspace: SourceView;
+  workspace?: SourceView | null;
   user_resource_root: string;
-  workspace_resource_root: string;
+  workspace_resource_root?: string | null;
   runtime_root: string;
   user_mcp: SourceView2;
-  workspace_mcp: SourceView2;
+  workspace_mcp?: SourceView2 | null;
   agents: AgentSourceView[];
-}
-export interface LoadedSources {
-  generation: RuntimeResourceRevision;
-  changed_sources: string[];
 }
 export interface SourceView {
   path: string;

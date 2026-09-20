@@ -4,11 +4,12 @@ Web owns forms, drafts and presentation. Rust owns parsing, semantic validation,
 serialization, overlays, provenance, shadowing, CAS and runtime publication.
 The [CFG3 reference](configuration.md) is the configuration contract.
 
-The primary tabs are **Effective | User | Workspace**. Effective is read-only and
-shows native values, source origins, selected/defined resources, readiness, generation
-and explicit Session model. The User tab edits the bound User document and User
-resources; the Workspace tab edits its partial document and resources. The actual
-User config pathname is displayed separately from fixed `~/rustx/.agents`.
+Global Settings edits User definitions with no Session required. Workspace Settings
+opens the exact registered Workspace through Product Host authorization without
+changing Session focus or creating a runtime. The selected authoring target remains
+stable when Session focus changes. Resolved source previews are read-only and are
+not the Session's adopted binding. The actual User pathname is displayed separately
+from fixed `~/rustx/.agents`.
 
 Structured groups cover Runtime General, Providers & Models, Tool Policies, Root
 Model/Tools/Skills/Plugins/Agents & Workflows, and MCP/Python/Skill/Agent/Workflow
@@ -28,8 +29,10 @@ General also edits the native Root identity and description semantic units.
 **Save** submits a native typed semantic-unit mutation with the exact source
 revision and transfers responsibility to native application. Conflicts preserve
 the draft. Settings renders simultaneous applied, preparing, failed/retry,
-context-awaiting-adoption and process-restart state. **Adopt configuration** sends
-the inspected candidate and expected Session binding; Busy never cancels work.
+process-restart state. The single **Adopt configuration** control lives below the
+focused Session title, outside Settings. It sends the inspected candidate and
+expected Session binding; native eligibility is advisory and the native admission
+gate revalidates both. Busy never cancels work or schedules automatic adoption.
 Diagnostics offers native rescan. Uncertain writes/adoption are repaired by
 rereading authority, never replayed. Reconnect rereads native state.
 
@@ -53,8 +56,8 @@ These captures come from the real App Server/provider-emulator acceptance suite:
 
 [Settings architecture](../web-console/SETTINGS-ARCHITECTURE.md) describes the one
 Harness shell, grouped sections, Provider/Model drill-down, structured exact-identity
-rows, native resource cards and session-scoped unsaved drafts. General uses native
-runtime units; process settings are explicitly User-only/restart-required. Theme
+rows, native resource cards and target-scoped unsaved drafts. General uses native
+source units; process settings are User-only and consume native hot/restart classification. Theme
 is an intentionally browser-local preference. Resource discovery never implies
 Root selection or native preparation.
 

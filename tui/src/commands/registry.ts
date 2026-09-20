@@ -25,11 +25,10 @@ export interface CommandSpec {
  */
 export const COMMANDS: readonly CommandSpec[] = [
   { name: "/capabilities", description: "Inspect all native Agent capabilities in a scrollable view." },
-  { name: "/permissions", description: "Choose Workspace approval policy and publish saved changes." },
   { name: "/attach", description: "Upload a selected local file to this Session.", argumentHint: "<local-path>" },
   { name: "/queue", description: "Edit or remove exact observed queued Human input." },
   { name: "/export", description: "Export this Session archive to a client-local file.", argumentHint: "[output-path]" },
-  { name: "/settings", description: "Inspect native settings, captured sources, and application boundaries." },
+  { name: "/settings", description: "Read, rescan, and edit User/Workspace configuration." },
   { name: "/help", description: "List the available commands." },
   { name: "/goal", description: "Show, create, pause, resume, edit, or budget a persistent Goal." },
   {
@@ -46,7 +45,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   {
     name: "/session",
-    description: "Show the active session, node, and conversation metadata.",
+    argumentHint: "[settings | adopt]",
+    description: "Show Session metadata, settings, or explicitly adopt the inspected candidate.",
   },
   {
     name: "/name",
@@ -84,10 +84,6 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     name: "/compact",
     description: "Manually compact canonical conversation context while the runtime is idle.",
-  },
-  {
-    name: "/configuration",
-    description: "Inspect native application; /configuration rescan or /configuration adopt <attempt>.",
   },
   {
     name: "/debug",

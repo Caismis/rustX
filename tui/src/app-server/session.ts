@@ -308,20 +308,6 @@ export class AppServerSession {
     return result.files.map(({ receipt }) => ({ type: "upload", ...receipt }));
   }
 
-  async permissionSources() {
-    const source = (await this.#client.call("configuration/sourcesRead", { session_id: this.sessionId }, "source_settings")).projection;
-    if (source.application) this.#installConfiguration(source.application);
-    return source;
-  }
-
-  async writePermission(revision: string, mode: import("../protocol/app-server.ts").ApprovalMode) {
-    await this.#client.call("configuration/sourceWrite", {
-      session_id: this.sessionId, expected_revision: revision,
-      mutation: { kind: "config", scope: "workspace", mutation: { unit: "approval", authored: mode } },
-    }, "source_settings");
-    return this.permissionSources();
-  }
-
   /** Requests cancellation of the current attempt. Acceptance, not settlement. */
   async cancelCurrentAttempt(): Promise<string> {
     const accepted = await this.#client.call(
@@ -467,29 +453,29 @@ export class AppServerSession {
   }
 
   #installConfiguration(application: ConfigurationApplication): void {
-    if (this.#configuration && compareExact(application.version, this.#configuration.version) <= 0) return;
+    if (this.#configuration && compareExact(application.version, this.#configuration.version) < 0) return;
     this.#configuration = application;
     this.#publish();
   }
 
-  async reconcileConfiguration(): Promise<ConfigurationApplication> {
-    const { application } = await this.#client.call("configuration/reconcile", { session_id: this.sessionId }, "configuration_application");
-    this.#installConfiguration(application);
-    return application;
+  async readConfiguration() {
+    const result = await this.#client.call("session/configuration", { session_id: this.sessionId }, "session_configuration");
+    if (result.application) this.#installConfiguration(result.application);
+    return result.application;
   }
 
   async adoptConfiguration(candidate: AvailableConfiguration): Promise<ConfigurationApplication> {
     const { application } = await this.#client.call("session/adoptConfiguration", {
       session_id: this.sessionId, candidate: candidate.identity, expected_binding: candidate.expected_binding,
     }, "configuration_application");
-    this.#installConfiguration(application);
+    // Acknowledgement is not a new observation. The caller rereads native authority.
     return application;
   }
 
   /** The safe public catalog. This is why the client never reads rustx.toml. */
   async modelCatalog(): Promise<ModelCatalogView> {
     const models = await this.#client.call(
-      "settings/models",
+      "session/models",
       { target: this.#target },
       "models",
     );
@@ -498,7 +484,7 @@ export class AppServerSession {
 
   async modelGet(): Promise<SessionModelView> {
     const model = await this.#client.call(
-      "settings/model",
+      "session/model",
       { target: this.#target },
       "model",
     );
@@ -514,7 +500,7 @@ export class AppServerSession {
    */
   async modelSet(config: SessionModelConfig): Promise<SessionModelView> {
     const model = await this.#client.call(
-      "settings/setModel",
+      "session/setModel",
       { target: this.#target, config },
       "model",
     );
@@ -523,7 +509,7 @@ export class AppServerSession {
 
   /** One native read of the published immutable configuration. */
   async configuration(): Promise<import("../protocol/app-server.ts").EffectiveConfiguration> {
-    const result = await this.#client.call("configuration/effective", { target: this.#target }, "effective_configuration");
+    const result = await this.#client.call("session/effectiveConfiguration", { target: this.#target }, "effective_configuration");
     return result.projection;
   }
 

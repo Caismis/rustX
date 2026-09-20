@@ -7,13 +7,13 @@ import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v15';
+import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v16';
 
 let server: Server;
 beforeEach(() => {
   server = new Server(); localStorage.clear();
   server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: cfg3Source(), session_revision: '1' }));
-  server.handlers.set('configuration/effective', () => ({ type: 'effective_configuration', projection: cfg3Effective() }));
+  server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_configuration', projection: cfg3Effective() }));
 });
 afterEach(() => { cleanup(); server.client.disconnect(); localStorage.clear(); });
 async function mount(ids = ['A', 'B']) {
@@ -225,7 +225,7 @@ it('reopen repairs metadata on the same connection after an older-epoch read set
   server.summaries.set('A', { name: 'Reopened name' });
   let reopened!: Promise<void>;
   await act(async () => { reopened = server.client.attach('A'); });
-  await server.waitFor('settings/read', 2);
+  await server.waitFor('session/settings', 2);
   expect(methods().filter(method => method === 'session/summary')).toHaveLength(2);
   await act(async () => { server.reply(oldRequest); await oldRead; });
   const repair = await server.waitFor('session/summary', 3);

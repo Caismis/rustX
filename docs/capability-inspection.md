@@ -15,7 +15,7 @@ means invoking Attempt inheritance, not a lookup of current Root defaults. Root
 Tool/Plugin selection is not a child ceiling. Skill selection describes prompt
 visibility with resolved User and Workspace roots.
 
-`configuration/effective` describes a loaded published generation. Source reads and
+`session/effectiveConfiguration` describes a loaded published generation. Source reads and
 `rustx config show --sources` describe current prospective resolution and explicitly
 remain distinct. Admitted Attempt generation/model/resources can differ from current
 published defaults. Clients render those native facts without recomputing them.

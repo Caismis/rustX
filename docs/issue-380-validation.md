@@ -10,7 +10,7 @@ no integration was necessary. No new PR or worktree was created.
 
 The [implementation report](issue-380-implementation.md) contains the revised
 ownership model and exact T01–T16 mapping. No wire structures changed during this
-repair; the existing generated App Server v15 / RuntimeClient v44 remain current.
+repair; the existing generated App Server v16 / RuntimeClient v44 remain current.
 
 ## Commands and results
 

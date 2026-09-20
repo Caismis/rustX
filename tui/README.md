@@ -30,7 +30,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v15. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v16. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -151,15 +151,16 @@ local. See [the complete client architecture](../docs/tui-app-server.md).
 
 Root Tool/Skill/Plugin/Agent/Workflow capability selection is authored in
 `rustx.toml`; named Agents own independent complete profiles. `/settings` shows
-native effective/source/provenance/generation facts. `/model` changes Session
-intent. `/configuration` inspects native application and explicit adoption. File
-saves alone leave the loaded generation unchanged.
+native authored sources independently of Session existence. `/model` changes only
+Session intent. `/session settings` inspects native application and `/session adopt`
+explicitly adopts the inspected candidate. Source commits transfer automatic
+application to the native coordinator; context adoption remains explicit.
 
 ## Startup sequence
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v15)
+  -> initialize (App Server protocol v16)
   -> session/create or choose a durable Session
   -> session/attach (authoritative snapshot, cursor, subscription)
   -> interactive
@@ -360,7 +361,7 @@ does not implement a parallel Session system.
 Each either renders projection state, changes a client display preference, or
 invokes exactly one canonical App Server operation. `/model` opens the
 searchable selector over `model_catalog_get` and applies a choice through
-`settings/setModel`, while `/model show` renders the projection's own model view;
+`session/setModel`, while `/model show` renders the projection's own model view;
 `/tools`, `/skills`, and `/todos` read the projection the client already
 holds; `/status` prints the
 runtime's own Agent Status rendering; `/compact` invokes one
@@ -439,13 +440,13 @@ inventory in a scrollable surface. This is independent of historical Tool calls
 and running Subagent instances. No resource directory or configuration file is
 read to reconstruct effective capabilities.
 
-`/permissions` reads native configuration sources. Arrows select Tool policy or
-Full access; Enter submits a typed Workspace approval CAS and rereads authority.
-Saved policy applies automatically to future independent Attempts. Current policy,
-desired policy and a running Attempt's captured policy remain distinct. Native
-application state also reports preparation, context awaiting adoption, failure and
-process restart. `/configuration` exposes inspected-candidate adoption, rescan and
-retry. Uncertain mutations are never replayed. PgDn/PgUp pages policy details.
+`/settings user` reads User sources; `/settings workspace "/canonical/path"` reads
+an explicit Workspace. Add `approval policy`, `approval full_access`, or `approval
+inherit` to save typed source intent with exact revision CAS. Add `rescan` for native
+reconciliation. No Session is required. `/session settings` reports native preparation,
+candidate and eligibility; `/session adopt` submits the inspected candidate and
+binding. Uncertain mutations are reread, never replayed. Runtime approval prompts
+remain independent of these source-authoring commands.
 
 To add a file while preserving prompt text, press Ctrl+P and enter
 `/attach <local-path>`. The direct slash command also works on an empty Composer.
@@ -620,7 +621,7 @@ limits. It preserves configured, effective, and attempt-frozen identities and
 shows the highlighted row's effective facts exactly as published. The client
 does not read `rustx.toml`, infer provider behavior from a model prefix, or
 invent a reasoning scale. Selecting a row calls the canonical dispatcher
-`settings/setModel` path; subsequent events publish the effective model without
+`session/setModel` path; subsequent events publish the effective model without
 process replacement.
 
 The footer shows stable operating context, in retention order: current/frozen
@@ -925,7 +926,7 @@ TypeScript protocol or presentation layer. Whether reasoning is *drawn* is a
 client preference (`/show-reasoning`, `ctrl+t`); when hidden it collapses to a
 `Thinking…` marker rather than becoming assistant text. What rustX *asks a
 provider for* is `SessionModelConfig.reasoningProfile` / `reasoningEnabled`,
-which only `settings/setModel` changes.
+which only `session/setModel` changes.
 
 ### Working status is proven, never timed
 
@@ -964,21 +965,17 @@ Pi source is copied into this repository.
 
 ### Effective settings and explicit defaults
 
-`/settings` distinguishes captured launch sources, active Session selection,
-effective/pending approval, current resources and frozen attempt facts. It uses the
-native snapshot; reconnect replaces the view without replaying controls.
+`/settings` owns source authoring; `/session settings` owns Session selections and
+configuration status. `/debug` displays low-level native facts. Reconnect rereads
+authority without replaying controls or implicitly adopting configuration.
 
 Use `/model profile set <id>` or `/model profile clear` for generation-time reasoning
 (profile IDs such as `default` and `clear` remain selectable through `set`), and
 `/show-reasoning on|off` for display only. `/reasoning` is no longer a command.
 
-`/defaults user` reads the declared user document and its revision. Then
-`/save-default user model <revision>` explicitly saves the selected model/profile,
-or `/save-default user approval <revision>` saves effective approval. These Rust-owned
-writes affect future launches and leave the live Session unchanged. Stale revisions
-are rejected; reread and review before retrying. `/model` does not save defaults.
-
-`/configuration` reports native application; explicit context adoption requires an idle Session.
+There are no `/defaults`, `/save-default`, `/permissions`, or `/configuration`
+compatibility aliases. `/model` does not save defaults. Explicit context adoption
+is checked at the native Session admission gate, never queued for later idleness.
 See [the complete source/lifetime matrix and write guarantee](../docs/effective-settings.md).
 
 ### Delete historical Sessions inside `/resume`

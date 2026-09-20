@@ -18,9 +18,7 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
      await page.getByRole('checkbox', { name: 'Native contracts' }).click();
    }
    if (mode === 'selectors') {
-     await page.getByRole('button', { name: 'Approval mode' }).click();
-     await expect(page.getByRole('menuitem', { name: 'Full access' })).toBeEnabled();
-     await page.keyboard.press('Escape');
+     await expect(page.getByRole('button', { name: 'Approval mode' })).toHaveCount(0);
      await page.getByRole('button', { name: 'Model and reasoning' }).click();
      await expect(page.getByText('Reading native models…')).toHaveCount(0);
      await page.getByRole('menuitem', { name: 'Reasoning profile' }).click();
@@ -143,9 +141,8 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await shot('context');
     await page.evaluate(() => window.composerFixture.docks(false));
     await expect(input).toHaveValue('Review these notes.');
-    for (const name of ['Commands', 'Add attachments', 'Approval mode', 'Model and reasoning']) await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Approval mode' }).click();
-    await expect(page.getByRole('menuitem', { name: 'Full access' })).toBeVisible(); await page.keyboard.press('Escape');
+    for (const name of ['Commands', 'Add attachments', 'Model and reasoning']) await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Approval mode', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Model and reasoning' }).click();
     await expect(page.getByText('Reading native models…')).toHaveCount(0); await page.keyboard.press('Escape');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

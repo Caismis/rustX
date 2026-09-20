@@ -1,8 +1,8 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { SourceMutation } from '../../../../protocol/app-server/v15';
+import type { SourceMutation } from '../../../../protocol/app-server/v16';
 import { Switch } from '../../presentation/primitives/Switch';
 import { Button } from '../../presentation/primitives/Button';
-import { DraftContext } from './drafts';
+import { DraftContext, SourceContext, authoredUnit } from './drafts';
 import css from '../../presentation/settings/SettingsContent.module.css';
 
 export type SaveSource = (mutation: SourceMutation, revision: string) => Promise<string | undefined>;
@@ -11,6 +11,9 @@ export function UnitForm<T>({ title, initial, revision, mutation, save, children
   save: SaveSource; children: (value: T, change: (value: T) => void) => ReactNode; removable?: boolean;
 }) {
   const drafts = useContext(DraftContext);
+  const source = useContext(SourceContext);
+  const workspace = source?.target.kind === 'workspace';
+  const own = authoredUnit(source?.workspace?.authored, mutation(null));
   const identity = JSON.stringify(mutation(null));
   const cached = drafts?.get(identity);
   const [value, change] = useState<T>(() => cached ? cached.value as T : initial), [base, setBase] = useState(cached?.base ?? revision);
@@ -36,11 +39,13 @@ export function UnitForm<T>({ title, initial, revision, mutation, save, children
     finally { setBusy(false); }
   };
   return <form aria-label={title} className={css.unit} onSubmit={e => { e.preventDefault(); void commit(); }}>
-    <fieldset disabled={busy}><legend>{title}</legend>{children(value, next => { committed.current = undefined; change(next); setDirty(true); setSaved(false); })}
+    <fieldset disabled={busy}><legend>{title}</legend>
+      {workspace && mutation(null).kind === 'config' && <><p>{own == null ? 'Inherited — no Workspace override' : 'Workspace override — empty selections remain explicit'}</p><details><summary>Native resolved preview (not Session adoption)</summary><pre>{JSON.stringify(authoredUnit(source?.resolved, mutation(null)), null, 2) ?? 'Unset'}</pre></details></>}
+      {children(value, next => { committed.current = undefined; change(next); setDirty(true); setSaved(false); })}
       <details><summary>Source revision & replacement</summary><p className={css.hint}>Draft base revision: {base}<br />Current revision: {revision}</p><p>Save replaces this native semantic unit. Remove omits it from this scope. Empty selections remain explicit.</p></details>
       {base !== revision && <div className={css.review}><p role="status">Source revision changed. Your draft and original revision are preserved. Review the current source before replacing it.</p><details><summary>Review current authored unit (redacted)</summary><pre>{JSON.stringify(initial, null, 2)}</pre></details></div>}
       <div className={css.actions}><Button variant="primary" type="submit">Save {title}</Button>
-        {removable && <Button type="button" onClick={() => void commit(true)}>Remove {title}</Button>}
+        {removable && <Button type="button" title={workspace ? 'Reset to global default — remove this override' : 'Remove authored value'} onClick={() => void commit(true)}>Remove {title}</Button>}
         <Button type="button" onClick={() => { change(initial); setBase(revision); setDirty(false); setSaved(false); }}>Discard draft</Button>
         {base !== revision && <Button type="button" onClick={() => setBase(revision)}>Use reviewed revision</Button>}
       </div>{saved && <p role="status">Saved. Native application proceeds automatically.</p>}

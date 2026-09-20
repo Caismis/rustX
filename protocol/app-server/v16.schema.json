@@ -241,7 +241,7 @@
           "properties": {
             "method": {
               "type": "string",
-              "const": "settings/model"
+              "const": "session/model"
             },
             "params": {
               "type": "object",
@@ -266,7 +266,7 @@
           "properties": {
             "method": {
               "type": "string",
-              "const": "settings/models"
+              "const": "session/models"
             },
             "params": {
               "type": "object",
@@ -291,7 +291,7 @@
           "properties": {
             "method": {
               "type": "string",
-              "const": "settings/setModel"
+              "const": "session/setModel"
             },
             "params": {
               "type": "object",
@@ -1398,7 +1398,7 @@
           "properties": {
             "method": {
               "type": "string",
-              "const": "configuration/effective"
+              "const": "session/effectiveConfiguration"
             },
             "params": {
               "type": "object",
@@ -1428,13 +1428,13 @@
             "params": {
               "type": "object",
               "properties": {
-                "session_id": {
-                  "$ref": "#/$defs/SessionId"
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
                 }
               },
               "additionalProperties": false,
               "required": [
-                "session_id"
+                "target"
               ]
             }
           },
@@ -1453,8 +1453,8 @@
             "params": {
               "type": "object",
               "properties": {
-                "session_id": {
-                  "$ref": "#/$defs/SessionId"
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
                 },
                 "expected_revision": {
                   "type": "string"
@@ -1465,7 +1465,7 @@
               },
               "additionalProperties": false,
               "required": [
-                "session_id",
+                "target",
                 "expected_revision",
                 "mutation"
               ]
@@ -1481,7 +1481,7 @@
           "properties": {
             "method": {
               "type": "string",
-              "const": "settings/read"
+              "const": "session/settings"
             },
             "params": {
               "type": "object",
@@ -1507,6 +1507,31 @@
             "method": {
               "type": "string",
               "const": "configuration/reconcile"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/configuration"
             },
             "params": {
               "type": "object",
@@ -2784,14 +2809,64 @@
         "answer"
       ]
     },
-    "SourceMutation": {
+    "SourceTarget": {
+      "description": "Native source authority. A Session is never an authoring target.",
       "oneOf": [
         {
           "type": "object",
           "properties": {
-            "scope": {
-              "$ref": "#/$defs/SourceScope"
+            "kind": {
+              "type": "string",
+              "const": "user"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "directory": {
+              "type": "string"
             },
+            "kind": {
+              "type": "string",
+              "const": "workspace"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "directory"
+          ]
+        }
+      ]
+    },
+    "SourceMutation": {
+      "oneOf": [
+        {
+          "description": "Explicit repair of an unparseable configuration document. Never used\nfor ordinary semantic-unit editing and never accepts an invalid source.",
+          "type": "object",
+          "properties": {
+            "document": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "repair_config"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "document"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "id": {
               "$ref": "#/$defs/McpServerId"
             },
@@ -2813,16 +2888,12 @@
           "additionalProperties": false,
           "required": [
             "kind",
-            "scope",
             "id"
           ]
         },
         {
           "type": "object",
           "properties": {
-            "scope": {
-              "$ref": "#/$defs/SourceScope"
-            },
             "mutation": {
               "$ref": "#/$defs/ConfigMutation"
             },
@@ -2834,16 +2905,12 @@
           "additionalProperties": false,
           "required": [
             "kind",
-            "scope",
             "mutation"
           ]
         },
         {
           "type": "object",
           "properties": {
-            "scope": {
-              "$ref": "#/$defs/SourceScope"
-            },
             "name": {
               "$ref": "#/$defs/SubagentName"
             },
@@ -2865,17 +2932,9 @@
           "additionalProperties": false,
           "required": [
             "kind",
-            "scope",
             "name"
           ]
         }
-      ]
-    },
-    "SourceScope": {
-      "type": "string",
-      "enum": [
-        "user",
-        "workspace"
       ]
     },
     "McpServerId": {
@@ -5530,20 +5589,6 @@
             "projection": {
               "$ref": "#/$defs/SourceSettings"
             },
-            "session_revision": {
-              "type": "string",
-              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-            },
-            "session_selection": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/SessionModelConfig"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "type": {
               "type": "string",
               "const": "source_settings"
@@ -5552,8 +5597,30 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "projection",
-            "session_revision"
+            "projection"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "application": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConfigurationApplication"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "session_configuration"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
           ]
         },
         {
@@ -12965,13 +13032,17 @@
               "type": "null"
             }
           ]
+        },
+        "eligibility": {
+          "$ref": "#/$defs/AdoptionEligibility"
         }
       },
       "required": [
         "scope",
         "version",
         "desired",
-        "units"
+        "units",
+        "eligibility"
       ]
     },
     "UnitApplication": {
@@ -13073,6 +13144,47 @@
         "identity",
         "expected_binding",
         "impact"
+      ]
+    },
+    "AdoptionEligibility": {
+      "description": "Advisory only; adoption always revalidates the native admission gate.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "eligible"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "busy"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "unavailable"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        }
       ]
     },
     "RuntimeClientSnapshot": {
@@ -15194,6 +15306,13 @@
         "path"
       ]
     },
+    "SourceScope": {
+      "type": "string",
+      "enum": [
+        "user",
+        "workspace"
+      ]
+    },
     "ResourceDiagnostic": {
       "description": "Bounded resource diagnostics expose source ownership, never source contents.",
       "type": "object",
@@ -17301,6 +17420,15 @@
     "SourceSettings": {
       "type": "object",
       "properties": {
+        "target": {
+          "$ref": "#/$defs/SourceTarget"
+        },
+        "process_policy_impacts": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ProcessPolicyImpact"
+          }
+        },
         "process_bindings": {
           "anyOf": [
             {
@@ -17359,27 +17487,44 @@
             "type": "string"
           }
         },
-        "loaded": {
+        "resolved": {
+          "description": "Read-only native source resolution; never a Session adopted binding.",
           "anyOf": [
             {
-              "$ref": "#/$defs/LoadedSources"
+              "$ref": "#/$defs/RuntimeLayer"
             },
             {
               "type": "null"
             }
           ]
         },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Origin"
+          }
+        },
         "user": {
           "$ref": "#/$defs/SourceView"
         },
         "workspace": {
-          "$ref": "#/$defs/SourceView"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceView"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "user_resource_root": {
           "type": "string"
         },
         "workspace_resource_root": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "runtime_root": {
           "type": "string"
@@ -17388,7 +17533,14 @@
           "$ref": "#/$defs/SourceView2"
         },
         "workspace_mcp": {
-          "$ref": "#/$defs/SourceView2"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceView2"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "agents": {
           "type": "array",
@@ -17398,34 +17550,23 @@
         }
       },
       "required": [
+        "target",
+        "process_policy_impacts",
         "absent_resource_revision",
         "resource_revisions",
+        "provenance",
         "user",
-        "workspace",
         "user_resource_root",
-        "workspace_resource_root",
         "runtime_root",
         "user_mcp",
-        "workspace_mcp",
         "agents"
       ]
     },
-    "LoadedSources": {
-      "type": "object",
-      "properties": {
-        "generation": {
-          "$ref": "#/$defs/RuntimeResourceRevision"
-        },
-        "changed_sources": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "required": [
-        "generation",
-        "changed_sources"
+    "ProcessPolicyImpact": {
+      "type": "string",
+      "enum": [
+        "hot",
+        "restart"
       ]
     },
     "SourceView": {

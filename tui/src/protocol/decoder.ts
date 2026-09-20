@@ -1,11 +1,11 @@
-/** The sole untrusted-JSON → generated DTO boundary for App Server v15. */
+/** The sole untrusted-JSON → generated DTO boundary for App Server v16. */
 import { readFileSync } from "node:fs";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
-import type { ProtocolMessage } from "../../../protocol/app-server/v15.ts";
+import type { ProtocolMessage } from "../../../protocol/app-server/v16.ts";
 
 const schema = JSON.parse(readFileSync(
-  new URL("../../../protocol/app-server/v15.schema.json", import.meta.url),
+  new URL("../../../protocol/app-server/v16.schema.json", import.meta.url),
   "utf8",
 ));
 const ajv = new Ajv2020({

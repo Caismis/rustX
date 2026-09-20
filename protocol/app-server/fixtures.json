@@ -71,7 +71,7 @@
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 15,
+      "protocol_version": 16,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -88,7 +88,7 @@
     "id": 7,
     "result": {
       "type": "initialized",
-      "protocol_version": 15,
+      "protocol_version": 16,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,
@@ -385,7 +385,10 @@
           "attempt": "9007199254740993"
         },
         "units": {},
-        "candidate": null
+        "candidate": null,
+        "eligibility": {
+          "status": "unavailable"
+        }
       }
     }
   },

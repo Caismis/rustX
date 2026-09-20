@@ -47,6 +47,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(run).toContainText('completed');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    await settings.getByLabel('Configuration owner').selectOption({ label: 'Workspace A' });
     await settings.getByRole('button', { name: 'Agents', exact: true }).click();
     await expect(settings).toContainText('reviewer');
     await settings.getByRole('button', { name: 'Workflows', exact: true }).click();
@@ -54,11 +55,11 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await settings.screenshot({ path: test.info().outputPath('native-workflow-inventory.png') });
     await settings.getByRole('button', { name: 'Skills', exact: true }).click();
     await expect(settings).toContainText('acceptance');
-    await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
+    await settings.getByLabel('Configuration owner').selectOption({ label: 'Workspace A' });
     await settings.getByRole('button', { name: 'Agents & Workflows', exact: true }).click();
     await settings.getByRole('button', { name: 'Remove workflows 1', exact: true }).click();
     await settings.getByRole('button', { name: 'Save Workflow allowlist', exact: true }).click();
-    await expect(settings.getByText(/Source saved. Native application/)).toBeVisible();
+    await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();
     expect(readFileSync(workflowPath, 'utf8')).toBe(workflow);
     expect(readFileSync(agentPath, 'utf8')).toBe(agent);
     expect((await fixture.control('requests')).requests).toHaveLength(3);

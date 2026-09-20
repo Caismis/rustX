@@ -1,4 +1,4 @@
-import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary, UserInputBlock } from '../../../../protocol/app-server/v15';
+import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary, UserInputBlock } from '../../../../protocol/app-server/v16';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 
@@ -45,8 +45,8 @@ export class CommandSession {
   async models() {
     this.requireCurrent();
     const [current, catalog] = await Promise.all([
-      this.client.request({ method: 'settings/model', params: { target: this.target } }, 'model'),
-      this.client.request({ method: 'settings/models', params: { target: this.target } }, 'models'),
+      this.client.request({ method: 'session/model', params: { target: this.target } }, 'model'),
+      this.client.request({ method: 'session/models', params: { target: this.target } }, 'models'),
     ]);
     this.requireCurrent();
     if (this.client.getSnapshot().views[this.sessionId]?.modelMutation) await this.client.repairAgentModel(this.sessionId);

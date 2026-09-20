@@ -1,0 +1,96 @@
+import { expect, test } from '@playwright/test';
+import { AppServerHost } from '../../../tui/src/app-server/host';
+import { startDogfood } from './dogfood-server';
+import { routeWorkspaceHost } from './workspace-host';
+import { connectRemote, connectionAction, chooseWorkspace } from './shell-actions';
+import { wireProbe } from './wire-probe';
+
+test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorization and lost-write recovery', async ({ page }) => {
+ const f = await startDogfood();
+ const remote = await AppServerHost.connectRemote({ endpoint: f.endpoint, token: f.token });
+ const wire = await wireProbe(page);
+ try {
+   await routeWorkspaceHost(page, f); await page.goto('/'); await connectRemote(page, f.endpoint, f.token);
+   const catalog = await f.workspaceHost.host.listWorkspaces();
+   const [a, b] = catalog.workspaces;
+   const sessions = () => remote.client.call('session/list', { offset: 0, limit: 32 }, 'sessions');
+   expect((await sessions()).sessions).toEqual([]);
+   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+   const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+   await expect(settings.getByText(/Revision:/)).toBeVisible();
+   await settings.getByRole('button', { name: 'General', exact: true }).click();
+   await settings.getByLabel('max_connections', { exact: true }).fill('19');
+   await settings.getByRole('button', { name: 'Save App Server policy', exact: true }).click();
+   await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();
+   await settings.getByRole('button', { name: 'Server & source diagnostics', exact: true }).click();
+   await expect(settings.getByText('Saved process policy is active.')).toBeVisible();
+   const source = await remote.client.call('configuration/sourcesRead', { target: { kind: 'user' } }, 'source_settings');
+   expect(source.projection.process_bindings?.max_connections).toBe(19);
+   expect(source.projection.workspace).toBeNull();
+   await settings.getByLabel('Configuration owner').selectOption(a.id);
+   await settings.getByRole('button', { name: 'Tools', exact: true }).click();
+   await settings.getByLabel('read', { exact: true }).check();
+   await settings.getByLabel('Configuration owner').selectOption(b.id);
+   await expect(settings.getByLabel('read', { exact: true })).not.toBeChecked();
+   await settings.getByLabel('write', { exact: true }).check();
+   await settings.getByLabel('Configuration owner').selectOption(a.id);
+   await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
+   await expect(settings.getByLabel('write', { exact: true })).not.toBeChecked();
+   await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
+   await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();
+   const authored = await f.workspaceHost.host.configureWorkspace(a.id, f.endpoint, { kind: 'read' });
+   expect(authored.workspace?.authored?.agent?.tools?.builtin).toEqual(['read']);
+   expect((await sessions()).sessions).toEqual([]);
+   expect(wire.requests.some(row => ['session/create', 'session/attach', 'turn/start'].includes(row.method))).toBe(false);
+   await expect(f.workspaceHost.host.configureWorkspace('unregistered', f.endpoint, { kind: 'read' })).rejects.toThrow('Unknown');
+   await f.workspaceHost.host.removeWorkspace(a.id);
+   await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
+   await expect(settings.getByRole('alert')).toContainText('Unknown');
+   await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
+   await settings.getByLabel('Configuration owner').selectOption('');
+   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeEnabled();
+   const before = wire.requests.filter(row => row.method === 'configuration/sourceWrite').length;
+   wire.loseNext('configuration/sourceWrite');
+   await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
+   await expect.poll(wire.lost).toBe(1);
+   await connectionAction(page, 'Reconnect');
+   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeEnabled();
+   expect(wire.lost()).toBe(1);
+   expect(wire.requests.filter(row => row.method === 'configuration/sourceWrite')).toHaveLength(before + 1);
+   expect((await sessions()).sessions).toEqual([]);
+ } finally { await remote.shutdown(); const report = await f.stop(false); expect(report.requestCount).toBe(0); }
+});
+
+test('C13 C14 C15 C16 C17 real native Busy gate, candidate fence, live eligibility and lost adoption response', async ({ page }) => {
+ const f = await startDogfood(); const wire = await wireProbe(page);
+ const remote = await AppServerHost.connectRemote({ endpoint: f.endpoint, token: f.token });
+ try {
+   await routeWorkspaceHost(page, f); await page.goto('/'); await connectRemote(page, f.endpoint, f.token);
+   await chooseWorkspace(page, 'Workspace A'); await page.getByRole('button', { name: 'Create Session', exact: true }).click();
+   const message = page.getByRole('textbox', { name: 'Message', exact: true }); await expect(message).toBeEnabled();
+   const id = (await remote.client.call('session/list', { offset: 0, limit: 32 }, 'sessions')).sessions[0].id;
+   const selection = await remote.client.call('session/settings', { session_id: id }, 'settings');
+   await message.fill('Long action in A'); await message.press('Enter'); await f.gate('finish-a');
+   const source = await remote.client.call('configuration/sourcesRead', { target: { kind: 'user' } }, 'source_settings');
+   await remote.client.call('configuration/sourceWrite', { target: { kind: 'user' }, expected_revision: source.projection.user.revision,
+     mutation: { kind: 'config', mutation: { unit: 'instructions', authored: 'New instructions require explicit Session adoption.' } } }, 'source_settings');
+   const adopt = page.getByRole('button', { name: 'Adopt configuration', exact: true });
+   await expect(adopt).toBeVisible(); await expect(adopt).toBeDisabled();
+   await expect(page.getByText('Session work must settle before adoption.')).toBeVisible();
+   const app = (await remote.client.call('session/configuration', { session_id: id }, 'session_configuration')).application!;
+   expect(app.eligibility.status).toBe('busy'); const candidate = app.candidate!;
+   await expect(remote.client.call('session/adoptConfiguration', { session_id: id, candidate: candidate.identity, expected_binding: candidate.expected_binding }, 'configuration_application')).rejects.toThrow();
+   await expect(remote.client.call('session/adoptConfiguration', { session_id: id, candidate: { ...candidate.identity, attempt: String(BigInt(candidate.identity.attempt) + 1n) }, expected_binding: candidate.expected_binding }, 'configuration_application')).rejects.toThrow();
+   await f.release('finish-a'); await expect(adopt).toBeEnabled();
+   const history = await remote.readSession(id);
+   wire.loseNext('session/adoptConfiguration'); await adopt.click();
+   await expect.poll(wire.lost).toBe(1);
+   await connectionAction(page, 'Reconnect');
+   await expect(adopt).toHaveCount(0);
+   expect(wire.lost()).toBe(1); expect(wire.requests.filter(row => row.method === 'session/adoptConfiguration')).toHaveLength(1);
+   expect((await remote.client.call('session/configuration', { session_id: id }, 'session_configuration')).application?.candidate).toBeNull();
+   expect(await remote.client.call('session/settings', { session_id: id }, 'settings')).toEqual(selection);
+   expect(await remote.readSession(id)).toEqual(history);
+   expect((await f.control('requests')).requests).toHaveLength(1);
+ } finally { await remote.shutdown(); await page.close(); await f.stop(false); }
+});

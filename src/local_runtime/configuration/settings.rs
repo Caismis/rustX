@@ -4,7 +4,7 @@ use super::super::authoring::{
     ContextLayer, McpAuthoring, ModelLayer, RuntimeLayer, SubagentsLayer, TimeoutLayer,
     ToolDeadlineLayer,
 };
-use super::{SessionConfigInput, UserConfigManager};
+use super::UserConfigManager;
 use crate::model::authoring::{Model, Provider};
 use crate::model::catalog::{CredentialSource, CredentialSourceView};
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,55 @@ use std::{
 pub enum SourceScope {
     User,
     Workspace,
+}
+
+/// Native source authority. A Session is never an authoring target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SourceTarget {
+    User,
+    Workspace { directory: PathBuf },
+}
+
+impl SourceTarget {
+    #[must_use]
+    pub const fn scope(&self) -> SourceScope {
+        match self {
+            Self::User => SourceScope::User,
+            Self::Workspace { .. } => SourceScope::Workspace,
+        }
+    }
+
+    /// Revalidate the physical authority on every operation; do not follow a
+    /// replaced directory to a different source owner.
+    /// # Errors
+    /// Rejects relative, removed, redirected, or noncanonical Workspace paths.
+    pub fn validate(&self) -> Result<(), SettingsError> {
+        if let Self::Workspace { directory } = self
+            && (!directory.is_absolute()
+                || super::canonical_directory(directory).map_err(|_| SettingsError::Invalid)?
+                    != *directory)
+        {
+            return Err(SettingsError::Invalid);
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn workspace(&self) -> Option<&Path> {
+        match self {
+            Self::User => None,
+            Self::Workspace { directory } => Some(directory),
+        }
+    }
+
+    #[must_use]
+    pub fn application_scope(&self) -> String {
+        match self {
+            Self::User => "source:user".into(),
+            Self::Workspace { directory } => format!("source:workspace:{}", directory.display()),
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProviderView {
@@ -77,6 +126,8 @@ pub struct McpWrite {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SourceSettings {
+    pub target: SourceTarget,
+    pub process_policy_impacts: BTreeMap<String, ProcessPolicyImpact>,
     pub process_bindings: Option<super::super::app_server_policy::AppServerPolicy>,
     pub application: Option<super::application::ConfigurationApplication>,
     /// Native current-file approval resolution. None when prospective configuration is invalid.
@@ -87,53 +138,17 @@ pub struct SourceSettings {
     /// Exact CAS token for a currently absent resource identity.
     pub absent_resource_revision: String,
     pub resource_revisions: BTreeMap<PathBuf, String>,
-    pub loaded: Option<LoadedSources>,
+    /// Read-only native source resolution; never a Session adopted binding.
+    pub resolved: Option<RuntimeLayer<ProviderView>>,
+    pub provenance: BTreeMap<String, super::Origin>,
     pub user: SourceView<RuntimeLayer<ProviderView>>,
-    pub workspace: SourceView<RuntimeLayer<ProviderView>>,
+    pub workspace: Option<SourceView<RuntimeLayer<ProviderView>>>,
     pub user_resource_root: PathBuf,
-    pub workspace_resource_root: PathBuf,
+    pub workspace_resource_root: Option<PathBuf>,
     pub runtime_root: PathBuf,
     pub user_mcp: SourceView<BTreeMap<crate::runtime::identity::McpServerId, McpView>>,
-    pub workspace_mcp: SourceView<BTreeMap<crate::runtime::identity::McpServerId, McpView>>,
+    pub workspace_mcp: Option<SourceView<BTreeMap<crate::runtime::identity::McpServerId, McpView>>>,
     pub agents: Vec<AgentSourceView>,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct LoadedSources {
-    pub generation: crate::runtime::identity::RuntimeResourceRevision,
-    pub changed_sources: Vec<PathBuf>,
-}
-impl SourceSettings {
-    pub(crate) fn with_loaded(mut self, loaded: &EffectiveConfiguration) -> Self {
-        let mut current = BTreeMap::from([
-            (self.user.path.clone(), self.user.revision.clone()),
-            (self.workspace.path.clone(), self.workspace.revision.clone()),
-            (self.user_mcp.path.clone(), self.user_mcp.revision.clone()),
-            (
-                self.workspace_mcp.path.clone(),
-                self.workspace_mcp.revision.clone(),
-            ),
-        ]);
-        current.extend(self.resource_revisions.clone());
-        current.extend(
-            self.agents
-                .iter()
-                .map(|agent| (agent.source.path.clone(), agent.source.revision.clone())),
-        );
-        let paths: std::collections::BTreeSet<_> = current
-            .keys()
-            .chain(loaded.source_revisions.keys())
-            .cloned()
-            .collect();
-        let changed_sources: Vec<_> = paths
-            .into_iter()
-            .filter(|path| current.get(path) != loaded.source_revisions.get(path))
-            .collect();
-        self.loaded = Some(LoadedSources {
-            generation: loaded.generation,
-            changed_sources,
-        });
-        self
-    }
 }
 
 /// Redacted, immutable facts read at the runtime configuration publication lock.
@@ -265,20 +280,28 @@ pub enum ConfigMutation {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)] // Finite wire command; parsed and consumed once per CAS operation.
 pub enum SourceMutation {
+    /// Explicit repair of an unparseable configuration document. Never used
+    /// for ordinary semantic-unit editing and never accepts an invalid source.
+    RepairConfig {
+        document: String,
+    },
     Mcp {
-        scope: SourceScope,
         id: crate::runtime::identity::McpServerId,
         authored: Option<McpWrite>,
     },
     Config {
-        scope: SourceScope,
         mutation: ConfigMutation,
     },
     Agent {
-        scope: SourceScope,
         name: crate::runtime::subagent::SubagentName,
         authored: Option<super::super::config::AgentProfileDocument>,
     },
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessPolicyImpact {
+    Hot,
+    Restart,
 }
 #[derive(Debug)]
 pub enum SettingsError {
@@ -299,6 +322,25 @@ fn revision(bytes: Option<&[u8]>) -> String {
 }
 fn parse(bytes: Option<&[u8]>) -> Result<RuntimeLayer, SettingsError> {
     crate::toml_authoring::parse(bytes.unwrap_or(b"")).map_err(|_| SettingsError::Invalid)
+}
+fn source_resolution_diagnostic(document: &RuntimeLayer) -> Option<String> {
+    let validate = || -> Result<(), String> {
+        let config = document.clone().resolve()?;
+        let catalog = crate::model::catalog::ModelCatalog::from_document(
+            crate::model::authoring::Catalog {
+                schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
+                providers: document.providers.clone().unwrap_or_default(),
+                models: document.models.clone().unwrap_or_default(),
+            }
+            .into(),
+        )
+        .map_err(|error| error.to_string())?;
+        catalog
+            .model(&config.initial_model().model)
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    };
+    validate().err()
 }
 fn view(path: PathBuf, bytes: Option<&[u8]>) -> SourceView<RuntimeLayer<ProviderView>> {
     let parsed = parse(bytes);
@@ -610,29 +652,199 @@ fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
         .map_err(|_| SettingsError::Invalid)
 }
 impl UserConfigManager {
+    #[allow(clippy::too_many_lines)] // Finite inert resource-family projections; no preparation or scheduling.
+    fn authoring_inventory(
+        &self,
+        target: &SourceTarget,
+    ) -> crate::runtime::capability_inspection::CapabilityInspection {
+        use crate::runtime::capability_inspection::{
+            CapabilityInspection, ResourceDefinition, ResourceDiagnostic, ResourceFamily,
+        };
+        use crate::runtime::resources::ResourceLocation;
+        let user = self.resource_root(&SourceTarget::User);
+        let workspace = target.workspace();
+        let mut inventory = CapabilityInspection::default();
+        let mcp = super::super::mcp_resources::load(&user, workspace);
+        inventory
+            .definitions
+            .extend(
+                mcp.locations
+                    .iter()
+                    .map(|(id, location)| ResourceDefinition {
+                        family: ResourceFamily::Mcp,
+                        name: id.to_string(),
+                        location: location.clone(),
+                        valid: mcp.definitions.get(id).is_some_and(Result::is_ok),
+                    }),
+            );
+        inventory.resource_diagnostics.extend(
+            mcp.invalid_scopes
+                .iter()
+                .map(ResourceDiagnostic::from_error),
+        );
+        match super::super::agent_resources::load_authorized(workspace, &user.join("agents")) {
+            Ok((catalog, sources)) => {
+                inventory
+                    .definitions
+                    .extend(sources.iter().map(|(name, source)| ResourceDefinition {
+                        family: ResourceFamily::Agent,
+                        name: name.to_string(),
+                        location: ResourceLocation {
+                            scope: if source.layer == "user" {
+                                SourceScope::User
+                            } else {
+                                SourceScope::Workspace
+                            },
+                            path: source.selected.clone(),
+                            shadowed: source.overridden.clone(),
+                        },
+                        valid: !catalog.invalid().contains_key(name),
+                    }));
+                inventory.resource_diagnostics.extend(
+                    catalog
+                        .invalid()
+                        .values()
+                        .chain(catalog.discovery_diagnostics.iter())
+                        .map(ResourceDiagnostic::from_error),
+                );
+            }
+            Err(error) => inventory
+                .resource_diagnostics
+                .push(ResourceDiagnostic::from_error(&error)),
+        }
+        match super::super::workflow_resources::load(workspace, &user) {
+            Ok(catalog) => {
+                inventory
+                    .definitions
+                    .extend(
+                        catalog
+                            .locations
+                            .iter()
+                            .map(|(id, location)| ResourceDefinition {
+                                family: ResourceFamily::Workflow,
+                                name: id.to_string(),
+                                location: location.clone(),
+                                valid: !catalog.invalid().contains_key(id),
+                            }),
+                    );
+                inventory.resource_diagnostics.extend(
+                    catalog
+                        .invalid()
+                        .values()
+                        .chain(catalog.discovery_diagnostics.iter())
+                        .map(ResourceDiagnostic::from_error),
+                );
+            }
+            Err(error) => inventory
+                .resource_diagnostics
+                .push(ResourceDiagnostic::from_error(&error)),
+        }
+        match super::super::managed_python_resources::discover(workspace, &user) {
+            Ok(catalog) => {
+                inventory
+                    .definitions
+                    .extend(
+                        catalog
+                            .locations
+                            .iter()
+                            .map(|(id, location)| ResourceDefinition {
+                                family: ResourceFamily::ManagedPython,
+                                name: id.to_string(),
+                                location: location.clone(),
+                                valid: catalog.packages().get(id).is_some_and(Result::is_ok),
+                            }),
+                    );
+                inventory.resource_diagnostics.extend(
+                    catalog
+                        .discovery_diagnostics
+                        .iter()
+                        .map(ResourceDiagnostic::from_error),
+                );
+            }
+            Err(error) => inventory
+                .resource_diagnostics
+                .push(ResourceDiagnostic::from_error(&error)),
+        }
+        let skills = if let Some(workspace) = workspace {
+            crate::tools::workspace::Workspace::new(workspace)
+                .ok()
+                .map(|workspace| {
+                    crate::skills::SkillDiscovery::with_config(
+                        &workspace,
+                        crate::skills::SkillDiscoveryConfig {
+                            automatic: crate::skills::automatic_skill_roots(
+                                Some(&self.sources.home_directory),
+                                workspace.root(),
+                            ),
+                        },
+                    )
+                    .discover()
+                })
+        } else {
+            Some(crate::skills::SkillDiscovery::user_root(user.join("skills")).discover())
+        };
+        if let Some(skills) = skills {
+            inventory.definitions.extend(
+                skills
+                    .provenance
+                    .iter()
+                    .map(|skill| (skill, true))
+                    .chain(skills.invalid.iter().map(|skill| (skill, false)))
+                    .map(|(skill, valid)| ResourceDefinition {
+                        family: ResourceFamily::Skill,
+                        name: skill.name.clone(),
+                        valid,
+                        location: ResourceLocation {
+                            scope: match skill.source {
+                                crate::skills::SkillSource::User => SourceScope::User,
+                                crate::skills::SkillSource::Workspace => SourceScope::Workspace,
+                            },
+                            path: skill.location.clone().into(),
+                            shadowed: skill
+                                .shadowed
+                                .first()
+                                .map(|lower| lower.location.clone().into()),
+                        },
+                    }),
+            );
+            inventory.skills = skills.provenance;
+            inventory.skill_diagnostics = skills.diagnostics;
+        }
+        inventory
+            .definitions
+            .sort_by(|a, b| (&a.family, &a.name).cmp(&(&b.family, &b.name)));
+        inventory
+    }
+
     #[must_use]
-    pub fn resource_root(&self, input: &SessionConfigInput, scope: SourceScope) -> PathBuf {
-        match scope {
-            SourceScope::User => self.sources.home_directory.join("rustx/.agents"),
-            SourceScope::Workspace => input.cwd.join(".agents"),
+    pub fn resource_root(&self, target: &SourceTarget) -> PathBuf {
+        match target {
+            SourceTarget::User => self.sources.home_directory.join("rustx/.agents"),
+            SourceTarget::Workspace { directory } => directory.join(".agents"),
         }
     }
-    fn config_path(&self, input: &SessionConfigInput, scope: SourceScope) -> PathBuf {
-        match scope {
-            SourceScope::User => self.sources.config_path.clone(),
-            SourceScope::Workspace => input.cwd.join("rustx.toml"),
+    fn config_path(&self, target: &SourceTarget) -> PathBuf {
+        match target {
+            SourceTarget::User => self.sources.config_path.clone(),
+            SourceTarget::Workspace { directory } => directory.join("rustx.toml"),
         }
     }
     /// Read redacted authored documents and exact byte revisions.
     /// # Errors
     /// Reports malformed documents, read failures, and resources changed during capture.
+    #[allow(clippy::too_many_lines)] // One captured-source transaction with final exact manifest validation.
     pub fn read_source_settings(
         &self,
-        input: &SessionConfigInput,
+        target: &SourceTarget,
     ) -> Result<SourceSettings, SettingsError> {
-        let user = self.config_path(input, SourceScope::User);
-        let workspace = self.config_path(input, SourceScope::Workspace);
-        let mut paths = vec![user.clone(), workspace.clone()];
+        target.validate()?;
+        let user = self.config_path(&SourceTarget::User);
+        let workspace = target
+            .workspace()
+            .map(|directory| directory.join("rustx.toml"));
+        let mut paths: Vec<_> = std::iter::once(user.clone())
+            .chain(workspace.clone())
+            .collect();
         paths.sort();
         paths.dedup();
         #[cfg(test)]
@@ -644,32 +856,77 @@ impl UserConfigManager {
             locks.push(super::super::settings::lock_document(path).map_err(|_| SettingsError::Io)?);
         }
         let user_bytes = read(&user)?;
-        let workspace_bytes = read(&workspace)?;
-        let resource_revisions = [SourceScope::User, SourceScope::Workspace]
-            .into_iter()
-            .map(|scope| {
-                let root = self.resource_root(input, scope);
-                let revision = super::super::resource_directory::revision(&root);
-                (root, revision)
+        let workspace_bytes = workspace
+            .as_ref()
+            .map(|path| read(path))
+            .transpose()?
+            .flatten();
+        let roots: Vec<_> =
+            std::iter::once((SourceScope::User, self.resource_root(&SourceTarget::User)))
+                .chain(
+                    target
+                        .workspace()
+                        .map(|directory| (SourceScope::Workspace, directory.join(".agents"))),
+                )
+                .collect();
+        let resource_revisions = roots
+            .iter()
+            .map(|(_, root)| {
+                let revision = super::super::resource_directory::revision(root);
+                (root.clone(), revision)
             })
             .collect();
-        let (prospective_resources, prospective_approval_mode, prospective_diagnostic) =
-            match self.resolve_session(input) {
-                Ok(prospective) => (
-                    Some(prospective.inspection),
-                    Some(prospective.config.approval_mode),
-                    None,
-                ),
-                Err(failure) => (
-                    None,
-                    None,
-                    Some(format!(
-                        "{}: {}",
-                        failure.diagnostic.path, failure.diagnostic.reason
-                    )),
-                ),
-            };
+        let mut provenance = BTreeMap::new();
+        let resolved = (|| {
+            let mut merged = RuntimeLayer::default();
+            let user_layer = parse(user_bytes.as_deref())?;
+            merged.overlay(
+                user_layer,
+                &super::Origin::User {
+                    document: user.clone(),
+                    base: user.parent().ok_or(SettingsError::Invalid)?.into(),
+                },
+                &mut provenance,
+            );
+            if let Some(path) = &workspace {
+                let layer =
+                    super::parse_layer(path, workspace_bytes.as_deref().unwrap_or(b""), true)
+                        .map_err(|_| SettingsError::Invalid)?;
+                merged.overlay(
+                    layer,
+                    &super::Origin::Workspace {
+                        document: path.clone(),
+                        base: path.parent().ok_or(SettingsError::Invalid)?.into(),
+                    },
+                    &mut provenance,
+                );
+            }
+            Ok::<_, SettingsError>(merged)
+        })();
+        let prospective_approval_mode = resolved
+            .as_ref()
+            .ok()
+            .and_then(|document| document.clone().resolve().ok())
+            .map(|config| config.approval_mode);
+        let prospective_diagnostic = match &resolved {
+            Err(_) => {
+                Some("Source cannot be resolved; repair the diagnosed authored document.".into())
+            }
+            Ok(document) => source_resolution_diagnostic(document),
+        };
+        let prospective_resources = Some(self.authoring_inventory(target));
         let result = SourceSettings {
+            target: target.clone(),
+            process_policy_impacts: [
+                ("max_resident_runtimes", ProcessPolicyImpact::Hot),
+                ("max_connections", ProcessPolicyImpact::Hot),
+                ("max_external_attachments", ProcessPolicyImpact::Hot),
+                ("idle_grace_ms", ProcessPolicyImpact::Hot),
+                ("shutdown_deadline_ms", ProcessPolicyImpact::Restart),
+            ]
+            .into_iter()
+            .map(|(key, impact)| (key.into(), impact))
+            .collect(),
             process_bindings: None,
             application: None,
             prospective_approval_mode,
@@ -677,35 +934,40 @@ impl UserConfigManager {
             prospective_diagnostic,
             absent_resource_revision: revision(None),
             resource_revisions,
-            loaded: None,
-            user_mcp: mcp_view(
-                self.resource_root(input, SourceScope::User)
-                    .join("mcp.toml"),
-            )?,
-            workspace_mcp: mcp_view(
-                self.resource_root(input, SourceScope::Workspace)
-                    .join("mcp.toml"),
-            )?,
-            agents: agent_views(
-                &self.resource_root(input, SourceScope::User),
-                SourceScope::User,
-            )?
-            .into_iter()
-            .chain(agent_views(
-                &self.resource_root(input, SourceScope::Workspace),
-                SourceScope::Workspace,
-            )?)
-            .collect(),
+            resolved: resolved
+                .ok()
+                .map(|document| document.map_providers(ProviderView::from)),
+            provenance,
+            user_mcp: mcp_view(self.resource_root(&SourceTarget::User).join("mcp.toml"))?,
+            workspace_mcp: target
+                .workspace()
+                .map(|directory| mcp_view(directory.join(".agents/mcp.toml")))
+                .transpose()?,
+            agents: agent_views(&self.resource_root(&SourceTarget::User), SourceScope::User)?
+                .into_iter()
+                .chain(
+                    target
+                        .workspace()
+                        .map(|directory| {
+                            agent_views(&directory.join(".agents"), SourceScope::Workspace)
+                        })
+                        .transpose()?
+                        .unwrap_or_default(),
+                )
+                .collect(),
             user: view(user.clone(), user_bytes.as_deref()),
-            workspace: view(workspace.clone(), workspace_bytes.as_deref()),
-            user_resource_root: self.resource_root(input, SourceScope::User),
-            workspace_resource_root: self.resource_root(input, SourceScope::Workspace),
+            workspace: workspace
+                .as_ref()
+                .map(|path| view(path.clone(), workspace_bytes.as_deref())),
+            user_resource_root: self.resource_root(&SourceTarget::User),
+            workspace_resource_root: target
+                .workspace()
+                .map(|directory| directory.join(".agents")),
             runtime_root: self.sources.runtime_root.clone(),
         };
-        for (scope, path, captured) in [
-            (SourceScope::User, user, user_bytes),
-            (SourceScope::Workspace, workspace, workspace_bytes),
-        ] {
+        for (scope, path, captured) in std::iter::once((SourceScope::User, user, user_bytes))
+            .chain(workspace.map(|path| (SourceScope::Workspace, path, workspace_bytes)))
+        {
             let expected = revision(captured.as_deref());
             let actual = revision(read(&path)?.as_deref());
             if actual != expected {
@@ -716,8 +978,7 @@ impl UserConfigManager {
                 });
             }
         }
-        for scope in [SourceScope::User, SourceScope::Workspace] {
-            let root = self.resource_root(input, scope);
+        for (scope, root) in roots {
             let expected = &result.resource_revisions[&root];
             let actual = super::super::resource_directory::revision(&root);
             if actual != *expected {
@@ -736,21 +997,21 @@ impl UserConfigManager {
     #[allow(clippy::too_many_lines)] // One revision-fenced source commit transaction.
     pub fn write_source_settings(
         &self,
-        input: &SessionConfigInput,
+        target: &SourceTarget,
         expected: &str,
         mutation: SourceMutation,
     ) -> Result<SourceSettings, SettingsError> {
-        let (scope, path) = match &mutation {
-            SourceMutation::Mcp { scope, .. } => {
-                (*scope, self.resource_root(input, *scope).join("mcp.toml"))
+        target.validate()?;
+        let scope = target.scope();
+        let path = match &mutation {
+            SourceMutation::Mcp { .. } => self.resource_root(target).join("mcp.toml"),
+            SourceMutation::Config { .. } | SourceMutation::RepairConfig { .. } => {
+                self.config_path(target)
             }
-            SourceMutation::Config { scope, .. } => (*scope, self.config_path(input, *scope)),
-            SourceMutation::Agent { scope, name, .. } => (
-                *scope,
-                self.resource_root(input, *scope)
-                    .join("agents")
-                    .join(format!("{name}.toml")),
-            ),
+            SourceMutation::Agent { name, .. } => self
+                .resource_root(target)
+                .join("agents")
+                .join(format!("{name}.toml")),
         };
         std::fs::create_dir_all(path.parent().ok_or(SettingsError::Io)?)
             .map_err(|_| SettingsError::Io)?;
@@ -767,6 +1028,18 @@ impl UserConfigManager {
                 });
             }
             let candidate = match mutation {
+                SourceMutation::RepairConfig { document } => {
+                    if parse(original.as_deref()).is_ok() {
+                        return Err(SettingsError::Invalid);
+                    }
+                    let repaired = super::parse_layer(
+                        &path,
+                        document.as_bytes(),
+                        scope == SourceScope::Workspace,
+                    )
+                    .map_err(|_| SettingsError::Invalid)?;
+                    Some(encode(repaired)?)
+                }
                 SourceMutation::Mcp { id, authored, .. } => {
                     Some(mcp_candidate(original.as_deref(), id, authored)?)
                 }
@@ -842,7 +1115,7 @@ impl UserConfigManager {
                 .and_then(|dir| dir.sync_all())
                 .map_err(|_| SettingsError::Committed)?;
         }
-        self.read_source_settings(input)
+        self.read_source_settings(target)
             .map_err(|_| SettingsError::Committed)
     }
 }

@@ -296,7 +296,7 @@ keeping the capability panel open; consumption and panel dismissal are separate.
 
 | Command | Typed integration |
 | --- | --- |
-| `/model` | `settings/model` + `settings/models`, then `settings/setModel` with an exact catalog model reference and native defaults |
+| `/model` | `session/model` + `session/models`, then `session/setModel` with an exact catalog model reference and native defaults |
 | Approval mode control | Native Workspace Approval source-unit CAS; desired/published/running distinction and automatic native application |
 | `/compact` | Native `context/compact`, available with no active Attempt; pending inbound alone is permitted by native maintenance |
 | `/new` | `session/create` using native Session cwd; attach/open only after success |
@@ -345,10 +345,10 @@ one implementation. The active empty editor exposes Stop; a ready message replac
 Queue submission (Ctrl/Cmd+Enter selects Steer). Stop acknowledgement only records a cancellation request.
 The native attempt phase alone supplies terminal presentation; disconnect is inert.
 
-`AgentControls` reads exact `settings/models` and `settings/model` data. Both the
+`AgentControls` reads exact `session/models` and `session/model` data. Both the
 composer menu and `/model` popup advertise only returned model references and
 reasoning profile IDs. The native default is represented by omitting the profile.
-`settings/setModel` is the single dedicated Session model operation. It prepares a
+`session/setModel` is the single dedicated Session model operation. It prepares a
 complete binding and commits through the idle/admission gate and model baseline
 fence. Acknowledged or uncertain model changes require authoritative reads before
 dependent Send/lineage actions. Catalog caches and menus are discarded on attachment

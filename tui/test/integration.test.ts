@@ -33,6 +33,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 
+import { CommandDispatcher } from "../src/commands/dispatcher.ts";
 import { parseArguments } from "../src/cli.ts";
 import { prepareStartup } from "../src/startup.ts";
 
@@ -213,6 +214,25 @@ describe("local self-hosted mode: one owned App Server child over stdio", { skip
   after(async () => {
     server?.cleanup();
     await provider?.finish();
+  });
+
+  it("C01 C02 C12 C20 real TUI Settings author without Sessions or runtime allocation", { timeout: 90_000 }, async () => {
+    const isolated = ServerFixture.create("rustx-settings-zero-", provider.url("/v1"));
+    const host = await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: isolated.runtimeRoot }, env: isolated.env });
+    try {
+      const dispatcher = new CommandDispatcher({ host, session: undefined, diagnostics: () => { throw new Error("not requested"); }, sessionSettings: isolated.settings("authoring") });
+      assert.equal((await host.client.call("session/list", { offset: 0, limit: 32 }, "sessions")).sessions.length, 0);
+      const read = await dispatcher.submit("/settings");
+      assert.equal(read.kind, "inspect");
+      const workspace = isolated.workspace("explicit-workspace");
+      const saved = await dispatcher.submit('/settings workspace "' + workspace + '" approval full_access');
+      assert.equal(saved.kind, "inspect");
+      const source = await host.client.call("configuration/sourcesRead", { target: { kind: "workspace", directory: workspace } }, "source_settings");
+      assert.equal(source.projection.workspace?.authored?.approval_mode, "full_access");
+      assert.equal((await host.client.call("session/list", { offset: 0, limit: 32 }, "sessions")).sessions.length, 0);
+      assert.equal(host.attached.length, 0);
+      for (const command of ["/permissions", "/configuration"]) assert.equal((await dispatcher.submit(command)).kind, "transient");
+    } finally { await host.shutdown(); isolated.cleanup(); }
   });
 
   it("keeps one child across every Session, and never replaces it", { timeout: 90_000 }, async () => {

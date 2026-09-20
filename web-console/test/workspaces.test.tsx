@@ -47,7 +47,7 @@ it('cold grouping and Workspace selection issue no attach, cancel, unload, setti
   expect(methods()).not.toContain('session/unload'); expect(methods()).not.toContain('turn/cancel');
 });
 it('Workspace settings have no trust gate; names and unregister stay Host-owned', async () => {
-  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
+  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
   const host = await mount();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace A' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
@@ -175,12 +175,12 @@ it('late native rename completion cannot replace a newer metadata query', async 
 
 it('registered authorization is checked from current native settings before exactly one cold attach', async () => {
   const host = await mount();
-  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
+  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
   vi.mocked(host.classifyLocations).mockClear();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(host.classifyLocations).toHaveBeenCalledWith(['/workspace/A'], endpoint);
   const sequence = methods();
-  expect(sequence.indexOf('settings/read')).toBeLessThan(sequence.indexOf('session/attach'));
+  expect(sequence.indexOf('session/settings')).toBeLessThan(sequence.indexOf('session/attach'));
   expect(sequence.filter(method => method === 'session/attach')).toHaveLength(1);
   expect(server.coldLoads.get('A')).toBe(1);
   expect(screen.getByRole('button', { name: 'Select Workspace Workspace A' }).getAttribute('aria-current')).toBe('page');
@@ -197,7 +197,7 @@ it('unregister retains authorization and permits ungrouped cold open without rec
 });
 it('stale authorized summary cannot authorize current outside cwd', async () => {
   const host = await mount();
-  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
+  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(screen.getByRole('alert').textContent).toContain('not authorized');
   expect(screen.getByRole('button', { name: 'Open Session A' })).toBeTruthy();
@@ -208,7 +208,7 @@ it('stale authorized summary cannot authorize current outside cwd', async () => 
 it('unauthorized saved views cannot cold attach on initial restoration or reconnect', async () => {
   const host = hostFixture();
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
-  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
+  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={host} />); await server.connect(); });
   await act(async () => { server.client.disconnect(); await server.connect(); });
   expect(host.classifyLocations).toHaveBeenCalledWith(['/outside/roots'], endpoint);
@@ -219,7 +219,7 @@ it('toolbar cold resume and sidebar Fork share admission and refuse an unauthori
   await mount();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   await act(async () => server.client.release('A'));
-  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
+  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
   const baseline = methods().filter(method => method === 'session/attach').length;
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' })));
@@ -250,7 +250,7 @@ it('Sidebar selection synchronizes Workspace context and /new resolves A after v
     expect(request.params.settings.cwd).toBe('/workspace/A'); server.snapshots.set('child', snapshot('child'));
     return { type: 'session_transition', session: { id: 'child', active_node: 'node-child', active_conversation_id: 'conversation-child', node_count: 1, created_at: '0', updated_at: '0' } };
   });
-  server.handlers.set('settings/read', request => ({ type: 'settings', revision: '0', settings: { cwd: request.method === 'settings/read' && request.params.session_id === 'B' ? '/workspace/B' : '/workspace/A' } }));
+  server.handlers.set('session/settings', request => ({ type: 'settings', revision: '0', settings: { cwd: request.method === 'session/settings' && request.params.session_id === 'B' ? '/workspace/B' : '/workspace/A' } }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
   expect(screen.getByRole('button', { name: 'Select Workspace Workspace B' }).getAttribute('aria-current')).toBe('page');
@@ -288,7 +288,7 @@ it('an already attached source cannot Fork a child after current cwd authorizati
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Fork session' })));
   const popup = screen.getByRole('dialog', { name: '/fork' });
-  server.handlers.set('settings/read', () => ({ type: 'settings', revision: '1', settings: { cwd: '/outside/roots' } }));
+  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '1', settings: { cwd: '/outside/roots' } }));
   await act(async () => fireEvent.click(within(popup).getByRole('option', { name: /Native Fork boundary/ })));
   expect(methods()).not.toContain('session/fork');
   expect(server.loaded.has('A')).toBe(true); // No hot revocation/unload.

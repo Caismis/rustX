@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v15';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v16';
 import { interactionKey, OutcomeUncertain } from '../src/client/app-server';
 import { conversation } from '../src/bindings/projection';
 import { capabilities, endpoint, interaction, Server, snapshot, TOKEN } from './fixture';
@@ -12,7 +12,7 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 15 } });
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 16 } });
     expect(JSON.stringify(s.client.log.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
@@ -24,10 +24,10 @@ describe('native App Server connection', () => {
     await expect(t.connect()).rejects.toThrow('Incompatible');
   });
   it('correlates pipelined responses in reverse order', async () => {
-    const s = server(); await s.connect(); s.held.add('settings/read');
-    const a = s.client.request({ method: 'settings/read', params: { session_id: 'A' } }, 'settings');
-    const b = s.client.request({ method: 'settings/read', params: { session_id: 'B' } }, 'settings');
-    const requests = s.requests.filter(item => item.request.method === 'settings/read');
+    const s = server(); await s.connect(); s.held.add('session/settings');
+    const a = s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings');
+    const b = s.client.request({ method: 'session/settings', params: { session_id: 'B' } }, 'settings');
+    const requests = s.requests.filter(item => item.request.method === 'session/settings');
     s.reply(requests[1].request); s.reply(requests[0].request);
     expect((await a).settings.cwd).toBe('/workspace/A'); expect((await b).settings.cwd).toBe('/workspace/B');
   });
@@ -143,8 +143,8 @@ describe('native App Server connection', () => {
     expect(s.coldLoads.get('A')).toBe(1);
   });
   it('does not deliver a response continuation after its connection has been replaced', async () => {
-    const s = server(); await s.connect(); s.held.add('settings/read');
-    const read = s.client.request({ method: 'settings/read', params: { session_id: 'A' } }, 'settings');
+    const s = server(); await s.connect(); s.held.add('session/settings');
+    const read = s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings');
     const rejected = expect(read).rejects.toThrow('Obsolete connection');
     s.reply(s.requests.at(-1)!.request); s.client.disconnect(); await rejected;
     expect(s.client.getSnapshot().uncertain).toEqual([]);
@@ -161,8 +161,8 @@ describe('native App Server connection', () => {
   });
   it('discards a capacity-queued interaction without marking an unsent response uncertain', async () => {
     const s = server(); s.snapshots.get('A')!.pending_interactions = [interaction('approval')]; await s.attached('A');
-    s.held.add('settings/read');
-    const reads = Array.from({ length: 8 }, () => s.client.request({ method: 'settings/read', params: { session_id: 'A' } }, 'settings').catch(() => {}));
+    s.held.add('session/settings');
+    const reads = Array.from({ length: 8 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings').catch(() => {}));
     const response = s.client.answer('A', interaction('approval').interaction, { type: 'approval', decision: { type: 'allow' } });
     const rejected = expect(response).rejects.not.toBeInstanceOf(OutcomeUncertain);
     expect(s.requests.filter(item => item.request.method === 'interaction/respond')).toEqual([]);
@@ -352,7 +352,7 @@ it.each(['preview', 'blocked', 'stale', 'not_found'] as const)('recovery settles
 it('T12 native configuration notifications reject stale versions independently per Session', async () => {
   const s = server(); await s.attached('A', 'B');
   const desired = { input_revision: 'input', attempt: '9007199254740993' };
-  const application = { scope: 'A', version: '9007199254740993', desired, units: { execution_policy: { status: 'applied' as const } }, candidate: null };
+  const application = { eligibility: { status: 'unavailable' as const }, scope: 'A', version: '9007199254740993', desired, units: { execution_policy: { status: 'applied' as const } }, candidate: null };
   s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application } });
   s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: { ...application, version: '9007199254740992', units: { execution_policy: { status: 'preparing' } } } } });
   s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: { ...application, scope: 'B', version: '2' } } });

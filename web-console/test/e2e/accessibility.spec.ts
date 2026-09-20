@@ -59,10 +59,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await tabTo(page.getByRole('button', { name: 'Settings', exact: true })); await page.keyboard.press('Enter');
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
-    await tabTo(settings.getByRole('tab', { name: 'Effective', exact: true }));
-    await page.keyboard.press('ArrowRight');
-    await expect(settings.getByRole('tab', { name: 'User', exact: true })).toBeFocused();
-    await page.keyboard.press('Enter');
+    await tabTo(settings.getByLabel('Configuration owner')); await expect(settings.getByLabel('Configuration owner')).toBeFocused();
     await tabTo(settings.getByRole('button', { name: 'Providers & Models', exact: true })); await page.keyboard.press('Enter');
     await tabTo(settings.getByRole('button', { name: 'Edit Provider fixture', exact: true })); await page.keyboard.press('Enter');
     const endpoint = settings.getByLabel('Endpoint', { exact: true });

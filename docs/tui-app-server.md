@@ -1,15 +1,20 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol 12. It does not parse
+The TUI is a projection/control client of App Server protocol 16. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v15.ts`](../protocol/app-server/v15.ts).
+[`protocol/app-server/v16.ts`](../protocol/app-server/v16.ts).
 
-`/settings` renders native effective/source/provenance facts. `/configuration`
-inspects scope-versioned application state; rescan and retry use native
-`configuration/reconcile`, and adoption sends the inspected candidate identity
-and expected binding to `session/adoptConfiguration`. `/model` is the dedicated
-Session model operation. Ordinary Save applies automatically through the native
-coordinator. Clients do not classify cache impact or resource closures.
+`/settings` reads User configuration even with zero Sessions. `/settings workspace
+"/canonical/path"` selects a native Workspace source; `rescan` and `approval
+policy|full_access|inherit` operate on that explicit target with source CAS.
+`/session settings` inspects Session selections, binding, pending candidate and
+native eligibility. `/session adopt` sends only the last inspected candidate and
+expected binding to `session/adoptConfiguration`. `/model` uses `session/setModel`;
+it never writes a configuration source. `/debug` owns low-level diagnostics.
+The obsolete `/configuration` and `/permissions` commands have no aliases.
+Ordinary Save transfers work to the existing native coordinator. Clients do not
+classify cache impact or resource closures, retry refused adoption, or replay an
+uncertain mutation.
 
 A spawned App Server receives process-only `--config` and `--runtime-root` bindings.
 User resources remain `~/rustx/.agents`. Remote connections use the server's bindings,
@@ -19,7 +24,7 @@ it does not replay Save, adoption or other prior side effects.
 See [configuration](configuration.md) and [development](../DEVELOPMENT.md) for launch
 commands, and [the protocol](app-server-protocol.md) for transport/attachment semantics.
 
-## Durable Session lifecycle (v15)
+## Durable Session lifecycle (v16)
 
 `/resume` opens a durable Session and implicitly ensures a compatible runtime.
 Closing a view only detaches. No manual unload command or ordinary residency
@@ -41,4 +46,4 @@ generations fence late reads and paging. Reconnect/resync remembers only the
 selected SubagentId and reconstructs through `subagent/transcript` on the current
 parent AttachmentTarget, displaying explicit unavailable history when needed.
 No child Session/Composer or HITL owner is created. See the
-[protocol contract](app-server-protocol.md#read-only-native-subagent-conversations-v15).
+[protocol contract](app-server-protocol.md#read-only-native-subagent-conversations-v16).

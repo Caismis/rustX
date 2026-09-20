@@ -275,6 +275,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                         },
                     units: std::collections::BTreeMap::default(),
                     candidate: None,
+                    eligibility: crate::local_runtime::configuration::application::AdoptionEligibility::Unavailable,
                 },
         },
         MethodResult::InboundAccepted {
@@ -603,9 +604,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v15.schema.json", "v15.ts"]);
+        assert_eq!(generations, ["v16.schema.json", "v16.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v15.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v16.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

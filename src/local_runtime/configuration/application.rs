@@ -20,6 +20,17 @@ pub enum AdoptionError {
     Failed { diagnostic: String },
 }
 
+/// Advisory only; adoption always revalidates the native admission gate.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum AdoptionEligibility {
+    Eligible,
+    Busy,
+    Unavailable,
+}
+
 pub(crate) struct PreparedConfiguration {
     pub(crate) selection_only: bool,
     pub(crate) owner: Arc<()>,
@@ -84,6 +95,7 @@ pub struct ConfigurationApplication {
     pub desired: ApplicationIdentity,
     pub units: BTreeMap<ApplyUnit, UnitApplication>,
     pub candidate: Option<AvailableConfiguration>,
+    pub eligibility: AdoptionEligibility,
 }
 
 #[derive(
@@ -129,6 +141,8 @@ pub(crate) struct ApplicationState {
     scopes: BTreeMap<String, ConfigurationApplication>,
     pending: BTreeMap<String, ApplicationIdentity>,
     inputs: BTreeMap<String, Result<CapturedApplication, String>>,
+    source_inputs:
+        BTreeMap<String, Result<super::super::app_server_policy::AppServerPolicy, String>>,
     worker_running: bool,
     ready: BTreeMap<String, ReadyConfiguration>,
 }
@@ -384,6 +398,7 @@ impl ApplicationState {
                 version: self.version,
                 desired: identity.clone(),
                 candidate: None,
+                eligibility: AdoptionEligibility::Unavailable,
                 units: BTreeMap::from([
                     (ApplyUnit::ExecutionPolicy, UnitApplication::Preparing),
                     (ApplyUnit::Capabilities, UnitApplication::Preparing),
@@ -434,6 +449,38 @@ impl ApplicationState {
         let identity = self.desire(scope.clone(), revision);
         self.inputs.insert(scope, input);
         identity
+    }
+
+    pub(crate) fn capture_source(
+        &mut self,
+        scope: String,
+        revision: Option<String>,
+        process: Result<super::super::app_server_policy::AppServerPolicy, String>,
+    ) {
+        if self
+            .scopes
+            .get(&scope)
+            .is_some_and(|view| view.desired.input_revision == revision)
+            && self.source_inputs.get(&scope) == Some(&process)
+            && self.scopes.get(&scope).is_some_and(|view| {
+                !view
+                    .units
+                    .values()
+                    .any(|unit| matches!(unit, UnitApplication::Failed { .. }))
+            })
+        {
+            return;
+        }
+        self.desire(scope.clone(), revision);
+        self.scopes
+            .get_mut(&scope)
+            .expect("registered source")
+            .units
+            .retain(|unit, _| *unit == ApplyUnit::ProcessBindings);
+        if let Ok(policy) = &process {
+            self.desired_process = Some(policy.clone());
+        }
+        self.source_inputs.insert(scope, process);
     }
 
     pub(crate) fn record_source(

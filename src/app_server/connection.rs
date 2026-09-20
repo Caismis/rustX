@@ -573,12 +573,12 @@ impl AppServerConnection {
                     .await
                     .map_err(|_| domain(ErrorData::OperationFailed))?
             }
-            Method::ConfigurationReconcile { session_id } => {
+            Method::ConfigurationReconcile { target } => {
                 Ok(MethodResult::ConfigurationApplication {
                     application: self
                         .host
                         .manager()
-                        .reconcile_configuration(&session_id)
+                        .reconcile_configuration(&target)
                         .await
                         .map_err(source_settings_error)?,
                 })
@@ -594,34 +594,39 @@ impl AppServerConnection {
                     .adopt_configuration(&session_id, &candidate, expected_binding)
                     .map_err(|rejection| domain(ErrorData::ConfigurationAdoption { rejection }))?,
             }),
-            Method::SourcesRead { session_id } => {
-                let (projection, session_revision, session_selection) = self
+            Method::SessionConfiguration { session_id } => {
+                self.sessions
+                    .read_settings(&session_id)
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::SessionConfiguration {
+                    application: self.host.manager().configuration_application(&session_id),
+                })
+            }
+            Method::SourcesRead { target } => {
+                let projection = self
                     .host
                     .manager()
-                    .source_settings(&session_id, None)
+                    .source_settings(&target, None)
                     .await
                     .map_err(source_settings_error)?;
                 Ok(MethodResult::SourceSettings {
                     projection: Box::new(projection),
-                    session_revision,
-                    session_selection,
                 })
             }
             Method::SourcesWrite {
-                session_id,
+                target,
                 expected_revision,
                 mutation,
             } => {
-                let (projection, session_revision, session_selection) = self
+                let projection = self
                     .host
                     .manager()
-                    .source_settings(&session_id, Some((expected_revision, mutation)))
+                    .source_settings(&target, Some((expected_revision, mutation)))
                     .await
                     .map_err(source_settings_error)?;
                 Ok(MethodResult::SourceSettings {
                     projection: Box::new(projection),
-                    session_revision,
-                    session_selection,
                 })
             }
             Method::SettingsRead { session_id } => {
@@ -710,7 +715,21 @@ impl AppServerConnection {
         let _reader = self.reader.lock().await;
         let mut configuration_changes = self.host.manager().configuration_changes();
         loop {
-            for application in self.host.manager().configuration_applications() {
+            for application in self
+                .host
+                .manager()
+                .configuration_applications()
+                .into_iter()
+                .map(|application| {
+                    // Session advisory eligibility is a live native fact. Enrich a
+                    // notification only from an already resident runtime; parsing a
+                    // scope or reading a notification never loads a cold Session.
+                    crate::runtime::identity::SessionId::parse(&application.scope)
+                        .ok()
+                        .and_then(|session| self.host.manager().configuration_application(&session))
+                        .unwrap_or(application)
+                })
+            {
                 let mut versions = self
                     .configuration_versions
                     .lock()
@@ -1220,9 +1239,6 @@ fn source_settings_error(
     error: crate::local_runtime::session_runtime_manager::SourceSettingsError,
 ) -> RpcError {
     match error {
-        crate::local_runtime::session_runtime_manager::SourceSettingsError::Session(error) => {
-            session_error(error)
-        }
         crate::local_runtime::session_runtime_manager::SourceSettingsError::Source(error) => {
             source_error(error)
         }

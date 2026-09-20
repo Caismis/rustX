@@ -4388,6 +4388,27 @@ impl ConversationRuntime {
         true
     }
 
+    pub(crate) fn configuration_adoption_eligibility(
+        &self,
+    ) -> crate::local_runtime::configuration::application::AdoptionEligibility {
+        use crate::local_runtime::configuration::application::AdoptionEligibility;
+        let state = self.inner.lock_state();
+        if !self.inner.lifecycle.is_running() {
+            AdoptionEligibility::Unavailable
+        } else if self.inner.idle_epoch_locked(&state).is_err()
+            || self.inner.tool_runtime.background().configuration_busy()
+            || self
+                .inner
+                .subagents
+                .as_ref()
+                .is_some_and(crate::runtime::subagent::SubagentRegistry::configuration_busy)
+        {
+            AdoptionEligibility::Busy
+        } else {
+            AdoptionEligibility::Eligible
+        }
+    }
+
     /// Final commit primitive used by the native configuration owner. It holds
     /// the source fence around this call; this gate is also Attempt admission's
     /// gate. A refusal leaves the ready candidate available to inspect/retry.

@@ -1,22 +1,22 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v15';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v16';
 import { AgentControls } from '../src/app/agent/AgentControls';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { Interactions } from '../src/app/agent/Interactions';
 import { Tool } from '../src/app/agent/Tool';
 import { RpcFailure } from '../src/client/app-server';
 import { toolCard } from '../src/bindings/tools';
-import { cfg3Effective, cfg3Source } from './cfg3-data';
+import { cfg3Effective } from './cfg3-data';
 import { Server, snapshot, interaction } from './fixture';
 let server: Server;
 beforeEach(() => { server = new Server(); });
 afterEach(() => { cleanup(); server.client.disconnect(); });
 const count = (method: string) => server.requests.filter(row => row.request.method === method).length;
-function Control({ kind = 'model' }: { kind?: 'model' | 'permission' }) {
+function Control() {
  const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
- return <AgentControls client={server.client} view={state.views.A} kind={kind}/>;
+ return <AgentControls client={server.client} view={state.views.A}/>;
 }
 const running = (): RuntimeClientSnapshot => ({ ...snapshot(), attempt: { attempt_id: 'native-attempt', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } } });
 function modelFixture() {
@@ -25,10 +25,10 @@ function modelFixture() {
  model.effective.reasoningProfile = 'deliberate';
  const catalog: CatalogModelView[] = ['exact/model', 'other'].map(id => ({ model: id, protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: model.effective.declaredCapabilities, effectiveCapabilities: model.effective.capabilities, credentialSource: { type: 'literal' }, reasoningProfiles: id === 'other' ? [] : [{ id: 'deliberate', enabled: true }, { id: 'brief', enabled: true }], defaultReasoningProfile: id === 'other' ? null : 'deliberate' }));
  server.snapshots.set('A', { ...snapshot(), model });
- server.handlers.set('settings/models', () => ({ type: 'models', catalog: { models: catalog } }));
- server.handlers.set('settings/model', () => ({ type: 'model', model: server.snapshots.get('A')!.model! }));
- server.handlers.set('settings/setModel', request => {
-   if (request.method !== 'settings/setModel') throw new Error('wrong request');
+ server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: catalog } }));
+ server.handlers.set('session/model', () => ({ type: 'model', model: server.snapshots.get('A')!.model! }));
+ server.handlers.set('session/setModel', request => {
+   if (request.method !== 'session/setModel') throw new Error('wrong request');
    const next = structuredClone(server.snapshots.get('A')!);
    next.model!.configured = request.params.config;
    next.model!.effective.model = request.params.config.model;
@@ -44,17 +44,17 @@ async function openModels() {
 }
 it('model/profile menu advertises only exact native values and acknowledgement alone never changes selection', async () => {
  modelFixture(); await server.attached('A'); render(<Control/>); await openModels();
- expect(count('settings/models')).toBe(1); expect(count('settings/model')).toBe(1);
+ expect(count('session/models')).toBe(1); expect(count('session/model')).toBe(1);
  fireEvent.click(screen.getByRole('menuitem', { name: 'Reasoning profile' }));
  expect(screen.getByRole('menuitem', { name: 'brief' })).toBeTruthy();
  expect(screen.queryByText('high')).toBeNull(); expect(screen.queryByText('off')).toBeNull();
- server.held.add('settings/setModel'); server.held.add('session/snapshot');
+ server.held.add('session/setModel'); server.held.add('session/snapshot');
  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'brief' })));
- const request = await server.waitFor('settings/setModel', 1);
+ const request = await server.waitFor('session/setModel', 1);
  expect(request.params).toEqual({ target: server.target('A'), config: { model: 'exact/model', reasoningProfile: 'brief' } });
  await act(async () => server.reply(request));
  expect(screen.getByRole('button', { name: 'Model and reasoning' }).textContent).toContain('deliberate');
- expect(count('settings/setModel')).toBe(1);
+ expect(count('session/setModel')).toBe(1);
  expect(server.client.getSnapshot().views.A.modelMutation?.status).toBe('acknowledged');
  await expect(server.client.send('A', 'dependent turn')).rejects.toThrow('Reread native model state');
  expect(count('turn/start')).toBe(0);
@@ -66,38 +66,25 @@ it('model/profile menu advertises only exact native values and acknowledgement a
 it('lost model mutation is visible uncertainty; reconnect invalidates catalog and never replays', async () => {
  const catalog = modelFixture(); await server.attached('A'); render(<Control/>); await openModels();
  fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
- server.held.add('settings/setModel');
+ server.held.add('session/setModel');
  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'other' })));
- const request = await server.waitFor('settings/setModel', 1);
+ const request = await server.waitFor('session/setModel', 1);
  await act(async () => { server.commit(request); server.socket.close(); });
  expect(server.client.getSnapshot().uncertain).toHaveLength(1);
  expect(server.client.getSnapshot().views.A.modelMutation?.status).toBe('uncertain');
- expect(count('settings/setModel')).toBe(1);
+ expect(count('session/setModel')).toBe(1);
  catalog.splice(0, 1);
  await act(async () => server.connect());
- expect(count('settings/setModel')).toBe(1);
+ expect(count('session/setModel')).toBe(1);
  await openModels();
- expect(count('settings/models')).toBe(2);
+ expect(count('session/models')).toBe(2);
  fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
  expect(screen.queryByRole('menuitem', { name: 'exact/model' })).toBeNull();
 });
-it('permission save uses exact source CAS and distinguishes desired, published, and frozen active policy', async () => {
- const source = cfg3Source(); source.prospective_approval_mode = 'policy';
- server.snapshots.set('A', running());
- server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: structuredClone(source), session_revision: '1' }));
- server.handlers.set('configuration/sourceWrite', request => {
-   if (request.method !== 'configuration/sourceWrite') throw new Error('wrong request');
-   expect(request.params.expected_revision).toBe('workspace-1');
-   expect(request.params.mutation).toEqual({ kind: 'config', scope: 'workspace', mutation: { unit: 'approval', authored: 'full_access' } });
-   source.prospective_approval_mode = 'full_access'; source.workspace.revision = 'workspace-2';
-   return { type: 'source_settings', projection: structuredClone(source), session_revision: '1' };
- });
- await server.attached('A'); render(<Control kind="permission"/>);
- await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Approval mode' })));
- await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Full access' })));
- expect(count('configuration/sourceWrite')).toBe(1); expect(count('session/adoptConfiguration')).toBe(0);
- expect(screen.getByText('Effective for running attempt: policy')).toBeTruthy();
- expect(screen.queryByRole('button', { name: 'Apply saved policy' })).toBeNull();
+it('Session controls never expose source-authoring permission controls', async () => {
+ modelFixture(); await server.attached('A'); render(<Control/>); await openModels();
+ expect(screen.queryByRole('button', { name: 'Approval mode' })).toBeNull();
+ expect(count('configuration/sourcesRead')).toBe(0); expect(count('configuration/sourceWrite')).toBe(0);
 });
 it('one Stop gesture issues one request, and only native snapshot settlement releases the cancellation guard', async () => {
  server.snapshots.set('A', running()); await server.attached('A'); server.held.add('turn/cancel');

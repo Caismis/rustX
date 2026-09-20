@@ -168,7 +168,7 @@ pub async fn representative_scenario(
             driver,
             sequence,
             Method::ConfigurationReconcile {
-                session_id: target.session_id.clone(),
+                target: rustx::local_runtime::configuration::settings::SourceTarget::User,
             },
         )
         .await;
