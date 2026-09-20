@@ -70,7 +70,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 13;
+export const APP_SERVER_PROTOCOL_VERSION = 14;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -148,7 +148,6 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "configuration/sourcesRead": "read",
   "configuration/effective": "read",
   "configuration/sourceWrite": "side_effecting",
-  "settings/selectModel": "side_effecting",
   "settings/model": "read",
   "settings/models": "read",
   "settings/setModel": "side_effecting",
@@ -190,8 +189,8 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "interaction/respond": "side_effecting",
   "interaction/cancel": "side_effecting",
   "settings/read": "read",
-  "settings/replace": "side_effecting",
-  "configuration/reload": "side_effecting",
+  "configuration/reconcile": "side_effecting",
+  "session/adoptConfiguration": "side_effecting",
 } satisfies Record<MethodName, ResponseLossClass>);
 
 interface PendingRequest {
@@ -349,7 +348,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v13 protocol message");
+      this.#fail("invalid App Server v14 protocol message");
       return;
     }
 

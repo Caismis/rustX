@@ -246,7 +246,7 @@ validation are unchanged. Drafts are not persisted or replayed on remount.
 
 The card retains its width axis, 22px corners, elevation, 12px gap and toolbar
 rhythm. Left: compact `+` command launcher, quiet paperclip intake accessory and
-permission control (effective policy is available on its tooltip; pending Reload
+permission control (effective policy is available on its tooltip; native application state
 keeps the effective/desired distinction and action visible). Right: bounded model control and one primary action. The
 paperclip remains keyboard/touch accessible because rustX has no typed file-intake
 slash command; it uses an unfilled accessory treatment instead of a second `+`
@@ -297,7 +297,7 @@ keeping the capability panel open; consumption and panel dismissal are separate.
 | Command | Typed integration |
 | --- | --- |
 | `/model` | `settings/model` + `settings/models`, then `settings/setModel` with an exact catalog model reference and native defaults |
-| Approval mode control | Native Workspace Approval source-unit CAS; desired/published/running distinction and explicit Reload |
+| Approval mode control | Native Workspace Approval source-unit CAS; desired/published/running distinction and automatic native application |
 | `/compact` | Native `context/compact`, available with no active Attempt; pending inbound alone is permitted by native maintenance |
 | `/new` | `session/create` using native Session cwd; attach/open only after success |
 | `/fork` | Native exact user-boundary selection and independent `session/fork` |
@@ -348,20 +348,18 @@ The native attempt phase alone supplies terminal presentation; disconnect is ine
 `AgentControls` reads exact `settings/models` and `settings/model` data. Both the
 composer menu and `/model` popup advertise only returned model references and
 reasoning profile IDs. The native default is represented by omitting the profile.
-`settings/setModel` is the current target-bound live mutation. `settings/selectModel`
-is the distinct durable Session revision-CAS authoring operation; it does not
-replace the live Agent operation. An acknowledged or uncertain model change fences
-dependent Send/lineage actions until a fresh authoritative snapshot is read.
-Catalog caches and open menus are discarded on attachment/generation replacement.
+`settings/setModel` is the single dedicated Session model operation. It prepares a
+complete binding and commits through the idle/admission gate and model baseline
+fence. Acknowledged or uncertain model changes require authoritative reads before
+dependent Send/lineage actions. Catalog caches and menus are discarded on attachment
+replacement.
 
-The permission menu offers only `policy` and `full_access`. Native
-`SourceSettings.prospective_approval_mode` resolves desired source policy; the
-browser does not parse config or compute an overlay. Save uses the exact Workspace
-source revision and Approval semantic unit. It never publishes a runtime generation.
-The running label reads `attempt.execution_settings.approval_mode`; idle effective
-policy reads `snapshot.effective_approval_mode`. Pending Reload is explicit. Apply
-saved policy invokes existing `configuration/reload` only while idle; native busy
-and publication checks remain final. This is an Agent control, not a CFG3 editor.
+The permission menu offers `policy` and `full_access`. Native source projection
+resolves desired policy; the browser does not overlay config. Save submits the
+exact Workspace revision and typed approval unit. Native reconciliation applies
+policy automatically to future independent Attempts. Running labels retain
+`attempt.execution_settings.approval_mode`; current policy comes from the native
+snapshot. Settings presents native context adoption, failures and restart state.
 
 Native pending interactions take over the composer seat, preserving the hidden
 local draft. Approval uses native Allow/Deny; Questionnaire supports schema-defined

@@ -2694,6 +2694,7 @@ impl WorkflowRuntime {
             }
         })?;
         let spec = crate::runtime::subagent::SubagentStartSpec {
+            execution_policy: context.execution_policy(),
             resolved,
             approval_mode: context.approval_mode(),
             task: agent.task.clone(),
@@ -3171,8 +3172,7 @@ mod tests {
 
     #[cfg(unix)]
     use crate::capabilities::CapabilitySnapshot;
-    #[cfg(unix)]
-    use crate::context::SessionContextPolicy;
+
     #[cfg(unix)]
     use crate::durable::ConversationStore;
     #[cfg(unix)]
@@ -3388,14 +3388,6 @@ chat_reasoning_replay = "omit"
                     &runtime_root.clone(),
                 )
                 .expect("product root"),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
-                tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
-                ),
-                context: SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
             },
             workspace: WorkspaceManager::new(&workspace, &runtime_root),
             max_active,

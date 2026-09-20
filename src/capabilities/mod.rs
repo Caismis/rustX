@@ -63,7 +63,6 @@ pub use availability::{
     CAPABILITY_FAILURE_REASON_MAX_BYTES, CapabilityAvailability, CapabilitySourceState,
     capability_failure_reason,
 };
-pub(crate) use coordinator::CommittedCapability;
 pub use coordinator::{
     AttemptCapabilityLease, CapabilityCoordinator, CapabilityCoordinatorConfig, CapabilityObserver,
     CapabilityResourceInputs, PreparedCapabilityCandidate,
@@ -72,10 +71,5 @@ pub use error::{CapabilityCommitError, CapabilityPreparationError};
 pub use selected::{SelectedCapabilityPlan, SelectedMaterializationError, SelectedSourceTool};
 pub use snapshot::CapabilitySnapshot;
 pub use tools::{AgentActivation, AvailableTool, AvailableToolCatalog, extension_provided_tool};
-
-/// The commit-boundary synchronization hook, used by the Runtime Client
-/// lock-order tests to park a commit with the coordinator lock held.
-#[cfg(test)]
-pub(crate) use coordinator::test_sync;
 
 pub(crate) use coordinator::RuntimeCapabilityPublication;

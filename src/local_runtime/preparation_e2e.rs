@@ -163,14 +163,6 @@ impl Lab {
                     &runtime_root.clone(),
                 )
                 .expect("product root"),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
-                tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
-                ),
-                context: crate::context::SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
             },
             workspace: crate::runtime::workspace::WorkspaceManager::new(&workspace, &runtime_root),
             max_active: 4,
@@ -197,6 +189,7 @@ impl Lab {
         )
         .expect("the child plane implements read");
         SubagentStartSpec {
+            execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
             resolved: ResolvedSubagentSpec {
                 environment: Vec::new(),
                 generation: crate::runtime::identity::RuntimeResourceRevision::new(1),

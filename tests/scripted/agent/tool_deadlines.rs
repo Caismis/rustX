@@ -1693,10 +1693,8 @@ async fn issue204_batch_siblings_settle_exactly_once_in_model_order() {
 /// executions built from different policies are independent authorities: a
 /// call admitted under a 10ms hard deadline settles `TimedOut` at t=10 even
 /// though a second execution admits the same tool under a far larger one.
-/// (The composition-level freeze — a reloaded resource generation never
-/// reaching a running invocation — is covered by the configuration and
-/// runtime-level regressions; `reload_configuration` is attempt-exclusive, so a
-/// mid-attempt reload is structurally refused.)
+/// The configuration regressions prove that automatic policy publication never
+/// reaches any work derived from an already-admitted Attempt.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn issue204_admitted_executions_obey_their_own_frozen_policy() {
     let scripted = call("call-frozen", "tool-frozen", "frozen");

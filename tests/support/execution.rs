@@ -68,13 +68,6 @@ pub(crate) fn subagent_plane_for(conversation: &str) -> SubagentPlane {
             program: std::path::PathBuf::from("/nonexistent/rustx"),
             product_root: crate::runtime::local_storage::ProductRoot::create(&runtime_root.clone())
                 .expect("product root"),
-            model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
-            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-            context: rustx::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
         },
         workspace: WorkspaceManager::new(&workspace, &runtime_root),
         max_active: 4,

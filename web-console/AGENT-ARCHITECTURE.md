@@ -12,7 +12,7 @@ Pre-implementation classification:
 | Tool row/tree and specialized bodies | B | Native canonical Tool projection; no browser call/result pairing |
 | Approval / Questionnaire takeover | B | Native pending interaction and exact response schema; drafts only are local |
 | Model / reasoning menu and popup | B | Native catalog, Session selection and revision; no provider inference |
-| Permission selector | B | CFG3 source CAS and explicit Reload; attempt policy stays frozen |
+| Permission selector | B | CFG3 source CAS and automatic native application; attempt policy stays frozen |
 | Agent CSS, disclosure and shared primitives | A | Pinned Harness source with bounded environment adaptations |
 | Todo / Goal / Queue, lineage, activity, transport notices | C | Existing native owners; Harness seats/primitives |
 
@@ -33,10 +33,11 @@ subjects, while routing IDs and review instance metadata move to diagnostics.
 Goal/Queue changes are limited to diagnostic text removal; their layout, native
 references, CAS, controls and the WEB-11 composer contract are unchanged.
 
-CFG3 Save changes desired source configuration. Reload publishes a generation;
-an active attempt keeps its admitted policy. The Agent control must display this
-boundary explicitly, including pending Reload, rather than imply a Save changed
-execution. No Session approval override or compatibility settings API is added.
+CFG3 Save transfers desired source configuration to native reconciliation.
+The current Attempt retains captured policy; later independent Attempts can use
+new policy. Native context candidates require explicit Session adoption. The
+permission menu renders native desired/effective/captured facts without classifying
+cache impact or publication behavior.
 
 Canonical Tool results carry `ToolCallOccurrenceRef` (Assistant MessageId plus
 block index). SQLite schema 40 validates this owner and atomically maintains the

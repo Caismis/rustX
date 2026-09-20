@@ -1,6 +1,6 @@
-import { cfg3Source, cfg3Effective } from './cfg3-data';
+import { cfg3Source, cfg3Effective, cfg3Application } from './cfg3-data';
 import { vi } from 'vitest';
-import type { AttachmentTarget, EffectiveConfiguration, MethodResult, Request1, SourceSettings } from '../../protocol/app-server/v13';
+import type { AttachmentTarget, EffectiveConfiguration, MethodResult, Request1, SourceSettings } from '../../protocol/app-server/v14';
 import { AppServerClient, type ClientView } from '../src/client/app-server';
 export const cfg3Session = 'ses_00000000-0000-7000-8000-000000000001';
 export const cfg3Target: AttachmentTarget = { session_id: cfg3Session, conversation_id: 'conv_00000000-0000-7000-8000-000000000001', runtime_incarnation: '1', attachment_id: 'attachment-1' };
@@ -11,8 +11,13 @@ export function cfg3Client(handler?: (operation: Request1, source: SourceSetting
   const request = vi.spyOn(client, 'request').mockImplementation(async operation => {
     const overridden = await handler?.(operation, source, effective); if (overridden) return overridden as never;
     if (operation.method === 'configuration/effective') return { type: 'effective_configuration', projection: structuredClone(effective) } as never;
-    if (operation.method === 'configuration/reload') { effective.generation = '8'; source.loaded = { generation: '8', pending_reload: false, changed_sources: [] }; return { type: 'configuration_reloaded', resource_revision: '8', capability_revision: '8' } as never; }
-    if (operation.method === 'configuration/sourceWrite') { source.loaded = { generation: '7', pending_reload: true, changed_sources: ['/workspace/rustx.toml'] }; source[operation.params.mutation.scope].revision = 'saved-2'; }
+    if (operation.method === 'session/adoptConfiguration') {
+      source.application = { ...source.application!, version: '3', candidate: null, units: { instructions: { status: 'applied' } } };
+      effective.generation = '8'; effective.adopted_binding = '2'; source.loaded = { generation: '8', changed_sources: [] };
+      return { type: 'configuration_application', application: source.application } as never;
+    }
+    if (operation.method === 'configuration/reconcile') return { type: 'configuration_application', application: source.application ?? cfg3Application() } as never;
+    if (operation.method === 'configuration/sourceWrite') { source.application = cfg3Application(); source[operation.params.mutation.scope].revision = 'saved-2'; }
     return { type: 'source_settings', projection: structuredClone(source), session_revision: '1', session_selection: null } as never;
   });
   return { client, request, source, effective, state };

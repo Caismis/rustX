@@ -19,9 +19,8 @@
 //!
 //! All synchronization is exact; no sleep participates in any proof.
 
-use super::super::{common, support};
+use super::super::support;
 
-use std::path::Path;
 use std::sync::Arc;
 
 use rustx::capabilities::{CapabilityCoordinator, CapabilityCoordinatorConfig};
@@ -34,8 +33,8 @@ use rustx::runtime::conversation_runtime::{
 };
 use rustx::runtime::identity::AgentId;
 use rustx::runtime_client::{
-    HostConstructionError, RuntimeClientEvent, RuntimeClientHost, RuntimeClientHostConfig,
-    RuntimeClientRequest, RuntimeClientResult,
+    RuntimeClientEvent, RuntimeClientHost, RuntimeClientHostConfig, RuntimeClientRequest,
+    RuntimeClientResult,
 };
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::runtime::ConversationToolRuntime;
@@ -45,7 +44,7 @@ use support::fake::{FakeModel, FakeStep};
 /// One independently constructed runtime bundle: a fresh runtime identity
 /// with its own workspace, plus a coordinator over it.
 struct Bundle {
-    dir: tempfile::TempDir,
+    _dir: tempfile::TempDir,
     runtime: ConversationToolRuntime,
     coordinator: CapabilityCoordinator,
 }
@@ -81,7 +80,7 @@ async fn new_bundle(conversation: &str) -> Bundle {
     let candidate = coordinator.prepare_candidate().await.expect("prepare");
     coordinator.commit(candidate).expect("commit");
     Bundle {
-        dir,
+        _dir: dir,
         runtime,
         coordinator,
     }
@@ -168,88 +167,6 @@ fn one_turn_stop() -> Vec<FakeStep> {
     ]
 }
 
-fn write_skill(workspace: &Path, name: &str) {
-    let root = workspace.join(".agents").join("skills").join(name);
-    std::fs::create_dir_all(&root).expect("skill dir");
-    std::fs::write(
-        root.join("SKILL.md"),
-        format!("---\nname: {name}\ndescription: \"a binding probe skill\"\n---\nbody\n"),
-    )
-    .expect("SKILL.md");
-}
-
-/// A background tool execution that never settles on its own: it runs until
-/// its own cancellation fires, so the published record stays observable.
-struct ParkedBackgroundTool;
-
-impl rustx::tools::executor::ToolExecutor for ParkedBackgroundTool {
-    fn start<'a>(
-        &'a self,
-        _invocation: rustx::tools::types::ToolInvocation,
-        context: rustx::tools::executor::ToolExecutionContext<'a>,
-    ) -> rustx::tools::executor::ToolExecutionHandle<'a> {
-        let cancellation = context.cancellation.clone();
-        rustx::tools::executor::ToolExecutionHandle::settled_by_operation(
-            Box::pin(async move {
-                context.cancellation.cancelled().await;
-                rustx::tools::types::ToolExecutionResult {
-                    status: rustx::tools::types::ToolExecutionStatus::Cancelled {
-                        reason: rustx::runtime::types::CancellationReason::UserRequested,
-                        phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
-                    },
-                    content: Vec::new(),
-                    duration_ms: 0,
-                    exit_code: None,
-                    artifacts: Vec::new(),
-                    truncation: None,
-                    workflow: None,
-                    managed_output: None,
-                }
-            }),
-            cancellation,
-        )
-    }
-
-    fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {
-        rustx::tools::ToolProgressCapability::None
-    }
-}
-
-/// Commits one authoritative background dispatch on the runtime's registry
-/// and returns its execution identity. The record is published under the
-/// registry's ownership commit, before this returns.
-fn dispatch_background(
-    runtime: &ConversationToolRuntime,
-) -> rustx::runtime::identity::ToolExecutionId {
-    let executor: Arc<dyn rustx::tools::executor::ToolExecutor> = Arc::new(ParkedBackgroundTool);
-    let invocation = rustx::tools::types::ToolInvocation {
-        id: rustx::tools::types::ToolInvocationId::Agent {
-            call_id: rustx::runtime::identity::ToolCallId::new("call-binding-seam"),
-        },
-        tool_id: rustx::runtime::identity::ToolId::new("tool-binding-seam"),
-        tool_name: "binding-seam".to_owned(),
-        mode: rustx::tools::types::ToolInvocationMode::Background,
-        arguments: serde_json::json!({}),
-    };
-    let registry = runtime.background();
-    let prepared = registry
-        .prepare_dispatch(
-            &invocation,
-            &executor,
-            rustx::tools::environment::ToolEnvironment::new(),
-        )
-        .expect("prepare background dispatch");
-    let outcome = registry
-        .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
-        .expect("dispatch commits");
-    let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
-        outcome
-    else {
-        panic!("the background dispatch is accepted");
-    };
-    execution_id
-}
-
 fn text(text: &str) -> Vec<rustx::message::types::UserContentBlock> {
     vec![rustx::message::types::UserContentBlock::Text(
         rustx::message::content::TextBlock {
@@ -290,189 +207,6 @@ async fn cloning_a_tool_runtime_does_not_create_a_new_binding_identity() {
     assert_eq!(
         runtime.conversation_id().as_str(),
         "conv_978c7a00-2dc9-77bb-883d-e0ffc411cb3c"
-    );
-}
-
-/// A second host over a clone of the same runtime identity is rejected with
-/// the typed error, leaves every observation seam pointing at the first
-/// host, and leaves the first host fully operational.
-// One rejection observed end to end: splitting it would lose the
-// before/after continuity that is the whole point.
-#[allow(clippy::too_many_lines)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() {
-    let bundle = new_bundle("conv_393348a9-8841-75ff-87c1-ba2c77dfe158").await;
-    let model = Arc::new(FakeModel::new(vec![one_turn_stop(), one_turn_stop()]));
-    let (runtime, host_config) = config(
-        bundle.runtime.clone(),
-        bundle.coordinator.clone(),
-        model.clone(),
-    );
-    let host_a = RuntimeClientHost::new(host_config).expect("first host");
-    runtime.activate();
-
-    let attachment = host_a
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
-        .expect("attach");
-    let subscription = attachment
-        .0
-        .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
-        .expect("subscribe");
-    let (baseline, baseline_cursor) = host_a.snapshot().expect("snapshot");
-
-    // The rejected construction: a second host over the very same
-    // conversation runtime handle.
-    let rejected = RuntimeClientHost::new(RuntimeClientHostConfig {
-        runtime: runtime.clone(),
-        replay_limit: None,
-    });
-    match rejected {
-        Err(HostConstructionError::RuntimeClientAlreadyBound { conversation_id }) => {
-            assert_eq!(
-                conversation_id.as_str(),
-                "conv_393348a9-8841-75ff-87c1-ba2c77dfe158"
-            );
-        }
-        Err(HostConstructionError::ObservationBridgeAlreadyInstalled { .. }) => {
-            panic!("the binding claim must reject a second host before the bridge")
-        }
-        Err(HostConstructionError::RuntimeAlreadyActivated { .. }) => {
-            panic!("the binding claim must reject a second host before the lifecycle check")
-        }
-        Err(HostConstructionError::Durable(_)) => {
-            panic!("the second host must not reach durable bootstrap")
-        }
-        Ok(_) => panic!("a second host over one runtime identity must be rejected"),
-    }
-
-    // No semantic side effect: the first host's projection did not move.
-    let (after_rejection, after_cursor) = host_a.snapshot().expect("snapshot");
-    assert_eq!(after_cursor, baseline_cursor, "no event was published");
-    assert_eq!(after_rejection.messages, baseline.messages);
-    assert_eq!(
-        after_rejection.capabilities.revision, baseline.capabilities.revision,
-        "the rejected construction never touched capability state"
-    );
-    assert!(
-        after_rejection.inbound.pending.is_empty(),
-        "the rejected construction never drained or enqueued inbound"
-    );
-    assert!(after_rejection.attempt.is_none());
-
-    // Every authoritative seam still reaches host A, so no observer was
-    // replaced.
-    bundle
-        .runtime
-        .mailbox()
-        .enqueue(rustx::message::types::UserMessageBlock {
-            id: rustx::runtime::identity::MessageId::new("msg-seam"),
-            content: text("seam"),
-            source: rustx::message::types::UserSource::Human,
-            kind: rustx::message::types::InboundKind::Message,
-            timestamp: Some(
-                chrono::DateTime::parse_from_rfc3339("2026-08-13T00:00:00Z")
-                    .expect("fixed timestamp")
-                    .with_timezone(&chrono::Utc),
-            ),
-        })
-        .expect("enqueue");
-    // The enqueued message is admitted by the runtime's idle wakeup; the
-    // admitted attempt settles immediately. Waiting for its request-history
-    // transfer makes the runtime provably idle before the configuration reload
-    // below, so the reload can never be rejected as Busy by an active attempt
-    // lease.
-    tokio::time::timeout(std::time::Duration::from_mins(2), async {
-        loop {
-            if !common::request_snapshots(&host_a.request_history()).is_empty() {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("the admitted attempt must settle before the configuration reload");
-    // Consume the first attempt's terminal event before submitting the next
-    // inbound. Otherwise the later wait could mistake this already-published
-    // event for the second attempt, making the request-count assertion depend
-    // on scheduler timing.
-    loop {
-        let delivery = tokio::time::timeout(std::time::Duration::from_mins(2), subscription.next())
-            .await
-            .expect("the first attempt event must arrive");
-        let rustx::runtime_client::EventDelivery::Event(event) = delivery else {
-            panic!("subscription stays open, got {delivery:?}");
-        };
-        if matches!(event.event, RuntimeClientEvent::AttemptSettled { .. }) {
-            break;
-        }
-    }
-    // The Runtime Client terminal event is projected asynchronously from the
-    // durable attempt event. The runtime-owned settlement signal is the
-    // exact coordinator transition that follows it: `finish_attempt` has
-    // restored the conversation and cleared `current_attempt` before the
-    // signal fires. Waiting for both seams prevents a legitimate reload
-    // `Busy(Attempt)` result without relying on delivery timing.
-    tokio::time::timeout(
-        std::time::Duration::from_mins(2),
-        runtime.settlement_signal().notified(),
-    )
-    .await
-    .expect("the runtime settlement handoff must complete before reload");
-    write_skill(&bundle.dir.path().join("workspace"), "binding-skill");
-    let committed = runtime
-        .reload_configuration()
-        .await
-        .expect("configuration reload");
-    // The background registry transition is published under the registry's
-    // ownership commit, so its arrival at the observer is exact.
-    let background_id = dispatch_background(&bundle.runtime);
-
-    // The enqueued message is admitted by the runtime's idle wakeup, so
-    // the observation-seam proof is the committed canonical message: the
-    // seam still reaches host A even after the rejected second host.
-    let (observed, _) = await_message_committed(&host_a, "msg-seam").await;
-    assert_eq!(
-        observed.capabilities.revision, committed.capability_revision,
-        "the capability seam still reaches host A"
-    );
-    assert!(
-        observed
-            .background
-            .iter()
-            .any(|execution| execution.execution_id == background_id),
-        "the background seam still reaches host A"
-    );
-
-    // Host A still coordinates execution end to end after the rejection.
-    let response = attachment
-        .0
-        .handle_request(RuntimeClientRequest::SubmitInbound {
-            id: rustx::runtime_client::RequestId::new(1),
-            content: text("go"),
-        });
-    assert!(matches!(
-        response.result,
-        Some(RuntimeClientResult::InboundAccepted { .. })
-    ));
-    loop {
-        // Liveness guard only: the delivery wait itself is exact.
-        let delivery = tokio::time::timeout(std::time::Duration::from_mins(2), subscription.next())
-            .await
-            .expect("the stream must not stall");
-        let rustx::runtime_client::EventDelivery::Event(event) = delivery else {
-            panic!("subscription stays open, got {delivery:?}");
-        };
-        if matches!(event.event, RuntimeClientEvent::AttemptSettled { .. }) {
-            break;
-        }
-    }
-    let (settled, settled_cursor) = host_a.snapshot().expect("snapshot");
-    assert!(settled_cursor > baseline_cursor);
-    assert!(settled.attempt.is_some(), "host A ran the attempt");
-    assert_eq!(
-        model.requests().len(),
-        2,
-        "the single bound host drove both accepted turns"
     );
 }
 
@@ -584,34 +318,6 @@ async fn reconnect_replaces_the_attachment_not_the_host() {
         "reconnect receives a fresh attachment identity"
     );
     host.snapshot().expect("the host served both attachments");
-}
-
-/// Waits until the runtime admitted the given inbound message into
-/// canonical history (the idle wakeup admits it immediately; the commit is
-/// the deterministic seam-arrival proof).
-async fn await_message_committed(
-    host: &RuntimeClientHost,
-    message_id: &str,
-) -> (
-    rustx::runtime_client::RuntimeClientSnapshot,
-    rustx::runtime_client::RuntimeClientCursor,
-) {
-    tokio::time::timeout(std::time::Duration::from_mins(2), async {
-        loop {
-            let snapshot = host.snapshot().expect("snapshot");
-            if snapshot
-                .0
-                .messages
-                .iter()
-                .any(|message| matches!(message, rustx::message::types::MessageBlock::User(user) if user.id.as_str() == message_id))
-            {
-                return snapshot;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("the runtime must admit the enqueued inbound message")
 }
 
 /// The `ConversationToolRuntime` is the one conversation authority at the

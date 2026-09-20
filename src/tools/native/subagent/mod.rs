@@ -276,6 +276,7 @@ impl ToolExecutor for SubagentExecutor {
                     Err(error) => return failed_result(error.to_string()),
                 };
                 let spec = SubagentStartSpec {
+                    execution_policy: subagent_context.execution_policy(),
                     resolved,
                     approval_mode: subagent_context.approval_mode(),
                     task: input.task,
@@ -623,7 +624,7 @@ chat_reasoning_replay = "omit"
         use std::sync::Arc;
 
         use crate::capabilities::CapabilitySnapshot;
-        use crate::context::SessionContextPolicy;
+
         use crate::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
         use crate::model::invocation::ModelBindingRegistry;
         use crate::model::session::SessionModelConfig;
@@ -671,14 +672,6 @@ chat_reasoning_replay = "omit"
                     &runtime_root.clone(),
                 )
                 .expect("product root"),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
-                tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
-                ),
-                context: SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
             },
             workspace: WorkspaceManager::new(&workspace_root, &runtime_root),
             max_active: 4,
@@ -798,7 +791,7 @@ chat_reasoning_replay = "omit"
 
         use crate::capabilities::CapabilitySnapshot;
         use crate::capabilities::selection::AgentToolSelection;
-        use crate::context::SessionContextPolicy;
+
         use crate::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
         use crate::model::invocation::ModelBindingRegistry;
         use crate::model::session::SessionModelConfig;
@@ -871,14 +864,6 @@ chat_reasoning_replay = "omit"
                 program: std::path::PathBuf::from("/nonexistent/rustx"),
                 product_root: crate::runtime::local_storage::ProductRoot::create(&runtime_root)
                     .unwrap(),
-                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
-                tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
-                ),
-                context: SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
             },
             workspace: WorkspaceManager::new(&workspace_root, &runtime_root),
             max_active: 4,

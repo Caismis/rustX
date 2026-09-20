@@ -18,7 +18,7 @@
 //!   vocabulary (missing vs empty vs null, closed dimensions).
 //!
 //! Every generation-ordering assertion here is decided by an explicit
-//! linearization the test drives — a completed `reload_configuration`, or a typed
+//! linearization the test drives — a native configuration publication, or a typed
 //! refusal — never by a sleep.
 
 use crate::launch_fixture::LaunchFixture;
@@ -788,38 +788,6 @@ async fn sub258_a_workflow_override_cannot_smuggle_nested_delegation() {
 // D. Freeze, identity, and materialization
 // =====================================================================
 
-/// An R1-resolved specification and the R1 caller's authority both stay R1
-/// after R2 publishes, and a later invocation resolves against its own
-/// admitted generation.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sub258_r1_resolution_and_authority_survive_r2_publication() {
-    let lab = Lab::new();
-    lab.write_skill("review-guidance", "First generation", "First body");
-    lab.write_config(&reviewer_roles(), &["read"]);
-    let product = lab.compose().await;
-    let r1 = product.runtime().runtime_resources();
-    let requested = parse_override(serde_json::json!({"tools":{"builtin":["grep"]}}));
-    let frozen = delegate(&r1, "reviewer", Some(&requested)).unwrap();
-    lab.write_skill("review-guidance", "Second generation", "Second body");
-    lab.write_config(&reviewer_roles(), &[]);
-    assert_eq!(delegate(&r1, "reviewer", Some(&requested)).unwrap(), frozen);
-    product.runtime().reload_configuration().await.unwrap();
-    let r2 = product.runtime().runtime_resources();
-    assert_eq!(delegate(&r1, "reviewer", Some(&requested)).unwrap(), frozen);
-    let next = delegate(&r2, "reviewer", Some(&requested)).unwrap();
-    assert_eq!(tool_names(&next), ["builtin:grep"]);
-    assert_eq!(
-        frozen.skills[0].catalog_entry.description,
-        "First generation"
-    );
-    assert_eq!(
-        next.skills[0].catalog_entry.description,
-        "Second generation"
-    );
-    assert_ne!(next.profile_digest(), frozen.profile_digest());
-    product.runtime().shutdown().await.unwrap();
-}
-
 /// A default that the invocation replaced away is not a dependency any more:
 /// resolution requires only the effective selection's sources, and the role's
 /// separate catalog admission is untouched.
@@ -937,91 +905,6 @@ async fn sub258_the_effective_profile_digest_follows_its_documented_contract() {
             .expect("encode")
             .contains("test-only-secret"),
         "no credential material rides in the frozen specification"
-    );
-}
-
-/// The two identities are **separate**: `definition_digest` names the source
-/// definition, `profile_digest` names the final frozen execution contract.
-///
-/// So a change to the source definition that leaves the effective contract
-/// semantically identical must move the first and leave the second alone.
-/// Three such changes are proven here against real published generations:
-/// the role's routing description (which never executes at all), and a
-/// default Tool/Skill/extension selection that the invocation replaces
-/// completely (which stops existing before the child is frozen).
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sub258_replaced_defaults_and_routing_prose_do_not_change_the_profile_digest() {
-    let lab = Lab::new();
-    lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_skill("security-review", "How to review security", "security body");
-    lab.write_config(&reviewer_roles(), &["read", "grep"]);
-    let product = lab.compose().await;
-
-    // Every dimension the two definitions differ in is replaced by this one
-    // request, so the effective contract is identical on both sides.
-    let requested = parse_override(serde_json::json!({
-        "tools": {"builtin": ["read"]},
-        "skills": ["review-guidance"],
-        "plugins": {"agentStatus": {"enabled": true}},
-    }));
-
-    let r1 = product.runtime().runtime_resources();
-    // The caller holds Agent Status itself, so the extension dimension stays
-    // authorized across both generations regardless of the role's default.
-    let before = delegate(&r1, "reviewer", Some(&requested)).expect("R1 resolution");
-
-    // R2 rewrites the role's routing prose and every default the request
-    // replaces. Nothing else about the role changes.
-    lab.write_config(
-        &serde_json::json!({"reviewer": {"description": "An entirely different routing description.", "tools": {"builtin": ["grep"]}, "skills": ["security-review"], "plugins": {"agent_status": {"enabled": false}}}}),
-        &["read", "grep"],
-    );
-    product
-        .runtime()
-        .reload_configuration()
-        .await
-        .expect("R2 publishes");
-    let r2 = product.runtime().runtime_resources();
-    let after = delegate(&r2, "reviewer", Some(&requested)).expect("R2 resolution");
-
-    assert_ne!(
-        before.definition_digest, after.definition_digest,
-        "the source definitions really did change"
-    );
-    assert_eq!(
-        tool_names(&before),
-        tool_names(&after),
-        "the effective tools are identical"
-    );
-    assert_eq!(skill_names(&before), skill_names(&after));
-    assert_eq!(before.extensions, after.extensions);
-    assert_eq!(
-        before.profile_digest(),
-        after.profile_digest(),
-        "one effective execution contract is one effective profile identity, however the \
-         source definition it came from was respelled"
-    );
-
-    // ...and the separation is not vacuous: a change that reaches the
-    // effective contract still moves the profile identity.
-    let narrowed = delegate(
-        &r2,
-        "reviewer",
-        Some(&parse_override(serde_json::json!({
-            "tools": {"builtin": ["grep"]},
-            "skills": ["review-guidance"],
-            "plugins": {"agentStatus": {"enabled": true}},
-        }))),
-    )
-    .expect("resolution");
-    assert_ne!(
-        narrowed.profile_digest(),
-        after.profile_digest(),
-        "a materially different effective profile still has its own identity"
-    );
-    assert_eq!(
-        narrowed.definition_digest, after.definition_digest,
-        "...while both children still name the same source definition"
     );
 }
 

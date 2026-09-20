@@ -136,6 +136,7 @@ pub struct AppServerConnection {
     changed: Arc<tokio::sync::Notify>,
     reader: Arc<tokio::sync::Mutex<()>>,
     next_route: Arc<std::sync::atomic::AtomicUsize>,
+    configuration_versions: Arc<Mutex<std::collections::BTreeMap<String, u64>>>,
 }
 
 impl AppServerConnection {
@@ -173,6 +174,7 @@ impl AppServerConnection {
             routes: Arc::new(Mutex::new(RouteTable::default())),
             changed: Arc::new(tokio::sync::Notify::new()),
             reader: Arc::new(tokio::sync::Mutex::new(())),
+            configuration_versions: Arc::default(),
             next_route: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
@@ -268,9 +270,9 @@ impl AppServerConnection {
                 | Method::SessionFork { .. }
                 | Method::SessionBranch { .. }
                 | Method::SessionRecoverDeletion { .. }
-                | Method::SettingsReplace { .. }
                 | Method::SourcesWrite { .. }
-                | Method::SelectModel { .. }
+                | Method::ConfigurationReconcile { .. }
+                | Method::AdoptConfiguration { .. }
         ) {
             let connection = self.clone();
             tokio::spawn(async move { Box::pin(connection.dispatch(request.call)).await })
@@ -330,6 +332,7 @@ impl AppServerConnection {
             let client = route.client.clone();
             let changed = self.changed.clone();
             let sessions = self.sessions.clone();
+            let manager = self.host.manager().clone();
             let receiver = {
                 let routes = self.routes.lock().expect("routes mutex");
                 if routes.closed
@@ -356,6 +359,7 @@ impl AppServerConnection {
                                     authority.map_err(client_error)?,
                                     changed,
                                     sessions,
+                                    manager,
                                 )
                                 .await
                             }
@@ -484,7 +488,8 @@ impl AppServerConnection {
                     .map_err(session_error)?,
             }),
             Method::SessionCreate { settings } => self
-                .sessions
+                .host
+                .manager()
                 .create_session(settings)
                 .await
                 .map(transition)
@@ -568,6 +573,27 @@ impl AppServerConnection {
                     .await
                     .map_err(|_| domain(ErrorData::OperationFailed))?
             }
+            Method::ConfigurationReconcile { session_id } => {
+                Ok(MethodResult::ConfigurationApplication {
+                    application: self
+                        .host
+                        .manager()
+                        .reconcile_configuration(&session_id)
+                        .await
+                        .map_err(source_settings_error)?,
+                })
+            }
+            Method::AdoptConfiguration {
+                session_id,
+                candidate,
+                expected_binding,
+            } => Ok(MethodResult::ConfigurationApplication {
+                application: self
+                    .host
+                    .manager()
+                    .adopt_configuration(&session_id, &candidate, expected_binding)
+                    .map_err(|rejection| domain(ErrorData::ConfigurationAdoption { rejection }))?,
+            }),
             Method::SourcesRead { session_id } => {
                 let (projection, session_revision, session_selection) = self
                     .host
@@ -598,19 +624,6 @@ impl AppServerConnection {
                     session_selection,
                 })
             }
-            Method::SelectModel {
-                session_id,
-                expected_revision,
-                selection,
-            } => {
-                let revision = self
-                    .host
-                    .manager()
-                    .select_model(&session_id, expected_revision, selection)
-                    .await
-                    .map_err(source_settings_error)?;
-                Ok(MethodResult::SettingsReplaced { revision })
-            }
             Method::SettingsRead { session_id } => {
                 let (revision, settings) = self
                     .sessions
@@ -619,17 +632,6 @@ impl AppServerConnection {
                     .map_err(session_error)?;
                 Ok(MethodResult::Settings { revision, settings })
             }
-            Method::SettingsReplace {
-                session_id,
-                expected_revision,
-                settings,
-            } => Ok(MethodResult::SettingsReplaced {
-                revision: self
-                    .sessions
-                    .replace_settings(&session_id, expected_revision, settings)
-                    .await
-                    .map_err(session_error)?,
-            }),
             Method::SessionAttach {
                 session_id,
                 node_id,
@@ -669,6 +671,10 @@ impl AppServerConnection {
                             capacity,
                         }),
                         MethodResult::Attached {
+                            configuration: self
+                                .host
+                                .manager()
+                                .configuration_application(&session_id),
                             target,
                             snapshot: Box::new(snapshot),
                             cursor,
@@ -702,7 +708,22 @@ impl AppServerConnection {
     /// Panics if a connection routing mutex is poisoned.
     pub async fn next_notification(&self) -> Notification {
         let _reader = self.reader.lock().await;
+        let mut configuration_changes = self.host.manager().configuration_changes();
         loop {
+            for application in self.host.manager().configuration_applications() {
+                let mut versions = self
+                    .configuration_versions
+                    .lock()
+                    .expect("configuration notification versions");
+                let version = versions.entry(application.scope.clone()).or_default();
+                if application.version > *version {
+                    *version = application.version;
+                    return Notification {
+                        jsonrpc: JsonRpcVersion::V2,
+                        notification: NotificationMethod::ConfigurationChanged { application },
+                    };
+                }
+            }
             let changed = self.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
@@ -715,7 +736,7 @@ impl AppServerConnection {
                 .cloned()
                 .collect();
             if routes.is_empty() {
-                changed.await;
+                tokio::select! { () = &mut changed => {}, _ = configuration_changes.changed() => {} }
                 continue;
             }
             // A continuously ready Session cannot starve other attachments.
@@ -742,6 +763,7 @@ impl AppServerConnection {
                 .collect();
             let (route, delivery, observed) = tokio::select! {
                 () = &mut changed => continue,
+                _ = configuration_changes.changed() => continue,
                 result = futures_util::future::select_all(pending) => result.0,
             };
             let target = route.target.clone();
@@ -820,8 +842,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::InboundRemove { target, .. }
         | Method::TurnCancel { target, .. }
         | Method::InteractionRespond { target, .. }
-        | Method::InteractionCancel { target, .. }
-        | Method::ConfigurationReload { target, .. } => Some(target),
+        | Method::InteractionCancel { target, .. } => Some(target),
         _ => None,
     }
 }
@@ -833,11 +854,17 @@ async fn dispatch_runtime(
     authority: Arc<crate::runtime_client::host::ClientInner>,
     changed: Arc<tokio::sync::Notify>,
     sessions: SessionController,
+    manager: crate::local_runtime::session_runtime_manager::SessionRuntimeManager,
 ) -> Result<MethodResult, RpcError> {
     match method {
-        Method::ConfigurationGet { .. } => Ok(MethodResult::EffectiveConfiguration {
-            projection: Box::new(authority.configuration().map_err(client_error)?),
-        }),
+        Method::ConfigurationGet { target } => {
+            let mut projection = authority.configuration().map_err(client_error)?;
+            projection.application = manager.configuration_application(&target.session_id);
+            projection.process_bindings = Some(manager.process_policy());
+            Ok(MethodResult::EffectiveConfiguration {
+                projection: Box::new(projection),
+            })
+        }
         Method::ArtifactRead {
             target: _,
             artifact_id,
@@ -890,7 +917,14 @@ async fn dispatch_runtime(
         }
         Method::ModelGet { target: _ } => native_result(authority.model_get()),
         Method::ModelCatalog { target: _ } => native_result(authority.model_catalog()),
-        Method::ModelSet { target: _, config } => native_result(authority.model_set(*config)),
+        Method::ModelSet { target, config } => Ok(MethodResult::Model {
+            model: Box::new(
+                manager
+                    .set_model(&target.session_id, *config)
+                    .await
+                    .map_err(|rejection| domain(ErrorData::ConfigurationAdoption { rejection }))?,
+            ),
+        }),
         Method::Capability { target: _ } => native_result(authority.capability()),
         Method::Trace {
             target: _,
@@ -1019,9 +1053,7 @@ async fn dispatch_runtime(
             target: _,
             interaction,
         } => native_result(authority.cancel_interaction(&interaction).await),
-        Method::ConfigurationReload { target: _ } => {
-            native_result(authority.reload_configuration().await)
-        }
+
         _ => unreachable!("only admitted runtime methods"),
     }
 }
@@ -1087,23 +1119,14 @@ fn native_result(
         RuntimeClientResult::InteractionResponseAccepted { interaction } => {
             MethodResult::InteractionSettled { interaction }
         }
-        RuntimeClientResult::ConfigurationReloaded {
-            resource_revision,
-            capability_revision,
-        } => MethodResult::ConfigurationReloaded {
-            resource_revision,
-            capability_revision,
-        },
+
         _ => return Err(domain(ErrorData::OperationFailed)),
     })
 }
 fn client_error(error: RuntimeClientError) -> RpcError {
     domain(match error {
-        RuntimeClientError::ConfigurationReloadBusy { reason } => {
-            ErrorData::ConfigurationBusy { reason }
-        }
-        RuntimeClientError::ConfigurationReloadFailed { diagnostic } => {
-            ErrorData::ConfigurationFailed { diagnostic }
+        RuntimeClientError::ConfigurationAdoption { rejection } => {
+            ErrorData::ConfigurationAdoption { rejection }
         }
         RuntimeClientError::InteractionNotPending { interaction } => {
             ErrorData::InteractionNotPending { interaction }

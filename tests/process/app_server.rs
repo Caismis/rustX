@@ -170,7 +170,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":13,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":14,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -227,9 +227,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v9, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v13"),
+            Some("rustx.app-server.v14"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v13, rustx-token.wrong"),
+            Some("rustx.app-server.v14, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -976,33 +976,7 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
         initialize_client(&client).await;
         let a = attach(&client, f.sessions[0].clone(), 2).await;
         let a_initial = snapshot(&client, &a).await;
-        // Explicit model choice belongs to the durable Session; omitted
-        // extension defaults remain current source authority on cold load.
-        let MethodResult::Settings {
-            revision,
-            mut settings,
-            ..
-        } = result(
-            &client,
-            Method::SettingsRead {
-                session_id: a.session_id.clone(),
-            },
-        )
-        .await
-        else {
-            panic!("settings")
-        };
-        settings.model =
-            Some(serde_json::from_value(a_initial["model"]["configured"].clone()).unwrap());
-        result(
-            &client,
-            Method::SettingsReplace {
-                session_id: a.session_id.clone(),
-                expected_revision: revision,
-                settings: settings.clone(),
-            },
-        )
-        .await;
+        // Session creation already pins the resolved model selection.
         start_turn(&client, &a, "tui multi-session: session A long task").await;
         provider.await_gate("session-a-holding").await;
         let admitted = snapshot(&client, &a).await["attempt"].clone();
@@ -1072,7 +1046,10 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
         else {
             panic!("settings")
         };
-        assert_eq!(persisted, settings);
+        assert_eq!(
+            serde_json::to_value(persisted.model).unwrap(),
+            a_initial["model"]["configured"]
+        );
         assert_eq!(provider.requests().await.len(), 2);
         client.close().await;
         terminate(&child);

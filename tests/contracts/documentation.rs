@@ -30,6 +30,10 @@ const OBSOLETE: &[&str] = &[
     "trusted workspace",
     "untrusted workspace",
     "resources/reload",
+    "configuration/reload",
+    "pending_reload",
+    "settings/selectmodel",
+    "settings/replace",
     "resource reload",
     "source enablement",
     "source activation",
@@ -88,6 +92,7 @@ fn current_documentation_rejects_obsolete_cfg2_contracts() {
         "web-console/VALIDATION.md",
         "docs/tui-dogfooding-267.md",
         "docs/cfg3-residue-audit.md",
+        "docs/issue-380-audit.md",
     ];
     let mut failures = Vec::new();
     paths.sort();
@@ -133,7 +138,7 @@ fn documentation_guard_distinguishes_current_paths_and_negative_spellings() {
         "<workspace>/.agents/skills",
         "rustx.toml",
         "--config",
-        "configuration/reload",
+        "configuration/reconcile",
         "Plugins default off",
     ] {
         assert!(!obsolete_contract(current), "{current}");

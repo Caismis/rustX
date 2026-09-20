@@ -9,7 +9,7 @@ import { CommandSession, NavigationEpoch, createSession } from '../src/app/comma
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v13';
+import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v14';
 import { Server, snapshot } from './fixture';
 
 let server: Server;

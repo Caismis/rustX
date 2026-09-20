@@ -292,10 +292,6 @@ struct Driver {
 }
 
 impl Driver {
-    async fn start(emulator: &ProviderEmulator) -> Self {
-        Self::start_with_workflow(emulator, WORKFLOW).await
-    }
-
     async fn start_with_workflow(emulator: &ProviderEmulator, workflow: &str) -> Self {
         let root = tempfile::tempdir().expect("temp root");
         let workspace = root.path().join("workspace");
@@ -504,112 +500,6 @@ async fn discovered_workflow_can_remain_out_of_main_model_admission() {
             .names()
             .contains(&"review_pr")
     );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn admitted_workflow_freezes_files_resources_and_keeps_one_parent_history_boundary() {
-    let Some(emulator) = ProviderEmulator::start("workflow_output").await else {
-        return;
-    };
-    let driver = Driver::start(&emulator).await;
-    driver.submit();
-    emulator.await_gate("workflow-child-admitted").await;
-    // The real child's model request proves native admission and profile
-    // materialization already happened. Edit every relevant source while
-    // that child is held before its terminal output, without a timing race.
-    let workspace = driver.root.path().join("workspace");
-    std::fs::write(
-        workspace.join(".agents/workflows/review_pr.yaml"),
-        r"
-description: Changed future workflow
-block:
-  input: {type: object}
-  output: {type: object, properties: {summary: {type: string}}, required: [summary]}
-  entry: done
-  nodes:
-    done:
-      type: return
-      output: {type: literal, value: {summary: changed future output}}
-  edges: []
-",
-    )
-    .expect("replace future program");
-    std::fs::write(
-        workspace.join(".agents/agents/reviewer.toml"),
-        "description = \"Future reviewer.\"\ninstructions = \"CHANGED FUTURE PROFILE\\n\"\n",
-    )
-    .expect("replace future profile");
-    std::fs::write(
-        driver.root.path().join("rustx.toml"),
-        format!(
-            "{}\n{}",
-            CONFIG.replace("workflows = [\"review_pr\"]", "workflows = []"),
-            models_json_for_base_url("http://127.0.0.1:1/v1")
-        ),
-    )
-    .expect("replace future exposure");
-    emulator.release_gate("workflow-child-admitted").await;
-    let (events, outcome) = driver.settle().await;
-
-    assert!(
-        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
-        "Workflow Tool completion is one parent attempt result: {outcome:?}"
-    );
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| matches!(event, RuntimeClientEvent::ToolExecutionSettled { .. }))
-            .count(),
-        1,
-        "the parent sees one bounded Workflow Tool execution"
-    );
-    let snapshot = driver.runtime.host().snapshot().expect("snapshot");
-    let snapshot_json = serde_json::to_string(&snapshot).expect("snapshot JSON");
-    assert!(snapshot_json.contains("native workflow child committed"));
-    assert!(
-        !snapshot_json.contains("Review the request and commit the result"),
-        "the child task is not injected into parent canonical history"
-    );
-    assert!(
-        !snapshot_json.contains("\"passed\":true"),
-        "the intermediate child value is not injected into parent history"
-    );
-
-    let requests = emulator.requests().await;
-    assert_eq!(requests.len(), 3, "parent, child, then parent continuation");
-    assert!(
-        !serde_json::to_string(&requests)
-            .unwrap()
-            .contains("CHANGED FUTURE PROFILE")
-    );
-    driver
-        .runtime
-        .host()
-        .reload_configuration()
-        .await
-        .expect("publish edited resources for future attempts");
-    assert!(
-        driver
-            .runtime
-            .runtime()
-            .runtime_resources()
-            .root_profile()
-            .unwrap()
-            .workflows
-            .is_empty()
-    );
-    assert_eq!(
-        driver
-            .runtime
-            .runtime()
-            .runtime_resources()
-            .workflows()
-            .get(&WorkflowId::parse("review_pr").unwrap())
-            .unwrap()
-            .description(),
-        "Changed future workflow"
-    );
-    emulator.finish().await;
 }
 
 #[tokio::test]

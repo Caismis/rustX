@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v13';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v14';
 import { AgentControls } from '../src/app/agent/AgentControls';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { Interactions } from '../src/app/agent/Interactions';
@@ -89,16 +89,15 @@ it('permission save uses exact source CAS and distinguishes desired, published, 
    if (request.method !== 'configuration/sourceWrite') throw new Error('wrong request');
    expect(request.params.expected_revision).toBe('workspace-1');
    expect(request.params.mutation).toEqual({ kind: 'config', scope: 'workspace', mutation: { unit: 'approval', authored: 'full_access' } });
-   source.prospective_approval_mode = 'full_access'; source.workspace.revision = 'workspace-2'; source.loaded!.pending_reload = true;
+   source.prospective_approval_mode = 'full_access'; source.workspace.revision = 'workspace-2';
    return { type: 'source_settings', projection: structuredClone(source), session_revision: '1' };
  });
  await server.attached('A'); render(<Control kind="permission"/>);
  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Approval mode' })));
  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Full access' })));
- expect(count('configuration/sourceWrite')).toBe(1); expect(count('configuration/reload')).toBe(0);
+ expect(count('configuration/sourceWrite')).toBe(1); expect(count('session/adoptConfiguration')).toBe(0);
  expect(screen.getByText('Effective for running attempt: policy')).toBeTruthy();
- expect(screen.getByText('Desired: full_access · pending Reload')).toBeTruthy();
- expect((screen.getByRole('button', { name: 'Apply saved policy' }) as HTMLButtonElement).disabled).toBe(true);
+ expect(screen.queryByRole('button', { name: 'Apply saved policy' })).toBeNull();
 });
 it('one Stop gesture issues one request, and only native snapshot settlement releases the cancellation guard', async () => {
  server.snapshots.set('A', running()); await server.attached('A'); server.held.add('turn/cancel');

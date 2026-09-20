@@ -72,6 +72,7 @@ fn resolved(agent: &str) -> ResolvedSubagentSpec {
 
 fn spec(task: &str) -> SubagentStartSpec {
     SubagentStartSpec {
+        execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
         resolved: resolved("explore"),
         approval_mode: rustx::runtime::ApprovalMode::Policy,
         task: task.to_owned(),
@@ -147,6 +148,7 @@ async fn start_subagent(
 /// program, which is why it is never steerable (Issue #193).
 fn workflow_spec(task: &str) -> SubagentStartSpec {
     SubagentStartSpec {
+        execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
         terminal: rustx::runtime::subagent::SubagentTerminalMode::WorkflowOutput {
             output_schema: serde_json::json!({
                 "type": "object",

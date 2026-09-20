@@ -614,10 +614,10 @@ The Ledger, Surface, and RequestSnapshot have separate ownership:
   authority, not durable compaction state and not a source for rewriting old
   snapshots or summaries.
 
-Compaction never discovers or reloads resources. Explicit reload remains a
-quiescent runtime lifecycle operation, and a cold reopen may publish a new
-current resource generation for future attempts while preserving old Ledger
-facts, summaries, and RequestSnapshots byte-for-byte.
+Compaction never discovers or applies configuration. Native configuration
+coordination owns application, and explicit Session adoption owns context-binding
+changes. Both preserve Ledger facts, summaries and historical RequestSnapshots.
+Runtime recreation within the process retains the Session adopted binding.
 
 ## 6. Context Engine responsibilities
 

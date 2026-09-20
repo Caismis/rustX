@@ -216,9 +216,7 @@ impl std::fmt::Debug for LocalRuntimeDependencies {
     }
 }
 
-/// Reload-time resource composition for one local runtime. Command-line
-/// inputs are immutable; pinned user/project document slots and resources are read only
-/// when this loader is explicitly invoked by the runtime reload boundary.
+/// Off-side resource composition from the configuration owner’s immutable input capture.
 struct LocalRuntimeResourceLoader {
     paths: AdmittedSessionConfig,
     native_resources: NativeToolResources,
@@ -247,12 +245,13 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
     fn prepare<'a>(
         &'a self,
         capability: &'a CapabilityCoordinator,
+        capture: Option<crate::local_runtime::configuration::ProspectiveSessionConfig>,
+        preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
     ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
         Box::pin(async move {
-            let capture = self
-                .paths
-                .reload_configuration()
-                .map_err(RuntimeResourceLoadError::new)?;
+            let capture = capture.ok_or_else(|| {
+                RuntimeResourceLoadError::new("configuration preparation requires captured inputs")
+            })?;
             let config = capture.config.as_ref();
             let models = ModelBindingRegistry::new(
                 capture
@@ -281,7 +280,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             )
             .map_err(|error| {
                 RuntimeResourceLoadError::new(format!(
-                    "cannot register reload-time native tools: {error}"
+                    "cannot register candidate native tools: {error}"
                 ))
             })?;
             crate::tools::native::register_workflow_sources(
@@ -291,7 +290,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             )
             .map_err(|error| {
                 RuntimeResourceLoadError::new(format!(
-                    "cannot register reload-time Workflow Tools: {error}"
+                    "cannot register candidate Workflow Tools: {error}"
                 ))
             })?;
             let skill_discovery = SkillDiscoveryConfig {
@@ -300,7 +299,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             let mcp_servers = captured_mcp_bindings(config, &self.paths.credentials)
                 .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
             let mut candidate = capability
-                .prepare_reload_capture(
+                .prepare_captured_inputs(
                     CapabilityResourceInputs {
                         source_demand: admitted_source_demand(
                             config,
@@ -320,11 +319,12 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                         base_environment,
                     },
                     capture.skill_discovery.clone(),
+                    preparation_cancellation,
                 )
                 .await
                 .map_err(|error| {
                     RuntimeResourceLoadError::new(format!(
-                        "cannot prepare reload capability resources: {error}"
+                        "cannot prepare candidate capability resources: {error}"
                     ))
                 })?;
             validate_workflow_tool_name_collisions(&candidate, &workflows)?;
@@ -824,6 +824,8 @@ impl RuntimeResourceLoader for FrozenSubagentResourceLoader {
     fn prepare<'a>(
         &'a self,
         capability: &'a CapabilityCoordinator,
+        _capture: Option<crate::local_runtime::configuration::ProspectiveSessionConfig>,
+        _preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
     ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
         Box::pin(async move {
             let candidate = capability.prepare_base_only_candidate().map_err(|error| {
@@ -1132,7 +1134,7 @@ impl LocalConversationCore {
             )?;
 
             // Initial Root Plugin selection comes from the resolved CFG3 profile.
-            // Later safe-boundary reload publishes a new profile; admitted work
+            // Later configuration adoption publishes a new profile; admitted work
             // retains its generation. Conversation Todo/Goal state owners remain
             // stable independently of whether a generation exposes their Tools.
             // Named Agents resolve their own independent Plugin profiles.
@@ -1236,9 +1238,6 @@ impl LocalConversationCore {
                         product_root: crate::runtime::local_storage::ProductRoot::clone(
                             &conversation_access,
                         ),
-                        model_timeout_policy,
-                        tool_deadline_policy,
-                        context: runtime_config.context_policy(),
                     },
                     workspace: WorkspaceManager::for_local_conversation(
                         tool_runtime.workspace().root(),

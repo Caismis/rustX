@@ -1,4 +1,5 @@
 //! Direct connection contracts. Provider gates prove overlap; no socket timing.
+#![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::{Fixture, bounded, input};
 use crate::app_server::connection::AppServerConnection;
 use crate::app_server::protocol::*;
@@ -268,56 +269,6 @@ async fn admitted_async_operation_drains_before_delete_releases_resources() {
             ),
             "deletion committed after all admitted operations drained"
         );
-        f.close().await;
-    })
-    .await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unload_claim_rejects_late_operations_and_old_incarnations() {
-    bounded(async {
-        let f = Fixture::new().await;
-        let connection = AppServerConnection::new(f.host.clone());
-        initialize(&connection).await;
-        let old = attach(&connection, &f, 0).await;
-        let probe = f.manager.probe(&old.conversation_id);
-        probe.before_shutdown.arm();
-        let unload = super::unload_task(&f, old.conversation_id.clone());
-        probe.before_shutdown.entered().await;
-        for _ in 0..2 {
-            assert_eq!(
-                rejected(
-                    &connection,
-                    Method::TurnStart {
-                        target: old.clone(),
-                        content: (input("never execute"))
-                            .into_iter()
-                            .map(|block| match block {
-                                crate::message::types::UserContentBlock::Text(text) =>
-                                    crate::app_server::protocol::UserInputBlock::Text(text),
-                                _ => panic!("client fixtures must use text or issued receipts"),
-                            })
-                            .collect()
-                    }
-                )
-                .await,
-                ErrorData::StaleRuntime
-            );
-        }
-        assert!(
-            !*probe.before_operation.entered.borrow(),
-            "late operation never admitted"
-        );
-        assert!(f.provider.request_bodies().is_empty());
-        probe.before_shutdown.release();
-        unload.await.unwrap().unwrap();
-        let replacement = f.manager.load(&old.session_id, None).await.unwrap();
-        assert_ne!(old.runtime_incarnation, replacement.incarnation_id());
-        assert_eq!(
-            rejected(&connection, Method::ConfigurationReload { target: old }).await,
-            ErrorData::StaleRuntime
-        );
-        assert!(f.provider.request_bodies().is_empty());
         f.close().await;
     })
     .await;
@@ -653,7 +604,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":12,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 13, requested: 12 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 14, requested: 12 })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -771,8 +722,8 @@ async fn durable_session_operations_never_compose_a_runtime() {
         };
         assert_eq!(session.name.as_deref(), Some("durable only"));
         let MethodResult::Settings {
-            revision,
-            mut settings,
+            revision: _,
+            settings,
             ..
         } = call(
             &connection,
@@ -785,44 +736,10 @@ async fn durable_session_operations_never_compose_a_runtime() {
         else {
             panic!("settings");
         };
-        settings.model = Some(crate::model::session::SessionModelConfig::of(
-            crate::model::catalog::ModelRef::parse("local/b").unwrap(),
-        ));
-        let MethodResult::SettingsReplaced { revision: updated } = call(
-            &connection,
-            103,
-            Method::SettingsReplace {
-                session_id: id.clone(),
-                expected_revision: revision,
-                settings: settings.clone(),
-            },
-        )
-        .await
-        else {
-            panic!("replace");
-        };
-        assert!(updated > revision);
-        let stale = connection
-            .handle_request(Request {
-                jsonrpc: JsonRpcVersion::V2,
-                id: RequestId::Integer(104),
-                call: Method::SettingsReplace {
-                    session_id: id.clone(),
-                    expected_revision: revision,
-                    settings,
-                },
-            })
-            .await;
-        assert!(matches!(
-            stale,
-            Response::Failure(Failure {
-                error: RpcError {
-                    data: Some(ErrorData::StaleSettings { .. }),
-                    ..
-                },
-                ..
-            })
-        ));
+        assert!(
+            settings.model.is_some(),
+            "Session creation resolves its model"
+        );
         let MethodResult::Tree { nodes, .. } = call(
             &connection,
             105,
@@ -1307,6 +1224,7 @@ async fn attach_snapshot_and_subscription_share_the_publication_cut() {
             target,
             snapshot,
             cursor,
+            ..
         } = attaching.await.unwrap()
         else {
             panic!("attach")
@@ -1449,54 +1367,6 @@ async fn close_linearizes_before_pending_attach_commit() {
         let replacement = AppServerConnection::new(f.host.clone());
         initialize(&replacement).await;
         attach(&replacement, &f, 0).await;
-        replacement.close();
-        f.close().await;
-    })
-    .await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn admitted_mutation_survives_close_before_native_dispatch() {
-    bounded(async {
-        let f = Fixture::new().await;
-        let connection = std::sync::Arc::new(AppServerConnection::new(f.host.clone()));
-        initialize(&connection).await;
-        let target = attach(&connection, &f, 0).await;
-        let probe = f.manager.probe(&target.conversation_id);
-        probe.before_operation.arm();
-        let worker = connection.clone();
-        let pending =
-            tokio::spawn(
-                async move { call(&worker, 10, Method::ConfigurationReload { target }).await },
-            );
-        probe.before_operation.entered().await; // manager lease acquired, native call not executed
-        connection.close();
-        assert_eq!(connection.attachment_counts(), (0, 0));
-        let replacement = AppServerConnection::new(f.host.clone());
-        initialize(&replacement).await;
-        let new = attach(&replacement, &f, 0).await;
-        probe.before_operation.release();
-        assert!(matches!(
-            pending.await.unwrap(),
-            MethodResult::ConfigurationReloaded { .. }
-        ));
-        let MethodResult::Snapshot { snapshot, .. } = call(
-            &replacement,
-            11,
-            Method::SessionSnapshot {
-                trace_records: vec![],
-                target: new,
-            },
-        )
-        .await
-        else {
-            panic!("snapshot");
-        };
-        assert_eq!(snapshot.resources.revision.get(), 2);
-        assert!(matches!(
-            rejected(&connection, Method::ServerInfo {}).await,
-            ErrorData::StaleAttachment
-        ));
         replacement.close();
         f.close().await;
     })
@@ -2200,7 +2070,7 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
         let id = f.sessions[0].id.clone();
         let MethodResult::SourceSettings {
             projection,
-            session_revision,
+            session_revision: _,
             ..
         } = call(
             &connection,
@@ -2274,59 +2144,6 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
             panic!()
         };
         assert_eq!(fresh.user, saved.user);
-        let MethodResult::SettingsReplaced { revision } = call(
-            &connection,
-            4,
-            Method::SelectModel {
-                session_id: id.clone(),
-                expected_revision: session_revision,
-                selection: selection.clone(),
-            },
-        )
-        .await
-        else {
-            panic!()
-        };
-        assert!(revision > session_revision);
-        assert!(matches!(
-            rejected(
-                &connection,
-                Method::SelectModel {
-                    session_id: id.clone(),
-                    expected_revision: session_revision,
-                    selection: None
-                }
-            )
-            .await,
-            ErrorData::StaleSettings { .. }
-        ));
-        let MethodResult::SourceSettings {
-            session_selection,
-            projection,
-            ..
-        } = call(
-            &connection,
-            5,
-            Method::SourcesRead {
-                session_id: id.clone(),
-            },
-        )
-        .await
-        else {
-            panic!()
-        };
-        assert_eq!(session_selection, selection);
-        assert_eq!(projection.loaded, None);
-        call(
-            &connection,
-            6,
-            Method::SelectModel {
-                session_id: id,
-                expected_revision: revision,
-                selection: None,
-            },
-        )
-        .await;
         let error = f
             .manager
             .configuration
@@ -2560,32 +2377,6 @@ async fn cfg3_source_document_wait_releases_catalog_and_rejects_mixed_session_re
         assert_eq!(current, next);
         assert_eq!(selected.unwrap().model.to_string(), "local/b");
         assert_eq!(after.user.revision, before.user.revision);
-        f.close().await;
-    }).await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn web08_selection_validation_releases_catalog_and_commits_with_original_cas() {
-    bounded(async {
-        let f = Fixture::new().await;
-        let id = f.sessions[0].id.clone();
-        let (_, revision, _) = f.manager.source_settings(&id, None).await.unwrap();
-        let (entered, resume) = source_gate(&f, "validation_started");
-        let manager = f.manager.clone();
-        let select_id = id.clone();
-        let save = tokio::spawn(async move { manager.select_model(&select_id, revision, Some(crate::model::session::SessionModelConfig::of(crate::model::catalog::ModelRef::parse("local/b").unwrap()))).await });
-        entered.await.unwrap();
-        let mut catalog = f.manager.sessions.catalog.lock().await;
-        catalog.settings_revision(&f.sessions[1].id).unwrap();
-        let (_, settings) = catalog.lineage(&id, None).unwrap();
-        let unchanged = settings.model.clone();
-        let next = catalog.replace_settings(&id, revision, settings).unwrap();
-        drop(catalog);
-        resume.send(()).unwrap();
-        assert!(matches!(save.await.unwrap(), Err(super::super::SourceSettingsError::Session(crate::local_runtime::session::SessionError::StaleSettings { expected, actual })) if expected == revision && actual == next));
-        let (_, actual, selection) = f.manager.source_settings(&id, None).await.unwrap();
-        assert_eq!(actual, next);
-        assert_eq!(selection, unchanged);
         f.close().await;
     }).await;
 }

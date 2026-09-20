@@ -336,7 +336,23 @@ pub(crate) fn translate_request(
     request: &crate::model::types::ModelRequest,
     tools: &ValidatedTools,
 ) -> Result<serde_json::Value, ModelError> {
-    let (system, messages) = translate_messages(request, tools)?;
+    construct_request(request, tools, true)
+}
+
+/// Same wire constructor, omitting natural history for configuration evidence.
+pub(crate) fn configuration_request(
+    request: &crate::model::ModelRequest,
+    tools: &ValidatedTools,
+) -> Result<serde_json::Value, ModelError> {
+    construct_request(request, tools, false)
+}
+
+fn construct_request(
+    request: &crate::model::ModelRequest,
+    tools: &ValidatedTools,
+    require_history: bool,
+) -> Result<serde_json::Value, ModelError> {
+    let (system, messages) = translate_messages(request, tools, require_history)?;
 
     if !request.tools.is_empty() && !request.invocation.capabilities.tool_calls {
         return Err(ModelError {
@@ -397,6 +413,7 @@ fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<Wi
 fn translate_messages(
     request: &crate::model::types::ModelRequest,
     tools: &ValidatedTools,
+    require_history: bool,
 ) -> Result<(Vec<WireTextBlock>, Vec<WireRequestMessage>), ModelError> {
     let system: Vec<WireTextBlock> = if request.effective_system_prompt.is_empty() {
         Vec::new()
@@ -475,7 +492,7 @@ fn translate_messages(
     }
     flush_tool_results(&mut pending_tool_results, &mut messages);
 
-    if messages.is_empty() {
+    if require_history && messages.is_empty() {
         return Err(ModelError {
             kind: ModelErrorKind::InvalidRequest,
             message: "an Anthropic Messages request requires at least one message".to_owned(),

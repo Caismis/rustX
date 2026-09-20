@@ -311,8 +311,8 @@ async fn a_model_update_after_admission_affects_only_future_attempts() {
         config: Box::new(SessionModelConfig::of(beta.reference())),
     });
     assert!(
-        response.error.is_none(),
-        "the update is valid: {response:?}"
+        response.error.is_some(),
+        "busy Session rejects model adoption: {response:?}"
     );
 
     // The runtime can truthfully report both facts at once, so a client never
@@ -320,8 +320,8 @@ async fn a_model_update_after_admission_affects_only_future_attempts() {
     let (snapshot, _) = host.snapshot().expect("snapshot");
     assert_eq!(
         snapshot.model.as_ref().unwrap().configured.model,
-        beta.reference(),
-        "the session desired model is B"
+        alpha.reference(),
+        "the Session keeps A until explicit idle model adoption"
     );
     let attempt = snapshot.attempt.as_ref().expect("a running attempt");
     assert_eq!(
@@ -361,6 +361,11 @@ async fn a_model_update_after_admission_affects_only_future_attempts() {
         "B's binding was never used by the already-admitted attempt"
     );
 
+    let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
+        id: RequestId::new(4),
+        config: Box::new(SessionModelConfig::of(beta.reference())),
+    });
+    assert!(response.error.is_none(), "{response:?}");
     // The next attempt snapshots B.
     submit(&attachment, 3, "second");
     receive_until(&subscription, |event| {
@@ -695,7 +700,10 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
             ..SessionModelConfig::of(alpha.reference())
         }),
     });
-    assert!(response.error.is_none(), "{response:?}");
+    assert!(
+        response.error.is_some(),
+        "active Attempt refuses summary adoption: {response:?}"
+    );
 
     release.send_replace(true);
     receive_until(&subscription, |event| {

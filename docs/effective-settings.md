@@ -10,17 +10,26 @@ App Server `configuration/effective` returns the published generation, redacted
 effective document and origins, Source revisions, Root profile, resource inventory
 and readiness, explicit Session model, and admitted Attempt generation/model/resources.
 `configuration/sourcesRead` separately reads current authored documents and inert
-prospective resources. Their revisions determine pending reload. A prospective
-source read never changes the published runtime.
+prospective resources. A source read does not publish configuration.
 
-User and Workspace editors send typed semantic-unit CAS mutations through
-`configuration/sourceWrite`. The native writer canonicalizes the complete document;
-comments are not retained. External changes and competing writers invalidate stale
-revisions. A conflict preserves the client draft. After an uncertain response,
-clients reread and reconcile; they do not blindly retry the mutation.
+Typed `configuration/sourceWrite` CAS mutations persist source and transfer
+application responsibility to the native coordinator. External edits invalidate
+stale revisions. Conflicts preserve client drafts. Lost responses require an
+authoritative reread, never blind replay.
 
-There is one `configuration/reload`. The candidate includes all documents,
-resources, policies, profiles and finite demand. Its single snapshot publication
-advances the generation. Busy, cancellation or failed preparation leaves the old
-generation authoritative. Save does not invoke Reload. Reconnect reads the current
-projection without replaying either operation.
+Application is composable per unit: policy may already apply to future Attempts
+while instructions await Session adoption, another closure failed, and a process
+binding needs restart. The projection includes desired input revision, application
+attempt, per-unit results, actual process bindings, latest complete candidate and
+the addressed Session's adopted revision. Ready is distinct from adopted.
+
+`session/adoptConfiguration` commits the inspected candidate with its expected
+Session baseline. Busy never cancels work. Conflict requires a reread. An admitted
+Attempt and all descendants keep their immutable execution snapshot.
+`configuration/reconcile` owns external-file rescan and same-revision retry;
+ordinary Save does not invoke it as a second action. Healthy no-ops do not create
+fake pending state or resource churn. Scope-versioned notifications are native
+authority; reconnect rereads them without replaying mutations.
+
+See [application and adoption](configuration.md#save-automatic-application-and-session-adoption)
+for ownership, finite units, request-shape comparison and publication fences.

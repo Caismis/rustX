@@ -113,8 +113,8 @@ Request Snapshot and attempt recovery; there is no Goal replay.
 ## State and command contract
 
 `agent.plugins.goal.enabled` defaults to false and is frozen per published
-configuration generation. `/reload` publishes Plugin composition at the safe
-boundary. When disabled, Goal Tools, context and driver are unavailable and
+configuration generation. Native reconciliation prepares the complete Plugin
+closure; Session-relative context impact determines explicit adoption. When disabled, Goal Tools, context and driver are unavailable and
 `/goal` reports feature-disabled. Conversation-owned stored state remains
 untouched and can be projected when the Plugin is enabled again. Named child
 definitions and invocation overrides share the closed syntax, but effective

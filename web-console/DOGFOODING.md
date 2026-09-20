@@ -158,7 +158,7 @@ interrupt guarantee). There is no Delivery selector. At desktop and 390px widths
 check the 36px resting editor, multiline growth, internal text scrolling at the
 configured cap and shrinkage on deletion. `+` opens commands; the quiet paperclip,
 paste and drop all retain upload intake. Effective permission is available on the
-control tooltip, with pending policy/reload information still visible.
+control tooltip, with native policy/application information still visible.
 Edit the pending row, save, remove, and queue the original text again. Open its
 editor, release `goal-round`, and wait for `Queued input handled.`. The claimed
 row's obsolete draft must not be sendable. Cancel the draft. Pause/resume Goal;
@@ -208,11 +208,11 @@ Use a fresh fixture without prompts. Open **Effective | User | Workspace**.
   model inheritance, independent Tools/Skills/Plugins, timeout and worktree policy.
   Root's delegation allowlist is separate. Skill, Python and Workflow source
   editors are outside this UI; their native inventory remains available.
-- Save and confirm pending reload while generation N stays loaded. Reload and
+- Save and confirm automatic policy application or native pending adoption. Adopt and
   verify N → N+1. Invalid source or busy ownership retains N with native diagnostics.
 - Create an external-editor CAS conflict. The draft survives; review the current
   revision before another deliberate Save. Lost responses trigger authoritative
-  rereads without replay. Reconnect is not an automatic Save or Reload.
+  rereads without replay. Reconnect rereads authority without replaying Save or adoption.
 - Invalid Workspace content must be diagnosed, never treated as an inactive trust
   scope. Host picker authorization remains separate from native configuration.
 

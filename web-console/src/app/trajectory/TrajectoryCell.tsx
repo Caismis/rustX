@@ -4,7 +4,7 @@ import type {
   TraceKind,
   TraceRecord,
   TraceSystemPromptState,
-} from '../../../../protocol/app-server/v13';
+} from '../../../../protocol/app-server/v14';
 import { IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import css from './Trajectory.module.css';

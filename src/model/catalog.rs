@@ -863,6 +863,15 @@ impl ModelCatalog {
             })
     }
 
+    pub(crate) fn same_binding(&self, other: &Self, model: &ModelRef) -> bool {
+        match (self.models.get(model), other.models.get(model)) {
+            (Some(a), Some(b)) => {
+                a == b && self.providers.get(&a.provider) == other.providers.get(&b.provider)
+            }
+            _ => false,
+        }
+    }
+
     /// Every model reference in deterministic presentation order.
     pub fn model_refs(&self) -> impl Iterator<Item = ModelRef> + '_ {
         self.models.keys().cloned()

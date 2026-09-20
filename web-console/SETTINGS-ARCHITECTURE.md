@@ -44,8 +44,8 @@ it with `{ mode: "session" }`. Rendering never materializes native defaults.
 3. Submit that exact draft base revision. Rust either commits or rejects.
 4. Acknowledgement supplies the new authoritative revision and redacted source.
    Successful credential drafts are reconstructed from this projection.
-5. Save changes source only. The loaded generation stays authoritative until
-   explicit Reload prepares and atomically publishes its replacement.
+5. Save transfers application responsibility to the native coordinator. Independent
+   complete units apply automatically; native context candidates await explicit adoption.
 
 Conflict preserves the draft and original revision. The user can inspect the
 current redacted unit and deliberately choose “Use reviewed revision” before
@@ -53,12 +53,13 @@ resubmitting. Remove submits `null`; empty arrays, `all`, exact arrays and empty
 objects remain distinct generated values. No recursive merge or config-file
 serialization is implemented in TypeScript.
 
-Lost Save/Reload replies and reconnect cause authoritative rereads, never replay.
+Lost Save/adoption replies and reconnect cause authoritative rereads, never replay.
 Connection/attachment epochs fence obsolete work, and a read sequence prevents an
 older overlapping read from replacing a newer observation or a write acknowledgement.
 Both success and rejection commit only within the same epoch and read sequence,
 including explicit refresh failures.
-A failed/busy Reload leaves the previous generation and native diagnostic visible.
+Busy adoption leaves work running. Failed preparation leaves old effective resources
+available. Settings renders native per-unit state without inferring field impact.
 
 ## Coverage and native limits
 

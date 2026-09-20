@@ -46,7 +46,7 @@ physical execution scratch beneath their native owner directories.
 `--config /absolute/file.toml` replaces the User document binding for this
 process. User resources stay at `~/rustx/.agents`; the Workspace document stays
 at `<workspace>/rustx.toml`. `--runtime-root /absolute/directory` replaces only
-the process runtime storage root. Neither path can change through reload.
+the process runtime storage root. Both are fixed process bindings.
 Workspace identity never determines the default runtime storage root.
 
 ```sh
@@ -237,7 +237,7 @@ policy engine. Runtime control and Plugin Tools keep their domain-owned policies
 `app_server` accepts positive bounded `max_resident_runtimes` (8),
 `max_connections` (32), `max_external_attachments` (64), `idle_grace_ms` (300000),
 and `shutdown_deadline_ms` (30000). It is User-authored process policy. Workspace
-authoring is rejected and reload cannot rebind the process.
+authoring is rejected and application cannot rebind the process.
 
 ## Exact overlay matrix
 
@@ -335,46 +335,59 @@ validates exact model-facing capability exposure. Failed required preparation
 rejects the candidate. Unselected sources cause zero connections or preparation.
 See [Workflow authoring](workflow-authoring.md) for the unchanged Workflow language.
 
-## Save, reload and restart
+## Save, automatic application and Session adoption
 
-Save is a source CAS write. Each typed mutation supplies the exact source
-revision. The native writer takes the persistent document lock, checks that
-revision, applies one semantic-unit mutation, validates and deterministically
-serializes the complete rustX-owned TOML document, stages and syncs it, rechecks
-the revision, renames into place, and syncs its parent. Comments are canonicalized
-away. Competing cooperating writers have one winner. An external editor's changed
-bytes invalidate a stale draft. Secret replacement/retention is scoped to the
-same authored source, never a shadowed Provider.
+`configuration/sourceWrite` is a typed source CAS operation. The native writer
+checks the exact byte revision, validates and canonicalizes TOML, stages and syncs
+it, checks again, renames it, and syncs its parent. External edits invalidate stale
+drafts. Secret retention is scoped to the same authored source.
 
-An uncertain write response is repaired by rereading the authoritative source.
-Clients preserve their draft and never blindly replay a mutation. Successful Save
-does not update a loaded runtime. Its source revisions differ from the published
-generation and the native projection reports pending reload.
+After persistence, native configuration coordination captures a finite immutable
+input manifest and owns reconciliation independently of the RPC. Save requires no
+second action. Saved source is desired state; it is not proof of effective state.
+The application attempt identity distinguishes retries of the same input revision.
+The source/application mutex orders commits against final candidate publication.
 
-`/reload` calls the single `configuration/reload` operation. The runtime builds a
-candidate off-side: reread both documents and both resource roots; parse; apply
-typed overlays; shadow resources; resolve models, policies and profiles; calculate
-finite demand; prepare required external sources; validate the complete candidate.
-Source revision fences reject changes during capture. The capability coordinator
-owns one immutable `RuntimeResourceSnapshot` carrying `RuntimeConfiguration`,
-catalogs, prepared sources, Tool registry and projection facts.
+The finite units are execution policy, capability/resource closure, instructions,
+provider/request construction, shared child capacity, and process bindings.
+Independent approval and deadline policies apply to future independent Attempts.
+Capability definitions, implementations, environments, MCP bindings and leases move
+together. Candidate preparation happens off-side with one active preparation and
+latest pending work per Session. Preparation has a bounded deadline. Failures do
+not roll back independently applied units or mutate resources leased by old work.
 
-Publication replaces the coordinator's complete current resource snapshot under
-its state lock through the runtime's private publication authority. That swap is
-the configuration publication linearization point. The generation advances once
-for a published candidate. No client can observe a new Provider with an old Root
-profile. Active Attempts, background work, children, Workflows, maintenance and
-competing reload ownership can return typed busy. Failure or cancellation before
-publication leaves the exact old snapshot authoritative. Saving or watching files
-never publishes; there is no filesystem watcher.
+Each Session retains its adopted binding across runtime unload/load and reconnect
+within an App Server process. Comparison uses that Session's actual adopted
+provider request shape. Adapter-built system contributions, ordered Tool schemas,
+provider/model namespace and request parameters determine impact. Natural history
+growth is excluded. Preserved means configuration preserves the relevant prefix;
+it does not promise a provider cache hit. Unproven changes require adoption.
 
-Already admitted work retains its generation and effective model. Later eligible
-admission observes the new generation. Explicit Session model intent survives
-reload and is revalidated against the candidate catalog. Cold composition always
-rereads current files and process bindings, whether or not a prior reload occurred.
-Durable Session configuration contains only `cwd` and optional explicit `model`.
-Session names, graph focus and graph metadata have separate Session owners;
-materialized effective configuration is never durable configuration authority.
+`session/adoptConfiguration` addresses a concrete ready candidate and expected
+Session binding revision. It returns typed Busy, NotReady or Conflict, or commits
+the complete binding atomically under the same gate as Attempt admission. It never
+cancels work, edits history, compacts, invokes a model or changes the selected model.
+A ready candidate is not an adopted binding.
+
+An independent Attempt captures complete execution configuration once. Requests,
+Steps, retries, recovery, Tool batches, Subagents and Workflow children inherit
+that capture even after new policy publishes. Session creation resolves its model
+once; changing global defaults does not replace it. `settings/setModel` is the
+single deliberate Session model mutation and uses the same preparation/commit
+primitive, with Session and model baseline fences.
+
+`configuration/reconcile` rescans external files or retries failed preparation.
+Stable changed inputs create a new desired revision; retrying unchanged inputs
+creates a new application attempt. Healthy semantic no-ops do not advance runtime
+generation or rebuild resources. There is no filesystem watcher.
+
+Effective and source projections report simultaneous per-unit results: applied,
+preparing, ready for adoption, failed, and process restart required. Actual process
+bindings are separate from desired state. Connection/residency admission limits
+apply through their owners; the process drain deadline waits for restart. Fixed
+startup storage/transport bindings remain process-owned. Notifications identify
+scope and monotonically ordered native versions; clients discard stale versions.
+Reconnect rereads authority and never replays uncertain mutations.
 
 ## Durable identity and retention
 
@@ -409,14 +422,15 @@ and shows native configuration, origins, selections, readiness and generation.
 User and Workspace edit native structured drafts for Providers, Models, Root
 selection, policies, Plugins, MCP definitions and complete named-Agent profiles.
 The User config pathname and fixed User resource root are shown separately.
-Save and Reload are distinct actions. Reload success shows the generation change;
-busy or failure states that the old generation remains authoritative. CAS conflict
-preserves the draft. Reconnect reads current state without replaying Save or Reload.
+Save starts native application automatically. Settings presents independent
+application, explicit context adoption, failure/retry and process restart state.
+CAS conflicts preserve drafts. Rescan is a diagnostics action.
 
-TUI `/settings` presents native effective/source/generation facts, `/reload` uses
-the same native operation, and `/model` changes Session intent. Neither client
-parses or merges configuration. App Server protocol 7 is generated from Rust; the
-previous development protocol is rejected rather than dual-decoded.
+TUI `/settings` presents native effective/source facts; `/configuration` inspects
+application state and provides explicit rescan, retry and inspected-candidate
+adoption. `/model` changes Session selection. Neither client parses, merges or
+classifies configuration. App Server protocol 14 is generated from Rust; obsolete
+development protocols are rejected without compatibility decoding.
 
 CFG3 intentionally replaces the previous development configuration and durable
 formats. There are no compatibility readers, aliases, trust commands, migration

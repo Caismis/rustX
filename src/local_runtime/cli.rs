@@ -290,7 +290,7 @@ pub const USAGE: &str = r"usage: rustx [--config <absolute-rustx.toml>] [--works
 User configuration defaults to ~/rustx/rustx.toml. --config replaces only that
 User source binding; it never relocates ~/rustx/.agents or ~/rustx/runtime.
 Workspace configuration is <workspace>/rustx.toml, with no ancestor accumulation.
---runtime-root is a process binding; reload cannot change it.
+--runtime-root is a process binding; changing it requires process restart.
 --model selects deliberate Session intent and never edits an authored default.
 
 rustx.toml owns Root capability selection and global Tool invocation policy.
@@ -303,8 +303,9 @@ Unused MCP and Python definitions do not connect or prepare environments.
 Skills are prompt visibility, never filesystem access control. Prompts provide
 the User and Workspace Skill roots for progressive disclosure. Same-name
 Workspace resources shadow User resources completely, including invalid ones.
-Save commits source bytes only. /reload publishes one coherent configuration
-generation; already-admitted work retains its frozen generation.
+Save automatically starts native configuration application. Complete cache-preserving
+changes apply for future independent Attempts; existing Sessions explicitly adopt
+prepared context changes. Admitted work retains its immutable configuration.
 ";
 
 /// Parses the bounded startup arguments.

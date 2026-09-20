@@ -860,7 +860,7 @@ impl RuntimeClientProjection {
                 snapshot,
                 availability,
             } => {
-                // One reload, one fold, one event. The runtime publishes the
+                // One configuration commit, one fold, one event. The runtime publishes the
                 // resource generation and the capability generation it was
                 // built against as a single observation precisely so both
                 // views move together: this arm updates the snapshot

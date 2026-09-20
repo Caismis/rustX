@@ -2,6 +2,7 @@
 //! No provider, Session runtime, or external source is prepared here.
 //! Source content is reread per call; admitted configurations own their capture.
 
+pub mod application;
 pub mod settings;
 
 use crate::bounded_file::read_bounded;
@@ -218,11 +219,13 @@ pub enum Origin {
 /// Validated Session configuration authority consumed by the existing native composition owner.
 #[derive(Debug, Clone)]
 pub struct AdmittedSessionConfig {
+    pub(crate) binding_revision: u64,
     pub(crate) credentials: crate::credentials::CredentialSnapshot,
     prospective: Box<ProspectiveSessionConfig>,
 }
 
 /// Shared authority, source overlay and path capture, before domain validation.
+#[derive(Clone)]
 struct LayerCapture {
     revisions: BTreeMap<PathBuf, String>,
     locations: SessionLocations,
@@ -275,6 +278,109 @@ pub struct ProspectiveSessionConfig {
 }
 
 impl ProspectiveSessionConfig {
+    /// Compare independently prepared capability inputs, excluding context and
+    /// provider units. Authored revisions and shadowed/unselected metadata are
+    /// not effective resource identities.
+    pub(crate) fn same_capabilities(&self, other: &Self) -> bool {
+        let normalized = |source: &Self| {
+            let mut config = source.config.as_ref().clone();
+            config.approval_mode = crate::runtime::ApprovalMode::default();
+            config.model_timeout_policy = super::config::ModelTimeoutPolicyDocument::default();
+            config.tool_deadline_policy = super::config::ToolDeadlinePolicyDocument::default();
+            config.subagents = super::config::SubagentsDocument::default();
+            config.context = super::config::ContextPolicyDocument::default();
+            config.agent.instructions.clear();
+            config.agent.model = None;
+            config.agent.agents_md = super::config::AgentProjectInstructionsDocument::default();
+            // Inert definitions are not resource demand.
+            let demand = super::composition::admitted_source_demand(
+                &config,
+                &source.subagents,
+                &source.workflows,
+                source.managed_python.clone(),
+            );
+            config.mcp_servers.retain(|id, _| {
+                demand
+                    .sources
+                    .contains(&crate::capabilities::ToolSourceId::Mcp(id.clone()))
+            });
+            (config, demand.sources)
+        };
+        let (a, demand_a) = normalized(self);
+        let (b, demand_b) = normalized(other);
+        if a != b || demand_a != demand_b {
+            return false;
+        }
+        if a.agent
+            .agents
+            .iter()
+            .any(|name| self.subagents.get(name) != other.subagents.get(name))
+        {
+            return false;
+        }
+        if a.agent.workflows.iter().any(|id| {
+            let view = |source: &Self| {
+                source
+                    .workflows
+                    .entries()
+                    .get(id)
+                    .map(|entry| entry.source.tool_identity())
+            };
+            view(self) != view(other)
+        }) {
+            return false;
+        }
+        if demand_a.iter().any(|id| {
+            self.managed_python.packages().get(id) != other.managed_python.packages().get(id)
+        }) {
+            return false;
+        }
+        // Skill dependencies are materialized as a shared environment, so even
+        // non-advertised discovered packages participate in this closure today.
+        self.skill_discovery.packages == other.skill_discovery.packages
+    }
+
+    pub(crate) fn same_context(&self, other: &Self) -> bool {
+        self.config.agent.instructions == other.config.agent.instructions
+            && self.config.agent.agents_md == other.config.agent.agents_md
+            && self.config.context == other.config.context
+            && self.project_context_files == other.project_context_files
+            && self.root_agent_project_files == other.root_agent_project_files
+    }
+
+    pub(crate) fn same_provider(&self, other: &Self) -> bool {
+        let selection = self.session_model();
+        selection == other.session_model()
+            && self.models.same_binding(&other.models, &selection.model)
+            && selection
+                .summary_selection()
+                .is_none_or(|summary| self.models.same_binding(&other.models, &summary.model))
+            && self.config.agent.agents.iter().all(|name| {
+                self.subagents
+                    .get(name)
+                    .and_then(|definition| definition.profile().model.as_ref())
+                    .is_none_or(|model| self.models.same_binding(&other.models, &model.model))
+            })
+    }
+
+    pub(crate) fn retaining_context_from(mut self, adopted: &Self) -> Self {
+        let config = std::sync::Arc::make_mut(&mut self.config);
+        config
+            .agent
+            .instructions
+            .clone_from(&adopted.config.agent.instructions);
+        config
+            .agent
+            .agents_md
+            .clone_from(&adopted.config.agent.agents_md);
+        config.context = adopted.config.context;
+        self.project_context_files
+            .clone_from(&adopted.project_context_files);
+        self.root_agent_project_files
+            .clone_from(&adopted.root_agent_project_files);
+        self
+    }
+
     /// Capture process credentials after coherent User and Workspace resolution.
     /// # Errors
     /// Rejects changed physical resource authority before credential capture.
@@ -284,6 +390,7 @@ impl ProspectiveSessionConfig {
     ) -> Result<AdmittedSessionConfig, String> {
         self.validate_resource_authority()?;
         Ok(AdmittedSessionConfig {
+            binding_revision: 1,
             credentials: credentials(),
             prospective: Box::new(self),
         })
@@ -365,19 +472,26 @@ impl ProspectiveSessionConfig {
     pub fn identity(&self) -> &str {
         &self.identity
     }
+}
 
-    /// Cold resolution and explicit reload share the same complete capture path.
-    /// Process bindings are copied from admission; Session model intent is applied
-    /// separately at the runtime publication boundary.
-    pub(crate) fn reload_configuration(&self) -> Result<ProspectiveSessionConfig, String> {
-        let mut sources = self.sources.clone();
-        sources.runtime_root.clone_from(&self.runtime_root);
-        UserConfigManager::new(sources)?
-            .resolve_session(&SessionConfigInput {
-                cwd: self.workspace.clone(),
-                model: None,
-            })
-            .map_err(|error| error.to_string())
+impl AdmittedSessionConfig {
+    pub(crate) fn with_model(&self, model: crate::model::session::SessionModelConfig) -> Self {
+        let mut retained = self.clone();
+        retained.prospective.input.model = Some(model);
+        retained.binding_revision = retained
+            .binding_revision
+            .checked_add(1)
+            .expect("Session binding revision exhausted");
+        retained
+    }
+    pub(crate) fn with_execution_policy(&self, desired: &CurrentRuntimeConfig) -> Self {
+        let mut retained = self.clone();
+        let config = std::sync::Arc::make_mut(&mut retained.prospective.config);
+        config.approval_mode = desired.approval_mode;
+        config.subagents = desired.subagents.clone();
+        config.model_timeout_policy = desired.model_timeout_policy;
+        config.tool_deadline_policy = desired.tool_deadline_policy;
+        retained
     }
 }
 
@@ -401,6 +515,65 @@ impl std::ops::Deref for ProspectiveSessionConfig {
     clippy::unnecessary_debug_formatting
 )] // derived paths always have parents; debug escapes diagnostic paths
 impl UserConfigManager {
+    /// Capture policies independently of fallible context/resource preparation.
+    /// Both consume the same immutable source overlay. Policy publication never
+    /// borrows a second read merely because another closure fails.
+    pub(crate) fn capture_application(
+        &self,
+        request: &SessionConfigInput,
+    ) -> Result<application::CapturedApplication, String> {
+        self.capture_application_at_boundary(request, || {})
+    }
+
+    pub(super) fn capture_application_at_boundary(
+        &self,
+        request: &SessionConfigInput,
+        after_layers: impl FnOnce(),
+    ) -> Result<application::CapturedApplication, String> {
+        let layers = self
+            .capture_layers(request, None)
+            .map_err(|error| error.to_string())?;
+        after_layers();
+        let policy = layers
+            .merged
+            .clone()
+            .resolve()
+            .map_err(|error| error.clone())?;
+        policy.timeout_policy().map_err(|error| error.to_string())?;
+        policy
+            .tool_deadline_policy()
+            .map_err(|error| error.to_string())?;
+        let revisions = layers.revisions.clone();
+        let process = layers.merged.app_server.clone().unwrap_or_default();
+        process.validate()?;
+        let context = self
+            .resolve_captured_layers(layers)
+            .and_then(Self::resolve_runtime_configuration)
+            .and_then(|capture| self.resolve_resources(request, capture))
+            .map_err(|error| error.diagnostic.reason);
+        for (path, expected) in &revisions {
+            let actual = read_layer_revision(path, false, path != &self.sources.config_path)
+                .map_err(|error| error.to_string())?
+                .1;
+            if &actual != expected {
+                return Err("configuration changed during capture; rescan to retry".into());
+            }
+        }
+        let manifest = context
+            .as_ref()
+            .map_or(&revisions, |capture| &capture.source_revisions);
+        let revision = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(manifest).expect("input manifest"))
+        );
+        Ok(application::CapturedApplication {
+            policy,
+            process,
+            revision,
+            context,
+        })
+    }
+
     /// Resolve current canonical sources for exactly this Session context.
     /// No credentials or external preparation are acquired here.
     ///
@@ -415,13 +588,39 @@ impl UserConfigManager {
         self.resolve_resources(request, resolved)
     }
 
-    pub(crate) fn resolve_model_configuration(
+    pub(crate) fn capture_session_model(
         &self,
-        request: &SessionConfigInput,
-    ) -> Result<SourceCapture, LaunchFailure> {
-        #[cfg(test)]
-        self.test_hooks.reach("validation_started");
-        self.resolve_model_candidate(request, None)
+        adopted: &AdmittedSessionConfig,
+        selection: crate::model::session::SessionModelConfig,
+    ) -> Result<ProspectiveSessionConfig, String> {
+        let mut input = adopted.input.clone();
+        input.model = Some(selection);
+        let source = self
+            .capture_layers(&input, None)
+            .map_err(|error| error.to_string())?;
+        for (path, expected) in &source.revisions {
+            let actual = read_layer_revision(path, false, path != &self.sources.config_path)
+                .map_err(|error| error.to_string())?
+                .1;
+            if &actual != expected {
+                return Err("model inputs changed during capture; retry".into());
+            }
+        }
+        let mut candidate = adopted.prospective.as_ref().clone();
+        candidate.input = input;
+        candidate.models = ModelCatalog::from_document(
+            crate::model::authoring::Catalog {
+                schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
+                providers: source.merged.providers.clone().unwrap_or_default(),
+                models: source.merged.models.clone().unwrap_or_default(),
+            }
+            .into(),
+        )
+        .map_err(|error| error.to_string())?;
+        candidate.effective.models = source.merged.models;
+        candidate.effective.providers = source.merged.providers;
+        candidate.source_revisions.extend(source.revisions);
+        Ok(candidate)
     }
 
     fn resolve_model_candidate(
@@ -510,7 +709,10 @@ impl UserConfigManager {
             return Err("runtime_root must be disjoint from the workspace".into());
         }
 
-        let mut merged = RuntimeLayer::default();
+        let mut merged = RuntimeLayer {
+            app_server: user.app_server.clone(),
+            ..RuntimeLayer::default()
+        };
         let mut provenance = BTreeMap::new();
         let mut project_resources = Vec::new();
         for (mut layer, origin) in [
@@ -552,6 +754,13 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         candidate: Option<(&Path, &[u8])>,
     ) -> Result<SourceCapture, LaunchFailure> {
+        self.resolve_captured_layers(self.capture_layers(request, candidate)?)
+    }
+
+    fn resolve_captured_layers(
+        &self,
+        capture: LayerCapture,
+    ) -> Result<SourceCapture, LaunchFailure> {
         let LayerCapture {
             mut revisions,
             locations,
@@ -559,7 +768,7 @@ impl UserConfigManager {
             merged,
             mut provenance,
             project_resources,
-        } = self.capture_layers(request, candidate)?;
+        } = capture;
         for root in [
             self.sources.home_directory.join("rustx/.agents"),
             locations.workspace.join(".agents"),
@@ -735,7 +944,7 @@ impl UserConfigManager {
             &locations.workspace,
         );
         // Capture authority once, including host path aliases and missing leaves.
-        // Reload reuses this physical identity; validators must not rebind it.
+        // Configuration preparation retains this physical identity; validators must not rebind it.
         let agent_root = normalize_missing(&host.home_directory.join("rustx/.agents/agents"))?;
         let project_context_files = {
             crate::runtime::load_project_context_files(&locations.workspace)
@@ -989,10 +1198,50 @@ impl UserConfigManager {
                     Some(root),
                     "resources",
                     "authored resources changed during candidate construction",
-                    "retry reload after source edits settle",
+                    "rescan after source edits settle",
                     "candidate discarded".into(),
                 ));
             }
+        }
+        for file in project_context_files
+            .iter()
+            .chain(root_agent_project_files.iter())
+            .chain(
+                subagents
+                    .definitions()
+                    .flat_map(|definition| definition.profile().project_instructions.files.iter()),
+            )
+        {
+            let bytes = read_bounded(&file.path)?;
+            let text = std::str::from_utf8(&bytes)
+                .map_err(|_| LaunchFailure::from("instruction text is not UTF-8"))?;
+            if text.trim_start_matches('\u{feff}') != file.content {
+                return Err("instruction input changed during capture; rescan to retry".into());
+            }
+            revisions.insert(file.path.clone(), super::settings::revision(Some(&bytes)));
+        }
+        for (path, expected) in &revisions {
+            if path == &host.home_directory.join("rustx/.agents")
+                || path == &locations.workspace.join(".agents")
+            {
+                continue;
+            }
+            let bytes = match read_bounded(path) {
+                Ok(bytes) => Some(bytes),
+                Err(_) if !path.exists() => None,
+                Err(error) => return Err(error.into()),
+            };
+            if super::settings::revision(bytes.as_deref()) != *expected {
+                return Err("configuration inputs changed during capture; rescan to retry".into());
+            }
+        }
+        if crate::runtime::load_project_context_files(&locations.workspace)
+            .map_err(LaunchFailure::resource)?
+            != project_context_files
+        {
+            return Err(
+                "project instruction discovery changed during capture; rescan to retry".into(),
+            );
         }
         diagnostics.sort();
         diagnostics.dedup();
@@ -1104,8 +1353,8 @@ pub(super) fn parse_layer(
             Some(path.into()),
             "app_server",
             "App Server process policy cannot be authored by a Workspace",
-            "author app_server in the bound User rustx.toml and restart the process",
-            "process policy is captured before Session composition and is not reloadable".into(),
+            "author app_server in the bound User rustx.toml",
+            "process policy belongs to the User scope; native application distinguishes live limits from restart bindings".into(),
         ));
     }
     if let Some(version) = layer.schema_version

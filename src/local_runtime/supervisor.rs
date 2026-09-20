@@ -491,10 +491,19 @@ impl RuntimeClientSessionControl for LocalSessionAttachment {
                 message: e.to_string(),
             }
         })?;
-        settings.model = Some(config);
+        settings.model = Some(config.clone());
         match catalog.replace_settings(&self.session_id, expected, settings) {
             Ok(revision) => {
                 self.settings_revision.store(revision, Ordering::Release);
+                if let Some(binding) = self
+                    .controller
+                    .configuration_bindings
+                    .lock()
+                    .expect("Session configuration bindings")
+                    .get_mut(&self.session_id)
+                {
+                    *binding = binding.with_model(config);
+                }
                 Ok(())
             }
             Err(error) if error.committed() => {

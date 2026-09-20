@@ -156,13 +156,6 @@ impl RuntimeAttachment {
             .await
     }
 
-    /// Publish a new native resource generation at its existing admission boundary.
-    /// # Errors
-    /// Closed attachments or native reload failures.
-    pub async fn reload_configuration(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(true)?.reload_configuration().await
-    }
-
     /// Cancel exactly one pending interaction at its authoritative coordinator.
     /// # Errors
     /// Closed attachments and stale interactions fail explicitly.
@@ -237,9 +230,6 @@ impl RuntimeAttachment {
             RuntimeClientRequest::CancelCurrentAttempt { .. } => inner.cancel_current_attempt(),
             RuntimeClientRequest::CompactContext { .. } => {
                 unreachable!("manual compaction is handled asynchronously")
-            }
-            RuntimeClientRequest::ReloadConfiguration { .. } => {
-                unreachable!("configuration reload is handled asynchronously")
             }
             RuntimeClientRequest::InteractionRespond { .. } => {
                 unreachable!("interaction responses are handled asynchronously")
@@ -335,17 +325,6 @@ impl RuntimeAttachment {
         if !matches!(request, RuntimeClientRequest::Shutdown { .. }) {
             if matches!(request, RuntimeClientRequest::CompactContext { .. }) {
                 let result = inner.compact_context().await;
-                return match result {
-                    Ok(result) => RuntimeClientResponse {
-                        id,
-                        result: Some(result),
-                        error: None,
-                    },
-                    Err(error) => Self::error_response(id, error),
-                };
-            }
-            if matches!(request, RuntimeClientRequest::ReloadConfiguration { .. }) {
-                let result = inner.reload_configuration().await;
                 return match result {
                     Ok(result) => RuntimeClientResponse {
                         id,

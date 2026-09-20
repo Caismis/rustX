@@ -1146,16 +1146,13 @@ otherwise the audit would name a value no durable record contains.
 Keypresses, focus changes, editing state, and TUI presentation details are
 never interaction facts.
 
-A pending interaction stays pinned to its admitted resource/capability
-generation. `reload_resources` returns `Busy { reason: Interaction }` while a
-waiter owns the attempt, and the complete old generation is retained: external
-edits to `AGENTS.md`-style files, Skills, extension instructions, or Tool
-configuration cannot change the pending prompt, approval subject, policy, Tool
-schema, or execution authority underneath the waiter. Only after settlement
-and attempt completion may a reload publish a new generation, affecting a
-later admitted attempt only. A cold reopen may load current resources for
-future attempts, but it can neither reinterpret nor authorize execution from a
-historical interaction.
+Native configuration application publishes independently valid, complete units.
+The source/application fence and runtime gate order publication against new input
+and Attempt capture. Explicit context adoption requires an idle Session and the
+inspected candidate/binding revision. Existing Attempts and every derived request,
+Tool batch, child and Workflow retain their captured immutable configuration.
+Session bindings survive runtime unload/load within the process. See
+[configuration application](configuration.md#save-automatic-application-and-session-adoption).
 
 The one control-capable Runtime Client attachment is the 0.1 interaction
 provider; read-only inspection attachments never provide interaction
@@ -1481,7 +1478,7 @@ complete named Agent's `plugins` table. All default off. `NativeAgentExtensions`
 is the internal typed representation; it is not a dynamic plugin API.
 
 Root composition belongs to the immutable configuration generation. A successful
-reload publishes Plugin configuration, Tool registrations, policies and context
+capability publication applies Plugin configuration, Tool registrations, policies and context
 contributors together. Each Attempt uses its admitted profile. Named Agents
 compose independently, without a Root Tool or Plugin ceiling. Child scope
 restrictions remain typed admission rules.
@@ -2984,7 +2981,7 @@ the launch-boundary policy inheritance.
   Project-origin Skills, Subagent instruction/agents_md files and path-valued
   MCP command/cwd must resolve within the canonical Workspace. Traversal,
   absolute paths, symlink targets and external `--config` cannot widen that
-  authority. Initial preparation rechecks frozen path authority; reload rechecks
+  authority. Initial preparation rechecks frozen path authority; candidate preparation rechecks
   its candidate from pinned slots. Failed candidates never replace the current
   generation. Automatic project roots and instruction/Workflow reads follow the
   same rule. Host/CLI resources and execution paths remain separate authorities;
@@ -3011,7 +3008,7 @@ the launch-boundary policy inheritance.
 - **One candidate publishes atomically.** Exact YAML loading, program
   compilation, profile admission, capability validation, and concrete
   Workflow Tool registration occur off-side. One publication boundary makes
-  the generation visible; an invalid reload preserves the previous valid
+  the generation visible; an invalid capability candidate preserves the previous valid
   generation. A run retains the immutable program snapshot it admitted.
 - **The compiler establishes fixed finite block control.** Ordinary edges within
   every block are acyclic; only structured bounded Loop repeats a fixed body.
@@ -3102,11 +3099,13 @@ enters existing lifecycle owners. Named omitted model inherits the invoking
 Attempt's frozen model. Root delegation is its explicit Agent allowlist, never a
 Root Tool/Plugin ceiling.
 
-Save commits authored bytes with revision fencing. Reload builds one complete
-candidate off-side and publishes at one coordinator state-lock linearization
-point, or preserves the exact old generation. Busy ownership refuses publication.
-Cold composition rereads current files and startup bindings. Session persistence
-contains only cwd and explicit model intent. Admitted work stays frozen.
+Native configuration application publishes independently valid, complete units.
+The source/application fence and runtime gate order publication against new input
+and Attempt capture. Explicit context adoption requires an idle Session and the
+inspected candidate/binding revision. Existing Attempts and every derived request,
+Tool batch, child and Workflow retain their captured immutable configuration.
+Session bindings survive runtime unload/load within the process. See
+[configuration application](configuration.md#save-automatic-application-and-session-adoption).
 
 Session/Node/Conversation/ToolExecution identities are typed UUIDv7, allocated with
 collision/no-overwrite checks. Semantic order uses explicit metadata. The fixed
@@ -3133,8 +3132,8 @@ hold attempt leases and never block a capability commit.
 
 - Attempt lease acquisition and candidate capability commit serialize
   through the same synchronization boundary: acquisition wins first →
-  commit observes busy and cannot activate; commit wins first → the next
-  attempt snapshots the new revision. There is no unchecked window
+  the admitted Attempt retains the old complete snapshot; publication wins first
+  → the next independent Attempt captures the new revision. There is no unchecked window
   between the deciding quiescence observation and the active-snapshot
   swap, and no sleep-based coordination.
 - A candidate may be prepared independently (Skill discovery, dependency
@@ -3163,8 +3162,8 @@ hold attempt leases and never block a capability commit.
   unchanged.
 - Skill, native-tool, and MCP capability mutations (a Python tool package's
   included, since it is an MCP source) in a live product
-  runtime occur through its explicit configuration reload and only while the
-  conversation runtime is quiescent in the M6 sense. After the runtime claim,
+  runtime occur through native configuration coordination. Complete preserved
+  closures can publish while old Attempts retain their leases. After the runtime claim,
   the ordinary `CapabilityCoordinator::commit` API is rejected; only the
   runtime's private resource-publication authority can advance live
   capability state.
@@ -3177,7 +3176,7 @@ hold attempt leases and never block a capability commit.
   physical settlement permits registry reclamation. A
   `PhysicalSettlement` failure is retained as terminal evidence, fences
   healthy runtime continuation, and is reported after the committed new
-  generation; it is not converted into a pre-publication reload failure.
+  generation; it is not converted into a pre-publication preparation failure.
 - MCP `PhysicalSettlement` failure is persistent runtime fencing authority even
   while the runtime is inactive. Retirement-registry callback installation
   replays pre-existing failures. MCP PhysicalSettlement failure publication
@@ -3187,15 +3186,15 @@ hold attempt leases and never block a capability commit.
   attempt cancellation arbitration, and closes healthy lifecycle admission
   before releasing the coordinator lock. The latch is diagnostic/admission
   evidence retained by the coordinator; `ConversationLifecycle` remains the
-  generic gate for inbound, attempt, compaction, reload, interaction,
+  generic gate for inbound, attempt, compaction, adoption, interaction,
   background, and subagent semantic ownership. There is no interval after
   the authoritative failure transition in which the runtime is still
   healthily `Running`. Activation therefore cannot reopen a failure-fenced
   runtime, and a background-late settlement failure uses the same atomic
   failure-drain transition. A generation's close completion becomes
   observable only after its generation state, registry evidence, fencing
-  callback, and lifecycle-admission release are complete, so a ready reload
-  cannot return `Ok` before a post-publication retirement failure is visible.
+  callback, and lifecycle-admission release are complete. Native application state
+  and ordinary runtime health report post-publication retirement failures.
 - The broader runtime-wide busy semantics (active tool calls, foreground or
   background processes, event-writer or drain transitions) remain the M9
   scheduler's concern, not part of the M6 commit guard.
@@ -4971,8 +4970,8 @@ Surface span only; and RequestSnapshot freezes exact historical request-time
 System bytes, ordered sections, Tool definitions, model values, Surface
 revision, and continuation. The process-local Runtime Resource Snapshot is
 current executable authority, not durable compaction state. Compaction never
-discovers or reloads it; explicit reload remains quiescent, and cold reopen
-may publish a new generation only for future attempts.
+discovers or applies configuration. The native coordinator owns application;
+explicit Session adoption leaves the Ledger and Surface untouched.
 
 A successful compaction must make measurable progress: coverage advances and
 the deterministic post-compaction estimate decreases. Invalid, stale,
@@ -5623,7 +5622,7 @@ The frozen invariants:
     `CapabilityCommitError::RuntimePublicationRequired` before and after
     activation; the startup commit performed *before* the conversation
     runtime is constructed remains allowed. Live publication uses the
-    runtime's configuration reload owner.
+    native configuration coordinator.
 
   Capability candidate preparation is the one composition/readiness
   exception: it may run while inactive, but its counted owner prevents an
@@ -5951,7 +5950,7 @@ semantic normalization boundary. The frozen invariants:
   proposals inside them render as proposed/unaccepted/unexecuted and can
   never produce Tool Plane execution, a ToolResult, or side effects.
   Interaction requested/settled rows are audit evidence only; recovery never
-  reconstructs their pending waiters. Configuration reload produces no transcript
+  reconstructs their pending waiters. Configuration adoption produces no transcript
   item, and a RequestSnapshot still reproduces its old System/resource bytes
   after a cold reopen.
 - **Client detach never implies semantic cancellation.** Detaching an
@@ -6469,15 +6468,11 @@ resolvable.
 
 ### Request-pinned generation
 
-A publication stream is pinned to the exact attempt, turn, request, and
-provisional message identity that opened it. External resource, Skill, or Tool
-configuration edits during streaming cannot alter the in-flight request, the
-model Tool schemas, preflight authority, publication classification, or the
-later canonical Assistant of that stream. The public reload operation returns
-busy while the attempt owns the session; it never aborts or splices a new
-generation into publication. A cold reopen may load current resources for a
-later attempt, but the old stream's settlement stays tied to its frozen
-historical request.
+A publication stream retains its exact admitted Attempt, request and provisional
+message identity. Later configuration publication cannot alter provider requests,
+Tool schemas, preflight authority or canonical settlement. Independent future
+Attempts may capture new policy while this stream continues. Explicit Session
+adoption returns Busy while execution owns the gate and never cancels the stream.
 
 ### Tail latency
 
@@ -7032,8 +7027,8 @@ contracts and provider protocols. These invariants are frozen by M2:
 
 - **Global approval policy belongs to configuration.** User < Workspace authoring
   determines approval policy through typed semantic overlay. Saving source bytes
-  does not change a running generation; configuration reload publishes at the safe
-  boundary. Clients project effective policy and answer individual runtime-owned
+  automatically reconciles independent policy for future Attempts; an admitted
+  Attempt retains its captured policy. Clients project effective policy and answer individual runtime-owned
   approval interactions. They do not persist a Session policy override or replay
   configuration mutations on reconnect.
 
@@ -7500,7 +7495,7 @@ revisions. Cooperating writers serialize with an OS file lock, compare revisions
 validate and stage complete canonical bytes, recheck bytes before atomic rename,
 and fsync the parent directory. External edits invalidate stale revisions. An
 uncertain result is reread, never blindly replayed. Normal projections redact
-secrets. Save and Reload remain separate. Clients never parse, overlay, derive
+secrets. Native application follows Save. Clients never parse, overlay, derive
 provenance or treat a draft as loaded effective state.
 
 

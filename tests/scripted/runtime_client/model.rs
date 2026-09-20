@@ -675,31 +675,12 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
         id: RequestId::new(2),
         config: Box::new(SessionModelConfig::of(model_ref("beta/model-b"))),
     });
-    let Some(RuntimeClientResult::ModelSet { model: desired }) = response.result else {
-        panic!("the update is accepted while an attempt runs: {response:?}");
-    };
-    assert_eq!(desired.configured.model, model_ref("beta/model-b"));
-
-    // The switch publishes exactly one session observation and never a
-    // second start for the running attempt.
-    let switch = receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. })
-    })
-    .await;
-    let RuntimeClientEvent::SessionModelChanged { model: published } =
-        switch.last().expect("the change").event.clone()
-    else {
-        panic!("the session model change is published");
-    };
-    assert_eq!(published.configured.model, model_ref("beta/model-b"));
-    assert_eq!(
-        switch
-            .iter()
-            .filter(|event| matches!(event.event, RuntimeClientEvent::AttemptStarted { .. }))
-            .count(),
-        0,
-        "the running attempt never restarts and never re-announces a model"
-    );
+    assert!(matches!(
+        response.error,
+        Some(RuntimeClientError::ConfigurationAdoption {
+            rejection: rustx::local_runtime::configuration::application::AdoptionError::Busy
+        })
+    ));
 
     // The running attempt is still, truthfully, on A.
     let (during, _) = host.snapshot().expect("snapshot");
@@ -712,7 +693,7 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
     );
     assert_eq!(
         during.model.as_ref().unwrap().configured.model,
-        model_ref("beta/model-b")
+        model_ref("alpha/model-a")
     );
 
     release.send_replace(true);
@@ -725,6 +706,18 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
         RuntimeClientEvent::AttemptSettled { .. }
     ));
 
+    let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
+        id: RequestId::new(4),
+        config: Box::new(SessionModelConfig::of(model_ref("beta/model-b"))),
+    });
+    assert!(
+        response.error.is_none(),
+        "idle selection succeeds: {response:?}"
+    );
+    receive_until(&subscription, |event| {
+        matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. })
+    })
+    .await;
     // The next admission uses B, announced on the same self-contained event.
     assert!(
         attachment

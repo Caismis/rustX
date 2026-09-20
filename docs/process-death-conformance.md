@@ -255,34 +255,29 @@ live response, or authorizes a tool from historical `Approved`.
 | `after:commit_compaction` | one `CompactionCompleted` | exactly the planned span replaced by its summary | historical prefix intact, summary appended | `compaction_surface_replace_is_atomic` |
 | project instructions and Skill catalog edited across the compaction | — | the post-compaction request still carries the loaded generation | no canonical project-instruction or Skill-guidance fact | `compaction_never_refreshes_resource_derived_authority` |
 
-Compaction is not a configuration reload boundary: it does not discover, refresh,
+Compaction is not a configuration application boundary: it does not discover, refresh,
 suppress, or remove resource-derived System authority, and the resource
 revision of the request after a committed compaction equals the one before it.
 
 ## 7. Context / System / resource / lineage authority
 
-The lab writes an `AGENTS.md`, one discovered Skill package, one ordinary
+Native application/adoption races are mapped in the Issue #380 acceptance report.
+Process recreation resolves current sources; in-process residency retains the
+Session binding. The lab writes an `AGENTS.md`, one discovered Skill package, one ordinary
 workspace file, and a runtime configuration; the parent edits any of them while
 a child is live.
 
-| Case | Loaded generation | Filesystem mutation point | Reload / reopen boundary | Old vs. new model API context | Test |
+| Case | Loaded generation | Mutation point | Process boundary | Request/history observations | Test |
 | --- | --- | --- | --- | --- | --- |
 | live external edits | R1 | between two attempts of one live runtime | none | requests 1–3 all send R1 project instructions, R1 Skill catalog, R1 Tool definitions and share one resource revision | `live_external_edits_never_expose_a_new_generation` |
 | progressive disclosure | R1 catalog | same | none | a later native `Read` returns the **current** `SKILL.md` body while the catalog stays R1 | `live_external_edits_never_expose_a_new_generation` |
-| successful explicit reload | R1 → R2 | at a quiescent boundary | `reload_resources()` | request 1 = R1; request 2 = R2 instructions + R2 catalog + R2 Tool definitions together; no canonical message, no synthetic diff; the R1 request still reconstructs exactly | `explicit_reload_publishes_one_complete_generation` |
-| failed reload | R1 | config corrupted before reload | `reload_resources()` returns a failure | the next request still sends complete R1; no revision published | `a_failed_reload_keeps_the_previous_generation` |
-| reload while an attempt owns the session | R1 | — | `reload_resources()` returns `Busy { Attempt }` | no mixed generation; one R1 request only | `reload_while_an_attempt_owns_the_session_is_busy` |
-| reload while a **compaction** owns the session | R1 | — | `reload_resources()` returns `Busy { Compaction }` | no mixed generation; the answered turn *and* the compaction summary side request are both R1 | `reload_while_a_compaction_owns_the_session_is_busy` |
-| reload while a pending **interaction** owns the session | R1 | — | `reload_resources()` returns `Busy { Interaction }` | no request admitted under a new generation; the pending approval authorizes nothing | `reload_while_an_interaction_owns_the_session_is_busy` |
-| reload while a **running foreground Tool execution** owns the session | R1 | — | `reload_resources()` returns `Busy { Attempt }`, strictly after the durable `ToolExecutionStarted` | no continuation admitted under a new generation; the running execution's outcome stays unknown and Class C blocks continuation | `reload_while_a_running_tool_execution_owns_the_session_is_busy` |
-| `SIGKILL` at `reload:prepared` / `reload:published` | R1 (+ an unpublished/just-published R2) | before the reload | the reload build/publish boundary | no request was admitted under a half-published generation; the reopened process performs a normal fresh load and sends pure R2 | `death_around_the_reload_publish_boundary_reloads_from_scratch` |
 | cold resume after external edits | R1 → R2 | while the process is dead | reopen | the first new request is R2; the historical Ledger, transcript order, and old `RequestSnapshot` (prompt + Tool definitions) are unchanged; no replacement message is appended | `cold_resume_uses_current_resources_and_preserves_history` |
 | deleted already-discovered Skill | R1 → R2 | between two processes | reopen | the historical `ToolResult` keeps the old body by value; a new `Read` returns the normal read error | `a_deleted_skill_leaves_history_by_value_and_reads_as_an_error` |
 | invalid current resources | — | config corrupted before reopen | runtime creation | creation fails explicitly; the historical generation is never used as live authority and no request is admitted | `invalid_current_resources_fail_runtime_creation` |
 | death before the first `ModelRequest` | R1 loaded, never recorded | after the death | reopen | no `RequestSnapshot` and no canonical resource/Skill-guidance fact exists; reopen simply loads current resources | `death_before_the_first_request_leaves_no_resource_record` |
 
 The current `RuntimeResourceSnapshot` is process-local, not durable recovery
-authority. That is what makes the reload-boundary row provable: there is no
+authority. There is no
 durable half-generation to recover, only a fresh load.
 
 ### Lineage authority: the cut, and what history may not resurrect
@@ -456,7 +451,6 @@ enumerate the state product.
 | background-capable turn + streaming publication + kill before C | one audit settlement, no execution, no background ownership to reattach | `background_capable_turn_and_streaming_publication_compose` |
 | settled tool result + continuation request in flight + new inbound | the settled result stays canonical and unrepaired, the continuation is indeterminate, the new inbound stays pending | `settled_tool_result_and_new_inbound_compose_with_an_indeterminate_request` |
 | approval + tool-start boundary + process death | `settled < started`, unknown outcome preserved, exactly one settled audit | `approval_settlement_and_the_tool_start_boundary_compose` |
-| R1 request history + external edits + reload / cold reopen to R2 | §7 rows above | `death_around_the_reload_publish_boundary_reloads_from_scratch`, `cold_resume_uses_current_resources_and_preserves_history` |
 
 ## Defect found and fixed
 

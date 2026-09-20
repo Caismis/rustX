@@ -59,9 +59,7 @@ use crate::conversation::SurfaceRevision;
 use crate::message::types::UserContentBlock;
 use crate::model::catalog::ModelCatalogView;
 use crate::model::session::{SessionModelConfig, SessionModelView};
-use crate::runtime::identity::{
-    AgentId, AttemptId, CapabilityRevision, ConversationId, MessageId, ToolExecutionId,
-};
+use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 
@@ -369,6 +367,8 @@ pub enum RuntimeClientSessionRequest {
 /// Version 42 adds completed-response provenance/timing, execution statistics,
 /// native context occupancy and explicit post-response lineage semantics.
 /// Version 41 clients are rejected without a compatibility projection.
+/// Version 44 removes generic configuration publication controls; native source
+/// application and fenced Session adoption belong to App Server.
 /// Version 43 makes three Trace presentation relationships native, mandatory
 /// facts instead of client inferences: the request-relative System Prompt
 /// state resolved against the nearest preceding actual request, the canonical
@@ -377,7 +377,7 @@ pub enum RuntimeClientSessionRequest {
 /// Subagent and Workflow records. Version 42 clients are rejected: the
 /// mandatory summary vocabulary changed shape, and no compatibility decoder
 /// or dual Trace DTO path exists in either version.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 43;
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 44;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -529,11 +529,7 @@ pub enum RuntimeClientRequest {
         /// Attachment-scoped request id.
         id: RequestId,
     },
-    /// Atomically reload the runtime-owned resource/capability generation.
-    ReloadConfiguration {
-        /// Attachment-scoped request id.
-        id: RequestId,
-    },
+
     /// Answer one live native interaction through the runtime-owned
     /// coordinator. The response has no tool-argument replacement channel.
     InteractionRespond {
@@ -758,7 +754,6 @@ impl RuntimeClientRequest {
             | Self::SubmitInbound { id, .. }
             | Self::CancelCurrentAttempt { id, .. }
             | Self::CompactContext { id, .. }
-            | Self::ReloadConfiguration { id, .. }
             | Self::InteractionRespond { id, .. }
             | Self::SnapshotGet { id, .. }
             | Self::TranscriptPageGet { id, .. }
@@ -796,7 +791,6 @@ impl RuntimeClientRequest {
             Self::CancelCurrentAttempt { .. } => "cancel_current_attempt",
             Self::Goal { .. } => "goal",
             Self::CompactContext { .. } => "compact_context",
-            Self::ReloadConfiguration { .. } => "reload_configuration",
             Self::InteractionRespond { .. } => "interaction_respond",
             Self::SnapshotGet { .. } => "snapshot_get",
             Self::TranscriptPageGet { .. } => "transcript_page_get",
@@ -850,7 +844,6 @@ impl RuntimeClientRequest {
         matches!(
             self,
             Self::CompactContext { .. }
-                | Self::ReloadConfiguration { .. }
                 | Self::InteractionRespond { .. }
                 | Self::SubagentWorkspaceDispose { .. }
                 | Self::Shutdown { .. }
@@ -870,7 +863,6 @@ impl RuntimeClientRequest {
             Self::SubmitInbound { .. }
                 | Self::CancelCurrentAttempt { .. }
                 | Self::CompactContext { .. }
-                | Self::ReloadConfiguration { .. }
                 | Self::InteractionRespond { .. }
                 | Self::ModelSet { .. }
                 | Self::SessionName { .. }
@@ -1028,13 +1020,7 @@ pub enum RuntimeClientResult {
         /// The authoritative context projection after the commit.
         context: RuntimeClientContextView,
     },
-    /// `reload_configuration` published a complete new generation.
-    ConfigurationReloaded {
-        /// Published process-local resource generation.
-        resource_revision: u64,
-        /// Compatible published capability generation.
-        capability_revision: CapabilityRevision,
-    },
+
     /// `interaction_respond` succeeded: the coordinator accepted the one
     /// terminal response transition.
     InteractionResponseAccepted {
@@ -1188,6 +1174,10 @@ pub enum RuntimeClientResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeClientError {
+    /// Native Session adoption/model fence refusal.
+    ConfigurationAdoption {
+        rejection: crate::local_runtime::configuration::application::AdoptionError,
+    },
     /// The negotiated protocol version is not supported by this runtime.
     UnsupportedProtocolVersion {
         /// The version this runtime speaks.
@@ -1212,16 +1202,7 @@ pub enum RuntimeClientError {
     },
     /// No attempt is currently cancellable.
     NoCurrentAttempt,
-    /// Configuration publication was refused because semantic work owns the Session.
-    ConfigurationReloadBusy {
-        /// Native owner preventing publication.
-        reason: crate::runtime::RuntimeResourceReloadBusyReason,
-    },
-    /// A complete configuration candidate failed; the old generation remains authoritative.
-    ConfigurationReloadFailed {
-        /// Bounded native diagnostic, with authored secrets redacted by the source owner.
-        diagnostic: String,
-    },
+
     /// The interaction was no longer pending. Duplicate, stale, pre-crash,
     /// and post-quiescent responses all use this bounded contract.
     InteractionNotPending {
@@ -1378,7 +1359,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 43);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 44);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

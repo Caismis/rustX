@@ -6,7 +6,7 @@ import { RootEditor } from '../src/app/settings/RootEditor';
 import { RuntimeEditor } from '../src/app/settings/RuntimeEditor';
 import { AgentEditor } from '../src/app/settings/AgentEditor';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer } from '../../protocol/app-server/v13';
+import type { ModelLayer } from '../../protocol/app-server/v14';
 import type { SaveSource } from '../src/app/settings/controls';
 afterEach(cleanup);
 const save = () => vi.fn<SaveSource>().mockResolvedValue(undefined);

@@ -10,17 +10,19 @@ malformed duplicates. There is no ancestor configuration accumulation.
 `--config /absolute/source.toml` replaces only the User source pathname.
 `--runtime-root /absolute/runtime` changes process storage, whose default is
 `~/rustx/runtime`. Neither flag moves User resources. Configuration paths and
-storage bindings remain fixed for that process. Reload never changes bindings.
+storage bindings remain fixed for that process. Application cannot change these bindings.
 
 `rustx app-server --listen stdio` owns one process and accepts Session creation
 with explicit Workspace paths. WebSocket uses `--listen ws://IP:PORT` and a
-`--token-file`. Process limits in User `app_server` require restart; Workspace
-cannot author those process limits.
+`--token-file`. User `app_server` admission limits apply automatically through native owners;
+its process drain deadline requires restart. Workspace cannot author these limits.
 
-Root configuration and Session intent are distinct. `--model` is an explicit
-Session choice. A cold resume reads current documents/resources and revalidates
-that choice; it never restores materialized effective configuration. An omitted
-Session choice follows the current Root default at the next eligible admission.
+Root defaults and resolved Session selection are distinct. Session creation pins
+its resolved model, including when `--model` is omitted. Runtime unload/load within
+the process restores its adopted binding. A new process resolves current sources
+and preserves durable model selection. Global default edits affect new Sessions.
 
-Save commits authored bytes. `/reload` publishes one complete immutable generation.
-Restart rereads current bytes from scratch. None substitutes for another.
+Save persists authored bytes and starts native reconciliation automatically.
+Independent complete cache-preserving units apply to future Attempts; context
+changes await explicit Session adoption. Rescan/retry uses `configuration/reconcile`.
+Only actual process-lifetime bindings wait for restart.

@@ -44,7 +44,6 @@ impl HostState {
 #[derive(Debug)]
 struct HostInner {
     manager: SessionRuntimeManager,
-    policy: AppServerPolicy,
     state: Mutex<HostState>,
     requests: watch::Sender<usize>,
     transport: Arc<TransportResources>,
@@ -87,9 +86,9 @@ impl AppServerHost {
 
     #[must_use]
     pub fn new(manager: SessionRuntimeManager, policy: AppServerPolicy) -> Self {
+        manager.bind_process_policy(policy);
         Self(Arc::new(HostInner {
             manager,
-            policy,
             state: Mutex::default(),
             requests: watch::channel(0).0,
             transport: Arc::default(),
@@ -101,8 +100,8 @@ impl AppServerHost {
         &self.0.manager
     }
     #[must_use]
-    pub fn policy(&self) -> &AppServerPolicy {
-        &self.0.policy
+    pub fn policy(&self) -> AppServerPolicy {
+        self.0.manager.process_policy()
     }
 
     /// Commit request ownership and its synchronous downstream admission under
@@ -114,7 +113,7 @@ impl AppServerHost {
         let mut state = self.0.state.lock().expect("host mutex");
         state.accepting()?;
         if *self.0.requests.borrow()
-            >= self.0.policy.max_connections * super::transport::IN_FLIGHT_REQUESTS
+            >= self.policy().max_connections * super::transport::IN_FLIGHT_REQUESTS
         {
             state.refuse("request_capacity");
             return Err(HostAdmissionError::RequestCapacity);
@@ -125,7 +124,7 @@ impl AppServerHost {
     pub(crate) fn admit_attachment(&self) -> Result<AttachmentPermit, HostAdmissionError> {
         let mut state = self.0.state.lock().expect("host mutex");
         state.accepting()?;
-        if state.attachments >= self.0.policy.max_external_attachments {
+        if state.attachments >= self.policy().max_external_attachments {
             state.refuse("attachment_capacity");
             return Err(HostAdmissionError::AttachmentCapacity);
         }
@@ -144,7 +143,7 @@ impl AppServerHost {
         self.0.transport.reserve(
             websocket,
             if websocket {
-                self.0.policy.max_connections
+                self.policy().max_connections
             } else {
                 1
             },
@@ -247,7 +246,7 @@ impl AppServerHost {
         }
         ServerDiagnostics {
             lifecycle,
-            policy: self.0.policy.clone(),
+            policy: self.policy(),
             external_attachments,
             loaded: residency.loaded,
             loading: residency.loading,

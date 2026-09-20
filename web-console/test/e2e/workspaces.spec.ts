@@ -59,9 +59,9 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     await closeSessionView(page, id);
     await expect.poll(async () => (await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.external_attachments).toBe(0);
     const attached = await remoteA.client.call('session/attach', { session_id: id }, 'attached');
-    await remoteA.client.call('configuration/reload', { target: attached.target }, 'configuration_reloaded');
+    await remoteA.client.call('configuration/reconcile', { session_id: id }, 'configuration_application');
     const refreshed = await remoteA.client.call('session/snapshot', { target: attached.target }, 'snapshot');
-    expect(refreshed.snapshot.resources?.revision).not.toBe(attached.snapshot.resources?.revision);
+    expect(refreshed.snapshot.resources?.revision).toBe(attached.snapshot.resources?.revision);
     await remoteA.client.call('session/detach', { target: attached.target }, 'detached');
     await page.locator(`button[data-session-id="${id}"]`).click();
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();

@@ -52,17 +52,14 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await settings.getByRole('button', { name: 'Model', exact: true }).click();
     await settings.getByRole('combobox', { name: 'Model', exact: true }).selectOption('fixture/second-model');
     await settings.getByRole('button', { name: 'Save Root model', exact: true }).click();
-    await expect(settings.getByText(/Pending reload/)).toBeVisible();
-    await settings.getByRole('button', { name: 'Reload', exact: true }).click();
-    await expect(settings.getByRole('alert')).toContainText('Reload busy');
-    await expect(settings.getByRole('alert')).toContainText('remains authoritative');
+    await expect(settings.getByText(/Applicable changes are applied/)).toBeVisible();
     await settings.getByRole('tab', { name: 'Effective', exact: true }).click();
     await settings.getByRole('button', { name: 'Overview', exact: true }).click();
     await expect(settings.getByRole('region', { name: 'Effective configuration', exact: true })).toContainText('fixture/console-model');
     await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
     await settings.getByRole('button', { name: 'Model', exact: true }).click();
     await settings.getByRole('button', { name: 'Remove Root model', exact: true }).click();
-    await expect(settings.getByText(/Source saved. Use Reload/)).toBeVisible();
+    await expect(settings.getByText(/Source saved. Native application/)).toBeVisible();
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 
     await page.locator(`button[data-session-id="${idB}"]`).click(); await send('Use B while A runs');
@@ -143,10 +140,11 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
-    await page.getByRole('button', { name: 'Reload', exact: true }).click();
-    await expect(page.getByRole('status').filter({ hasText: 'Configuration published' })).toBeVisible();
+    await settings.getByRole('button', { name: 'Diagnostics & source facts', exact: true }).click();
+    await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
+    await expect(settings.getByText(/Applicable changes are applied/)).toBeVisible();
     await closeSettings(page);
-    await expect(page.getByLabel('Native diagnostic JSON')).toContainText('second-model');
+    await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
     await expect(page.getByLabel('Session location', { exact: true })).toContainText(fixture.workspaceA);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('second-model');

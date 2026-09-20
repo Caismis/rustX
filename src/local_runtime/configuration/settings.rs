@@ -1,5 +1,5 @@
 //! Typed semantic-unit authoring. Native writers canonicalize rustX-owned documents.
-//! Save commits bytes only; runtime publication belongs exclusively to reload.
+//! Typed CAS persistence transfers application responsibility to the native coordinator.
 use super::super::authoring::{
     ContextLayer, McpAuthoring, ModelLayer, RuntimeLayer, SubagentsLayer, TimeoutLayer,
     ToolDeadlineLayer,
@@ -77,6 +77,8 @@ pub struct McpWrite {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SourceSettings {
+    pub process_bindings: Option<super::super::app_server_policy::AppServerPolicy>,
+    pub application: Option<super::application::ConfigurationApplication>,
     /// Native current-file approval resolution. None when prospective configuration is invalid.
     pub prospective_approval_mode: Option<crate::runtime::ApprovalMode>,
     /// Current-file analysis, separate from the published runtime. Never prepares sources.
@@ -98,7 +100,6 @@ pub struct SourceSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LoadedSources {
     pub generation: crate::runtime::identity::RuntimeResourceRevision,
-    pub pending_reload: bool,
     pub changed_sources: Vec<PathBuf>,
 }
 impl SourceSettings {
@@ -129,7 +130,6 @@ impl SourceSettings {
             .collect();
         self.loaded = Some(LoadedSources {
             generation: loaded.generation,
-            pending_reload: !changed_sources.is_empty(),
             changed_sources,
         });
         self
@@ -139,6 +139,9 @@ impl SourceSettings {
 /// Redacted, immutable facts read at the runtime configuration publication lock.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct EffectiveConfiguration {
+    pub process_bindings: Option<super::super::app_server_policy::AppServerPolicy>,
+    pub application: Option<super::application::ConfigurationApplication>,
+    pub adopted_binding: u64,
     pub source_revisions: BTreeMap<PathBuf, String>,
     pub generation: crate::runtime::identity::RuntimeResourceRevision,
     pub document: RuntimeLayer<ProviderView>,
@@ -157,6 +160,9 @@ pub struct EffectiveConfiguration {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AdmittedConfiguration {
+    pub approval_mode: crate::runtime::ApprovalMode,
+    pub model_timeout: Option<super::super::config::ModelTimeoutPolicyDocument>,
+    pub tool_deadline: Option<super::super::config::ToolDeadlinePolicyDocument>,
     pub attempt: crate::runtime::identity::AttemptId,
     pub generation: crate::runtime::identity::RuntimeResourceRevision,
     pub model: crate::model::session::SessionModelView,
@@ -664,6 +670,8 @@ impl UserConfigManager {
                 ),
             };
         let result = SourceSettings {
+            process_bindings: None,
+            application: None,
             prospective_approval_mode,
             prospective_resources,
             prospective_diagnostic,

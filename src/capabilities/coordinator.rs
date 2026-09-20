@@ -400,6 +400,36 @@ pub struct PreparedCapabilityCandidate {
 }
 
 impl PreparedCapabilityCandidate {
+    pub(crate) fn set_context_profile(
+        &mut self,
+        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
+    ) {
+        if let Some(profile) = &mut self.resolved_profile {
+            let profile = Arc::make_mut(profile);
+            profile
+                .instructions
+                .clone_from(&capture.config.agent.instructions);
+            profile.project_instructions.inherit = capture.config.agent.agents_md.inherit;
+            profile
+                .project_instructions
+                .files
+                .clone_from(&capture.root_agent_project_files);
+        }
+        self.resource_inputs
+            .agent_activation
+            .profile
+            .instructions
+            .clone_from(&capture.config.agent.instructions);
+        self.resource_inputs
+            .agent_activation
+            .profile
+            .agents_md
+            .clone_from(&capture.config.agent.agents_md);
+        self.resource_inputs
+            .agent_activation
+            .project_files
+            .clone_from(&capture.root_agent_project_files);
+    }
     /// An admission-local view; the caller retains this candidate until the
     /// child has frozen its materialization or the Workflow has settled.
     pub(crate) fn admitted_snapshot(
@@ -423,6 +453,18 @@ impl PreparedCapabilityCandidate {
                 Arc::new(self.effective_mcp_servers.clone()),
             )
             .with_resolved_profile(invoking.resolved_profile().cloned().map(Arc::new)),
+        )
+    }
+
+    pub(crate) fn configuration_snapshot(
+        &self,
+        invoking: &CapabilitySnapshot,
+    ) -> Arc<CapabilitySnapshot> {
+        Arc::new(
+            self.admitted_snapshot(invoking)
+                .as_ref()
+                .clone()
+                .with_resolved_profile(self.resolved_profile.clone()),
         )
     }
 
@@ -933,7 +975,7 @@ impl CapabilityCoordinator {
             .await
     }
 
-    /// Prepares a complete candidate from explicit reload-time inputs.
+    /// Prepares a complete candidate from explicit candidate inputs.
     #[cfg(test)]
     pub(crate) async fn prepare_candidate_with_inputs(
         &self,
@@ -949,15 +991,22 @@ impl CapabilityCoordinator {
             .await
     }
 
-    /// Reload uses the single source capture made by the configuration owner.
-    pub(crate) async fn prepare_reload_capture(
+    /// Preparation uses the single source capture made by the configuration owner.
+    pub(crate) async fn prepare_captured_inputs(
         &self,
         inputs: CapabilityResourceInputs,
         discovered: crate::skills::SkillDiscoveryOutcome,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
         let revision = self.current_snapshot().revision();
-        self.prepare_candidate_from_inputs(inputs, true, revision, Some(discovered), None)
-            .await
+        self.prepare_candidate_from_inputs(
+            inputs,
+            true,
+            revision,
+            Some(discovered),
+            Some(cancellation),
+        )
+        .await
     }
 
     /// Materializes finite child/Workflow demand from an admitted generation.
@@ -2066,7 +2115,7 @@ impl CapabilityCoordinator {
                     current: state.revision,
                 });
             }
-            if state.active_attempts > 0 {
+            if state.active_attempts > 0 && !defers_observation {
                 return Err(CapabilityCommitError::Busy);
             }
             // The MCP invalidation guard: final epoch validation and the
@@ -2540,11 +2589,6 @@ impl AttemptCapabilityLease {
     /// before the attempt releases its capability lease.
     pub(crate) fn mcp_leases(&self) -> Option<McpRuntimeLeaseSet> {
         self.mcp_leases.try_clone()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mcp_lease_uses_runtime(&self, runtime: &Arc<McpServerRuntime>) -> bool {
-        self.mcp_leases.contains_runtime(runtime)
     }
 }
 

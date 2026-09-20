@@ -7,7 +7,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { wireProbe } from './wire-probe';
 
-test('CFG3 committed write and reload response loss reconstructs native state without replay', async ({ page }) => {
+test('CFG3 committed write and reconciliation response loss reconstructs native state without replay', async ({ page }) => {
   const fixture = await startDogfood(); const wire = await wireProbe(page);
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/');
@@ -61,13 +61,15 @@ test('CFG3 committed write and reload response loss reconstructs native state wi
     await settings.getByRole('button', { name: 'Edit MCP loss-fixture', exact: true }).click();
     await expect(settings.getByLabel('MCP command', { exact: true })).toHaveValue('inert-fixture');
     expect(writes()).toHaveLength(3);
-    wire.loseNext('configuration/reload');
-    await settings.getByRole('button', { name: 'Reload', exact: true }).click();
+    wire.loseNext('configuration/reconcile');
+    await settings.getByRole('button', { name: 'Diagnostics & source facts', exact: true }).click();
+    await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
     await expect.poll(wire.lost).toBe(3); await reconnect();
-    await expect(settings.getByText(/Pending reload/)).toHaveCount(0);
-    expect(wire.requests.filter(request => request.method === 'configuration/reload')).toHaveLength(1);
+    await expect(settings.getByText(/Preparing configuration/)).toHaveCount(0);
+    expect(wire.requests.filter(request => request.method === 'configuration/reconcile')).toHaveLength(1);
     expect(writes()).toHaveLength(3);
     // Remounting a different Session reconstructs its own authoritative source scope.
+    await settings.getByRole('button', { name: 'MCP', exact: true }).click();
     await settings.getByRole('button', { name: 'Edit MCP loss-fixture', exact: true }).click();
     await settings.getByLabel('MCP command', { exact: true }).fill('unsaved-draft');
     await chooseWorkspace(page, 'Workspace B');

@@ -125,8 +125,8 @@ Host registration authorizes product navigation and exact Workspace routing; it 
 not configuration precedence. Native CFG3 resolves User < Workspace with no trust
 gate. Both source scopes are editable in structured Settings; Effective is a
 read-only native projection. Invalid configuration fails native resolution instead
-of silently skipping Workspace content. Save changes authored bytes only; Reload
-publishes a coherent generation. Host metadata introduces no configuration layer,
+of silently skipping Workspace content. Save persists source and transfers application to the native coordinator;
+context changes await explicit Session adoption. Host metadata introduces no configuration layer,
 credentials or resource definitions. See [Web Settings](../docs/web-settings.md).
 
 ## Harness browser presentation (#345)

@@ -1,5 +1,5 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { SourceMutation } from '../../../../protocol/app-server/v13';
+import type { SourceMutation } from '../../../../protocol/app-server/v14';
 import { Switch } from '../../presentation/primitives/Switch';
 import { Button } from '../../presentation/primitives/Button';
 import { DraftContext } from './drafts';
@@ -41,7 +41,7 @@ export function UnitForm<T>({ title, initial, revision, mutation, save, children
         {removable && <Button type="button" onClick={() => void commit(true)}>Remove {title}</Button>}
         <Button type="button" onClick={() => { change(initial); setBase(revision); setDirty(false); setSaved(false); }}>Discard draft</Button>
         {base !== revision && <Button type="button" onClick={() => setBase(revision)}>Use reviewed revision</Button>}
-      </div>{saved && <p role="status">Source saved. Reload separately to publish configuration.</p>}
+      </div>{saved && <p role="status">Saved. Native application proceeds automatically.</p>}
     </fieldset>
   </form>;
 }

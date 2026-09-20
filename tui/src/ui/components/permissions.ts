@@ -7,7 +7,7 @@ import { approvalLabel } from "../../presentation/selectors.ts";
 import type { PopupContent } from "./popup-frame.ts";
 
 type Sources = Awaited<ReturnType<AppServerSession["permissionSources"]>>;
-/** A view over native sources. A write never mutates Effective or frozen policy. */
+/** A view over native sources and native application authority. */
 export class PermissionsView implements PopupContent {
   #source: Sources;
   #selected = 0;
@@ -22,7 +22,7 @@ export class PermissionsView implements PopupContent {
   readonly changed: () => void;
   constructor(session: AppServerSession, source: Sources, close: () => void, changed: () => void) { this.session = session; this.close = close; this.changed = changed; this.#source = source; }
   popupTitle(): string { return "Permissions"; }
-  popupFooter(): string[] { return ["↑↓ select · Enter save · Ctrl+P publish · PgDn details · Esc"]; }
+  popupFooter(): string[] { return ["↑↓ select · Enter save · PgDn details · Esc"]; }
   setBodyHeight(height: number): void { this.#height = height; }
   invalidate(): void {}
   handleInput(data: string): void {
@@ -40,16 +40,11 @@ export class PermissionsView implements PopupContent {
     if (this.#busy || this.#failed || this.#detailOffset !== undefined) return;
     if (matchesKey(data, "up") || matchesKey(data, "down")) this.#selected = 1 - this.#selected;
     else if (matchesKey(data, "enter")) void this.save(this.#selected === 0 ? "policy" : "full_access");
-    else if (matchesKey(data, "ctrl+p")) void this.publish();
     this.changed();
   }
   async save(mode: ApprovalMode): Promise<void> {
     if (this.#busy || this.#failed) return;
     await this.#mutate(() => this.session.writePermission(this.#source.workspace.revision, mode));
-  }
-  async publish(): Promise<void> {
-    if (this.#busy || this.#failed) return;
-    await this.#mutate(() => this.session.publishPermissions());
   }
   async #mutate(action: () => Promise<Sources>): Promise<void> {
     this.#busy = true; this.#notice = "Waiting for native confirmation…"; this.changed();
@@ -61,11 +56,22 @@ export class PermissionsView implements PopupContent {
     const state = this.session.state;
     const frozen = isAttemptActive(state) ? state.attempt?.executionSettings?.approval_mode : undefined;
     const desired = this.#source.prospective_approval_mode;
+    const application = this.session.application ?? this.#source.application;
+    const units = Object.values(application?.units ?? {});
+    const status = [
+      ...(units.some(unit => unit.status === "preparing") ? ["Preparing configuration…"] : []),
+      ...(units.some(unit => unit.status === "applied") ? ["Applied for future independent Attempts."] : []),
+      ...(application?.candidate ? ["Context changes await adoption · /configuration"] : []),
+      ...(units.some(unit => unit.status === "failed") ? ["Application failed · /configuration retry"] : []),
+      ...(units.some(unit => unit.status === "process_restart") ? ["Process restart required."] : []),
+    ];
     const details = new Text([
+      ...status,
       ...(this.#notice ? [this.#notice] : []),
+      "Saved policy applies automatically to future independent Attempts.",
       `Current: ${approvalLabel(state.effectiveApprovalMode)}`,
       ...(frozen === undefined ? [] : [`Running attempt (frozen): ${approvalLabel(frozen)}`]),
-      `Desired: ${desired == null ? "unavailable" : approvalLabel(desired)}${this.#source.loaded?.pending_reload ? " · saved, pending publication" : ""}`,
+      `Desired: ${desired == null ? "unavailable" : approvalLabel(desired)}`,
     ].join("\n"), 0, 0).render(width);
     if (this.#detailOffset !== undefined) {
       this.#detailOffset = Math.min(this.#detailOffset, Math.max(0, details.length - this.#height));

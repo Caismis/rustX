@@ -541,10 +541,12 @@ struct RuntimeRegistry(Mutex<RegistryState>);
 /// current configuration sources to `configuration`, and execution to each core.
 #[derive(Clone, Debug)]
 pub struct SessionRuntimeManager {
-    sessions: SessionController,
+    pub(super) sessions: SessionController,
     registry: Arc<RuntimeRegistry>,
-    configuration: UserConfigManager,
-    credentials: CredentialSnapshot,
+    pub(super) configuration: UserConfigManager,
+    pub(super) credentials: CredentialSnapshot,
+    pub(super) process_policy: Arc<std::sync::RwLock<super::app_server_policy::AppServerPolicy>>,
+    pub(super) applications: super::configuration::application::ConfigurationApplications,
     dependencies: Arc<LocalRuntimeDependencies>,
     clock: Arc<dyn MonotonicClock>,
 }
@@ -840,18 +842,330 @@ impl SessionRuntimeManager {
                 #[cfg(test)]
                 reaper_waiting: None,
             }))),
+            process_policy: Arc::new(std::sync::RwLock::new(
+                configuration.app_server_policy().map_err(error)?,
+            )),
             configuration,
             credentials,
+            applications: super::configuration::application::ConfigurationApplications::default(),
             dependencies: Arc::new(dependencies),
             clock: Arc::new(SystemMonotonicClock::new()),
         })
     }
+    #[cfg(test)]
+    pub(super) async fn configuration_test_gate(
+        &self,
+        session: &SessionId,
+        publication: bool,
+    ) -> bool {
+        let node = self
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .lineage(session, None)
+            .expect("test Session")
+            .0;
+        let probe = self.probe(&node.conversation_id);
+        if publication {
+            probe.before_configuration_publish.park().await;
+            false
+        } else {
+            probe
+                .configuration_preparations
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            probe.before_configuration_prepare.park().await;
+            probe
+                .fail_configuration_once
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    pub(crate) fn process_policy(&self) -> super::app_server_policy::AppServerPolicy {
+        self.process_policy.read().expect("process policy").clone()
+    }
+
+    pub(crate) fn bind_process_policy(&self, policy: super::app_server_policy::AppServerPolicy) {
+        *self.process_policy.write().expect("process policy") = policy;
+    }
+
+    pub(super) fn apply_process_limits(
+        &self,
+        desired: &super::app_server_policy::AppServerPolicy,
+    ) -> bool {
+        let mut actual = self.process_policy.write().expect("process policy");
+        let restart = actual.shutdown_deadline_ms != desired.shutdown_deadline_ms;
+        actual.max_connections = desired.max_connections;
+        actual.max_external_attachments = desired.max_external_attachments;
+        actual.max_resident_runtimes = desired.max_resident_runtimes;
+        actual.idle_grace_ms = desired.idle_grace_ms;
+        let mut registry = self.registry.0.lock().expect("registry mutex");
+        registry.policy.max_resident_runtimes = desired.max_resident_runtimes;
+        registry.policy.idle_grace_ms = desired.idle_grace_ms;
+        restart
+    }
+
+    pub(crate) async fn create_session(
+        &self,
+        mut settings: super::session::SessionPersistentState,
+    ) -> Result<super::session_controller::SessionTransitionResult, super::session::SessionError>
+    {
+        let configuration = self.configuration.clone();
+        let credentials = self.credentials.clone();
+        let input = settings.input();
+        let capture = tokio::task::spawn_blocking(move || {
+            let mut capture = configuration.resolve_session(&input)?;
+            capture.input.model = Some(capture.session_model().clone());
+            capture.admit(|| credentials)
+        })
+        .await
+        .map_err(|error| super::session::SessionError::Catalog {
+            detail: error.to_string(),
+        })?
+        .map_err(|detail| super::session::SessionError::Catalog { detail })?;
+        settings.model = capture.input.model.clone();
+        let result = self.sessions.create_session(settings).await?;
+        self.sessions
+            .configuration_bindings
+            .lock()
+            .expect("Session configuration bindings")
+            .insert(result.session.id.clone(), capture);
+        Ok(result)
+    }
+
+    pub(super) fn configuration_runtime(&self, id: &SessionId) -> Option<ConversationRuntime> {
+        let resident = {
+            let state = self.registry.0.lock().expect("registry mutex");
+            state.by_session.get(id).and_then(|conversation| {
+                match state.entries.get(conversation) {
+                    Some(Entry::Loaded(resident)) => Some(resident.clone()),
+                    _ => None,
+                }
+            })
+        };
+        resident.and_then(|resident| resident.shutdown_runtime())
+    }
+
+    pub(crate) fn configuration_application(
+        &self,
+        id: &SessionId,
+    ) -> Option<super::configuration::application::ConfigurationApplication> {
+        self.applications.lock().view(id.as_ref())
+    }
+
+    pub(crate) fn configuration_changes(&self) -> watch::Receiver<u64> {
+        self.applications.subscribe()
+    }
+
+    pub(crate) fn configuration_applications(
+        &self,
+    ) -> Vec<super::configuration::application::ConfigurationApplication> {
+        self.applications.lock().views()
+    }
+
+    pub(crate) async fn set_model(
+        &self,
+        session: &SessionId,
+        selection: crate::model::session::SessionModelConfig,
+    ) -> Result<
+        crate::model::session::SessionModelView,
+        super::configuration::application::AdoptionError,
+    > {
+        use super::configuration::application::AdoptionError;
+        let expected_settings = self
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .settings_revision(session)
+            .map_err(|_| AdoptionError::Conflict)?;
+        let owner = self.clone();
+        let session = session.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut application = owner.applications.lock();
+            let adopted = owner
+                .sessions
+                .configuration_bindings
+                .lock()
+                .expect("Session configuration bindings")
+                .get(&session)
+                .cloned()
+                .ok_or(AdoptionError::NotReady)?;
+            let capture = owner
+                .configuration
+                .capture_session_model(&adopted, selection.clone())
+                .map_err(|diagnostic| AdoptionError::Failed { diagnostic })?;
+            let models = crate::model::invocation::ModelBindingRegistry::new(
+                capture
+                    .models
+                    .resolve(&owner.credentials)
+                    .map_err(|error| AdoptionError::Failed {
+                        diagnostic: error.to_string(),
+                    })?,
+            )
+            .map_err(|error| AdoptionError::Failed {
+                diagnostic: error.to_string(),
+            })?;
+            let runtime = owner
+                .configuration_runtime(&session)
+                .ok_or(AdoptionError::NotReady)?;
+            if runtime.model_view().configured == selection && capture.same_provider(&adopted) {
+                return Ok(runtime.model_view());
+            }
+            let mut candidate = runtime
+                .prepare_context_configuration(&capture, models, Some(selection.clone()))
+                .map_err(|diagnostic| AdoptionError::Failed { diagnostic })?;
+            candidate.selection_only = true;
+            let baseline = candidate.baseline;
+            let view = candidate.model.view();
+            let mut retained = capture
+                .admit(|| owner.credentials.clone())
+                .map_err(|diagnostic| AdoptionError::Failed { diagnostic })?;
+            retained.binding_revision = baseline + 1;
+            let mut catalog = owner
+                .sessions
+                .catalog
+                .try_lock()
+                .map_err(|_| AdoptionError::Busy)?;
+            let (_, mut settings) = catalog
+                .lineage(&session, None)
+                .map_err(|_| AdoptionError::Conflict)?;
+            settings.model = Some(selection);
+            runtime.adopt_configuration(&mut Some(candidate), baseline, true, || {
+                catalog
+                    .replace_settings(&session, expected_settings, settings)
+                    .map_err(|error| AdoptionError::Failed {
+                        diagnostic: error.to_string(),
+                    })?;
+                owner
+                    .sessions
+                    .configuration_bindings
+                    .lock()
+                    .expect("Session configuration bindings")
+                    .insert(session.clone(), retained.clone());
+                Ok(())
+            })?;
+            drop(catalog);
+            application.capture(
+                session.to_string(),
+                owner.configuration.capture_application(&retained.input),
+            );
+            owner.applications.notify(&application);
+            drop(application);
+            owner.applications.run(owner.clone());
+            Ok(view)
+        })
+        .await
+        .map_err(|_| AdoptionError::Failed {
+            diagnostic: "Session model operation interrupted".into(),
+        })?
+    }
+
+    pub(crate) fn adopt_configuration(
+        &self,
+        session: &SessionId,
+        identity: &super::configuration::application::ApplicationIdentity,
+        expected_binding: u64,
+    ) -> Result<
+        super::configuration::application::ConfigurationApplication,
+        super::configuration::application::AdoptionError,
+    > {
+        self.applications
+            .adopt(self, session, identity, expected_binding)
+    }
+
+    pub(crate) async fn reconcile_configuration(
+        &self,
+        session: &SessionId,
+    ) -> Result<super::configuration::application::ConfigurationApplication, SourceSettingsError>
+    {
+        let owner = self.clone();
+        let session = session.clone();
+        tokio::spawn(async move { owner.reconcile_configuration_owned(&session).await })
+            .await
+            .map_err(|_| {
+                SourceSettingsError::Source(
+                    super::configuration::settings::SettingsError::Committed,
+                )
+            })?
+    }
+
+    async fn reconcile_configuration_owned(
+        &self,
+        session: &SessionId,
+    ) -> Result<super::configuration::application::ConfigurationApplication, SourceSettingsError>
+    {
+        let input = self
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .lineage(session, None)
+            .map_err(SourceSettingsError::Session)?
+            .1
+            .input();
+        let input = self
+            .sessions
+            .configuration_bindings
+            .lock()
+            .expect("Session configuration bindings")
+            .get(session)
+            .map_or(input, |binding| binding.input.clone());
+        let owner = self.configuration.clone();
+        let applications = self.applications.clone();
+        let scope = session.to_string();
+        tokio::task::spawn_blocking(move || {
+            let mut state = applications.lock();
+            state.capture(scope, owner.capture_application(&input));
+            applications.notify(&state);
+        })
+        .await
+        .map_err(|_| {
+            SourceSettingsError::Source(super::configuration::settings::SettingsError::Io)
+        })?;
+        let state = self.applications.lock();
+        let view = state
+            .view(session.as_ref())
+            .expect("registered application");
+        self.applications.notify(&state);
+        drop(state);
+        self.applications.run(self.clone());
+        Ok(view)
+    }
+
     /// Read source provenance while retaining the Session revision it resolves.
     /// # Errors
     /// Session lookup, source validation and exact source conflicts are typed.
     /// # Panics
     /// Panics if a prior panic poisoned the resident-runtime registry mutex.
     pub async fn source_settings(
+        &self,
+        id: &super::session::SessionId,
+        mutation: Option<(String, super::configuration::settings::SourceMutation)>,
+    ) -> Result<
+        (
+            super::configuration::settings::SourceSettings,
+            u64,
+            Option<crate::model::session::SessionModelConfig>,
+        ),
+        SourceSettingsError,
+    > {
+        if mutation.is_none() {
+            return self.source_settings_owned(id, mutation).await;
+        }
+        let owner = self.clone();
+        let id = id.clone();
+        tokio::spawn(async move { owner.source_settings_owned(&id, mutation).await })
+            .await
+            .map_err(|_| {
+                SourceSettingsError::Source(
+                    super::configuration::settings::SettingsError::Committed,
+                )
+            })?
+    }
+
+    #[allow(clippy::too_many_lines)] // one ordered ownership transaction
+    async fn source_settings_owned(
         &self,
         id: &super::session::SessionId,
         mutation: Option<(String, super::configuration::settings::SourceMutation)>,
@@ -876,9 +1190,37 @@ impl SessionRuntimeManager {
         let committed = mutation.is_some();
         let owner = self.configuration.clone();
         let input = settings.input();
-        let projection = tokio::task::spawn_blocking(move || match mutation {
-            Some((expected, mutation)) => owner.write_source_settings(&input, &expected, mutation),
-            None => owner.read_source_settings(&input),
+        let application_owner = self.applications.clone();
+        let session = id.clone();
+        let bindings = self.sessions.configuration_bindings.clone();
+        let projection = tokio::task::spawn_blocking(move || {
+            let mut application = application_owner.lock();
+            let result = match mutation {
+                Some((expected, mutation)) => {
+                    owner.write_source_settings(&input, &expected, mutation)
+                }
+                None => owner.read_source_settings(&input),
+            };
+            if committed
+                && (result.is_ok()
+                    || matches!(
+                        &result,
+                        Err(super::configuration::settings::SettingsError::Committed)
+                    ))
+            {
+                let mut inputs: std::collections::BTreeMap<_, _> = bindings
+                    .lock()
+                    .expect("Session configuration bindings")
+                    .iter()
+                    .map(|(session, binding)| (session.clone(), binding.input.clone()))
+                    .collect();
+                inputs.entry(session).or_insert(input);
+                for (session, input) in inputs {
+                    application.capture(session.to_string(), owner.capture_application(&input));
+                }
+                application_owner.notify(&application);
+            }
+            result
         })
         .await
         .map_err(|_| {
@@ -887,8 +1229,26 @@ impl SessionRuntimeManager {
             } else {
                 super::configuration::settings::SettingsError::Io
             })
-        })?
-        .map_err(SourceSettingsError::Source)?;
+        })?;
+        if committed {
+            self.applications.run(self.clone());
+            #[cfg(test)]
+            {
+                let node = self
+                    .sessions
+                    .catalog
+                    .lock()
+                    .await
+                    .lineage(id, None)
+                    .expect("test Session")
+                    .0;
+                self.probe(&node.conversation_id)
+                    .after_configuration_persistence
+                    .park()
+                    .await;
+            }
+        }
+        let projection = projection.map_err(SourceSettingsError::Source)?;
         let actual = self
             .sessions
             .catalog
@@ -932,57 +1292,11 @@ impl SessionRuntimeManager {
                 || projection.clone(),
                 |loaded| projection.clone().with_loaded(&loaded),
             );
+        let mut projection = projection;
+        projection.application = self.applications.lock().view(id.as_ref());
+        projection.process_bindings = Some(self.process_policy());
         Ok((projection, revision, settings.model))
     }
-    /// Author a whole Session selection (or omission) using its durable CAS owner.
-    /// This is prospective; already loaded runtimes retain their admitted state.
-    /// # Errors
-    /// Stale revisions and invalid native model selections do not mutate state.
-    pub async fn select_model(
-        &self,
-        id: &super::session::SessionId,
-        expected: u64,
-        selection: Option<crate::model::session::SessionModelConfig>,
-    ) -> Result<u64, SourceSettingsError> {
-        let mut settings = {
-            let catalog = self.sessions.catalog.lock().await;
-            let actual = catalog
-                .settings_revision(id)
-                .map_err(SourceSettingsError::Session)?;
-            if expected != actual {
-                return Err(SourceSettingsError::Session(
-                    super::session::SessionError::StaleSettings { expected, actual },
-                ));
-            }
-            let (_, settings) = catalog
-                .lineage(id, None)
-                .map_err(SourceSettingsError::Session)?;
-            settings
-        };
-        settings.model = selection;
-        let owner = self.configuration.clone();
-        let input = settings.input();
-        tokio::task::spawn_blocking(move || {
-            if input.model.is_none() {
-                return Ok(());
-            }
-            owner.resolve_model_configuration(&input).map(|_| ())
-        })
-        .await
-        .map_err(|_| {
-            SourceSettingsError::Source(super::configuration::settings::SettingsError::Io)
-        })?
-        .map_err(|_| {
-            SourceSettingsError::Source(super::configuration::settings::SettingsError::Invalid)
-        })?;
-        self.sessions
-            .catalog
-            .lock()
-            .await
-            .replace_settings(id, expected, settings)
-            .map_err(SourceSettingsError::Session)
-    }
-
     #[must_use]
     /// # Panics
     /// Panics if an internal residency mutex was poisoned.
@@ -1047,6 +1361,22 @@ impl SessionRuntimeManager {
             .delete_session(session, revision)
             .await
             .map_err(error);
+        if matches!(
+            &result,
+            Ok(
+                super::session::deletion::SessionDeleteResult::Deleted { .. }
+                    | super::session::deletion::SessionDeleteResult::CommittedCleanupPending { .. }
+                    | super::session::deletion::SessionDeleteResult::CommittedDurabilityUncertain { .. }
+                    | super::session::deletion::SessionDeleteResult::NotFound { .. }
+            )
+        ) {
+            self.applications.forget(session.as_ref());
+            self.sessions
+                .configuration_bindings
+                .lock()
+                .expect("Session configuration bindings")
+                .remove(session);
+        }
         if !matches!(
             result,
             Ok(super::session::deletion::SessionDeleteResult::CommittedDurabilityUncertain { .. })
@@ -1140,7 +1470,12 @@ impl SessionRuntimeManager {
                 let mut registry = self.registry.0.lock().expect("registry mutex");
                 registry.check_session(session, &id)?;
                 match registry.entries.get(&id) {
-                    Some(Entry::Loaded(runtime)) => return Ok(runtime.identity.clone()),
+                    Some(Entry::Loaded(runtime)) => {
+                        let identity = runtime.identity.clone();
+                        drop(registry);
+                        self.rebind_configuration_runtime(session);
+                        return Ok(identity);
+                    }
                     Some(Entry::Loading(flight) | Entry::Unloading { flight, .. }) => {
                         flight.clone()
                     }
@@ -1167,10 +1502,19 @@ impl SessionRuntimeManager {
                     .lock()
                     .expect("registry mutex")
                     .check_session(session, runtime.conversation_id())?;
+                self.rebind_configuration_runtime(session);
                 return Ok(runtime);
             }
         }
     }
+    fn rebind_configuration_runtime(&self, session: &SessionId) {
+        if let Some(runtime) = self.configuration_runtime(session)
+            && self.applications.rebind_runtime(session.as_ref(), &runtime)
+        {
+            self.applications.run(self.clone());
+        }
+    }
+
     fn spawn_load(
         &self,
         id: ConversationId,
@@ -1211,6 +1555,7 @@ impl SessionRuntimeManager {
             .map_err(error)?;
         self.compose(access).await
     }
+    #[allow(clippy::too_many_lines)] // one ordered ownership transaction
     async fn compose(
         &self,
         access: SessionAccess,
@@ -1237,14 +1582,27 @@ impl SessionRuntimeManager {
         }
         let configuration = self.configuration.clone();
         let credentials = self.credentials.clone();
-        // Keep allocation inside blocking resolution too: abandoning a Tokio
-        // runtime cannot release authority while the blocking reader still runs.
+        let bindings = self.sessions.configuration_bindings.clone();
         let (access, paths) = tokio::task::spawn_blocking(move || {
-            let paths = configuration
-                .resolve_session(&access.settings.input())
-                .map_err(error)?
-                .admit(|| credentials)
-                .map_err(error)?;
+            let retained = bindings
+                .lock()
+                .expect("Session configuration bindings")
+                .get(&access.session.id)
+                .cloned();
+            let paths = if let Some(paths) = retained {
+                paths
+            } else {
+                let mut capture = configuration
+                    .resolve_session(&access.settings.input())
+                    .map_err(error)?;
+                capture.input.model = Some(capture.session_model().clone());
+                let paths = capture.admit(|| credentials).map_err(error)?;
+                bindings
+                    .lock()
+                    .expect("Session configuration bindings")
+                    .insert(access.session.id.clone(), paths.clone());
+                paths
+            };
             Ok::<_, RuntimeManagerError>((access, paths))
         })
         .await
@@ -1262,7 +1620,7 @@ impl SessionRuntimeManager {
             &self.dependencies,
             registry,
             paths.config().clone(),
-            access.settings,
+            super::session::SessionPersistentState::from_input(&paths.input),
             access.node.conversation_id.clone(),
             access
                 .database_path
@@ -1273,6 +1631,8 @@ impl SessionRuntimeManager {
         )
         .await
         .map_err(error)?;
+        core.runtime()
+            .restore_configuration_binding(paths.binding_revision);
         #[cfg(test)]
         if let Some(gate) = self
             .probe(&access.node.conversation_id)

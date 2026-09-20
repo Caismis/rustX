@@ -3,7 +3,7 @@ import { mcpTransport } from '../../bindings/mcp';
 import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';
 import css from '../../presentation/settings/SettingsContent.module.css';
 import { useState } from 'react';
-import type { McpWrite, SourceScope, SourceSettings } from '../../../../protocol/app-server/v13';
+import type { McpWrite, SourceScope, SourceSettings } from '../../../../protocol/app-server/v14';
 import { Button } from '../../presentation/primitives/Button';
 import { Names, TextField, UnitForm, type SaveSource } from './controls';
 
