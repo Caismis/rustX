@@ -6287,7 +6287,7 @@ fn invalid_model(error: &ModelInvocationError) -> ModelUpdateError {
 /// # Errors
 ///
 /// Returns the engine configuration error.
-fn validate_context_policy(
+pub(crate) fn validate_context_policy(
     policy: &SessionContextPolicy,
     model: &AttemptModelSnapshot,
 ) -> Result<(), crate::context::ContextError> {

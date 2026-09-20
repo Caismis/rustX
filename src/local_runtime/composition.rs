@@ -350,6 +350,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             validate_subagent_catalog(&prepared, &models)?;
             let prepared =
                 prepared.with_configuration(crate::runtime::resources::RuntimeConfiguration {
+                    component_revisions: capture.component_revisions.clone(),
                     resource_definitions: capture.inspection.definitions.clone(),
                     resource_diagnostics: capture.inspection.resource_diagnostics.clone(),
                     source_revisions: capture.source_revisions.clone(),
@@ -1349,6 +1350,7 @@ impl LocalConversationCore {
             .with_workflow_catalog(workflows)
             .with_managed_python_catalog(paths.managed_python.clone())
             .with_configuration(crate::runtime::resources::RuntimeConfiguration {
+                component_revisions: paths.component_revisions.clone(),
                 resource_definitions: paths.inspection.definitions.clone(),
                 resource_diagnostics: paths.inspection.resource_diagnostics.clone(),
                 source_revisions: paths.source_revisions.clone(),

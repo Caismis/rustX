@@ -7,7 +7,7 @@ use crate::local_runtime::configuration::application::{
 };
 use crate::local_runtime::configuration::settings::{ConfigMutation, SourceMutation, SourceScope};
 
-async fn settled(fixture: &Fixture, index: usize) -> ConfigurationApplication {
+pub(super) async fn settled(fixture: &Fixture, index: usize) -> ConfigurationApplication {
     let mut changed = fixture.manager.configuration_changes();
     loop {
         if let Some(view) = fixture
@@ -386,7 +386,15 @@ async fn t06_offside_preparation_allows_admission_and_t07_new_failure_supersedes
                 .any(|unit| matches!(unit, UnitApplication::Failed { .. })),
             "{latest:?}"
         );
-        assert!(latest.candidate.is_none());
+        // Independent instructions remain valid, but only a newly prepared
+        // candidate under the newest identity can be offered.
+        let candidate = latest.candidate.unwrap();
+        assert_eq!(candidate.identity, latest.desired);
+        assert_ne!(candidate.identity, old);
+        assert!(matches!(
+            latest.units[&ApplyUnit::Capabilities],
+            UnitApplication::Failed { .. }
+        ));
         assert!(Arc::ptr_eq(&before, &runtime.runtime_resources()));
         fixture.gates[0].release();
         runtime.settlement_signal().notified().await;
@@ -931,4 +939,442 @@ async fn t08_model_capture_ignores_unrelated_resource_directories_t09_same_selec
         application
     );
     fixture.close().await;
+}
+
+#[tokio::test]
+async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adopted() {
+    let fixture = Fixture::new().await;
+    let id = &fixture.sessions[0].id;
+    fixture.manager.load(id, None).await.unwrap();
+    let runtime = fixture.manager.configuration_runtime(id).unwrap();
+    let before = runtime.runtime_resources();
+    let (source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
+    let mut document: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
+    document["agent"]
+        .as_table_mut()
+        .unwrap()
+        .insert("instructions".into(), "independent instructions P2".into());
+    std::fs::write(&source.user.path, toml::to_string(&document).unwrap()).unwrap();
+    fixture
+        .manager
+        .probe(&fixture.sessions[0].active_conversation_id)
+        .fail_configuration_once
+        .store(true, Ordering::SeqCst);
+    write(
+        &fixture,
+        0,
+        ConfigMutation::NativePolicy {
+            id: crate::local_runtime::configuration::settings::NativeTool::Read,
+            authored: Some(
+                serde_json::from_value(serde_json::json!({"approval":"always"})).unwrap(),
+            ),
+        },
+    )
+    .await;
+    let application = settled(&fixture, 0).await;
+    assert!(
+        matches!(
+            application.units[&ApplyUnit::Capabilities],
+            UnitApplication::Failed { .. }
+        ),
+        "{application:?}"
+    );
+    assert!(
+        matches!(
+            application.units[&ApplyUnit::Instructions],
+            UnitApplication::Ready { .. }
+        ),
+        "{application:?}"
+    );
+    let candidate = application.candidate.unwrap();
+    let adopted = fixture
+        .manager
+        .adopt_configuration(id, &candidate.identity, candidate.expected_binding)
+        .unwrap();
+    assert!(matches!(
+        adopted.units[&ApplyUnit::Capabilities],
+        UnitApplication::Failed { .. }
+    ));
+    let after = runtime.runtime_resources();
+    assert_eq!(
+        after.configuration().unwrap().config.agent.instructions,
+        "independent instructions P2"
+    );
+    assert_eq!(
+        before.capability().revision(),
+        after.capability().revision()
+    );
+    assert!(Arc::ptr_eq(
+        before.capability().skills(),
+        after.capability().skills()
+    ));
+    assert_eq!(
+        before.configuration().unwrap().component_revisions[&ApplyUnit::Capabilities],
+        after.configuration().unwrap().component_revisions[&ApplyUnit::Capabilities]
+    );
+    assert_ne!(
+        before.configuration().unwrap().component_revisions[&ApplyUnit::Instructions],
+        after.configuration().unwrap().component_revisions[&ApplyUnit::Instructions]
+    );
+    assert!(Arc::ptr_eq(
+        before.capability().tool_registry(),
+        after.capability().tool_registry()
+    ));
+    assert_eq!(
+        before.configuration().unwrap().config.native_tools,
+        after.configuration().unwrap().config.native_tools
+    );
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_retry() {
+    Box::pin(bounded(async {
+        let fixture = Fixture::new().await;
+        let id = &fixture.sessions[0].id;
+        fixture.manager.load(id, None).await.unwrap();
+        let before = fixture
+            .manager
+            .configuration_runtime(id)
+            .unwrap()
+            .runtime_resources();
+        let probe = fixture
+            .manager
+            .probe(&fixture.sessions[0].active_conversation_id);
+        probe.before_configuration_prepare.arm();
+        let (source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
+        let mut document: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
+        document["agent"]["model"]["model"] = "local/b".into();
+        std::fs::write(&source.user.path, toml::to_string(&document).unwrap()).unwrap();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("available after success".into()),
+            },
+        )
+        .await;
+        probe.before_configuration_prepare.entered().await;
+        let create = || {
+            fixture.manager.create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+        };
+        let during = create().await.unwrap().session.id;
+        let retained = |id: &SessionId| {
+            fixture
+                .manager
+                .sessions
+                .configuration_bindings
+                .lock()
+                .unwrap()[id]
+                .clone()
+        };
+        assert_eq!(
+            retained(&during).config.agent.instructions,
+            before.configuration().unwrap().config.agent.instructions
+        );
+        assert!(fixture.manager.configuration_runtime(&during).is_none());
+        probe.fail_configuration_once.store(true, Ordering::SeqCst);
+        probe.before_configuration_prepare.release();
+        let failed = settled(&fixture, 0).await;
+        assert!(matches!(
+            failed.units[&ApplyUnit::Instructions],
+            UnitApplication::Failed { .. }
+        ));
+        let after_failure = create().await.unwrap().session.id;
+        assert_eq!(
+            retained(&after_failure).config.agent.instructions,
+            retained(&during).config.agent.instructions
+        );
+        assert_eq!(
+            retained(&after_failure).session_model(),
+            retained(&during).session_model()
+        );
+        assert!(retained(&after_failure).same_capabilities(&retained(&during)));
+        fixture.manager.reconcile_configuration(id).await.unwrap();
+        let success = settled(&fixture, 0).await;
+        assert_eq!(
+            success.desired.input_revision,
+            failed.desired.input_revision
+        );
+        assert!(success.candidate.is_some());
+        let after_success = create().await.unwrap().session.id;
+        assert_eq!(
+            retained(&after_success).config.agent.instructions,
+            "available after success"
+        );
+        assert_eq!(
+            retained(&after_success).session_model().model.to_string(),
+            "local/b"
+        );
+        assert_eq!(
+            retained(&during).session_model().model.to_string(),
+            "local/a"
+        );
+        assert_eq!(
+            retained(&after_failure).session_model().model.to_string(),
+            "local/a"
+        );
+        assert_ne!(
+            retained(&after_failure).config.agent.instructions,
+            "available after success"
+        );
+        assert_ne!(
+            retained(&during).config.agent.instructions,
+            "available after success"
+        );
+        fixture.manager.load(&after_failure, None).await.unwrap();
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_runtime(&after_failure)
+                .unwrap()
+                .runtime_resources()
+                .configuration()
+                .unwrap()
+                .config
+                .agent
+                .instructions,
+            before.configuration().unwrap().config.agent.instructions
+        );
+        fixture.close().await;
+    }))
+    .await;
+}
+
+#[tokio::test]
+async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget() {
+    let fixture = Fixture::new().await;
+    let mut ids = Vec::new();
+    for _ in 0..5 {
+        ids.push(
+            fixture
+                .manager
+                .create_session(SessionPersistentState {
+                    cwd: fixture.workspaces[0].clone(),
+                    model: None,
+                })
+                .await
+                .unwrap()
+                .session
+                .id,
+        );
+    }
+    // Persist the small process limit so source reconciliation keeps it.
+    let (source, _, _) = fixture
+        .manager
+        .source_settings(&ids[0], None)
+        .await
+        .unwrap();
+    let mut document: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
+    document.as_table_mut().unwrap().insert(
+        "app_server".into(),
+        toml::toml! { max_resident_runtimes = 1 }.into(),
+    );
+    std::fs::write(&source.user.path, toml::to_string(&document).unwrap()).unwrap();
+    let before = fixture.manager.registry.0.lock().unwrap().entries.len();
+    fixture
+        .manager
+        .source_settings(
+            &ids[0],
+            Some((
+                fixture
+                    .manager
+                    .source_settings(&ids[0], None)
+                    .await
+                    .unwrap()
+                    .0
+                    .user
+                    .revision,
+                SourceMutation::Config {
+                    scope: SourceScope::User,
+                    mutation: ConfigMutation::Instructions {
+                        authored: Some("cold desired context".into()),
+                    },
+                },
+            )),
+        )
+        .await
+        .unwrap();
+    let mut changed = fixture.manager.configuration_changes();
+    loop {
+        if ids
+            .iter()
+            .all(|id| fixture.manager.applications.is_deferred(id.as_ref()))
+        {
+            break;
+        }
+        changed.changed().await.unwrap();
+    }
+    assert_eq!(fixture.manager.process_policy().max_resident_runtimes, 1);
+    assert_eq!(
+        fixture.manager.registry.0.lock().unwrap().entries.len(),
+        before
+    );
+    for id in &ids {
+        assert!(fixture.manager.configuration_runtime(id).is_none());
+        let view = fixture.manager.configuration_application(id).unwrap();
+        assert_eq!(
+            view.units[&ApplyUnit::ExecutionPolicy],
+            UnitApplication::Applied
+        );
+        assert_eq!(
+            view.units[&ApplyUnit::Instructions],
+            UnitApplication::Preparing
+        );
+        assert!(
+            !view
+                .units
+                .values()
+                .any(|unit| matches!(unit, UnitApplication::Failed { .. }))
+        );
+    }
+    let subsequent = fixture
+        .manager
+        .create_session(SessionPersistentState {
+            cwd: fixture.workspaces[0].clone(),
+            model: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .manager
+            .sessions
+            .configuration_bindings
+            .lock()
+            .unwrap()[&subsequent.session.id]
+            .config
+            .agent
+            .instructions,
+        "cold desired context"
+    );
+    assert!(
+        fixture
+            .manager
+            .configuration_runtime(&subsequent.session.id)
+            .is_none()
+    );
+    fixture.manager.load(&ids[0], None).await.unwrap();
+    let runtime = fixture.manager.configuration_runtime(&ids[0]).unwrap();
+    assert_ne!(
+        runtime
+            .runtime_resources()
+            .configuration()
+            .unwrap()
+            .config
+            .agent
+            .instructions,
+        "cold desired context"
+    );
+    loop {
+        if fixture
+            .manager
+            .configuration_application(&ids[0])
+            .unwrap()
+            .candidate
+            .is_some()
+        {
+            break;
+        }
+        changed.changed().await.unwrap();
+    }
+    assert_eq!(
+        fixture.manager.registry.0.lock().unwrap().entries.len(),
+        before + 1
+    );
+    assert_ne!(
+        runtime
+            .runtime_resources()
+            .configuration()
+            .unwrap()
+            .config
+            .agent
+            .instructions,
+        "cold desired context"
+    );
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t09_t15_new_session_during_preparation_keeps_available_binding_after_success() {
+    Box::pin(bounded(async {
+        let fixture = Fixture::new().await;
+        let id = &fixture.sessions[0].id;
+        fixture.manager.load(id, None).await.unwrap();
+        let before = fixture
+            .manager
+            .sessions
+            .configuration_bindings
+            .lock()
+            .unwrap()[id]
+            .clone();
+        let probe = fixture
+            .manager
+            .probe(&fixture.sessions[0].active_conversation_id);
+        probe.before_configuration_prepare.arm();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("P2 available".into()),
+            },
+        )
+        .await;
+        probe.before_configuration_prepare.entered().await;
+        let create = || {
+            fixture.manager.create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+        };
+        let during = create().await.unwrap().session.id;
+        let retained = |id: &SessionId| {
+            fixture
+                .manager
+                .sessions
+                .configuration_bindings
+                .lock()
+                .unwrap()[id]
+                .clone()
+        };
+        assert_eq!(
+            retained(&during).component_revisions,
+            before.component_revisions
+        );
+        assert_eq!(retained(&during).session_model(), before.session_model());
+        assert_eq!(
+            retained(&during).config.agent.instructions,
+            before.config.agent.instructions
+        );
+        probe.before_configuration_prepare.release();
+        assert!(settled(&fixture, 0).await.candidate.is_some());
+        let after = create().await.unwrap().session.id;
+        assert_eq!(retained(&after).config.agent.instructions, "P2 available");
+        assert_eq!(
+            retained(&during).component_revisions,
+            before.component_revisions
+        );
+        fixture.manager.load(&during, None).await.unwrap();
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_runtime(&during)
+                .unwrap()
+                .runtime_resources()
+                .configuration()
+                .unwrap()
+                .config
+                .agent
+                .instructions,
+            before.config.agent.instructions
+        );
+        fixture.close().await;
+    }))
+    .await;
 }

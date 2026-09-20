@@ -2070,7 +2070,6 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
         let id = f.sessions[0].id.clone();
         let MethodResult::SourceSettings {
             projection,
-            session_revision: _,
             ..
         } = call(
             &connection,
@@ -2216,6 +2215,16 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             .await
             .unwrap();
         let target = attach(&connection, &f, 0).await;
+        let initial_application = super::configuration::settled(&f, 0).await;
+        if let Some(candidate) = initial_application.candidate {
+            f.manager
+                .adopt_configuration(
+                    &target.session_id,
+                    &candidate.identity,
+                    candidate.expected_binding,
+                )
+                .unwrap();
+        }
         call(
             &connection,
             101,
@@ -2312,7 +2321,18 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
         );
         assert_eq!(next.request_params["temperature"], 0.8);
         assert!(!frozen.primary.request_params.contains_key("temperature"));
-        let cold = attach(&connection, &f, 1).await;
+        // Creation uses the successfully prepared source authority, after
+        // native processing acknowledges availability. Existing A stays frozen.
+        super::configuration::settled(&f, 0).await;
+        let created = f
+            .manager
+            .create_session(crate::local_runtime::session::SessionPersistentState {
+                cwd: f.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap();
+        let cold = attach_session(&connection, &created.session).await;
         let MethodResult::Models { catalog } =
             call(&connection, 104, Method::ModelCatalog { target: cold }).await
         else {

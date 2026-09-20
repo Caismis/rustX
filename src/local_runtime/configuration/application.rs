@@ -3,7 +3,7 @@
 //! This owner serializes source ingestion and final publication, not execution
 //! admission or resource preparation. A single worker drains the latest desired
 //! attempt; replacing pending work never makes stale work publishable again.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 mod worker;
@@ -113,6 +113,17 @@ pub(crate) struct ConfigurationApplications {
 
 #[derive(Default)]
 pub(crate) struct ApplicationState {
+    // Source authority survives Session retirement and runtime eviction. Keys
+    // are canonical execution/configuration directories within this User owner.
+    available: BTreeMap<std::path::PathBuf, super::ProspectiveSessionConfig>,
+    desired_sources: BTreeMap<std::path::PathBuf, Result<CapturedApplication, String>>,
+    scope_sources: BTreeMap<String, std::path::PathBuf>,
+    deferred: BTreeSet<String>,
+    desired_process: Option<super::super::app_server_policy::AppServerPolicy>,
+    process: Option<(
+        super::super::app_server_policy::AppServerPolicy,
+        UnitApplication,
+    )>,
     next_attempt: u64,
     version: u64,
     scopes: BTreeMap<String, ConfigurationApplication>,
@@ -148,6 +159,11 @@ impl Default for ConfigurationApplications {
 }
 
 impl ConfigurationApplications {
+    #[cfg(test)]
+    pub(crate) fn is_deferred(&self, scope: &str) -> bool {
+        self.lock().deferred.contains(scope)
+    }
+
     pub(crate) fn lock(&self) -> MutexGuard<'_, ApplicationState> {
         self.inner.lock().expect("configuration application owner")
     }
@@ -163,10 +179,20 @@ impl ConfigurationApplications {
             .get(scope)
             .and_then(|ready| ready.prepared.as_ref())
             .is_some_and(|candidate| !runtime.configuration_allocation_matches(candidate));
-        if !obsolete {
+        if !obsolete && !state.deferred.remove(scope) {
             return false;
         }
-        let input = state.captured_input(scope);
+        let mut input = state
+            .scope_sources
+            .get(scope)
+            .and_then(|source| state.desired_sources.get(source))
+            .cloned()
+            .unwrap_or_else(|| state.captured_input(scope));
+        if let Ok(captured) = &mut input
+            && let Ok(context) = &mut captured.context
+        {
+            context.input.model = Some(runtime.model_view().configured);
+        }
         state.capture_binding(scope.to_owned(), input);
         self.notify(&state);
         true
@@ -175,9 +201,11 @@ impl ConfigurationApplications {
     pub(crate) fn forget(&self, scope: &str) {
         let mut state = self.lock();
         state.scopes.remove(scope);
+        state.scope_sources.remove(scope);
         state.pending.remove(scope);
         state.inputs.remove(scope);
         state.ready.remove(scope);
+        state.deferred.remove(scope);
         state.version = state
             .version
             .checked_add(1)
@@ -195,6 +223,102 @@ impl ConfigurationApplications {
 }
 
 impl ApplicationState {
+    /// Initial resolution happens only for an uninitialized source scope. Once
+    /// established, authored input cannot bypass successful native publication.
+    pub(crate) fn initial_binding(
+        &mut self,
+        configuration: &super::UserConfigManager,
+        input: &super::SessionConfigInput,
+        credentials: &crate::credentials::CredentialSnapshot,
+    ) -> Result<super::AdmittedSessionConfig, String> {
+        let key = super::canonical_directory(&input.cwd)?;
+        if !self.available.contains_key(&key) {
+            let capture = configuration
+                .resolve_session(&super::SessionConfigInput::new(key.clone()))
+                .map_err(|error| error.to_string())?;
+            Self::validate_default(&capture, credentials)?;
+            capture.validate_resource_authority()?;
+            self.available.insert(key.clone(), capture);
+        }
+        let mut capture = self.available[&key].clone();
+        capture.input.model = Some(
+            input
+                .model
+                .clone()
+                .unwrap_or_else(|| capture.config.initial_model().clone()),
+        );
+        Self::validate_selection(&capture, credentials)?;
+        capture.admit(|| credentials.clone())
+    }
+
+    fn validate_selection(
+        capture: &super::ProspectiveSessionConfig,
+        credentials: &crate::credentials::CredentialSnapshot,
+    ) -> Result<(), String> {
+        capture
+            .config
+            .validate()
+            .map_err(|error| error.to_string())?;
+        for name in &capture.config.agent.workflows {
+            if !capture.workflows.entries().contains_key(name) {
+                return Err(format!("unknown Workflow {name}"));
+            }
+        }
+        for name in &capture.config.agent.agents {
+            if capture.subagents.get(name).is_none() {
+                return Err(format!("unknown Agent {name}"));
+            }
+        }
+        let catalog = capture
+            .models
+            .resolve(credentials)
+            .map_err(|error| error.to_string())?;
+        let models = crate::model::invocation::ModelBindingRegistry::new(catalog)
+            .map_err(|error| error.to_string())?;
+        let model =
+            crate::model::session::SessionModelState::new(models, capture.session_model().clone())
+                .map_err(|error| error.to_string())?;
+        let snapshot = model.snapshot();
+        // The same native budget validator used at runtime composition.
+        crate::runtime::conversation_runtime::validate_context_policy(
+            &capture.config.context_policy(),
+            &snapshot,
+        )
+        .map_err(|error| error.message)
+    }
+
+    fn validate_default(
+        capture: &super::ProspectiveSessionConfig,
+        credentials: &crate::credentials::CredentialSnapshot,
+    ) -> Result<(), String> {
+        let mut default = capture.clone();
+        default.input.model = None;
+        Self::validate_selection(&default, credentials)
+    }
+
+    fn make_available(
+        &mut self,
+        scope: &str,
+        identity: &ApplicationIdentity,
+        capture: &super::ProspectiveSessionConfig,
+        credentials: &crate::credentials::CredentialSnapshot,
+    ) -> Result<(), String> {
+        Self::validate_default(capture, credentials)?;
+        if self.current(scope, identity)
+            && self
+                .desired_sources
+                .get(&capture.input.cwd)
+                .and_then(|input| input.as_ref().ok())
+                .is_some_and(|input| Some(&input.revision) == identity.input_revision.as_ref())
+        {
+            let mut available = capture.clone();
+            available.input.model = None;
+            self.available
+                .insert(available.input.cwd.clone(), available);
+        }
+        Ok(())
+    }
+
     /// Called while the native source commit lock is held. Retry deliberately
     /// allocates a new identity even when the input digest did not change.
     pub(crate) fn desire(
@@ -241,8 +365,12 @@ impl ApplicationState {
     pub(crate) fn capture(
         &mut self,
         scope: String,
+        source: &std::path::Path,
         input: Result<CapturedApplication, String>,
     ) -> ApplicationIdentity {
+        self.record_source(source, &input);
+        self.scope_sources
+            .insert(scope.clone(), source.to_path_buf());
         if let Ok(capture) = &input
             && let Some(current) = self.scopes.get(&scope)
             && current.desired.input_revision.as_ref() == Some(&capture.revision)
@@ -267,6 +395,18 @@ impl ApplicationState {
         let identity = self.desire(scope.clone(), revision);
         self.inputs.insert(scope, input);
         identity
+    }
+
+    pub(crate) fn record_source(
+        &mut self,
+        source: &std::path::Path,
+        input: &Result<CapturedApplication, String>,
+    ) {
+        self.desired_sources
+            .insert(source.to_path_buf(), input.clone());
+        if let Ok(input) = input {
+            self.desired_process = Some(input.process.clone());
+        }
     }
 
     fn captured_input(&self, scope: &str) -> Result<CapturedApplication, String> {
@@ -337,7 +477,11 @@ mod tests {
     #[test]
     fn t08_failed_capture_has_no_manufactured_input_revision() {
         let mut state = ApplicationState::default();
-        let identity = state.capture("s".into(), Err("input changed during capture".into()));
+        let identity = state.capture(
+            "s".into(),
+            std::path::Path::new("/workspace"),
+            Err("input changed during capture".into()),
+        );
         assert_eq!(identity.input_revision, None);
         assert_eq!(state.view("s").unwrap().desired, identity);
         assert!(state.ready.is_empty());

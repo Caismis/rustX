@@ -253,6 +253,7 @@ pub(crate) struct SourceCapture {
 /// Admission adds credentials; native composition owns external preparation.
 #[derive(Clone)]
 pub struct ProspectiveSessionConfig {
+    pub(crate) component_revisions: BTreeMap<application::ApplyUnit, String>,
     pub(crate) source_revisions: BTreeMap<PathBuf, String>,
     pub(crate) effective: RuntimeLayer,
     pub(crate) root_agent_project_files: Vec<crate::runtime::resources::ProjectContextFile>,
@@ -278,6 +279,14 @@ pub struct ProspectiveSessionConfig {
 }
 
 impl ProspectiveSessionConfig {
+    pub(crate) fn apply_execution_policy(&mut self, desired: &CurrentRuntimeConfig) {
+        let config = std::sync::Arc::make_mut(&mut self.config);
+        config.approval_mode = desired.approval_mode;
+        config.subagents = desired.subagents.clone();
+        config.model_timeout_policy = desired.model_timeout_policy;
+        config.tool_deadline_policy = desired.tool_deadline_policy;
+    }
+
     /// Compare independently prepared capability inputs, excluding context and
     /// provider units. Authored revisions and shadowed/unselected metadata are
     /// not effective resource identities.
@@ -378,6 +387,24 @@ impl ProspectiveSessionConfig {
             .clone_from(&adopted.project_context_files);
         self.root_agent_project_files
             .clone_from(&adopted.root_agent_project_files);
+        let context = self.effective.agent.get_or_insert_with(Default::default);
+        context.instructions = adopted
+            .effective
+            .agent
+            .as_ref()
+            .and_then(|agent| agent.instructions.clone());
+        context.agents_md = adopted
+            .effective
+            .agent
+            .as_ref()
+            .and_then(|agent| agent.agents_md.clone());
+        self.effective
+            .context
+            .clone_from(&adopted.effective.context);
+        self.component_revisions.insert(
+            application::ApplyUnit::Instructions,
+            adopted.component_revisions[&application::ApplyUnit::Instructions].clone(),
+        );
         self
     }
 
@@ -486,11 +513,7 @@ impl AdmittedSessionConfig {
     }
     pub(crate) fn with_execution_policy(&self, desired: &CurrentRuntimeConfig) -> Self {
         let mut retained = self.clone();
-        let config = std::sync::Arc::make_mut(&mut retained.prospective.config);
-        config.approval_mode = desired.approval_mode;
-        config.subagents = desired.subagents.clone();
-        config.model_timeout_policy = desired.model_timeout_policy;
-        config.tool_deadline_policy = desired.tool_deadline_policy;
+        retained.prospective.apply_execution_policy(desired);
         retained
     }
 }
@@ -1247,7 +1270,19 @@ impl UserConfigManager {
         diagnostics.dedup();
         diagnostics.truncate(256);
         inspection.resource_diagnostics = diagnostics;
+        let revision = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&revisions).expect("source manifest"))
+        );
         Ok(ProspectiveSessionConfig {
+            component_revisions: [
+                application::ApplyUnit::Capabilities,
+                application::ApplyUnit::Instructions,
+                application::ApplyUnit::Provider,
+            ]
+            .into_iter()
+            .map(|unit| (unit, revision.clone()))
+            .collect(),
             source_revisions: revisions,
             effective,
             root_agent_project_files,

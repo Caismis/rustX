@@ -913,10 +913,11 @@ impl SessionRuntimeManager {
         let configuration = self.configuration.clone();
         let credentials = self.credentials.clone();
         let input = settings.input();
+        let applications = self.applications.clone();
         let capture = tokio::task::spawn_blocking(move || {
-            let mut capture = configuration.resolve_session(&input)?;
-            capture.input.model = Some(capture.session_model().clone());
-            capture.admit(|| credentials)
+            applications
+                .lock()
+                .initial_binding(&configuration, &input, &credentials)
         })
         .await
         .map_err(|error| super::session::SessionError::Catalog {
@@ -1046,10 +1047,9 @@ impl SessionRuntimeManager {
                 Ok(())
             })?;
             drop(catalog);
-            application.capture_binding(
-                session.to_string(),
-                owner.configuration.capture_application(&retained.input),
-            );
+            let input = owner.configuration.capture_application(&retained.input);
+            application.record_source(&retained.input.cwd, &input);
+            application.capture_binding(session.to_string(), input);
             owner.applications.notify(&application);
             drop(application);
             owner.applications.run(owner.clone());
@@ -1116,7 +1116,7 @@ impl SessionRuntimeManager {
         let scope = session.to_string();
         tokio::task::spawn_blocking(move || {
             let mut state = applications.lock();
-            state.capture(scope, owner.capture_application(&input));
+            state.capture(scope, &input.cwd, owner.capture_application(&input));
             applications.notify(&state);
         })
         .await
@@ -1193,8 +1193,21 @@ impl SessionRuntimeManager {
         let application_owner = self.applications.clone();
         let session = id.clone();
         let bindings = self.sessions.configuration_bindings.clone();
+        let credentials = self.credentials.clone();
         let projection = tokio::task::spawn_blocking(move || {
             let mut application = application_owner.lock();
+            // A cold persisted Session may not yet have joined this process's
+            // configuration owner. Establish its pre-write binding at the same
+            // source fence; the worker must never bootstrap from saved desired
+            // bytes merely because no runtime has been allocated.
+            if committed {
+                let mut retained = bindings.lock().expect("Session configuration bindings");
+                if !retained.contains_key(&session)
+                    && let Ok(binding) = application.initial_binding(&owner, &input, &credentials)
+                {
+                    retained.insert(session.clone(), binding);
+                }
+            }
             let result = match mutation {
                 Some((expected, mutation)) => {
                     owner.write_source_settings(&input, &expected, mutation)
@@ -1216,7 +1229,11 @@ impl SessionRuntimeManager {
                     .collect();
                 inputs.entry(session).or_insert(input);
                 for (session, input) in inputs {
-                    application.capture(session.to_string(), owner.capture_application(&input));
+                    application.capture(
+                        session.to_string(),
+                        &input.cwd,
+                        owner.capture_application(&input),
+                    );
                 }
                 application_owner.notify(&application);
             }
@@ -1583,6 +1600,7 @@ impl SessionRuntimeManager {
         let configuration = self.configuration.clone();
         let credentials = self.credentials.clone();
         let bindings = self.sessions.configuration_bindings.clone();
+        let applications = self.applications.clone();
         let (access, paths) = tokio::task::spawn_blocking(move || {
             let retained = bindings
                 .lock()
@@ -1592,11 +1610,10 @@ impl SessionRuntimeManager {
             let paths = if let Some(paths) = retained {
                 paths
             } else {
-                let mut capture = configuration
-                    .resolve_session(&access.settings.input())
+                let paths = applications
+                    .lock()
+                    .initial_binding(&configuration, &access.settings.input(), &credentials)
                     .map_err(error)?;
-                capture.input.model = Some(capture.session_model().clone());
-                let paths = capture.admit(|| credentials).map_err(error)?;
                 bindings
                     .lock()
                     .expect("Session configuration bindings")

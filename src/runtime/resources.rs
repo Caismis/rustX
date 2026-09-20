@@ -96,6 +96,10 @@ impl ManagedPythonCatalog {
 /// Authored source capture is process-local and never persisted as Session intent.
 #[derive(Clone)]
 pub struct RuntimeConfiguration {
+    pub(crate) component_revisions: std::collections::BTreeMap<
+        crate::local_runtime::configuration::application::ApplyUnit,
+        String,
+    >,
     pub resource_definitions: Vec<crate::runtime::capability_inspection::ResourceDefinition>,
     pub resource_diagnostics: Vec<crate::runtime::capability_inspection::ResourceDiagnostic>,
     pub source_revisions: std::collections::BTreeMap<PathBuf, String>,
@@ -181,6 +185,14 @@ impl RuntimeResourceSnapshot {
             .clone_from(&capture.config.agent.agents_md);
         config.context = capture.config.context;
         configuration.models = models;
+        for unit in [
+            crate::local_runtime::configuration::application::ApplyUnit::Instructions,
+            crate::local_runtime::configuration::application::ApplyUnit::Provider,
+        ] {
+            configuration
+                .component_revisions
+                .insert(unit, capture.component_revisions[&unit].clone());
+        }
         let context = configuration
             .effective
             .agent
@@ -750,6 +762,9 @@ impl PreparedRuntimeResourceData {
             let configuration = Arc::make_mut(configuration);
             configuration.config = capture.config.clone();
             configuration.models = models;
+            configuration
+                .component_revisions
+                .clone_from(&capture.component_revisions);
             configuration.effective = capture.effective.clone().map_providers(Into::into);
             configuration
                 .source_revisions
