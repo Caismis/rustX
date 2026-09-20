@@ -20,8 +20,8 @@ use rustx::agent::{
     AgentStatusObservation,
 };
 use rustx::context::{
-    AgentStatusClock, AgentStatusConfig, AgentStatusEngine, AgentStatusModuleId, ContextRuntime,
-    DefaultTokenEstimator, SessionContextPolicy, TODO_STATUS_EMISSION_KEY,
+    AgentStatusClock, AgentStatusConfig, AgentStatusEngine, ContextRuntime, DefaultTokenEstimator,
+    SessionContextPolicy, TODO_STATUS_EMISSION_KEY,
 };
 use rustx::durable::ConversationStore;
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
@@ -206,7 +206,7 @@ fn stop_turn() -> Vec<FakeStep> {
 /// The first status is therefore prepared by request 2. Requests 3, 4, 5,
 /// and 6 are the four later fresh primary starts that establish the inclusive
 /// cooldown boundary; request 7 is the next `PostToolBatch` opportunity.
-fn todo_progress_script() -> Vec<Vec<FakeStep>> {
+fn logical_step_progress_script() -> Vec<Vec<FakeStep>> {
     let todo = ScriptedCall {
         id: "progress-todo",
         tool_id: TODO_TOOL_ID,
@@ -375,7 +375,7 @@ async fn one_settled_tool_batch_creates_one_post_tool_opportunity() {
             .expect("event history")
             .events
             .iter()
-            .filter(|event| matches!(event.event, RuntimeEvent::AgentStatusEmitted { .. }))
+            .filter(|event| matches!(event.event, RuntimeEvent::ContextContributionEmitted { .. }))
             .count(),
         1,
         "the Todo status has one suppression fact"
@@ -389,7 +389,8 @@ async fn one_settled_tool_batch_creates_one_post_tool_opportunity() {
         .filter(|event| {
             matches!(
                 event.event,
-                RuntimeEvent::ModelRequestStarted { .. } | RuntimeEvent::AgentStatusEmitted { .. }
+                RuntimeEvent::ModelRequestStarted { .. }
+                    | RuntimeEvent::ContextContributionEmitted { .. }
             )
         })
         .map(|event| event.event)
@@ -400,7 +401,8 @@ async fn one_settled_tool_batch_creates_one_post_tool_opportunity() {
         .filter(|event| {
             matches!(
                 event,
-                RuntimeEvent::ModelRequestStarted { .. } | RuntimeEvent::AgentStatusEmitted { .. }
+                RuntimeEvent::ModelRequestStarted { .. }
+                    | RuntimeEvent::ContextContributionEmitted { .. }
             )
         })
         .collect::<Vec<_>>();
@@ -413,7 +415,7 @@ async fn one_settled_tool_batch_creates_one_post_tool_opportunity() {
         [
             RuntimeEvent::ModelRequestStarted { .. },
             RuntimeEvent::ModelRequestStarted { .. },
-            RuntimeEvent::AgentStatusEmitted { .. },
+            RuntimeEvent::ContextContributionEmitted { .. },
         ]
     ));
 }
@@ -626,17 +628,27 @@ async fn committed_todo_state_emits_one_bounded_post_tool_reminder() {
 
     let head = fixture
         .store
-        .latest_agent_status_emission(AgentStatusModuleId::Todo, TODO_STATUS_EMISSION_KEY)
+        .latest_contribution_emission(
+            &crate::runtime::identity::ContextContributorIdentity::Native(
+                crate::runtime::identity::NativeContextContributor::AgentStatus,
+            ),
+            TODO_STATUS_EMISSION_KEY,
+        )
         .expect("latest Todo emission lookup")
         .expect("Todo emission committed with model start");
     assert_eq!(head.canonical_message_id, observations[0].status_message_id);
-    assert_eq!(head.module_id, AgentStatusModuleId::Todo);
+    assert_eq!(
+        head.producer,
+        crate::runtime::identity::ContextContributorIdentity::Native(
+            crate::runtime::identity::NativeContextContributor::AgentStatus
+        )
+    );
     assert_eq!(head.key, TODO_STATUS_EMISSION_KEY);
     assert!(!head.fingerprint.is_empty());
     assert_eq!(
         common::read_event_history(fixture.store.as_ref(), &result.attempt_id)
             .iter()
-            .filter(|event| matches!(event, RuntimeEvent::AgentStatusEmitted { .. }))
+            .filter(|event| matches!(event, RuntimeEvent::ContextContributionEmitted { .. }))
             .count(),
         1,
         "one Todo emission fact settles with the one status message"
@@ -650,7 +662,7 @@ async fn committed_todo_state_emits_one_bounded_post_tool_reminder() {
 /// inclusive threshold. No status module creates any of these requests.
 #[tokio::test]
 async fn todo_cooldown_uses_later_primary_starts_and_repeats_at_four() {
-    let model = fake_model(todo_progress_script());
+    let model = fake_model(logical_step_progress_script());
     let fixture = common::native_fixture();
     let noop = FakeTool::new(
         common::tool_policies(
@@ -708,11 +720,13 @@ async fn todo_cooldown_uses_later_primary_starts_and_repeats_at_four() {
         .events
         .iter()
         .filter_map(|event| match &event.event {
-            RuntimeEvent::AgentStatusEmitted {
+            RuntimeEvent::ContextContributionEmitted {
                 emission,
-                todo_progress_origin,
+                logical_step_origin,
                 ..
-            } if emission.module_id == AgentStatusModuleId::Todo => Some(*todo_progress_origin),
+            } if emission.key == crate::context::status::TODO_STATUS_EMISSION_KEY => {
+                Some(*logical_step_origin)
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -723,14 +737,19 @@ async fn todo_cooldown_uses_later_primary_starts_and_repeats_at_four() {
     );
     let head = fixture
         .store
-        .latest_agent_status_emission(AgentStatusModuleId::Todo, TODO_STATUS_EMISSION_KEY)
+        .latest_contribution_emission(
+            &crate::runtime::identity::ContextContributorIdentity::Native(
+                crate::runtime::identity::NativeContextContributor::AgentStatus,
+            ),
+            TODO_STATUS_EMISSION_KEY,
+        )
         .expect("latest Todo head")
         .expect("threshold-boundary Todo emission");
-    assert_eq!(head.todo_progress_origin, 7);
+    assert_eq!(head.logical_step_origin, 7);
     assert_eq!(
         fixture
             .store
-            .current_todo_progress()
+            .current_logical_step_progress()
             .expect("Todo progress"),
         7
     );

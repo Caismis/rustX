@@ -1,5 +1,11 @@
 # Development Plan
 
+Issue #383 converges native context capabilities over #380's captured Attempt
+configuration. Agent Status and Goal use one registered contribution lifecycle,
+with producer-scoped atomic startup receipts, typed historical metadata, and
+logical-step reuse. [Ownership, boundaries, and regression matrix](native-context-contributions.md)
+define this implementation; no dynamic plugin SDK or alternate config owner is introduced.
+
 M9.6 (#84) composes the root-only Goal extension over revisioned durable state,
 following #256/#258/#259. Its [admission contract](goal-extension.md) uses ordinary
 ConversationRuntime ownership and keeps Scheduler #85's future WHEN semantics
@@ -1217,7 +1223,8 @@ the live path and the durable path cannot drift and a future PostgreSQL
 backend reuses the same contract.
 
 The durable event vocabulary changed incompatibly, so
-`SQLITE_SCHEMA_VERSION` is now 15. Version 10 froze the structured
+`SQLITE_SCHEMA_VERSION` is now 43 (see [native contributions](native-context-contributions.md)).
+The historical milestones below describe the earlier schema changes. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126; version
 11 added typed Agent Status generation metadata to canonical status messages;
 version 12 added canonical-message-coupled Agent Status emission facts,

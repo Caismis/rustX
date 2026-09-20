@@ -49,8 +49,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     let snapshot = todo_status_start_snapshot(
         store.load_head().unwrap().revision.next(),
         status_id.clone(),
-        AgentStatusEmission {
-            module_id: AgentStatusModuleId::Todo,
+        ContributionEmission {
             key: "active_actionable".into(),
             fingerprint: "archive-fingerprint".into(),
         },
@@ -111,7 +110,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     later_request.provisional_message_id = later_request.identity.provisional_message_id();
     later_request.surface_revision = store.load_head().unwrap().revision;
     later_request.request_context_ids.clear();
-    later_request.agent_status = None;
+    later_request.contributions.clear();
     let later_receipt = store
         .commit_model_turn_start(&[], &later_request, Utc::now())
         .unwrap();
@@ -337,8 +336,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
     let mut snapshot = todo_status_start_snapshot(
         store.load_head().unwrap().revision.next(),
         status_id.clone(),
-        AgentStatusEmission {
-            module_id: AgentStatusModuleId::Todo,
+        ContributionEmission {
             key: "active_actionable".into(),
             fingerprint: "safe".into(),
         },

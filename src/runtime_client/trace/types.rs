@@ -225,6 +225,7 @@ pub struct TraceSystemPromptPresentation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TraceContextKind {
+    NativeEnvironment,
     GoalStatus,
     RuntimeToolObservation,
     ExtensionEnvironment,
@@ -266,6 +267,8 @@ pub enum TraceContextSource {
 #[serde(deny_unknown_fields)]
 pub struct TraceContextPresentation {
     pub message_id: MessageId,
+    /// Exact producer from the committed accepted-contribution record.
+    pub producer: crate::runtime::identity::ContextContributorIdentity,
     pub context_kind: TraceContextKind,
     /// The exact native producer, copied from the canonical message's own
     /// `UserSource`. It is never inferred from the context family, the
@@ -436,6 +439,8 @@ pub struct TraceDetail {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceRequestDetail {
+    /// Typed historical context, never the current domain projection.
+    pub contributions: Vec<TraceContributionMetadata>,
     pub request_id: RequestId,
     pub attempt_id: AttemptId,
     pub step_id: TurnId,
@@ -463,6 +468,21 @@ pub struct TraceRequestDetail {
     pub usage: Option<ModelUsage>,
     pub failure: Option<TraceRequestFailure>,
     pub generation: Option<TraceGeneration>,
+}
+
+/// The exact producer and typed data accepted for one historical request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceContributionMetadata {
+    pub message_id: MessageId,
+    pub producer: crate::runtime::identity::ContextContributorIdentity,
+    pub metadata: crate::message::ContextKind,
+    pub presentation: Option<TraceContributionPresentation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum TraceContributionPresentation {
+    AgentStatus(crate::runtime_client::snapshot::AgentStatusView),
 }
 
 /// One allowlisted provider-neutral request option.

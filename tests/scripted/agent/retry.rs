@@ -869,8 +869,8 @@ async fn transient_retry_does_not_regenerate_status_or_contributors() {
         audit.snapshot_history()[1].context_generation
     );
     assert_eq!(
-        audit.snapshot_history()[0].agent_status,
-        audit.snapshot_history()[1].agent_status
+        audit.snapshot_history()[0].contributions,
+        audit.snapshot_history()[1].contributions
     );
 }
 

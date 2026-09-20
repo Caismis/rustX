@@ -73,8 +73,8 @@ pub mod presentation;
 pub mod sqlite;
 
 pub use inbox::{
-    AcceptedInbound, AgentStatusEmissionLookup, AgentStatusEmissionRecord, CanonicalMessagePage,
-    CompactionCommitInput, ConversationInboundCapability, ConversationInteractionAudit,
+    AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ContributionEmissionLookup,
+    ContributionEmissionRecord, ConversationInboundCapability, ConversationInteractionAudit,
     ConversationStore, ConversationStoreBinding, ConversationStoreError, DurableConversationHead,
     EventPage, InboundDraft, LineageSeed, ModelTurnStartCommit, ModelTurnStartCommitDisposition,
     PendingBatch, PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,

@@ -7511,6 +7511,10 @@
         "message_id": {
           "$ref": "#/$defs/MessageId"
         },
+        "producer": {
+          "description": "Exact producer from the committed accepted-contribution record.",
+          "$ref": "#/$defs/ContextContributorIdentity"
+        },
         "context_kind": {
           "$ref": "#/$defs/TraceContextKind"
         },
@@ -7541,16 +7545,65 @@
       "additionalProperties": false,
       "required": [
         "message_id",
+        "producer",
         "context_kind",
         "source",
         "attachments",
         "truncated"
       ]
     },
+    "ContextContributorIdentity": {
+      "description": "The rustX-owned logical identity of a context contributor.\n\nThe identity is independent from registration order, process-local object\nidentity, and package/content generation.  The Context Assembly boundary\nderives trusted native provenance itself; contributors never provide it.",
+      "oneOf": [
+        {
+          "description": "A rustX-native semantic owner.",
+          "type": "object",
+          "properties": {
+            "Native": {
+              "$ref": "#/$defs/NativeContextContributor"
+            }
+          },
+          "required": [
+            "Native"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A certified extension with a stable logical key.",
+          "type": "object",
+          "properties": {
+            "CertifiedExtension": {
+              "$ref": "#/$defs/CertifiedExtensionIdentity"
+            }
+          },
+          "required": [
+            "CertifiedExtension"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "NativeContextContributor": {
+      "type": "string",
+      "enum": [
+        "goal_status",
+        "workspace_instructions",
+        "skill_guidance",
+        "agent_status",
+        "core_system_identity",
+        "agent_profile",
+        "runtime_tool_observation"
+      ]
+    },
+    "CertifiedExtensionIdentity": {
+      "description": "The stable logical key of one certified extension.\n\nPackage/content attestation is intentionally not part of this type.  A\npackage may be upgraded while preserving its logical ordering identity;\nthe assembly generation records the attestation separately.",
+      "type": "string"
+    },
     "TraceContextKind": {
       "description": "The closed presentation family of one admitted model-visible context fact.\n\nThis is a presentation vocabulary, not the internal `ContextKind` payload:\na complete `GoalSnapshot` or Agent Status generation metadata never enters\na pageable summary through it.",
       "type": "string",
       "enum": [
+        "native_environment",
         "goal_status",
         "runtime_tool_observation",
         "extension_environment",
@@ -7593,10 +7646,6 @@
           ]
         }
       ]
-    },
-    "CertifiedExtensionIdentity": {
-      "description": "The stable logical key of one certified extension.\n\nPackage/content attestation is intentionally not part of this type.  A\npackage may be upgraded while preserving its logical ordering identity;\nthe assembly generation records the attestation separately.",
-      "type": "string"
     },
     "TraceArtifact": {
       "description": "Safe reference to the existing native artifact carrier, never a path.",
@@ -7769,6 +7818,13 @@
       "description": "The exact historical request, reconstructed from frozen native authority.\n\nEvery value comes from this request's own immutable Request Snapshot and\nthe historical Conversation Surface revision it froze. Current model\nconfiguration, the current tool catalog and the current system prompt are\nnever consulted, so a request reopened after the Session was reconfigured\nstill shows what was actually sent.",
       "type": "object",
       "properties": {
+        "contributions": {
+          "description": "Typed historical context, never the current domain projection.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceContributionMetadata"
+          }
+        },
         "request_id": {
           "$ref": "#/$defs/RequestId2"
         },
@@ -7882,6 +7938,7 @@
       },
       "additionalProperties": false,
       "required": [
+        "contributions",
         "request_id",
         "attempt_id",
         "step_id",
@@ -7899,6 +7956,1155 @@
         "messages_truncated",
         "tools",
         "tools_truncated"
+      ]
+    },
+    "TraceContributionMetadata": {
+      "description": "The exact producer and typed data accepted for one historical request.",
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "$ref": "#/$defs/MessageId"
+        },
+        "producer": {
+          "$ref": "#/$defs/ContextContributorIdentity"
+        },
+        "metadata": {
+          "$ref": "#/$defs/ContextKind"
+        },
+        "presentation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceContributionPresentation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "message_id",
+        "producer",
+        "metadata"
+      ]
+    },
+    "ContextKind": {
+      "description": "The semantic family of one admitted model-visible context fact.",
+      "oneOf": [
+        {
+          "description": "Bounded task data from a composition-bound native producer.",
+          "type": "string",
+          "const": "native_environment"
+        },
+        {
+          "description": "Frozen current Goal observation; objective text remains user data.",
+          "type": "object",
+          "properties": {
+            "goal_status": {
+              "$ref": "#/$defs/GoalSnapshot"
+            }
+          },
+          "required": [
+            "goal_status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The rustX runtime's own observation of a structurally settled tool\nbatch (Issue #56).\n\nThis family names the native runtime owner, not the timing that made\nthe fact eligible: a certified extension observing the same batch\nproduces `ExtensionEnvironment`. The fact is admitted through the\nordinary Context Assembly / pre-step policy / admission path; the\nobserver never commits it.",
+          "type": "string",
+          "const": "runtime_tool_observation"
+        },
+        {
+          "description": "Generic certified-extension/environment context.",
+          "type": "string",
+          "const": "extension_environment"
+        },
+        {
+          "description": "Native runtime/Agent Status and its durable generation identity.",
+          "type": "object",
+          "properties": {
+            "agent_status": {
+              "$ref": "#/$defs/AgentStatusGenerationMetadata"
+            }
+          },
+          "required": [
+            "agent_status"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "GoalSnapshot": {
+      "description": "Authoritative bounded durable record.",
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/GoalRef"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/GoalPhase"
+        },
+        "blocked_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "autonomous_round_budget": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "autonomous_rounds_consumed": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "origin": {
+          "$ref": "#/$defs/GoalOrigin"
+        },
+        "last_round_message_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "reference",
+        "objective",
+        "phase",
+        "autonomous_round_budget",
+        "autonomous_rounds_consumed",
+        "origin"
+      ]
+    },
+    "GoalPhase": {
+      "description": "The single durable Goal lifecycle authority.\n\n- `Active`: continuation is authorized when runtime admission is eligible.\n- `Paused` / `Blocked`: continuation is not authorized.\n- `Complete`: terminal.",
+      "type": "string",
+      "enum": [
+        "active",
+        "paused",
+        "blocked",
+        "complete"
+      ]
+    },
+    "GoalOrigin": {
+      "description": "Trusted origin supplied by runtime, never by model arguments.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "message_id": {
+              "$ref": "#/$defs/MessageId"
+            },
+            "attempt_id": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "kind": {
+              "type": "string",
+              "const": "human_attempt"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "message_id",
+            "attempt_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "runtime_control"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AgentStatusGenerationMetadata": {
+      "description": "The structured durable identity of one canonical Agent Status generation.\n\nThe descriptor is attached to [`ContextKind::AgentStatus`] itself. Its\ntimestamp is the single Agent Status clock sample used to produce the\ngeneration, and its typed module list is the source of truth for active\nSurface visibility. Renderer text is never consulted for either fact.\n\nThe fields are private so every value, including one decoded from durable\nJSON, has non-empty, duplicate-free membership in deterministic semantic\norder.\n\n```compile_fail\nuse rustx::message::types::AgentStatusGenerationMetadata;\n\nfn mutate(metadata: &mut AgentStatusGenerationMetadata) {\n    metadata.modules = Vec::new();\n}\n```",
+      "type": "object",
+      "properties": {
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "modules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentStatusModuleId"
+          }
+        }
+      },
+      "required": [
+        "generated_at",
+        "modules"
+      ]
+    },
+    "AgentStatusModuleId": {
+      "description": "The stable identity of one code-owned Agent Status module.\n\nThis identity belongs to the canonical message layer because an active\nAgent Status message must carry enough durable information for a later\nSurface scan to identify the modules it contains. It is intentionally a\nclosed enum rather than extension metadata or a generic key/value field.",
+      "oneOf": [
+        {
+          "description": "The Time module.",
+          "type": "string",
+          "const": "time"
+        },
+        {
+          "description": "The Background module.",
+          "type": "string",
+          "const": "background"
+        },
+        {
+          "description": "The conversation-owned Todo module.",
+          "type": "string",
+          "const": "todo"
+        }
+      ]
+    },
+    "TraceContributionPresentation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "AgentStatus": {
+              "$ref": "#/$defs/AgentStatusView"
+            }
+          },
+          "required": [
+            "AgentStatus"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AgentStatusView": {
+      "description": "The structured Agent Status view of one composition.\n\nDerived from the exact composed status the model path consumed: the\nstructured sections and the canonical rendered representation originate\nfrom the same composition, so a client never parses the rendered text\nto recover structure and never triggers a second composition.\n\nThe view also carries the runtime facts that place the composition in\nconversation order: the eligible\n[`opportunities`](Self::opportunities), each with the durable identity it\nwas established against. Placement is a runtime fact because only the\nruntime knows it, and it is frozen where it is determined rather than\nreconstructed downstream; how a client draws a status at that place is\npresentation and stays entirely outside this type.",
+      "type": "object",
+      "properties": {
+        "attempt_id": {
+          "description": "The attempt that composed the status.",
+          "$ref": "#/$defs/AttemptId"
+        },
+        "turn": {
+          "description": "The turn number of the request preparation.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "status_message_id": {
+          "description": "The canonical Agent Status User message described by this view. It is\nthe stable identity of the composition: observing the same\n`status_message_id` twice describes one composition, never two.",
+          "$ref": "#/$defs/MessageId"
+        },
+        "opportunities": {
+          "description": "The delivery opportunities that made this generation eligible, each\ncarrying its own placement fact.\n\nThe Agent Status Context message is request-scoped model history: it\ncarries no transcript cursor of its own and never becomes a transcript\nitem, so placement has to be published or it cannot be known. Each\nopportunity publishes the identity it was established against —\n`FreshInbound` the exact inbound message, `PostToolBatch` the durable\nposition of its settled tool batch — and both were frozen by the\nsemantic owner at that establishment, not sampled when this\nobservation was folded.",
+          "$ref": "#/$defs/AgentStatusOpportunityView"
+        },
+        "sections": {
+          "description": "The ordered structured sections.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RuntimeClientStatusSection"
+          }
+        },
+        "rendered": {
+          "description": "The canonical rendered representation, derived from the same\ncomposition as the sections.\n\nIt exists for diagnostics and for proving that a client and the model\nsaw one composition. It is **not** a presentation source: a client\nrenders [`sections`](Self::sections) and never parses this text back\ninto structure.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "turn",
+        "status_message_id",
+        "opportunities",
+        "sections",
+        "rendered"
+      ]
+    },
+    "AgentStatusOpportunityView": {
+      "description": "The external view of the Agent Status opportunity set.",
+      "type": "object",
+      "properties": {
+        "fresh_inbound": {
+          "description": "The `FreshInbound` opportunity that produced this status, when one is\npresent. Future delivery opportunities can be added alongside it\nwithout making this member structurally mandatory.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FreshInboundOpportunityView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "post_tool_batch": {
+          "description": "The complete settled tool batch that made this existing primary step\neligible, when present.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PostToolBatchOpportunityView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "FreshInboundOpportunityView": {
+      "description": "The external view of one `FreshInbound` status opportunity.",
+      "type": "object",
+      "properties": {
+        "target_message_id": {
+          "description": "The inbound message that made status generation eligible.",
+          "$ref": "#/$defs/MessageId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "target_message_id"
+      ]
+    },
+    "PostToolBatchOpportunityView": {
+      "description": "The external view of one `PostToolBatch` status opportunity.\n\nThe opportunity itself remains a marker with no durable or scheduling\nmetadata. What it carries here is the one ordering fact that places a\ncomposition made from it: the durable transcript position of the canonical\n`ToolResult` batch that established it, frozen by the Agent Loop at that\nbatch's commit.\n\nThe freeze point matters and is the whole reason this is a published fact\nrather than something a client or the projection reconstructs. A status is\ncomposed at the primary-step preparation that consumes this opportunity,\nbut it is not observed until the durable model-turn-start commit lands,\nand inbound acceptance is an independent durable boundary that may commit\nin between. Anything that read \"the newest durable position\" at fold time\nwould place the status after an unrelated inbound turn.",
+      "type": "object",
+      "properties": {
+        "transcript_anchor": {
+          "description": "The durable position of the settled `ToolResult` batch this\nopportunity belongs to.\n\n`None` only when that batch committed no visible transcript item, in\nwhich case the composition carries no transcript-position placement\nand a client draws no annotation for it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeClientStatusSection": {
+      "description": "One structured Agent Status section of the external view.",
+      "oneOf": [
+        {
+          "description": "The typed Time payload.",
+          "type": "object",
+          "properties": {
+            "current_time": {
+              "description": "The runtime clock value sampled at composition time.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "timezone": {
+              "description": "The Time status timezone, when configured.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "temporal"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "current_time"
+          ]
+        },
+        {
+          "description": "The runtime-owned background-execution section.",
+          "type": "object",
+          "properties": {
+            "executions": {
+              "description": "The active background executions in allocation order.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RuntimeClientBackgroundExecution"
+              }
+            },
+            "omitted_count": {
+              "description": "Active executions omitted by the module-local bound.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "type": {
+              "type": "string",
+              "const": "background_executions"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "executions",
+            "omitted_count"
+          ]
+        },
+        {
+          "description": "The bounded conversation-owned Todo reminder.",
+          "type": "object",
+          "properties": {
+            "current": {
+              "description": "The first committed in-progress task, when any.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RuntimeClientTodoStatusTask"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tasks": {
+              "description": "Remaining committed active tasks in creation order.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RuntimeClientTodoStatusTask"
+              },
+              "default": []
+            },
+            "active_count": {
+              "description": "Number of committed active tasks.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "blocked_count": {
+              "description": "Number of active tasks blocked by active dependencies.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "completed_count": {
+              "description": "Number of committed completed tasks.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "deleted_count": {
+              "description": "Number of committed deleted tasks.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "omitted_count": {
+              "description": "Number of active tasks omitted from the bounded view.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "type": {
+              "type": "string",
+              "const": "todo"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "active_count",
+            "blocked_count",
+            "completed_count",
+            "deleted_count",
+            "omitted_count"
+          ]
+        }
+      ]
+    },
+    "RuntimeClientBackgroundExecution": {
+      "description": "The external background execution read model.\n\nProjected from the authoritative [`ConversationBackgroundRegistry`]\n([`crate::tools::background::ConversationBackgroundRegistry`]); the\ncontainer shape belongs to the Runtime Client protocol while the\nlifecycle, progress, and result leaf types are stable runtime-owned\nvalue contracts. No internal task handles or process ids ever appear.",
+      "type": "object",
+      "properties": {
+        "execution_id": {
+          "description": "The detached runtime execution identity.",
+          "$ref": "#/$defs/ToolExecutionId"
+        },
+        "tool_id": {
+          "description": "The canonical tool identity.",
+          "$ref": "#/$defs/ToolId"
+        },
+        "tool_name": {
+          "description": "The model-facing tool name.",
+          "type": "string"
+        },
+        "state": {
+          "description": "The authoritative lifecycle state.",
+          "$ref": "#/$defs/BackgroundLifecycle"
+        },
+        "progress": {
+          "description": "The latest bounded progress, when any was reported.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolProgress"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "description": "The bounded terminal result, when terminal.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolExecutionResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "execution_id",
+        "tool_id",
+        "tool_name",
+        "state"
+      ]
+    },
+    "BackgroundLifecycle": {
+      "description": "The public lifecycle of one background execution.\n\nTerminal states are absorbing. The allowed public transitions are:\n\n```text\nStarting  → Running\nStarting  → Cancelling\nStarting  → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\nRunning   → Cancelling\nRunning   → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\nStarting / Running / Cancelling → PublishingTerminal\nCancelling → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\nPublishingTerminal → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\n```\n\nThe terminal vocabulary claims only facts the executor proved: `Failed`\nis a *known* failure, `Denied` is policy/approval refusal (not `Failed`),\n`TimedOut` is a proven deadline settlement, and\n`OutcomeUnknown` means the executor could not prove the external outcome\nat all. A terminal lifecycle never claims a stronger external outcome\nthan the canonical [`ToolExecutionStatus`] of the stored result proves —\nin particular an unknown outcome is never labelled `Failed`, and a\ncancellation request that could not be confirmed physically never\nbecomes `Cancelled`.\n\n[`BackgroundLifecycle::PublishingTerminal`] is the honest non-terminal\nstate in which the executor has returned its terminal candidate and the\nregistry now owns durable terminal publication; it is never `Running`:\nthe executor has returned and the runner now owns the durable settlement\ncontinuation, retaining the settlement candidate until publication\nreaches a terminal outcome. An internal unpublished prepared\nstate implements dispatch atomicity but never leaks as an accepted\nexecution.",
+      "oneOf": [
+        {
+          "description": "The dispatch committed and the runner is starting.",
+          "type": "string",
+          "const": "starting"
+        },
+        {
+          "description": "The runner is executing.",
+          "type": "string",
+          "const": "running"
+        },
+        {
+          "description": "Cancellation intent committed and the cancellation was requested.\nThis is non-terminal: terminal certainty is still pending and the\nexecutor's returned settlement decides the terminal state.",
+          "type": "string",
+          "const": "cancelling"
+        },
+        {
+          "description": "The executor returned its terminal candidate; the registry owns\ndurable terminal publication, which has not committed yet.",
+          "type": "string",
+          "const": "publishing_terminal"
+        },
+        {
+          "description": "The execution succeeded.",
+          "type": "string",
+          "const": "succeeded"
+        },
+        {
+          "description": "The execution reached a known failure: the executor proved a failed\nterminal outcome. `Failed` never means \"anything that is not success\nor cancelled\" — an unproven outcome is [`Self::OutcomeUnknown`].",
+          "type": "string",
+          "const": "failed"
+        },
+        {
+          "description": "Invocation was refused by policy or approval authority.",
+          "type": "string",
+          "const": "denied"
+        },
+        {
+          "description": "The executor proved physical cancellation settlement; the canonical\nterminal result carries the registry-retained cancellation reason and\nthe phase derived from its logical start frontier.",
+          "type": "string",
+          "const": "cancelled"
+        },
+        {
+          "description": "The execution's deadline expired and the executor proved the\nterminal settlement (see [`ToolExecutionStatus::TimedOut`]).",
+          "type": "string",
+          "const": "timed_out"
+        },
+        {
+          "description": "The executor returned without being able to prove the external\noutcome (see [`ToolExecutionStatus::OutcomeUnknown`]). This is a\nfirst-class terminal state: the execution is settled as far as this\nruntime is concerned, but its external outcome is genuinely unknown\nand is never collapsed into [`Self::Failed`].",
+          "type": "string",
+          "const": "outcome_unknown"
+        }
+      ]
+    },
+    "ToolProgress": {
+      "description": "A bounded structured progress notification of one tool execution.\n\nProgress is an execution fact, never canonical message history. All\nfields are optional; an empty `ToolProgress` is a bare tick. The progress\nmessage text is bounded by [`MAX_PROGRESS_MESSAGE_BYTES`].\n\n[`MAX_PROGRESS_MESSAGE_BYTES`]: crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES",
+      "type": "object",
+      "properties": {
+        "message": {
+          "description": "A short human-readable progress message, when there is one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "completed": {
+          "description": "Completed units, when a total is known.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "total": {
+          "description": "Total units, when known.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    },
+    "ToolExecutionResult": {
+      "description": "The normalized outcome of one tool execution.\n\n`ToolMessageBlock` composes this type instead of duplicating its fields,\nkeeping one source of truth for tool results.",
+      "type": "object",
+      "properties": {
+        "workflow": {
+          "description": "Immutable native Workflow identity on the existing outer result.\nHistorical identity only: no execution state or continuation authority.\nIts retention is exactly that of this result, never a separate registry.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowToolIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "description": "Typed execution status, including unknown external outcomes.",
+          "$ref": "#/$defs/ToolExecutionStatus"
+        },
+        "content": {
+          "description": "Tool-owned result content.\n\nThis content is TOOL-OWNED: [`ToolResultContent::Json`] is arbitrary\ntool-owned structured data, and the runtime never infers semantics\nfrom its property names. rustX reserves no ordinary JSON field names;\nruntime-owned facts live in the typed fields of this struct. A\nprovider-independent, bounded model-facing representation is produced\nby [`Self::model_facing_projection`]; producers do not append runtime\nstatus or managed-output continuation text here.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolResultContent"
+          },
+          "default": []
+        },
+        "duration_ms": {
+          "description": "Execution duration in integer milliseconds (stable for persistence).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "exit_code": {
+          "description": "Process exit code where the tool executed a process.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "artifacts": {
+          "description": "Durable artifact/file references produced by the execution.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FileReference"
+          },
+          "default": []
+        },
+        "truncation": {
+          "description": "Truncation metadata where output was truncated.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TruncationState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "managed_output": {
+          "description": "Runtime-owned managed textual-output continuation metadata: where\nthe complete — or honestly partial — textual output of this result\nlives in the conversation's managed tool-output store (Issue #86).\nAbsent for results whose output fits the model-facing content.\n\nThis is the one typed source of truth for complete-vs-partial\nmanaged output; producers never encode these facts as magic\nproperties of tool-owned JSON, and generic runtime publication code\nconsumes only this typed field, never arbitrary JSON keys.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManagedOutputContinuation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "duration_ms"
+      ]
+    },
+    "WorkflowToolIdentity": {
+      "description": "Runtime-owned identity, independent of model `ToolCall` text.\nRetained with the canonical outer result, not with an execution owner.",
+      "type": "object",
+      "properties": {
+        "workflow_id": {
+          "$ref": "#/$defs/WorkflowId"
+        },
+        "program_digest": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "workflow_id",
+        "program_digest"
+      ]
+    },
+    "ToolExecutionStatus": {
+      "description": "Typed execution status of a tool call.\n\nThe terminal vocabulary is explicit about **outcome certainty**: a\nterminal status may claim only facts the owning runtime/executor can\nprove. `Success`, `Failed`, `Denied`, `Cancelled`, and `TimedOut` are\nconfirmed terminal outcomes; `OutcomeUnknown` means an admitted call\ncrossed the external-effect frontier but rustX cannot prove its final\nexternal result. An unknown outcome is never silently collapsed into\nsuccess, generic failure, confirmed timeout, or confirmed cancellation,\nand every non-success status produces bounded model-facing feedback\nthrough [`Self::feedback_text`].",
+      "oneOf": [
+        {
+          "description": "The tool completed successfully and the outcome is known.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "success"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "The tool reached a known failed terminal outcome.\n\nThis is never used merely because communication with an external\nexecutor failed after dispatch while the external operation could\nstill have succeeded; that situation is [`Self::OutcomeUnknown`].",
+          "type": "object",
+          "properties": {
+            "error": {
+              "description": "Human-readable error message.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "type",
+            "error"
+          ]
+        },
+        {
+          "description": "The pre-tool policy denied the already-resolved invocation before an\nexecutor future was created.",
+          "type": "object",
+          "properties": {
+            "reason": {
+              "description": "The policy or human-readable approval reason.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "denied"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ]
+        },
+        {
+          "description": "The execution's cancellation settlement is established.\n\nCancellation is an authoritative terminal outcome only when rustX can\nprove the execution's cancellation settlement: pre-start\n([`ToolCancellationPhase::BeforeStart`]) or proven stopped after start\n([`ToolCancellationPhase::DuringExecution`]). A cancellation *request*\nis not a confirmed cancellation result: when the call crossed the\nexternal-effect frontier and final settlement cannot be proven, the\nstatus is [`Self::OutcomeUnknown`].",
+          "type": "object",
+          "properties": {
+            "reason": {
+              "description": "Why the execution was cancelled.",
+              "$ref": "#/$defs/CancellationReason"
+            },
+            "phase": {
+              "description": "Whether cancellation won before executor start or while execution\nwas already in flight.",
+              "$ref": "#/$defs/ToolCancellationPhase"
+            },
+            "type": {
+              "type": "string",
+              "const": "cancelled"
+            }
+          },
+          "required": [
+            "type",
+            "reason",
+            "phase"
+          ]
+        },
+        {
+          "description": "The execution deadline expired and the owning runtime/executor\nestablished terminal settlement for the execution: it was stopped and\nproven unable to continue (for example, a local process tree that was\nkilled, waited/reaped, and proven terminal).\n\n`TimedOut` means more than \"rustX stopped awaiting the operation\". A\ndeadline expiry whose termination cannot be confirmed (for example a\nremote call whose cancellation is unconfirmed) is\n[`Self::OutcomeUnknown`], never `TimedOut`.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "timed_out"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "The admitted call crossed the external-effect frontier, but rustX\ncannot prove its final external outcome: a runtime restart before the\ndurable outcome commit, transport loss after dispatch, or a\ncancellation/deadline whose remote termination could not be\nconfirmed. The operation may have partially or fully completed.",
+          "type": "object",
+          "properties": {
+            "detail": {
+              "description": "A producer-owned diagnostic describing why certainty is\nunavailable. It is rendered into the bounded model-facing\nprojection and is never parsed to decide semantics; the typed\nvariant itself is the certainty claim.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "outcome_unknown"
+            }
+          },
+          "required": [
+            "type",
+            "detail"
+          ]
+        }
+      ]
+    },
+    "CancellationReason": {
+      "description": "Why an operation was cancelled.",
+      "oneOf": [
+        {
+          "description": "The user requested cancellation of the attempt or its work.",
+          "type": "string",
+          "const": "user_requested"
+        },
+        {
+          "description": "The conversation runtime is shutting down.",
+          "type": "string",
+          "const": "runtime_shutdown"
+        },
+        {
+          "description": "A parent operation that owns this work was cancelled.",
+          "type": "string",
+          "const": "parent_cancelled"
+        },
+        {
+          "description": "A conversation-owned subagent reached its definition-level whole-\nlifecycle execution deadline.",
+          "type": "string",
+          "const": "subagent_execution_deadline_exceeded"
+        }
+      ]
+    },
+    "ToolCancellationPhase": {
+      "description": "The semantic phase at which a tool call was cancelled.\n\nThis is a closed, provider-independent fact owned by the canonical tool\nresult contract and shared by foreground and background runtime-owned\nresults. The foreground Agent Loop selects it from its per-call executor\nstart frontier; the background registry selects it from its detached-runner\nfrontier. Executors may report a provisional physical cancellation status,\nbut they do not own the canonical phase classification. Clients only\nconsume or project the canonical typed fact; provider adapters likewise\ntranslate that fact without inferring its phase.",
+      "oneOf": [
+        {
+          "description": "The accepted call had execution authority, but its owner's executor\nstart frontier was never crossed.",
+          "type": "string",
+          "const": "before_start"
+        },
+        {
+          "description": "The owner's executor start frontier was crossed and cancellation won\nbefore normal completion with proven terminal settlement. This does\nnot promise rollback or absence of side effects. A cancellation that\ncannot be proven settled is not `Cancelled` at all: it is\n[`ToolExecutionStatus::OutcomeUnknown`].",
+          "type": "string",
+          "const": "during_execution"
+        }
+      ]
+    },
+    "ToolResultContent": {
+      "description": "A content block inside a tool result.",
+      "oneOf": [
+        {
+          "description": "Plain text output.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "description": "The text content.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "Structured output preserved as arbitrary JSON.",
+          "type": "object",
+          "properties": {
+            "value": {
+              "description": "The structured tool output value."
+            },
+            "type": {
+              "type": "string",
+              "const": "json"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
+          "description": "A file reference produced by the tool.",
+          "type": "object",
+          "properties": {
+            "artifact_id": {
+              "description": "Durable artifact identity of the file.",
+              "$ref": "#/$defs/ArtifactId"
+            },
+            "name": {
+              "description": "Optional display name.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mime_type": {
+              "description": "Optional MIME type.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "description": "Optional human-readable description.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "file"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "artifact_id"
+          ]
+        },
+        {
+          "description": "An image reference produced by the tool.",
+          "type": "object",
+          "properties": {
+            "artifact_id": {
+              "description": "Durable artifact identity of the image.",
+              "$ref": "#/$defs/ArtifactId"
+            },
+            "alt": {
+              "description": "Optional short description or alt text.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "artifact_id"
+          ]
+        }
+      ]
+    },
+    "FileReference": {
+      "description": "A reference to a Tool-generated managed file artifact; never a user upload.",
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "description": "Durable artifact identity of the file.",
+          "$ref": "#/$defs/ArtifactId"
+        },
+        "name": {
+          "description": "Optional display name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mime_type": {
+          "description": "Optional MIME type.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Optional human-readable description.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "artifact_id"
+      ]
+    },
+    "TruncationState": {
+      "description": "Truncation metadata for tool output.",
+      "type": "object",
+      "properties": {
+        "truncated": {
+          "description": "Whether the result content was truncated.",
+          "type": "boolean"
+        },
+        "original_bytes": {
+          "description": "Size of the untruncated output in bytes, when known.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "truncated"
+      ]
+    },
+    "ManagedOutputContinuation": {
+      "description": "Runtime-owned managed textual-output continuation metadata of one tool\nresult (Issue #86): where the complete — or honestly partial — textual\noutput of the execution lives in the conversation's managed tool-output\nstore.\n\nThis is rustX runtime metadata, explicitly typed and separate from\narbitrary tool-owned structured content (`ToolResultContent::Json`). It\nis not a semantic artifact, not a `FileReference`, and not a File\nmodality: textual output stays textual. The locator is an advisory\nmodel-facing absolute path inside the read-only managed tool-output\nroot — it is a locator, never filesystem authority.\n\nThe two managed-output lifecycles both use this type: a foreground\nresult references its lazy result spill (`results/result_N.txt`) only\nwhen the complete representation crossed the shared preview threshold,\nwhile a background result references its dispatch-allocated live-output\nfile (`tasks/exec_N.output`). A size-only cutoff is never a semantic tool\nfailure; `Partial`/`Unavailable` make output-storage failure explicit.",
+      "oneOf": [
+        {
+          "description": "The complete textual output of the result is retained at the\nabsolute managed-output locator; the bounded result content is a\npreview of it.",
+          "type": "object",
+          "properties": {
+            "locator": {
+              "description": "The absolute locator inside the managed tool-output root.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "complete"
+            }
+          },
+          "required": [
+            "type",
+            "locator"
+          ]
+        },
+        {
+          "description": "Output storage did not settle completely: the locator holds only\npartial output and must never be presented as the complete output.",
+          "type": "object",
+          "properties": {
+            "locator": {
+              "description": "The absolute locator inside the managed tool-output root.",
+              "type": "string"
+            },
+            "diagnostic": {
+              "description": "The output-storage failure diagnostic. Advisory only: it is\nbounded whenever the continuation is rendered.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "partial"
+            }
+          },
+          "required": [
+            "type",
+            "locator",
+            "diagnostic"
+          ]
+        },
+        {
+          "description": "No managed-output file exists for the result — output storage\nfailed before or without allocation — so the bounded result content\nis the only record.",
+          "type": "object",
+          "properties": {
+            "diagnostic": {
+              "description": "The output-storage failure diagnostic. Advisory only: it is\nbounded whenever the continuation is rendered.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "unavailable"
+            }
+          },
+          "required": [
+            "type",
+            "diagnostic"
+          ]
+        }
+      ]
+    },
+    "RuntimeClientTodoStatusTask": {
+      "description": "One bounded Todo task in the Agent Status client view.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The conversation-owned task id.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "subject": {
+          "description": "The bounded task subject.",
+          "type": "string"
+        },
+        "active_form": {
+          "description": "The bounded in-progress label, when present.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "The committed lifecycle status.",
+          "$ref": "#/$defs/TodoStatus"
+        },
+        "blocked": {
+          "description": "Whether an active dependency still blocks this task.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "subject",
+        "status",
+        "blocked"
+      ]
+    },
+    "TodoStatus": {
+      "description": "The lifecycle status of one task.",
+      "oneOf": [
+        {
+          "description": "Queued, not started.",
+          "type": "string",
+          "const": "pending"
+        },
+        {
+          "description": "Being worked on now.",
+          "type": "string",
+          "const": "in_progress"
+        },
+        {
+          "description": "Finished.",
+          "type": "string",
+          "const": "completed"
+        },
+        {
+          "description": "Tombstoned. Terminal, and kept so historical dependencies still\nresolve.",
+          "type": "string",
+          "const": "deleted"
+        }
       ]
     },
     "TraceRequestOption": {
@@ -8899,509 +10105,6 @@
         }
       ]
     },
-    "ToolProgress": {
-      "description": "A bounded structured progress notification of one tool execution.\n\nProgress is an execution fact, never canonical message history. All\nfields are optional; an empty `ToolProgress` is a bare tick. The progress\nmessage text is bounded by [`MAX_PROGRESS_MESSAGE_BYTES`].\n\n[`MAX_PROGRESS_MESSAGE_BYTES`]: crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES",
-      "type": "object",
-      "properties": {
-        "message": {
-          "description": "A short human-readable progress message, when there is one.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "completed": {
-          "description": "Completed units, when a total is known.",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "total": {
-          "description": "Total units, when known.",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        }
-      }
-    },
-    "ToolExecutionResult": {
-      "description": "The normalized outcome of one tool execution.\n\n`ToolMessageBlock` composes this type instead of duplicating its fields,\nkeeping one source of truth for tool results.",
-      "type": "object",
-      "properties": {
-        "workflow": {
-          "description": "Immutable native Workflow identity on the existing outer result.\nHistorical identity only: no execution state or continuation authority.\nIts retention is exactly that of this result, never a separate registry.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/WorkflowToolIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "status": {
-          "description": "Typed execution status, including unknown external outcomes.",
-          "$ref": "#/$defs/ToolExecutionStatus"
-        },
-        "content": {
-          "description": "Tool-owned result content.\n\nThis content is TOOL-OWNED: [`ToolResultContent::Json`] is arbitrary\ntool-owned structured data, and the runtime never infers semantics\nfrom its property names. rustX reserves no ordinary JSON field names;\nruntime-owned facts live in the typed fields of this struct. A\nprovider-independent, bounded model-facing representation is produced\nby [`Self::model_facing_projection`]; producers do not append runtime\nstatus or managed-output continuation text here.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ToolResultContent"
-          },
-          "default": []
-        },
-        "duration_ms": {
-          "description": "Execution duration in integer milliseconds (stable for persistence).",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "exit_code": {
-          "description": "Process exit code where the tool executed a process.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32",
-          "minimum": -2147483648,
-          "maximum": 2147483647
-        },
-        "artifacts": {
-          "description": "Durable artifact/file references produced by the execution.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/FileReference"
-          },
-          "default": []
-        },
-        "truncation": {
-          "description": "Truncation metadata where output was truncated.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TruncationState"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "managed_output": {
-          "description": "Runtime-owned managed textual-output continuation metadata: where\nthe complete — or honestly partial — textual output of this result\nlives in the conversation's managed tool-output store (Issue #86).\nAbsent for results whose output fits the model-facing content.\n\nThis is the one typed source of truth for complete-vs-partial\nmanaged output; producers never encode these facts as magic\nproperties of tool-owned JSON, and generic runtime publication code\nconsumes only this typed field, never arbitrary JSON keys.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ManagedOutputContinuation"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "status",
-        "duration_ms"
-      ]
-    },
-    "WorkflowToolIdentity": {
-      "description": "Runtime-owned identity, independent of model `ToolCall` text.\nRetained with the canonical outer result, not with an execution owner.",
-      "type": "object",
-      "properties": {
-        "workflow_id": {
-          "$ref": "#/$defs/WorkflowId"
-        },
-        "program_digest": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "workflow_id",
-        "program_digest"
-      ]
-    },
-    "ToolExecutionStatus": {
-      "description": "Typed execution status of a tool call.\n\nThe terminal vocabulary is explicit about **outcome certainty**: a\nterminal status may claim only facts the owning runtime/executor can\nprove. `Success`, `Failed`, `Denied`, `Cancelled`, and `TimedOut` are\nconfirmed terminal outcomes; `OutcomeUnknown` means an admitted call\ncrossed the external-effect frontier but rustX cannot prove its final\nexternal result. An unknown outcome is never silently collapsed into\nsuccess, generic failure, confirmed timeout, or confirmed cancellation,\nand every non-success status produces bounded model-facing feedback\nthrough [`Self::feedback_text`].",
-      "oneOf": [
-        {
-          "description": "The tool completed successfully and the outcome is known.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "success"
-            }
-          },
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "description": "The tool reached a known failed terminal outcome.\n\nThis is never used merely because communication with an external\nexecutor failed after dispatch while the external operation could\nstill have succeeded; that situation is [`Self::OutcomeUnknown`].",
-          "type": "object",
-          "properties": {
-            "error": {
-              "description": "Human-readable error message.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "failed"
-            }
-          },
-          "required": [
-            "type",
-            "error"
-          ]
-        },
-        {
-          "description": "The pre-tool policy denied the already-resolved invocation before an\nexecutor future was created.",
-          "type": "object",
-          "properties": {
-            "reason": {
-              "description": "The policy or human-readable approval reason.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "denied"
-            }
-          },
-          "required": [
-            "type",
-            "reason"
-          ]
-        },
-        {
-          "description": "The execution's cancellation settlement is established.\n\nCancellation is an authoritative terminal outcome only when rustX can\nprove the execution's cancellation settlement: pre-start\n([`ToolCancellationPhase::BeforeStart`]) or proven stopped after start\n([`ToolCancellationPhase::DuringExecution`]). A cancellation *request*\nis not a confirmed cancellation result: when the call crossed the\nexternal-effect frontier and final settlement cannot be proven, the\nstatus is [`Self::OutcomeUnknown`].",
-          "type": "object",
-          "properties": {
-            "reason": {
-              "description": "Why the execution was cancelled.",
-              "$ref": "#/$defs/CancellationReason"
-            },
-            "phase": {
-              "description": "Whether cancellation won before executor start or while execution\nwas already in flight.",
-              "$ref": "#/$defs/ToolCancellationPhase"
-            },
-            "type": {
-              "type": "string",
-              "const": "cancelled"
-            }
-          },
-          "required": [
-            "type",
-            "reason",
-            "phase"
-          ]
-        },
-        {
-          "description": "The execution deadline expired and the owning runtime/executor\nestablished terminal settlement for the execution: it was stopped and\nproven unable to continue (for example, a local process tree that was\nkilled, waited/reaped, and proven terminal).\n\n`TimedOut` means more than \"rustX stopped awaiting the operation\". A\ndeadline expiry whose termination cannot be confirmed (for example a\nremote call whose cancellation is unconfirmed) is\n[`Self::OutcomeUnknown`], never `TimedOut`.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "timed_out"
-            }
-          },
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "description": "The admitted call crossed the external-effect frontier, but rustX\ncannot prove its final external outcome: a runtime restart before the\ndurable outcome commit, transport loss after dispatch, or a\ncancellation/deadline whose remote termination could not be\nconfirmed. The operation may have partially or fully completed.",
-          "type": "object",
-          "properties": {
-            "detail": {
-              "description": "A producer-owned diagnostic describing why certainty is\nunavailable. It is rendered into the bounded model-facing\nprojection and is never parsed to decide semantics; the typed\nvariant itself is the certainty claim.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "outcome_unknown"
-            }
-          },
-          "required": [
-            "type",
-            "detail"
-          ]
-        }
-      ]
-    },
-    "CancellationReason": {
-      "description": "Why an operation was cancelled.",
-      "oneOf": [
-        {
-          "description": "The user requested cancellation of the attempt or its work.",
-          "type": "string",
-          "const": "user_requested"
-        },
-        {
-          "description": "The conversation runtime is shutting down.",
-          "type": "string",
-          "const": "runtime_shutdown"
-        },
-        {
-          "description": "A parent operation that owns this work was cancelled.",
-          "type": "string",
-          "const": "parent_cancelled"
-        },
-        {
-          "description": "A conversation-owned subagent reached its definition-level whole-\nlifecycle execution deadline.",
-          "type": "string",
-          "const": "subagent_execution_deadline_exceeded"
-        }
-      ]
-    },
-    "ToolCancellationPhase": {
-      "description": "The semantic phase at which a tool call was cancelled.\n\nThis is a closed, provider-independent fact owned by the canonical tool\nresult contract and shared by foreground and background runtime-owned\nresults. The foreground Agent Loop selects it from its per-call executor\nstart frontier; the background registry selects it from its detached-runner\nfrontier. Executors may report a provisional physical cancellation status,\nbut they do not own the canonical phase classification. Clients only\nconsume or project the canonical typed fact; provider adapters likewise\ntranslate that fact without inferring its phase.",
-      "oneOf": [
-        {
-          "description": "The accepted call had execution authority, but its owner's executor\nstart frontier was never crossed.",
-          "type": "string",
-          "const": "before_start"
-        },
-        {
-          "description": "The owner's executor start frontier was crossed and cancellation won\nbefore normal completion with proven terminal settlement. This does\nnot promise rollback or absence of side effects. A cancellation that\ncannot be proven settled is not `Cancelled` at all: it is\n[`ToolExecutionStatus::OutcomeUnknown`].",
-          "type": "string",
-          "const": "during_execution"
-        }
-      ]
-    },
-    "ToolResultContent": {
-      "description": "A content block inside a tool result.",
-      "oneOf": [
-        {
-          "description": "Plain text output.",
-          "type": "object",
-          "properties": {
-            "text": {
-              "description": "The text content.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "text"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "text"
-          ]
-        },
-        {
-          "description": "Structured output preserved as arbitrary JSON.",
-          "type": "object",
-          "properties": {
-            "value": {
-              "description": "The structured tool output value."
-            },
-            "type": {
-              "type": "string",
-              "const": "json"
-            }
-          },
-          "required": [
-            "type",
-            "value"
-          ]
-        },
-        {
-          "description": "A file reference produced by the tool.",
-          "type": "object",
-          "properties": {
-            "artifact_id": {
-              "description": "Durable artifact identity of the file.",
-              "$ref": "#/$defs/ArtifactId"
-            },
-            "name": {
-              "description": "Optional display name.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "mime_type": {
-              "description": "Optional MIME type.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "description": {
-              "description": "Optional human-readable description.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "type": "string",
-              "const": "file"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "artifact_id"
-          ]
-        },
-        {
-          "description": "An image reference produced by the tool.",
-          "type": "object",
-          "properties": {
-            "artifact_id": {
-              "description": "Durable artifact identity of the image.",
-              "$ref": "#/$defs/ArtifactId"
-            },
-            "alt": {
-              "description": "Optional short description or alt text.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "type": "string",
-              "const": "image"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "artifact_id"
-          ]
-        }
-      ]
-    },
-    "FileReference": {
-      "description": "A reference to a Tool-generated managed file artifact; never a user upload.",
-      "type": "object",
-      "properties": {
-        "artifact_id": {
-          "description": "Durable artifact identity of the file.",
-          "$ref": "#/$defs/ArtifactId"
-        },
-        "name": {
-          "description": "Optional display name.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "mime_type": {
-          "description": "Optional MIME type.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "description": {
-          "description": "Optional human-readable description.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "artifact_id"
-      ]
-    },
-    "TruncationState": {
-      "description": "Truncation metadata for tool output.",
-      "type": "object",
-      "properties": {
-        "truncated": {
-          "description": "Whether the result content was truncated.",
-          "type": "boolean"
-        },
-        "original_bytes": {
-          "description": "Size of the untruncated output in bytes, when known.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        }
-      },
-      "required": [
-        "truncated"
-      ]
-    },
-    "ManagedOutputContinuation": {
-      "description": "Runtime-owned managed textual-output continuation metadata of one tool\nresult (Issue #86): where the complete — or honestly partial — textual\noutput of the execution lives in the conversation's managed tool-output\nstore.\n\nThis is rustX runtime metadata, explicitly typed and separate from\narbitrary tool-owned structured content (`ToolResultContent::Json`). It\nis not a semantic artifact, not a `FileReference`, and not a File\nmodality: textual output stays textual. The locator is an advisory\nmodel-facing absolute path inside the read-only managed tool-output\nroot — it is a locator, never filesystem authority.\n\nThe two managed-output lifecycles both use this type: a foreground\nresult references its lazy result spill (`results/result_N.txt`) only\nwhen the complete representation crossed the shared preview threshold,\nwhile a background result references its dispatch-allocated live-output\nfile (`tasks/exec_N.output`). A size-only cutoff is never a semantic tool\nfailure; `Partial`/`Unavailable` make output-storage failure explicit.",
-      "oneOf": [
-        {
-          "description": "The complete textual output of the result is retained at the\nabsolute managed-output locator; the bounded result content is a\npreview of it.",
-          "type": "object",
-          "properties": {
-            "locator": {
-              "description": "The absolute locator inside the managed tool-output root.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "complete"
-            }
-          },
-          "required": [
-            "type",
-            "locator"
-          ]
-        },
-        {
-          "description": "Output storage did not settle completely: the locator holds only\npartial output and must never be presented as the complete output.",
-          "type": "object",
-          "properties": {
-            "locator": {
-              "description": "The absolute locator inside the managed tool-output root.",
-              "type": "string"
-            },
-            "diagnostic": {
-              "description": "The output-storage failure diagnostic. Advisory only: it is\nbounded whenever the continuation is rendered.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "partial"
-            }
-          },
-          "required": [
-            "type",
-            "locator",
-            "diagnostic"
-          ]
-        },
-        {
-          "description": "No managed-output file exists for the result — output storage\nfailed before or without allocation — so the bounded result content\nis the only record.",
-          "type": "object",
-          "properties": {
-            "diagnostic": {
-              "description": "The output-storage failure diagnostic. Advisory only: it is\nbounded whenever the continuation is rendered.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "unavailable"
-            }
-          },
-          "required": [
-            "type",
-            "diagnostic"
-          ]
-        }
-      ]
-    },
     "RuntimeClientTranscriptItem": {
       "description": "The explicit Runtime Client transcript vocabulary.",
       "oneOf": [
@@ -9829,191 +10532,6 @@
           }
         }
       }
-    },
-    "ContextKind": {
-      "description": "The semantic family of one admitted model-visible context fact.",
-      "oneOf": [
-        {
-          "description": "Frozen current Goal observation; objective text remains user data.",
-          "type": "object",
-          "properties": {
-            "goal_status": {
-              "$ref": "#/$defs/GoalSnapshot"
-            }
-          },
-          "required": [
-            "goal_status"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "description": "The rustX runtime's own observation of a structurally settled tool\nbatch (Issue #56).\n\nThis family names the native runtime owner, not the timing that made\nthe fact eligible: a certified extension observing the same batch\nproduces `ExtensionEnvironment`. The fact is admitted through the\nordinary Context Assembly / pre-step policy / admission path; the\nobserver never commits it.",
-          "type": "string",
-          "const": "runtime_tool_observation"
-        },
-        {
-          "description": "Generic certified-extension/environment context.",
-          "type": "string",
-          "const": "extension_environment"
-        },
-        {
-          "description": "Native runtime/Agent Status and its durable generation identity.",
-          "type": "object",
-          "properties": {
-            "agent_status": {
-              "$ref": "#/$defs/AgentStatusGenerationMetadata"
-            }
-          },
-          "required": [
-            "agent_status"
-          ],
-          "additionalProperties": false
-        }
-      ]
-    },
-    "GoalSnapshot": {
-      "description": "Authoritative bounded durable record.",
-      "type": "object",
-      "properties": {
-        "reference": {
-          "$ref": "#/$defs/GoalRef"
-        },
-        "objective": {
-          "type": "string"
-        },
-        "phase": {
-          "$ref": "#/$defs/GoalPhase"
-        },
-        "blocked_reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "autonomous_round_budget": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
-          "maximum": 4294967295
-        },
-        "autonomous_rounds_consumed": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
-          "maximum": 4294967295
-        },
-        "origin": {
-          "$ref": "#/$defs/GoalOrigin"
-        },
-        "last_round_message_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MessageId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "reference",
-        "objective",
-        "phase",
-        "autonomous_round_budget",
-        "autonomous_rounds_consumed",
-        "origin"
-      ]
-    },
-    "GoalPhase": {
-      "description": "The single durable Goal lifecycle authority.\n\n- `Active`: continuation is authorized when runtime admission is eligible.\n- `Paused` / `Blocked`: continuation is not authorized.\n- `Complete`: terminal.",
-      "type": "string",
-      "enum": [
-        "active",
-        "paused",
-        "blocked",
-        "complete"
-      ]
-    },
-    "GoalOrigin": {
-      "description": "Trusted origin supplied by runtime, never by model arguments.",
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "message_id": {
-              "$ref": "#/$defs/MessageId"
-            },
-            "attempt_id": {
-              "$ref": "#/$defs/AttemptId"
-            },
-            "kind": {
-              "type": "string",
-              "const": "human_attempt"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "message_id",
-            "attempt_id"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "const": "runtime_control"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "additionalProperties": false
-        }
-      ]
-    },
-    "AgentStatusGenerationMetadata": {
-      "description": "The structured durable identity of one canonical Agent Status generation.\n\nThe descriptor is attached to [`ContextKind::AgentStatus`] itself. Its\ntimestamp is the single Agent Status clock sample used to produce the\ngeneration, and its typed module list is the source of truth for active\nSurface visibility. Renderer text is never consulted for either fact.\n\nThe fields are private so every value, including one decoded from durable\nJSON, has non-empty, duplicate-free membership in deterministic semantic\norder.\n\n```compile_fail\nuse rustx::message::types::AgentStatusGenerationMetadata;\n\nfn mutate(metadata: &mut AgentStatusGenerationMetadata) {\n    metadata.modules = Vec::new();\n}\n```",
-      "type": "object",
-      "properties": {
-        "generated_at": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "modules": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/AgentStatusModuleId"
-          }
-        }
-      },
-      "required": [
-        "generated_at",
-        "modules"
-      ]
-    },
-    "AgentStatusModuleId": {
-      "description": "The stable identity of one code-owned Agent Status module.\n\nThis identity belongs to the canonical message layer because an active\nAgent Status message must carry enough durable information for a later\nSurface scan to identify the modules it contains. It is intentionally a\nclosed enum rather than extension metadata or a generic key/value field.",
-      "oneOf": [
-        {
-          "description": "The Time module.",
-          "type": "string",
-          "const": "time"
-        },
-        {
-          "description": "The Background module.",
-          "type": "string",
-          "const": "background"
-        },
-        {
-          "description": "The conversation-owned Todo module.",
-          "type": "string",
-          "const": "todo"
-        }
-      ]
     },
     "UserMessageBlock": {
       "description": "Inbound information supplied to the current agent.\n\nA `UserMessageBlock` does not necessarily mean a human spoke: it is the\ncanonical home for anything inbound, including messages from other agents\n(with [`UserSource::Agent`] provenance) and runtime compaction summaries\n(with [`InboundKind::CompactionSummary`] kind). It\nmust never become `AssistantMessageBlock` or `ToolMessageBlock`, which are\nreserved for output and actions of the current agent.",
@@ -11304,112 +11822,6 @@
           ]
         }
       }
-    },
-    "RuntimeClientBackgroundExecution": {
-      "description": "The external background execution read model.\n\nProjected from the authoritative [`ConversationBackgroundRegistry`]\n([`crate::tools::background::ConversationBackgroundRegistry`]); the\ncontainer shape belongs to the Runtime Client protocol while the\nlifecycle, progress, and result leaf types are stable runtime-owned\nvalue contracts. No internal task handles or process ids ever appear.",
-      "type": "object",
-      "properties": {
-        "execution_id": {
-          "description": "The detached runtime execution identity.",
-          "$ref": "#/$defs/ToolExecutionId"
-        },
-        "tool_id": {
-          "description": "The canonical tool identity.",
-          "$ref": "#/$defs/ToolId"
-        },
-        "tool_name": {
-          "description": "The model-facing tool name.",
-          "type": "string"
-        },
-        "state": {
-          "description": "The authoritative lifecycle state.",
-          "$ref": "#/$defs/BackgroundLifecycle"
-        },
-        "progress": {
-          "description": "The latest bounded progress, when any was reported.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ToolProgress"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "result": {
-          "description": "The bounded terminal result, when terminal.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ToolExecutionResult"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "execution_id",
-        "tool_id",
-        "tool_name",
-        "state"
-      ]
-    },
-    "BackgroundLifecycle": {
-      "description": "The public lifecycle of one background execution.\n\nTerminal states are absorbing. The allowed public transitions are:\n\n```text\nStarting  → Running\nStarting  → Cancelling\nStarting  → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\nRunning   → Cancelling\nRunning   → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\nStarting / Running / Cancelling → PublishingTerminal\nCancelling → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\nPublishingTerminal → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\n```\n\nThe terminal vocabulary claims only facts the executor proved: `Failed`\nis a *known* failure, `Denied` is policy/approval refusal (not `Failed`),\n`TimedOut` is a proven deadline settlement, and\n`OutcomeUnknown` means the executor could not prove the external outcome\nat all. A terminal lifecycle never claims a stronger external outcome\nthan the canonical [`ToolExecutionStatus`] of the stored result proves —\nin particular an unknown outcome is never labelled `Failed`, and a\ncancellation request that could not be confirmed physically never\nbecomes `Cancelled`.\n\n[`BackgroundLifecycle::PublishingTerminal`] is the honest non-terminal\nstate in which the executor has returned its terminal candidate and the\nregistry now owns durable terminal publication; it is never `Running`:\nthe executor has returned and the runner now owns the durable settlement\ncontinuation, retaining the settlement candidate until publication\nreaches a terminal outcome. An internal unpublished prepared\nstate implements dispatch atomicity but never leaks as an accepted\nexecution.",
-      "oneOf": [
-        {
-          "description": "The dispatch committed and the runner is starting.",
-          "type": "string",
-          "const": "starting"
-        },
-        {
-          "description": "The runner is executing.",
-          "type": "string",
-          "const": "running"
-        },
-        {
-          "description": "Cancellation intent committed and the cancellation was requested.\nThis is non-terminal: terminal certainty is still pending and the\nexecutor's returned settlement decides the terminal state.",
-          "type": "string",
-          "const": "cancelling"
-        },
-        {
-          "description": "The executor returned its terminal candidate; the registry owns\ndurable terminal publication, which has not committed yet.",
-          "type": "string",
-          "const": "publishing_terminal"
-        },
-        {
-          "description": "The execution succeeded.",
-          "type": "string",
-          "const": "succeeded"
-        },
-        {
-          "description": "The execution reached a known failure: the executor proved a failed\nterminal outcome. `Failed` never means \"anything that is not success\nor cancelled\" — an unproven outcome is [`Self::OutcomeUnknown`].",
-          "type": "string",
-          "const": "failed"
-        },
-        {
-          "description": "Invocation was refused by policy or approval authority.",
-          "type": "string",
-          "const": "denied"
-        },
-        {
-          "description": "The executor proved physical cancellation settlement; the canonical\nterminal result carries the registry-retained cancellation reason and\nthe phase derived from its logical start frontier.",
-          "type": "string",
-          "const": "cancelled"
-        },
-        {
-          "description": "The execution's deadline expired and the executor proved the\nterminal settlement (see [`ToolExecutionStatus::TimedOut`]).",
-          "type": "string",
-          "const": "timed_out"
-        },
-        {
-          "description": "The executor returned without being able to prove the external\noutcome (see [`ToolExecutionStatus::OutcomeUnknown`]). This is a\nfirst-class terminal state: the execution is settled as far as this\nruntime is concerned, but its external outcome is genuinely unknown\nand is never collapsed into [`Self::Failed`].",
-          "type": "string",
-          "const": "outcome_unknown"
-        }
-      ]
     },
     "RuntimeClientSubagent": {
       "description": "The Runtime Client view of one subagent child (Issue #60).\n\nA read-model materialization of the authoritative registry snapshot:\nevery field is derived, and the durable ownership/terminal events —\nnever this view — are the recovery authority.\n\nSince Issue #178 the view also carries the child's live activity\nprojection (`observation`), its redacted execution profile\n(`execution_profile`), and its start time (`started_at`). These are\nobservation-plane facts: the lifecycle `state` remains the only\nauthority on whether the child is alive, settling, or settled.",
@@ -14624,309 +15036,6 @@
           "description": "Conversation-owned execution: detached after accepted dispatch.",
           "type": "string",
           "const": "background"
-        }
-      ]
-    },
-    "AgentStatusView": {
-      "description": "The structured Agent Status view of one composition.\n\nDerived from the exact composed status the model path consumed: the\nstructured sections and the canonical rendered representation originate\nfrom the same composition, so a client never parses the rendered text\nto recover structure and never triggers a second composition.\n\nThe view also carries the runtime facts that place the composition in\nconversation order: the eligible\n[`opportunities`](Self::opportunities), each with the durable identity it\nwas established against. Placement is a runtime fact because only the\nruntime knows it, and it is frozen where it is determined rather than\nreconstructed downstream; how a client draws a status at that place is\npresentation and stays entirely outside this type.",
-      "type": "object",
-      "properties": {
-        "attempt_id": {
-          "description": "The attempt that composed the status.",
-          "$ref": "#/$defs/AttemptId"
-        },
-        "turn": {
-          "description": "The turn number of the request preparation.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
-          "maximum": 4294967295
-        },
-        "status_message_id": {
-          "description": "The canonical Agent Status User message described by this view. It is\nthe stable identity of the composition: observing the same\n`status_message_id` twice describes one composition, never two.",
-          "$ref": "#/$defs/MessageId"
-        },
-        "opportunities": {
-          "description": "The delivery opportunities that made this generation eligible, each\ncarrying its own placement fact.\n\nThe Agent Status Context message is request-scoped model history: it\ncarries no transcript cursor of its own and never becomes a transcript\nitem, so placement has to be published or it cannot be known. Each\nopportunity publishes the identity it was established against —\n`FreshInbound` the exact inbound message, `PostToolBatch` the durable\nposition of its settled tool batch — and both were frozen by the\nsemantic owner at that establishment, not sampled when this\nobservation was folded.",
-          "$ref": "#/$defs/AgentStatusOpportunityView"
-        },
-        "sections": {
-          "description": "The ordered structured sections.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/RuntimeClientStatusSection"
-          }
-        },
-        "rendered": {
-          "description": "The canonical rendered representation, derived from the same\ncomposition as the sections.\n\nIt exists for diagnostics and for proving that a client and the model\nsaw one composition. It is **not** a presentation source: a client\nrenders [`sections`](Self::sections) and never parses this text back\ninto structure.",
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "attempt_id",
-        "turn",
-        "status_message_id",
-        "opportunities",
-        "sections",
-        "rendered"
-      ]
-    },
-    "AgentStatusOpportunityView": {
-      "description": "The external view of the Agent Status opportunity set.",
-      "type": "object",
-      "properties": {
-        "fresh_inbound": {
-          "description": "The `FreshInbound` opportunity that produced this status, when one is\npresent. Future delivery opportunities can be added alongside it\nwithout making this member structurally mandatory.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FreshInboundStatusOpportunityView"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "post_tool_batch": {
-          "description": "The complete settled tool batch that made this existing primary step\neligible, when present.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PostToolBatchStatusOpportunityView"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "FreshInboundStatusOpportunityView": {
-      "description": "The external view of one `FreshInbound` status opportunity.",
-      "type": "object",
-      "properties": {
-        "target_message_id": {
-          "description": "The inbound message that made status generation eligible.",
-          "$ref": "#/$defs/MessageId"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "target_message_id"
-      ]
-    },
-    "PostToolBatchStatusOpportunityView": {
-      "description": "The external view of one `PostToolBatch` status opportunity.\n\nThe opportunity itself remains a marker with no durable or scheduling\nmetadata. What it carries here is the one ordering fact that places a\ncomposition made from it: the durable transcript position of the canonical\n`ToolResult` batch that established it, frozen by the Agent Loop at that\nbatch's commit.\n\nThe freeze point matters and is the whole reason this is a published fact\nrather than something a client or the projection reconstructs. A status is\ncomposed at the primary-step preparation that consumes this opportunity,\nbut it is not observed until the durable model-turn-start commit lands,\nand inbound acceptance is an independent durable boundary that may commit\nin between. Anything that read \"the newest durable position\" at fold time\nwould place the status after an unrelated inbound turn.",
-      "type": "object",
-      "properties": {
-        "transcript_anchor": {
-          "description": "The durable position of the settled `ToolResult` batch this\nopportunity belongs to.\n\n`None` only when that batch committed no visible transcript item, in\nwhich case the composition carries no transcript-position placement\nand a client draws no annotation for it.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuntimeClientTranscriptCursor"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "RuntimeClientStatusSection": {
-      "description": "One structured Agent Status section of the external view.",
-      "oneOf": [
-        {
-          "description": "The typed Time payload.",
-          "type": "object",
-          "properties": {
-            "current_time": {
-              "description": "The runtime clock value sampled at composition time.",
-              "type": "string",
-              "format": "date-time"
-            },
-            "timezone": {
-              "description": "The Time status timezone, when configured.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "type": "string",
-              "const": "temporal"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "current_time"
-          ]
-        },
-        {
-          "description": "The runtime-owned background-execution section.",
-          "type": "object",
-          "properties": {
-            "executions": {
-              "description": "The active background executions in allocation order.",
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/RuntimeClientBackgroundExecution"
-              }
-            },
-            "omitted_count": {
-              "description": "Active executions omitted by the module-local bound.",
-              "type": "integer",
-              "format": "uint",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "type": {
-              "type": "string",
-              "const": "background_executions"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "executions",
-            "omitted_count"
-          ]
-        },
-        {
-          "description": "The bounded conversation-owned Todo reminder.",
-          "type": "object",
-          "properties": {
-            "current": {
-              "description": "The first committed in-progress task, when any.",
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/RuntimeClientTodoStatusTask"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "tasks": {
-              "description": "Remaining committed active tasks in creation order.",
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/RuntimeClientTodoStatusTask"
-              },
-              "default": []
-            },
-            "active_count": {
-              "description": "Number of committed active tasks.",
-              "type": "integer",
-              "format": "uint",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "blocked_count": {
-              "description": "Number of active tasks blocked by active dependencies.",
-              "type": "integer",
-              "format": "uint",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "completed_count": {
-              "description": "Number of committed completed tasks.",
-              "type": "integer",
-              "format": "uint",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "deleted_count": {
-              "description": "Number of committed deleted tasks.",
-              "type": "integer",
-              "format": "uint",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "omitted_count": {
-              "description": "Number of active tasks omitted from the bounded view.",
-              "type": "integer",
-              "format": "uint",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "type": {
-              "type": "string",
-              "const": "todo"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "active_count",
-            "blocked_count",
-            "completed_count",
-            "deleted_count",
-            "omitted_count"
-          ]
-        }
-      ]
-    },
-    "RuntimeClientTodoStatusTask": {
-      "description": "One bounded Todo task in the Agent Status client view.",
-      "type": "object",
-      "properties": {
-        "id": {
-          "description": "The conversation-owned task id.",
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "subject": {
-          "description": "The bounded task subject.",
-          "type": "string"
-        },
-        "active_form": {
-          "description": "The bounded in-progress label, when present.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "status": {
-          "description": "The committed lifecycle status.",
-          "$ref": "#/$defs/TodoStatus"
-        },
-        "blocked": {
-          "description": "Whether an active dependency still blocks this task.",
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "id",
-        "subject",
-        "status",
-        "blocked"
-      ]
-    },
-    "TodoStatus": {
-      "description": "The lifecycle status of one task.",
-      "oneOf": [
-        {
-          "description": "Queued, not started.",
-          "type": "string",
-          "const": "pending"
-        },
-        {
-          "description": "Being worked on now.",
-          "type": "string",
-          "const": "in_progress"
-        },
-        {
-          "description": "Finished.",
-          "type": "string",
-          "const": "completed"
-        },
-        {
-          "description": "Tombstoned. Terminal, and kept so historical dependencies still\nresolve.",
-          "type": "string",
-          "const": "deleted"
         }
       ]
     },

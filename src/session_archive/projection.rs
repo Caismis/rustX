@@ -23,7 +23,7 @@ struct ArchiveRequestSnapshotV1<'a> {
     unresolved_output_carryover_source: &'a Option<crate::runtime::identity::PublicationStreamId>,
     unresolved_output_carryover: &'a Option<crate::model::input::RenderedUnresolvedOutputCarryover>,
     unresolved_output_carryover_anchor: &'a Option<crate::model::input::RequestOnlyInsertionAnchor>,
-    agent_status: &'a Option<crate::model::snapshot::AgentStatusStart>,
+    contributions: &'a [crate::model::snapshot::ContributionStart],
     invocation: ArchiveInvocationV1<'a>,
 }
 #[derive(Serialize)]
@@ -62,7 +62,7 @@ pub(super) fn request(snapshot: &RequestSnapshot) -> Value {
         unresolved_output_carryover_source: &snapshot.unresolved_output_carryover_source,
         unresolved_output_carryover: &snapshot.unresolved_output_carryover,
         unresolved_output_carryover_anchor: &snapshot.unresolved_output_carryover_anchor,
-        agent_status: &snapshot.agent_status,
+        contributions: &snapshot.contributions,
         invocation: ArchiveInvocationV1 {
             model: &invocation.model,
             protocol: invocation.protocol,
@@ -370,7 +370,7 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         | RuntimeEvent::TurnStarted
         | RuntimeEvent::TurnCompleted
         | RuntimeEvent::ModelRequestStarted { .. }
-        | RuntimeEvent::AgentStatusEmitted { .. }
+        | RuntimeEvent::ContextContributionEmitted { .. }
         | RuntimeEvent::ModelRetryScheduled { .. }
         | RuntimeEvent::InboundTurnAdopted { .. }
         | RuntimeEvent::AssistantMessageCommitted { .. }

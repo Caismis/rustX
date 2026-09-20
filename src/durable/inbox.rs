@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::conversation::{SurfaceOp, SurfaceRevision, SurfaceSpan};
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::types::{
-    AgentStatusModuleId, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use crate::model::snapshot::RequestSnapshot;
 use crate::model::types::ModelRequest;
@@ -85,7 +85,7 @@ pub struct ModelTurnStartCommit {
     pub started: RuntimeEventEnvelope,
     /// The status emission facts committed immediately after `started`, in
     /// the prepared emission order (which is also durable sequence order).
-    pub agent_status_emissions: Vec<RuntimeEventEnvelope>,
+    pub contribution_emissions: Vec<RuntimeEventEnvelope>,
     /// Whether this call inserted the transition or only verified it.
     pub disposition: ModelTurnStartCommitDisposition,
 }
@@ -93,7 +93,7 @@ pub struct ModelTurnStartCommit {
 impl ModelTurnStartCommit {
     /// Returns every start-owned event in exact durable sequence order.
     pub fn events(&self) -> impl Iterator<Item = &RuntimeEventEnvelope> {
-        std::iter::once(&self.started).chain(self.agent_status_emissions.iter())
+        std::iter::once(&self.started).chain(self.contribution_emissions.iter())
     }
 }
 
@@ -561,12 +561,12 @@ pub struct EventPage {
     pub next_sequence: Option<u64>,
 }
 
-/// One durable semantic Agent Status emission fact and its materialized latest
+/// One durable semantic contribution emission fact and its materialized latest
 /// lookup position.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentStatusEmissionRecord {
-    /// The closed module that owns the reminder semantics.
-    pub module_id: AgentStatusModuleId,
+pub struct ContributionEmissionRecord {
+    /// Registration-bound producer namespace.
+    pub producer: crate::runtime::identity::ContextContributorIdentity,
     /// Stable semantic reminder identity.
     pub key: String,
     /// Fingerprint of the bounded relevant content that was emitted.
@@ -580,25 +580,25 @@ pub struct AgentStatusEmissionRecord {
     /// The store-assigned Todo progress sequence at which the corresponding
     /// model-turn start became durable. This is the reminder's cooldown
     /// origin, not an evaluation coordinate supplied by the caller.
-    pub todo_progress_origin: u64,
+    pub logical_step_origin: u64,
     /// The Event Journal sequence of the emission fact.
     pub event_sequence: u64,
 }
 
 /// The read-only bounded suppression-history view used during status
 /// preparation.
-pub trait AgentStatusEmissionLookup: Send + Sync {
+pub trait ContributionEmissionLookup: Send + Sync {
     /// Reads the latest durable emission for one semantic module/key pair.
     ///
     /// # Errors
     ///
     /// Returns the conversation-store error when the bounded lookup cannot be
     /// completed or its durable row is malformed.
-    fn latest_agent_status_emission(
+    fn latest_contribution_emission(
         &self,
-        module_id: AgentStatusModuleId,
+        producer: &crate::runtime::identity::ContextContributorIdentity,
         key: &str,
-    ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError>;
+    ) -> Result<Option<ContributionEmissionRecord>, ConversationStoreError>;
 
     /// Reads the current conversation-owned Todo progress sequence through a
     /// bounded projection. One unit is one newly committed first request of a
@@ -608,7 +608,7 @@ pub trait AgentStatusEmissionLookup: Send + Sync {
     /// # Errors
     ///
     /// Returns the conversation-store error when the bounded lookup fails.
-    fn current_todo_progress(&self) -> Result<u64, ConversationStoreError>;
+    fn current_logical_step_progress(&self) -> Result<u64, ConversationStoreError>;
 }
 
 /// A bounded page of immutable Request Snapshots.
@@ -1756,22 +1756,22 @@ pub trait ConversationStore: Send + Sync + 'static {
         pending_source: Option<PublicationStreamId>,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
 
-    /// Reads the materialized latest Agent Status emission for one bounded
+    /// Reads the materialized latest contribution emission for one bounded
     /// semantic module/key pair. Normal status preparation never scans the
     /// Event Journal; this projection is advanced only by the combined
     /// model-turn-start transition that commits the referenced status message
     /// and emission fact together.
-    fn latest_agent_status_emission(
+    fn latest_contribution_emission(
         &self,
-        module_id: AgentStatusModuleId,
+        producer: &crate::runtime::identity::ContextContributorIdentity,
         key: &str,
-    ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError>;
+    ) -> Result<Option<ContributionEmissionRecord>, ConversationStoreError>;
 
     /// Reads the bounded Todo progress sequence used by the concrete Todo
     /// reminder policy. It advances only in the fresh logical model-turn
     /// start transaction, never for request-scoped context or Agent Status
     /// appends.
-    fn current_todo_progress(&self) -> Result<u64, ConversationStoreError>;
+    fn current_logical_step_progress(&self) -> Result<u64, ConversationStoreError>;
 
     /// Loads one immutable Request Snapshot on demand.
     fn load_request_snapshot(
@@ -1966,17 +1966,17 @@ pub trait ConversationStore: Send + Sync + 'static {
     ) -> Result<Option<PublicationAudit>, ConversationStoreError>;
 }
 
-impl<T: ConversationStore + ?Sized> AgentStatusEmissionLookup for T {
-    fn latest_agent_status_emission(
+impl<T: ConversationStore + ?Sized> ContributionEmissionLookup for T {
+    fn latest_contribution_emission(
         &self,
-        module_id: AgentStatusModuleId,
+        producer: &crate::runtime::identity::ContextContributorIdentity,
         key: &str,
-    ) -> Result<Option<AgentStatusEmissionRecord>, ConversationStoreError> {
-        ConversationStore::latest_agent_status_emission(self, module_id, key)
+    ) -> Result<Option<ContributionEmissionRecord>, ConversationStoreError> {
+        ConversationStore::latest_contribution_emission(self, producer, key)
     }
 
-    fn current_todo_progress(&self) -> Result<u64, ConversationStoreError> {
-        ConversationStore::current_todo_progress(self)
+    fn current_logical_step_progress(&self) -> Result<u64, ConversationStoreError> {
+        ConversationStore::current_logical_step_progress(self)
     }
 }
 

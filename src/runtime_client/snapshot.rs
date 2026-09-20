@@ -1095,18 +1095,18 @@ pub struct AgentStatusOpportunityView {
     /// present. Future delivery opportunities can be added alongside it
     /// without making this member structurally mandatory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fresh_inbound: Option<FreshInboundStatusOpportunityView>,
+    pub fresh_inbound: Option<FreshInboundOpportunityView>,
     /// The complete settled tool batch that made this existing primary step
     /// eligible, when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub post_tool_batch: Option<PostToolBatchStatusOpportunityView>,
+    pub post_tool_batch: Option<PostToolBatchOpportunityView>,
 }
 
 /// The external view of one `FreshInbound` status opportunity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
-pub struct FreshInboundStatusOpportunityView {
+pub struct FreshInboundOpportunityView {
     /// The inbound message that made status generation eligible.
     pub target_message_id: MessageId,
 }
@@ -1129,7 +1129,7 @@ pub struct FreshInboundStatusOpportunityView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
-pub struct PostToolBatchStatusOpportunityView {
+pub struct PostToolBatchOpportunityView {
     /// The durable position of the settled `ToolResult` batch this
     /// opportunity belongs to.
     ///

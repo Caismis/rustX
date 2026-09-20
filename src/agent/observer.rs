@@ -29,7 +29,7 @@
 //!
 //! This module defines the seam only; it owns no state and no consumer.
 
-use crate::context::status::{AgentStatus, AgentStatusOpportunitySet};
+use crate::context::status::{AgentStatus, ContributionOpportunities};
 use crate::durable::TranscriptCursor;
 use crate::events::types::RuntimeEvent;
 use crate::message::types::MessageBlock;
@@ -51,7 +51,7 @@ pub struct AgentStatusObservation {
     /// The canonical Agent Status User message described by this observation.
     pub status_message_id: crate::runtime::identity::MessageId,
     /// The opportunity set that made this generation eligible.
-    pub opportunities: AgentStatusOpportunitySet,
+    pub opportunities: ContributionOpportunities,
     /// The durable transcript position frozen when the `PostToolBatch`
     /// opportunity in [`opportunities`](Self::opportunities) was established:
     /// the canonical `ToolResult` batch's own position, read once at that

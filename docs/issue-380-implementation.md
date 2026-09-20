@@ -206,7 +206,7 @@ projection delayed until after the next edit.
 
 ## Protocol and clients
 
-App Server v14 replaces v13; RuntimeClient v44 replaces v43. Generated artifacts
+App Server v15 replaces v13; RuntimeClient v44 replaces v43. Generated artifacts
 come from `pnpm generate`. The native API exposes `configuration/reconcile` and
 `session/adoptConfiguration`, composable application state, actual process policy,
 Session adopted binding and scope/version identified `configuration/changed`

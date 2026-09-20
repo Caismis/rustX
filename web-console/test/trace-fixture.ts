@@ -1,4 +1,4 @@
-import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v14';
+import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v15';
 
 /** One bounded summary record, as the server pages them. */
 export const traceRecord = (n: number, overrides: Partial<TraceRecord> = {}): TraceRecord => ({
@@ -55,6 +55,7 @@ export const requestDetail = (n: number, overrides: Partial<TraceDetail> = {}): 
   id: `trace:${n}`,
   kind: 'request',
   request: {
+    contributions: [],
     request_id: `request-${n}`,
     attempt_id: 'attempt-a',
     step_id: '1',

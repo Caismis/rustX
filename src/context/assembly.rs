@@ -6,6 +6,7 @@
 //! and the exact system-section family.  It never owns canonical history,
 //! Surface mutation, admission, cancellation, or provider dispatch.
 
+use super::contribution::{ContributionOpportunities, ContributionPresentation, ContributionStart};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -13,16 +14,14 @@ use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::SurfaceRevision;
-use crate::message::types::{
-    AgentStatusGenerationMetadata, ContextKind, MessageBlock, UserContentBlock, UserSource,
-};
+use crate::message::types::{ContextKind, MessageBlock, UserContentBlock, UserSource};
 use crate::runtime::identity::{
     AttemptId, CapabilityRevision, CertifiedExtensionIdentity, ContextContributorIdentity,
     ConversationId, NativeContextContributor,
 };
 
 /// The ABI version of the native context contribution contract.
-pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 4;
+pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 5;
 
 /// The finite user-context semantic lanes owned by rustX.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -43,36 +42,32 @@ pub enum UserContextLane {
     /// The lane sits immediately after claimed inbound because a native
     /// runtime observation describes what the environment just did for the
     /// tool batch that precedes this step, while the request-time
-    /// workspace/extension and Agent Status lanes describe the
+    /// environment and task-data lanes describe the
     /// *current* step.
     RuntimeToolObservation,
     /// Generic certified-extension/environment context.
     ExtensionEnvironment,
-    /// Native runtime/Agent Status context.
-    AgentStatus,
-    /// Current Goal task data, never a system section.
-    GoalStatus,
+    /// Compiled-in domain task data, never system instructions.
+    TaskData,
 }
 
 impl UserContextLane {
     /// The contract's deterministic total order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 4] = [
         Self::ClaimedInbound,
         Self::RuntimeToolObservation,
         Self::ExtensionEnvironment,
-        Self::AgentStatus,
-        Self::GoalStatus,
+        Self::TaskData,
     ];
 
     /// Stable manifest spelling of one user-context lane.
     #[must_use]
     pub const fn manifest_name(self) -> &'static str {
         match self {
-            Self::GoalStatus => "goal_status",
+            Self::TaskData => "task_data",
             Self::ClaimedInbound => "claimed_inbound",
             Self::RuntimeToolObservation => "runtime_tool_observation",
             Self::ExtensionEnvironment => "extension_environment",
-            Self::AgentStatus => "agent_status",
         }
     }
 }
@@ -134,6 +129,10 @@ impl ContextProposalKind {
 /// The finite immutable input visible to one contributor invocation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContributorInputSnapshot {
+    /// Finite canonical read facts, captured once before contributor evaluation.
+    pub surface: crate::conversation::ConversationSurfaceSnapshot,
+    pub opportunities: ContributionOpportunities,
+    pub post_tool_batch_anchor: Option<crate::durable::TranscriptCursor>,
     /// The admitted attempt identity.
     pub attempt_id: AttemptId,
     /// The owning conversation identity.
@@ -156,21 +155,12 @@ pub struct ContributorInputSnapshot {
 /// Native values already sampled by rustX before assembly.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NativeContextInput {
-    /// Sampled for each new model step by the native execution owner.
-    pub goal: Option<Box<crate::goal::GoalSnapshot>>,
     /// Workspace/project instructions, when the native workspace owner has
     /// one for this request.
     pub workspace_instructions: Option<String>,
     /// Native Skill/capability guidance rendered from the attempt's immutable
     /// capability snapshot for the request-time Effective System Prompt.
     pub skill_guidance: Option<String>,
-    /// The canonical rendered Agent Status snapshot.
-    pub agent_status: Option<String>,
-    /// The structured generation identity belonging to `agent_status`.
-    ///
-    /// The text and descriptor are admitted together so canonical history can
-    /// later answer Surface-visibility questions without parsing presentation.
-    pub agent_status_metadata: Option<AgentStatusGenerationMetadata>,
     /// Core runtime/system identity content for the effective system prompt.
     pub core_runtime_identity: Option<String>,
     /// Agent profile/persona content for the effective system prompt.
@@ -192,10 +182,8 @@ pub struct NativeContextInput {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "producer", rename_all = "snake_case")]
 pub enum DeferredContextProducer {
-    /// The one rustX-owned native runtime observation owner
-    /// ([`NativeContextContributor::RuntimeToolObservation`]). It needs no
-    /// registration because rustX owns it.
-    NativeRuntimeObservation,
+    /// Native owner resolved against the same frozen contribution registry.
+    Native { identity: NativeContextContributor },
     /// A certified extension, named by its logical key. The key is only a
     /// reference: Context Assembly must find a matching registered extension
     /// or the proposal is rejected.
@@ -225,17 +213,17 @@ pub enum DeferredContextProducer {
 /// it was produced, and nothing gains extension provenance without being a
 /// registered extension.
 ///
-/// The proposal is a [`UserMessageProposal`] and nothing else. A settled tool
+/// The proposal uses the same bounded [`ContextProposal`] vocabulary as request time. A settled tool
 /// batch is a conversational fact, so the deferred seam publishes
 /// conversational context; the Effective System Prompt stays owned by the
 /// request-time contributor path.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeferredContextProposal {
     /// The semantic owner this proposal is produced for, pending resolution
     /// against the authoritative Context Assembly registration.
     pub producer: DeferredContextProducer,
     /// The transient bounded User context exactly as the producer returned it.
-    pub proposal: UserMessageProposal,
+    pub proposal: ContextProposal,
 }
 
 /// Whether a contribution's eligibility was established before this step or
@@ -260,45 +248,30 @@ enum ContributionPhase {
 /// proposals of the same owner resolve through it identically, which is what
 /// makes post-tool timing incapable of rewriting provenance.
 ///
-/// `None` means the owner publishes no model-visible User context at all (it
-/// is an effective-system-prompt owner), so such a proposal is invalid.
-fn user_semantics(
+/// Only registered dynamic contributors reach this mapping; resource-only
+/// System Section owners are not dynamic contributor registrations.
+fn user_lane_of(
     identity: &ContextContributorIdentity,
-) -> Option<(UserContextLane, UserSource, ContextKind)> {
+) -> (UserContextLane, UserSource, ContextKind) {
     match identity {
-        ContextContributorIdentity::Native(owner) => match owner {
-            NativeContextContributor::RuntimeToolObservation => Some((
-                UserContextLane::RuntimeToolObservation,
-                UserSource::Runtime,
-                ContextKind::RuntimeToolObservation,
-            )),
-            NativeContextContributor::AgentStatus
-            | NativeContextContributor::GoalStatus
-            | NativeContextContributor::WorkspaceInstructions
-            | NativeContextContributor::SkillGuidance
-            | NativeContextContributor::CoreSystemIdentity
-            | NativeContextContributor::AgentProfile => None,
-        },
-        ContextContributorIdentity::CertifiedExtension(extension) => Some((
+        ContextContributorIdentity::Native(NativeContextContributor::RuntimeToolObservation) => (
+            UserContextLane::RuntimeToolObservation,
+            UserSource::Runtime,
+            ContextKind::RuntimeToolObservation,
+        ),
+        ContextContributorIdentity::Native(_) => (
+            UserContextLane::TaskData,
+            UserSource::Runtime,
+            ContextKind::NativeEnvironment,
+        ),
+        ContextContributorIdentity::CertifiedExtension(extension) => (
             UserContextLane::ExtensionEnvironment,
             UserSource::Extension {
                 contributor: extension.clone(),
             },
             ContextKind::ExtensionEnvironment,
-        )),
+        ),
     }
-}
-
-/// [`user_semantics`] as a fallible lookup: an owner that publishes no
-/// model-visible User context cannot propose one, whatever its timing.
-fn user_lane_of(
-    identity: &ContextContributorIdentity,
-) -> Result<(UserContextLane, UserSource, ContextKind), ContextAssemblyError> {
-    user_semantics(identity).ok_or_else(|| {
-        ContextAssemblyError::InvalidProposal(format!(
-            "contributor {identity:?} owns no model-visible User context lane"
-        ))
-    })
 }
 
 /// A transient User context proposal. It contains no id, source, kind, lane,
@@ -310,26 +283,57 @@ pub struct UserMessageProposal {
 }
 
 /// One transient proposal returned by a contributor.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ContextProposal {
     /// A normal model-visible canonical User context fact.
     UserMessage(UserMessageProposal),
+    /// Typed native task data. Registration, not the proposal, grants provenance.
+    NativeUserMessage {
+        /// Complete bounded model content, rendered by its domain owner.
+        message: UserMessageProposal,
+        /// Typed domain presentation validated against the registered owner.
+        metadata: ContextKind,
+        presentation: Option<ContributionPresentation>,
+        emissions: Vec<crate::message::types::ContributionEmission>,
+    },
 }
 
 impl ContextProposal {
+    /// Complete bounded content, regardless of producer domain.
+    #[must_use]
+    pub fn message(&self) -> &UserMessageProposal {
+        match self {
+            Self::UserMessage(message) | Self::NativeUserMessage { message, .. } => message,
+        }
+    }
+
     /// The proposal kind.
     #[must_use]
     pub const fn kind(&self) -> ContextProposalKind {
         match self {
-            Self::UserMessage(_) => ContextProposalKind::UserMessage,
+            Self::UserMessage(_) | Self::NativeUserMessage { .. } => {
+                ContextProposalKind::UserMessage
+            }
         }
     }
+}
+
+/// Capability requirement, independent of domain identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContributionRequirement {
+    Mandatory,
+    Optional,
 }
 
 /// The contributor API. Implementations receive only a finite immutable
 /// snapshot and return transient typed proposals.
 pub trait ContextContributor: Send + Sync {
+    /// Whether acquisition may fail without failing the logical step.
+    fn requirement(&self) -> ContributionRequirement {
+        ContributionRequirement::Mandatory
+    }
+
     /// Produce bounded proposals for one primary model step.
     ///
     /// # Errors
@@ -387,8 +391,12 @@ impl ContextGeneration {
 
 /// A canonical User message draft after assembly validation. It still has no
 /// `MessageId`; the conversation admission owner allocates one exactly once.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AcceptedUserContext {
+    pub producer: ContextContributorIdentity,
+    pub message_id: Option<crate::runtime::identity::MessageId>,
+    pub presentation: Option<ContributionPresentation>,
+    pub emissions: Vec<crate::message::types::ContributionEmission>,
     /// Trusted provenance assigned by rustX.
     pub source: UserSource,
     /// Trusted semantic family assigned by rustX.
@@ -410,14 +418,40 @@ pub struct AcceptedSystemSection {
 
 /// The validated result of one assembly invocation. This value is transient
 /// until the Agent Loop crosses its admission boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AcceptedContext {
+    pub opportunities: ContributionOpportunities,
+    pub post_tool_batch_anchor: Option<crate::durable::TranscriptCursor>,
     /// Canonical User context facts awaiting core `MessageId` allocation.
     pub user_messages: Vec<AcceptedUserContext>,
     /// Request-time system sections awaiting effective-prompt rendering.
     pub system_sections: Vec<AcceptedSystemSection>,
     /// The identity/generation explanation of the accepted assembly.
     pub generation: ContextGeneration,
+}
+
+impl AcceptedContext {
+    /// Select frozen accepted records visible in this actual request.
+    pub(crate) fn request_contributions(&self, active: &[MessageBlock]) -> Vec<ContributionStart> {
+        self.user_messages
+            .iter()
+            .filter_map(|entry| {
+                let id = entry.message_id.as_ref()?;
+                active
+                    .iter()
+                    .any(|message| message.id() == id)
+                    .then(|| ContributionStart {
+                        message_id: id.clone(),
+                        producer: entry.producer.clone(),
+                        metadata: entry.kind.clone(),
+                        presentation: entry.presentation.clone(),
+                        emissions: entry.emissions.clone(),
+                        opportunities: self.opportunities.clone(),
+                        post_tool_batch_anchor: self.post_tool_batch_anchor,
+                    })
+            })
+            .collect()
+    }
 }
 
 /// A machine-readable projection of the real native contract.
@@ -485,6 +519,8 @@ pub enum ContextAssemblyError {
     InvalidProposal(String),
     /// A contributor failed while producing proposals.
     ContributorFailed(String),
+    /// Optional acquisition failure; integrity/validation errors are never isolated.
+    AcquisitionFailed(String),
     /// A deferred proposal named a semantic owner this assembly never
     /// registered.
     ///
@@ -512,6 +548,7 @@ impl core::fmt::Display for ContextAssemblyError {
             }
             Self::InvalidProposal(detail) => write!(f, "invalid context proposal: {detail}"),
             Self::ContributorFailed(detail) => write!(f, "context contributor failed: {detail}"),
+            Self::AcquisitionFailed(detail) => write!(f, "context acquisition failed: {detail}"),
             Self::UnregisteredContributor(identity) => write!(
                 f,
                 "deferred context names contributor {identity:?}, which is not a registered \
@@ -557,16 +594,22 @@ pub fn validate_user_message_proposal(
 
 #[derive(Clone)]
 struct RegisteredExtension {
-    identity: CertifiedExtensionIdentity,
+    identity: ContextContributorIdentity,
     generation: ContributorGeneration,
     system_sections: Vec<String>,
     contributor: Arc<dyn ContextContributor>,
 }
 
 /// The rustX-owned Context Assembly registry and validator.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ContextAssembly {
     extensions: Vec<RegisteredExtension>,
+}
+
+impl Default for ContextAssembly {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl core::fmt::Debug for ContextAssembly {
@@ -577,7 +620,7 @@ impl core::fmt::Debug for ContextAssembly {
                 &self
                     .extensions
                     .iter()
-                    .map(|extension| extension.identity.as_str())
+                    .map(|extension| &extension.identity)
                     .collect::<Vec<_>>(),
             )
             .finish()
@@ -587,9 +630,16 @@ impl core::fmt::Debug for ContextAssembly {
 impl ContextAssembly {
     /// Creates an empty assembly with only native core owners available.
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
+        let identity = NativeContextContributor::RuntimeToolObservation;
+        let generation = native_generation(identity);
         Self {
-            extensions: Vec::new(),
+            extensions: vec![RegisteredExtension {
+                identity: generation.identity.clone(),
+                generation,
+                system_sections: Vec::new(),
+                contributor: Arc::new(|_: &ContributorInputSnapshot| Ok(Vec::new())),
+            }],
         }
     }
 
@@ -613,11 +663,9 @@ impl ContextAssembly {
                 identity.as_str().to_owned(),
             ));
         }
-        if self
-            .extensions
-            .iter()
-            .any(|registered| registered.identity == identity)
-        {
+        if self.extensions.iter().any(|registered| {
+            registered.identity == ContextContributorIdentity::CertifiedExtension(identity.clone())
+        }) {
             return Err(ContextAssemblyError::DuplicateSingleOwner(format!(
                 "extension:{}",
                 identity.as_str()
@@ -628,12 +676,38 @@ impl ContextAssembly {
             attestation,
         };
         self.extensions.push(RegisteredExtension {
-            identity: identity.clone(),
+            identity: generation.identity.clone(),
             generation,
             system_sections: Vec::new(),
             contributor,
         });
         Ok(identity)
+    }
+
+    /// Binds a compiled-in producer to its Rust-owned identity.
+    pub(crate) fn register_native(
+        &mut self,
+        identity: NativeContextContributor,
+        contributor: Arc<dyn ContextContributor>,
+    ) -> Result<(), ContextAssemblyError> {
+        let generation = native_generation(identity);
+        if self
+            .extensions
+            .iter()
+            .any(|registered| registered.identity == generation.identity)
+        {
+            return Err(ContextAssemblyError::DuplicateSingleOwner(format!(
+                "{:?}",
+                generation.identity
+            )));
+        }
+        self.extensions.push(RegisteredExtension {
+            identity: generation.identity.clone(),
+            generation,
+            system_sections: Vec::new(),
+            contributor,
+        });
+        Ok(())
     }
 
     /// Adds one immutable System section to a registered extension resource.
@@ -655,7 +729,10 @@ impl ContextAssembly {
         let registered = self
             .extensions
             .iter_mut()
-            .find(|registered| &registered.identity == identity)
+            .find(|registered| {
+                registered.identity
+                    == ContextContributorIdentity::CertifiedExtension(identity.clone())
+            })
             .ok_or_else(|| {
                 ContextAssemblyError::UnregisteredContributor(identity.as_str().to_owned())
             })?;
@@ -672,7 +749,10 @@ impl ContextAssembly {
         let mut identities = self
             .extensions
             .iter()
-            .map(|extension| extension.identity.clone())
+            .filter_map(|extension| match &extension.identity {
+                ContextContributorIdentity::CertifiedExtension(identity) => Some(identity.clone()),
+                ContextContributorIdentity::Native(_) => None,
+            })
             .collect::<Vec<_>>();
         identities.sort();
         identities
@@ -720,25 +800,31 @@ impl ContextAssembly {
     /// [`UserSource::Extension`] provenance, and no synthesized generation:
     /// the whole assembly fails before any context can be admitted.
     ///
-    /// The native runtime observation owner needs no registration because
-    /// rustX owns it; it has no attestation for the same reason.
+    /// Native observers resolve against the same frozen native registrations.
     fn resolve_deferred_producer(
         &self,
         producer: &DeferredContextProducer,
     ) -> Result<ContributorGeneration, ContextAssemblyError> {
-        match producer {
-            DeferredContextProducer::NativeRuntimeObservation => Ok(native_generation(
-                NativeContextContributor::RuntimeToolObservation,
-            )),
-            DeferredContextProducer::CertifiedExtension { identity } => self
-                .extensions
-                .iter()
-                .find(|registered| &registered.identity == identity)
-                .map(|registered| registered.generation.clone())
-                .ok_or_else(|| {
-                    ContextAssemblyError::UnregisteredContributor(identity.as_str().to_owned())
-                }),
-        }
+        let identity = match producer {
+            DeferredContextProducer::Native { identity } => {
+                ContextContributorIdentity::Native(*identity)
+            }
+            DeferredContextProducer::CertifiedExtension { identity } => {
+                ContextContributorIdentity::CertifiedExtension(identity.clone())
+            }
+        };
+        self.extensions
+            .iter()
+            .find(|entry| entry.identity == identity)
+            .map(|entry| entry.generation.clone())
+            .ok_or_else(|| {
+                ContextAssemblyError::UnregisteredContributor(match &identity {
+                    ContextContributorIdentity::Native(owner) => owner.logical_key().to_owned(),
+                    ContextContributorIdentity::CertifiedExtension(owner) => {
+                        owner.as_str().to_owned()
+                    }
+                })
+            })
     }
 
     /// Assembles deferred, native, and certified-extension proposals against
@@ -778,10 +864,6 @@ impl ContextAssembly {
                 .as_ref()
                 .map(|_| native_generation(NativeContextContributor::SkillGuidance)),
             native
-                .agent_status
-                .as_ref()
-                .map(|_| native_generation(NativeContextContributor::AgentStatus)),
-            native
                 .core_runtime_identity
                 .as_ref()
                 .map(|_| native_generation(NativeContextContributor::CoreSystemIdentity)),
@@ -810,76 +892,60 @@ impl ContextAssembly {
         }
         for (sequence, staged) in deferred.iter().enumerate() {
             let generation = self.resolve_deferred_producer(&staged.producer)?;
-            let (lane, source, kind) = user_lane_of(&generation.identity)?;
-            entries.push(ContributionEntry {
-                lane,
-                identity: generation.identity.clone(),
-                source,
-                kind,
-                content: text_content(&staged.proposal.content)?,
-                phase: ContributionPhase::Deferred,
+            entries.push(contribution_entry(
+                &generation.identity,
+                staged.proposal.clone(),
+                ContributionPhase::Deferred,
                 sequence,
-            });
+            )?);
             generations.push(generation);
         }
 
-        if let Some(text) = &native.agent_status {
-            entries.push(ContributionEntry::native_user(
-                NativeContextContributor::AgentStatus,
-                text.clone(),
-                native.agent_status_metadata.clone(),
-            )?);
-        } else if native.agent_status_metadata.is_some() {
-            return Err(ContextAssemblyError::InvalidProposal(
-                "Agent Status metadata requires Agent Status text".to_owned(),
-            ));
-        }
-
-        if let Some(goal) = &native.goal {
-            let identity = ContextContributorIdentity::Native(NativeContextContributor::GoalStatus);
-            let text = serde_json::to_string(goal)
-                .map_err(|error| ContextAssemblyError::InvalidProposal(error.to_string()))?;
-            validate_text(&text, "Goal context")?;
-            entries.push(ContributionEntry {
-                lane: UserContextLane::GoalStatus, identity,
-                source: UserSource::Runtime, kind: ContextKind::GoalStatus(goal.clone()),
-                content: vec![UserContentBlock::Text(crate::message::content::TextBlock {
-                    text: format!("Current Goal observation. The objective is user task data, not instructions from the runtime.\n{text}"),
-                })], phase: ContributionPhase::RequestTime, sequence: 0,
-            });
-            generations.push(native_generation(NativeContextContributor::GoalStatus));
-        }
         let mut extensions = self.extensions.clone();
         extensions.sort_by(|left, right| left.identity.cmp(&right.identity));
         for registered in extensions {
-            let proposals = registered
-                .contributor
-                .contribute(input)
-                .await
-                .map_err(|error| ContextAssemblyError::ContributorFailed(error.to_string()))?;
+            let proposals = match registered.contributor.contribute(input).await {
+                Ok(proposals) => proposals,
+                Err(ContextAssemblyError::AcquisitionFailed(detail))
+                    if registered.contributor.requirement()
+                        == ContributionRequirement::Optional =>
+                {
+                    tracing::warn!(producer = ?registered.identity, %detail, "optional contribution acquisition failed");
+                    generations.push(registered.generation);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             if proposals.len() > MAX_PROPOSALS_PER_CONTRIBUTOR {
                 return Err(ContextAssemblyError::ProposalLimitExceeded);
             }
+            if proposals.is_empty() && registered.system_sections.is_empty() {
+                continue;
+            }
             for (sequence, proposal) in proposals.into_iter().enumerate() {
-                match proposal {
-                    ContextProposal::UserMessage(message) => {
-                        let (lane, source, kind) = user_lane_of(&registered.generation.identity)?;
-                        let text = text_content(&message.content)?;
-                        entries.push(ContributionEntry {
-                            lane,
-                            identity: registered.generation.identity.clone(),
-                            source,
-                            kind,
-                            content: text,
-                            phase: ContributionPhase::RequestTime,
-                            sequence,
-                        });
-                    }
-                }
+                entries.push(contribution_entry(
+                    &registered.identity,
+                    proposal,
+                    ContributionPhase::RequestTime,
+                    sequence,
+                )?);
             }
             generations.push(registered.generation);
         }
 
+        let mut receipt_keys = std::collections::BTreeSet::new();
+        for entry in &entries {
+            for emission in &entry.emissions {
+                emission
+                    .validate()
+                    .map_err(ContextAssemblyError::InvalidProposal)?;
+                if !receipt_keys.insert((&entry.identity, &emission.key)) {
+                    return Err(ContextAssemblyError::InvalidProposal(
+                        "duplicate producer-scoped contribution key".into(),
+                    ));
+                }
+            }
+        }
         entries.sort_by(|left, right| {
             left.lane
                 .cmp(&right.lane)
@@ -887,6 +953,37 @@ impl ContextAssembly {
                 .then_with(|| left.phase.cmp(&right.phase))
                 .then_with(|| left.sequence.cmp(&right.sequence))
         });
+        // Admit complete proposals in semantic order. Never separate content
+        // from its typed presentation or reminder receipts.
+        let mut remaining = MAX_CONTEXT_TEXT_BYTES;
+        let mut admitted = Vec::new();
+        for entry in entries {
+            let bytes = text_content(&entry.content)?
+                .iter()
+                .map(|block| match block {
+                    UserContentBlock::Text(text) => text.text.len(),
+                    _ => 0,
+                })
+                .sum::<usize>();
+            if bytes > remaining {
+                let optional = self
+                    .extensions
+                    .iter()
+                    .find(|registered| registered.identity == entry.identity)
+                    .is_some_and(|registered| {
+                        registered.contributor.requirement() == ContributionRequirement::Optional
+                    });
+                if optional {
+                    continue;
+                }
+                return Err(ContextAssemblyError::InvalidProposal(
+                    "mandatory context exceeds the total contribution budget".to_owned(),
+                ));
+            }
+            remaining -= bytes;
+            admitted.push(entry);
+        }
+        let entries = admitted;
         // Request-time system sections only: deferred post-tool proposals are
         // `UserMessageProposal` facts, so a section can never reach this path.
         // Sections sort by lane, native slots first, then certified-extension
@@ -911,9 +1008,15 @@ impl ContextAssembly {
         generations.dedup_by(|later, first| later.identity == first.identity);
 
         Ok(AcceptedContext {
+            opportunities: input.opportunities.clone(),
+            post_tool_batch_anchor: input.post_tool_batch_anchor,
             user_messages: entries
                 .into_iter()
                 .map(|entry| AcceptedUserContext {
+                    producer: entry.identity,
+                    message_id: None,
+                    presentation: entry.presentation,
+                    emissions: entry.emissions,
                     source: entry.source,
                     kind: entry.kind,
                     content: entry.content,
@@ -928,8 +1031,91 @@ impl ContextAssembly {
     }
 }
 
+fn contribution_entry(
+    identity: &ContextContributorIdentity,
+    proposal: ContextProposal,
+    phase: ContributionPhase,
+    sequence: usize,
+) -> Result<ContributionEntry, ContextAssemblyError> {
+    let (lane, source, kind, message, presentation, emissions) = match proposal {
+        ContextProposal::UserMessage(message) => {
+            let (lane, source, kind) = user_lane_of(identity);
+            (lane, source, kind, message, None, Vec::new())
+        }
+        ContextProposal::NativeUserMessage {
+            message,
+            metadata,
+            presentation,
+            emissions,
+        } => {
+            let (owner, lane) = match metadata.native_contribution_owner() {
+                Some(binding) => binding,
+                None if metadata == ContextKind::NativeEnvironment => {
+                    let ContextContributorIdentity::Native(owner) = identity else {
+                        return Err(ContextAssemblyError::InvalidProposal(
+                            "native metadata has a non-native producer".to_owned(),
+                        ));
+                    };
+                    (*owner, UserContextLane::TaskData)
+                }
+                None => {
+                    return Err(ContextAssemblyError::InvalidProposal(
+                        "metadata has no native producer".to_owned(),
+                    ));
+                }
+            };
+            if *identity != ContextContributorIdentity::Native(owner) {
+                return Err(ContextAssemblyError::InvalidProposal(
+                    "metadata does not belong to the registered producer".to_owned(),
+                ));
+            }
+            (
+                lane,
+                UserSource::Runtime,
+                metadata,
+                message,
+                presentation,
+                emissions,
+            )
+        }
+    };
+    let content = text_content(&message.content)?;
+    let check_id = crate::runtime::identity::MessageId::new("uncommitted-contribution");
+    let check = ContributionStart {
+        message_id: check_id.clone(),
+        producer: identity.clone(),
+        metadata: kind.clone(),
+        presentation: presentation.clone(),
+        emissions: emissions.clone(),
+        opportunities: ContributionOpportunities::default(),
+        post_tool_batch_anchor: None,
+    };
+    check
+        .validate_message(&MessageBlock::User(crate::message::UserMessageBlock {
+            id: check_id,
+            content: content.clone(),
+            source: source.clone(),
+            kind: crate::message::InboundKind::Context(kind.clone()),
+            timestamp: None,
+        }))
+        .map_err(|error| ContextAssemblyError::InvalidProposal(error.to_string()))?;
+    Ok(ContributionEntry {
+        lane,
+        identity: identity.clone(),
+        source,
+        kind,
+        content,
+        presentation,
+        emissions,
+        phase,
+        sequence,
+    })
+}
+
 #[derive(Debug)]
 struct ContributionEntry {
+    presentation: Option<ContributionPresentation>,
+    emissions: Vec<crate::message::types::ContributionEmission>,
     lane: UserContextLane,
     identity: ContextContributorIdentity,
     source: UserSource,
@@ -937,42 +1123,6 @@ struct ContributionEntry {
     content: Vec<UserContentBlock>,
     phase: ContributionPhase,
     sequence: usize,
-}
-
-impl ContributionEntry {
-    /// One request-time native User context fact. Its lane, provenance, and
-    /// semantic family come from the same owner table the deferred path uses.
-    fn native_user(
-        contributor: NativeContextContributor,
-        text: String,
-        agent_status_metadata: Option<AgentStatusGenerationMetadata>,
-    ) -> Result<Self, ContextAssemblyError> {
-        let identity = ContextContributorIdentity::Native(contributor);
-        let (lane, source, kind) = match contributor {
-            NativeContextContributor::AgentStatus => (
-                UserContextLane::AgentStatus,
-                UserSource::Runtime,
-                ContextKind::AgentStatus(agent_status_metadata.ok_or_else(|| {
-                    ContextAssemblyError::InvalidProposal(
-                        "Agent Status text requires generation metadata".to_owned(),
-                    )
-                })?),
-            ),
-            _ => user_semantics(&identity).expect("this native owner publishes User context"),
-        };
-        validate_text(&text, "native context")?;
-        Ok(Self {
-            lane,
-            identity,
-            source,
-            kind,
-            content: vec![UserContentBlock::Text(crate::message::content::TextBlock {
-                text,
-            })],
-            phase: ContributionPhase::RequestTime,
-            sequence: 0,
-        })
-    }
 }
 
 /// One request-time native effective-system-prompt section.
@@ -1107,6 +1257,7 @@ pub fn render_effective_system_prompt(sections: &[AcceptedSystemSection]) -> Str
 mod tests {
     use super::*;
     use crate::message::content::TextBlock;
+    use crate::message::types::AgentStatusGenerationMetadata;
     use crate::runtime::identity::MessageId;
 
     fn input() -> ContributorInputSnapshot {
@@ -1116,10 +1267,72 @@ mod tests {
             turn: 1,
             surface_revision: SurfaceRevision::INITIAL,
             surface_ids: vec![MessageId::new("inbound")],
+            surface: crate::conversation::ConversationSurfaceSnapshot {
+                revision: SurfaceRevision::INITIAL,
+                compaction_generation: 0,
+                active_message_ids: vec![],
+                messages: vec![],
+            },
+            opportunities: ContributionOpportunities::default(),
+            post_tool_batch_anchor: None,
             claimed_inbound: Vec::new(),
             workspace_root: PathBuf::from("/workspace"),
             capability_revision: CapabilityRevision::new(3),
         }
+    }
+
+    fn native_status_proposal() -> ContextProposal {
+        ContextProposal::NativeUserMessage {
+            presentation: None,
+            emissions: vec![],
+            message: UserMessageProposal {
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "registered native context".to_owned(),
+                })],
+            },
+            metadata: ContextKind::AgentStatus(
+                AgentStatusGenerationMetadata::new(
+                    chrono::DateTime::from_timestamp(0, 0).expect("epoch"),
+                    vec![crate::message::types::AgentStatusModuleId::Time],
+                )
+                .expect("valid metadata"),
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn registered_native_metadata_is_bound_to_its_producer() {
+        let contributor =
+            Arc::new(|_: &ContributorInputSnapshot| Ok(vec![native_status_proposal()]));
+        let mut assembly = ContextAssembly::new();
+        assembly
+            .register_native(NativeContextContributor::AgentStatus, contributor.clone())
+            .unwrap();
+        let accepted = assembly
+            .assemble(&input(), &NativeContextInput::default(), &[])
+            .await
+            .unwrap();
+        assert_eq!(accepted.user_messages.len(), 1);
+        assert_eq!(accepted.user_messages[0].source, UserSource::Runtime);
+        assert_eq!(
+            accepted.generation.contributors,
+            vec![native_generation(NativeContextContributor::AgentStatus)]
+        );
+        assert!(matches!(
+            assembly.register_native(NativeContextContributor::AgentStatus, contributor.clone()),
+            Err(ContextAssemblyError::DuplicateSingleOwner(_))
+        ));
+
+        let mut invalid = ContextAssembly::new();
+        invalid
+            .register_native(NativeContextContributor::GoalStatus, contributor)
+            .unwrap();
+        assert!(matches!(
+            invalid
+                .assemble(&input(), &NativeContextInput::default(), &[])
+                .await,
+            Err(ContextAssemblyError::InvalidProposal(_))
+        ));
     }
 
     #[tokio::test]
@@ -1256,19 +1469,17 @@ mod tests {
 
     #[tokio::test]
     async fn native_provenance_is_assigned_by_core() {
-        let assembly = ContextAssembly::new();
+        let mut assembly = ContextAssembly::new();
+        assembly
+            .register_native(
+                NativeContextContributor::AgentStatus,
+                Arc::new(|_: &ContributorInputSnapshot| Ok(vec![native_status_proposal()])),
+            )
+            .unwrap();
         let accepted = assembly
             .assemble(
                 &input(),
                 &NativeContextInput {
-                    agent_status: Some("same bytes".to_owned()),
-                    agent_status_metadata: Some(
-                        AgentStatusGenerationMetadata::new(
-                            chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
-                            vec![crate::message::types::AgentStatusModuleId::Time],
-                        )
-                        .expect("valid Agent Status metadata"),
-                    ),
                     ..NativeContextInput::default()
                 },
                 &[],
@@ -1314,7 +1525,6 @@ mod tests {
                     agent_profile: Some("agent profile".to_owned()),
                     workspace_instructions: Some("workspace".to_owned()),
                     skill_guidance: Some("skill catalog".to_owned()),
-                    ..NativeContextInput::default()
                 },
                 &[],
             )
@@ -1379,8 +1589,11 @@ mod tests {
 
     fn native_deferred(text: &str) -> DeferredContextProposal {
         DeferredContextProposal {
-            producer: DeferredContextProducer::NativeRuntimeObservation,
-            proposal: user_message(text),
+            producer: DeferredContextProducer::Native {
+                identity:
+                    crate::runtime::identity::NativeContextContributor::RuntimeToolObservation,
+            },
+            proposal: ContextProposal::UserMessage(user_message(text)),
         }
     }
 
@@ -1389,7 +1602,7 @@ mod tests {
             producer: DeferredContextProducer::CertifiedExtension {
                 identity: CertifiedExtensionIdentity::new(key).expect("identity"),
             },
-            proposal: user_message(text),
+            proposal: ContextProposal::UserMessage(user_message(text)),
         }
     }
 
@@ -1766,21 +1979,19 @@ mod tests {
     /// order, together with every request-time proposal of that lane.
     #[tokio::test]
     async fn deferred_context_uses_the_one_total_lane_order() {
-        let assembly =
+        let mut assembly =
             assembly_with_extension("example.extension", None, Some("extension context"));
+        assembly
+            .register_native(
+                NativeContextContributor::AgentStatus,
+                Arc::new(|_: &ContributorInputSnapshot| Ok(vec![native_status_proposal()])),
+            )
+            .unwrap();
         let accepted = assembly
             .assemble(
                 &input(),
                 &NativeContextInput {
                     workspace_instructions: Some("workspace".to_owned()),
-                    agent_status: Some("status".to_owned()),
-                    agent_status_metadata: Some(
-                        AgentStatusGenerationMetadata::new(
-                            chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
-                            vec![crate::message::types::AgentStatusModuleId::Time],
-                        )
-                        .expect("valid Agent Status metadata"),
-                    ),
                     ..NativeContextInput::default()
                 },
                 &[
@@ -1828,7 +2039,7 @@ mod tests {
                 "A2".to_owned(),
                 "deferred extension".to_owned(),
                 "extension context".to_owned(),
-                "status".to_owned(),
+                "registered native context".to_owned(),
             ]
         );
         assert_eq!(
@@ -1933,7 +2144,7 @@ mod tests {
     fn manifest_is_derived_from_contract_constants() {
         let manifest = ContextAssembly::compatibility_manifest();
         assert_eq!(
-            CONTEXT_COMPATIBILITY_ABI_VERSION, 4,
+            CONTEXT_COMPATIBILITY_ABI_VERSION, 5,
             "revisioned native Goal User observations are a v4 ABI"
         );
         assert_eq!(manifest.user_context_lanes, UserContextLane::ALL);

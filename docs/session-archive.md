@@ -3,7 +3,8 @@
 `rustx-session-archive/v1` is a ZIP64/DEFLATE inspection archive produced by
 `src/session_archive.rs`. `SessionArchiveProducer` is a native library owner,
 independent of App Server, Web, TUI and Trace. This is neither a canonical log nor
-an import, recovery or persistence format. SQLite uses schema 42 inherited from main; export changes no durable encoding.
+an import, recovery or persistence format. SQLite schema 43 stores the common accepted contributions; export projects those
+historical records without creating a second persistence authority.
 
 ## Logical files and authority
 

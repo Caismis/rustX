@@ -84,7 +84,44 @@ pub(super) fn request_detail(
         });
     }
     let (options, omitted_option_count) = request_options(&snapshot.invocation.request_params);
+    let contributions = snapshot
+        .contributions
+        .iter()
+        .map(|record| {
+            let presentation = match &record.presentation {
+                Some(crate::context::contribution::ContributionPresentation::AgentStatus(
+                    status,
+                )) => {
+                    let turn = snapshot.identity.turn.as_str().parse().map_err(|_| {
+                        ConversationStoreError::InvalidReference(
+                            "historical contribution has invalid logical step".to_owned(),
+                        )
+                    })?;
+                    Some(super::types::TraceContributionPresentation::AgentStatus(
+                        crate::runtime_client::projection::status_view(
+                            &crate::agent::AgentStatusObservation {
+                                attempt_id: snapshot.identity.attempt_id.clone(),
+                                turn,
+                                status_message_id: record.message_id.clone(),
+                                opportunities: record.opportunities.clone(),
+                                post_tool_batch_anchor: record.post_tool_batch_anchor,
+                                status: status.clone(),
+                            },
+                        ),
+                    ))
+                }
+                None => None,
+            };
+            Ok(super::types::TraceContributionMetadata {
+                message_id: record.message_id.clone(),
+                producer: record.producer.clone(),
+                metadata: record.metadata.clone(),
+                presentation,
+            })
+        })
+        .collect::<Result<Vec<_>, ConversationStoreError>>()?;
     Ok(Some(TraceRequestDetail {
+        contributions,
         request_id: snapshot.request_id.clone(),
         attempt_id: snapshot.identity.attempt_id.clone(),
         step_id: snapshot.identity.turn.clone(),

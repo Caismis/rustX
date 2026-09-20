@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { RuntimeLayer, SourceScope, SourceToolSelection, ModelLayer, AgentSkillSelection, AgentStatusExtensionDocument, AgentProjectInstructionsDocument } from '../../../../protocol/app-server/v14';
+import type { RuntimeLayer, SourceScope, SourceToolSelection, ModelLayer, AgentSkillSelection, AgentStatusExtensionDocument, AgentProjectInstructionsDocument } from '../../../../protocol/app-server/v15';
 import { Button } from '../../presentation/primitives/Button';
 import { ModelSelectionFields, StatusPluginFields } from './AgentEditor';
 import { CheckboxList, Toggle, Names, nativeTools, Selection, TextField, UnitForm, type SaveSource } from './controls';

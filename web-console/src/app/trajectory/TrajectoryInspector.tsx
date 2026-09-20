@@ -26,7 +26,7 @@ import type {
   TraceSystemPromptPresentation,
   TraceText,
   TraceToolDefinition,
-} from '../../../../protocol/app-server/v14';
+} from '../../../../protocol/app-server/v15';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Button } from '../../presentation/primitives/Button';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
@@ -254,6 +254,7 @@ const SYSTEM_PROMPT_STATE: Record<
 
 /** Display names for the closed Context presentation families. */
 const CONTEXT_KIND: Record<TraceContextKind, string> = {
+  native_environment: "Native context",
   goal_status: 'Goal status',
   runtime_tool_observation: 'Runtime tool observation',
   extension_environment: 'Extension environment',
@@ -610,6 +611,13 @@ export function TrajectoryInspector({
 
         {active === 'Context' && request && (
           <>
+            {request.contributions.map(contribution => (
+              <section key={contribution.message_id} className={css.requestMessage}>
+                <h3 className={css.sectionLabelHeading}>Accepted contribution</h3>
+                <p className={css.note}>Frozen request context, not current domain state.</p>
+                <Structured value={{ value: contribution, truncated: false }} label="Accepted contribution metadata" />
+              </section>
+            ))}
             <h3 className={css.sectionLabelHeading}>Reconstructed request context</h3>
             <p className={css.note}>
               The exact provider-neutral messages this request carried, rebuilt from its frozen

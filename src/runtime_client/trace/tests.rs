@@ -289,7 +289,7 @@ fn completion(
     generation: Option<GenerationEvidence>,
     seconds: i64,
 ) {
-    append(
+    let mut completed = event(
         store,
         E::ModelRequestCompleted {
             request_id: request.request_id.clone(),
@@ -299,6 +299,9 @@ fn completion(
         },
         seconds,
     );
+    completed.attempt_id = Some(request.identity.attempt_id.clone());
+    completed.turn_id = Some(request.identity.turn.clone());
+    store.append_event(completed).unwrap();
 }
 
 fn page(store: &dyn ConversationStore) -> TracePage {
@@ -2410,13 +2413,46 @@ fn request_with(
     let mut prepared = prepared_request(store, retry, None, identity_of(turn, retry));
     prompt.clone_into(&mut prepared.effective_system_prompt);
     prepared.request_context_ids = context.iter().map(|message| message.id().clone()).collect();
-    prepared.agent_status = context
+    prepared.contributions = context
         .iter()
-        .find(|message| message.is_agent_status())
-        .map(|message| crate::model::AgentStatusStart {
-            message_id: message.id().clone(),
-            emissions: vec![],
-        });
+        .filter_map(|message| {
+            let MessageBlock::User(user) = message else {
+                return None;
+            };
+            let InboundKind::Context(metadata) = &user.kind else {
+                return None;
+            };
+            let producer = match &user.source {
+                UserSource::Runtime => {
+                    crate::runtime::identity::ContextContributorIdentity::Native(
+                        metadata.native_contribution_owner()?.0,
+                    )
+                }
+                UserSource::Extension { contributor } => {
+                    crate::runtime::identity::ContextContributorIdentity::CertifiedExtension(
+                        contributor.clone(),
+                    )
+                }
+                _ => return None,
+            };
+            prepared
+                .context_generation
+                .contributors
+                .push(crate::context::ContributorGeneration {
+                    identity: producer.clone(),
+                    attestation: None,
+                });
+            Some(crate::model::ContributionStart {
+                message_id: user.id.clone(),
+                producer,
+                metadata: metadata.clone(),
+                presentation: None,
+                emissions: vec![],
+                opportunities: crate::context::ContributionOpportunities::default(),
+                post_tool_batch_anchor: None,
+            })
+        })
+        .collect();
     commit_request(store, prepared, context)
 }
 
@@ -2860,7 +2896,7 @@ fn request_scoped_context_that_is_not_an_admitted_context_fact_never_commits() {
     assert!(matches!(
         error,
         ConversationStoreError::InvalidReference(ref detail)
-            if detail.contains("hidden Context-kind User message")
+            if detail.contains("canonical context has no accepted contribution record")
     ));
     // Nothing committed, so the conversation still has no request at all.
     assert!(
@@ -3106,7 +3142,7 @@ fn related_request(store: &dyn ConversationStore, retry: u32, prompt: &str) -> R
             "Environment facts.",
         ),
     ];
-    let frozen = request_with(store, "1", retry, prompt, &context);
+    let frozen = request_with(store, &(retry + 1).to_string(), 0, prompt, &context);
     completion(store, &frozen, None, None, 3 + i64::from(retry) * 2);
     frozen
 }
@@ -3455,24 +3491,50 @@ fn all_context_assembly_semantic_pairs_project_from_durable_request_start() {
 fn assert_context_pair_rejected(source: UserSource, kind: ContextKind) {
     let store = store("conv_5a2c7e93-4b16-7d80-9f35-8e07b2c4d169");
     start(&store);
-    let message = context_message("contradictory-context", source, kind, "context");
-    // This is the real durable start, not a fixture that validates semantic pairs.
-    let frozen = request_with(&store, "1", 0, "prompt", std::slice::from_ref(&message));
-    assert_eq!(
-        store
-            .load_request_snapshot(&frozen.request_id)
-            .unwrap()
-            .request_context_ids,
-        vec![message.id().clone()]
+    let message = context_message(
+        "contradictory-context",
+        source.clone(),
+        kind.clone(),
+        "context",
     );
-    assert_eq!(
-        store.load_messages(&frozen.request_context_ids).unwrap(),
-        vec![message]
-    );
+    let mut snapshot = prepared_request(&store, 0, None, identity_of("1", 0));
+    snapshot.request_context_ids = vec![message.id().clone()];
+    let producer = match source {
+        UserSource::Extension { contributor } => {
+            crate::runtime::identity::ContextContributorIdentity::CertifiedExtension(contributor)
+        }
+        _ => crate::runtime::identity::ContextContributorIdentity::Native(
+            crate::runtime::identity::NativeContextContributor::RuntimeToolObservation,
+        ),
+    };
+    snapshot
+        .context_generation
+        .contributors
+        .push(crate::context::ContributorGeneration {
+            identity: producer.clone(),
+            attestation: None,
+        });
+    snapshot
+        .contributions
+        .push(crate::model::ContributionStart {
+            message_id: message.id().clone(),
+            producer,
+            metadata: kind,
+            presentation: None,
+            emissions: vec![],
+            opportunities: crate::context::ContributionOpportunities::default(),
+            post_tool_batch_anchor: None,
+        });
+    assert!(matches!(
+        store.commit_model_turn_start(&[message], &snapshot, timestamp(2)),
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
     assert!(
-        matches!(TraceProjection::new(&store).unwrap().page(None, 32),
-        Err(ConversationStoreError::InvalidReference(detail))
-            if detail.contains("contradictory-context") && detail.contains("not an admitted Context fact"))
+        store
+            .read_request_snapshots(None, 10)
+            .unwrap()
+            .snapshots
+            .is_empty()
     );
 }
 

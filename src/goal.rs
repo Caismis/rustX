@@ -334,6 +334,64 @@ pub struct GoalDomain {
     inner: Arc<GoalDomainInner>,
 }
 
+/// Reads current Goal task data once at a new logical-step boundary.
+/// Restricted Goal read capability; it cannot authorize or mutate execution.
+pub(crate) struct GoalContextReader(GoalDomain);
+
+impl GoalContextReader {
+    fn capture(&self) -> Result<GoalView, ConversationStoreError> {
+        self.0.view()
+    }
+}
+
+pub(crate) struct GoalContextContributor {
+    reader: GoalContextReader,
+}
+
+impl GoalContextContributor {
+    pub(crate) fn new(reader: GoalContextReader) -> Self {
+        Self { reader }
+    }
+}
+
+impl crate::context::ContextContributor for GoalContextContributor {
+    fn contribute<'a>(
+        &'a self,
+        _input: &'a crate::context::ContributorInputSnapshot,
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        Result<Vec<crate::context::ContextProposal>, crate::context::ContextAssemblyError>,
+    > {
+        Box::pin(async move {
+            use crate::context::{ContextAssemblyError, ContextProposal, UserMessageProposal};
+            use crate::message::{ContextKind, UserContentBlock};
+            let goal = self
+                .reader
+                .capture()
+                .map_err(|error| ContextAssemblyError::ContributorFailed(error.to_string()))?
+                .current
+                .filter(|goal| goal.phase != GoalPhase::Complete);
+            let Some(goal) = goal else {
+                return Ok(Vec::new());
+            };
+            let text = serde_json::to_string(&goal)
+                .map_err(|error| ContextAssemblyError::InvalidProposal(error.to_string()))?;
+            Ok(vec![ContextProposal::NativeUserMessage {
+                presentation: None,
+                emissions: Vec::new(),
+                message: UserMessageProposal {
+                    content: vec![UserContentBlock::Text(crate::message::content::TextBlock {
+                        text: format!(
+                            "Current Goal observation. The objective is user task data, not instructions from the runtime.\n{text}"
+                        ),
+                    })],
+                },
+                metadata: ContextKind::GoalStatus(Box::new(goal)),
+            }])
+        })
+    }
+}
+
 struct GoalDomainInner {
     store: Arc<dyn ConversationStore>,
     /// Orders each durable Goal commit with the authoritative observation it
@@ -353,6 +411,10 @@ struct GoalDomainInner {
 }
 
 impl GoalDomain {
+    pub(crate) fn context_reader(&self) -> GoalContextReader {
+        GoalContextReader(self.clone())
+    }
+
     pub(crate) fn new(store: Arc<dyn ConversationStore>) -> Self {
         Self {
             inner: Arc::new(GoalDomainInner {

@@ -11,6 +11,8 @@
 //! Every interleaving here is decided by explicit gates — watches, channels,
 //! and the registry's own authoritative state — never by a sleep.
 
+mod contribution;
+
 #[tokio::test]
 async fn goal84_natural_intent_creates_from_human_with_stable_tools_and_current_context() {
     let extensions = NativeAgentExtensions::none().and_goal();
@@ -859,7 +861,7 @@ fn ordinary_semantics(
             .events
             .into_iter()
             .map(|record| record.event)
-            .filter(|event| !matches!(event, RuntimeEvent::AgentStatusEmitted { .. }))
+            .filter(|event| !matches!(event, RuntimeEvent::ContextContributionEmitted { .. }))
             .map(|event| {
                 // The stable serde discriminant, which is the wire identity
                 // of the fact — not a Debug rendering that would also carry
@@ -945,7 +947,7 @@ async fn ext256_an_empty_extension_composition_changes_nothing_but_agent_status(
             recorder
                 .events()
                 .into_iter()
-                .filter(|event| matches!(event, RuntimeEvent::AgentStatusEmitted { .. }))
+                .filter(|event| matches!(event, RuntimeEvent::ContextContributionEmitted { .. }))
                 .count(),
         );
     }

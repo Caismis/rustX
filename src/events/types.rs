@@ -93,7 +93,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::conversation::SurfaceRevision;
 use crate::events::interaction::{InteractionSettlement, InteractionSubject};
-use crate::message::types::AgentStatusEmission;
+use crate::message::types::ContributionEmission;
 use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
 use crate::model::generation_evidence::GenerationEvidence;
@@ -272,20 +272,22 @@ pub enum RuntimeEvent {
         /// convenience; the Request Snapshot remains the authority.
         model: String,
     },
-    /// One semantic Agent Status emission became durable with its owning
+    /// One semantic contribution emission became durable with its owning
     /// model-turn start. This is a canonical-message-referencing fact and may
     /// only be inserted by the combined start transition.
-    AgentStatusEmitted {
+    ContextContributionEmitted {
+        /// Registration-bound owner of the local semantic key.
+        producer: crate::runtime::identity::ContextContributorIdentity,
         /// The exact request whose start accepted the emission.
         request_id: RequestId,
         /// The canonical Agent Status User message visible to the model.
         message_id: MessageId,
         /// The module-owned semantic emission identity.
-        emission: AgentStatusEmission,
+        emission: ContributionEmission,
         /// The store-assigned Todo progress sequence at the model-turn-start
         /// commit. This is the cooldown origin for the emitted Todo reminder;
         /// it is never supplied by status preparation.
-        todo_progress_origin: u64,
+        logical_step_origin: u64,
     },
     /// A model request completed successfully.
     ///
@@ -941,13 +943,17 @@ impl RuntimeEvent {
 /// Derives the deterministic Event Journal identity of one Agent Status
 /// emission settled by a request start.
 #[must_use]
-pub fn agent_status_emission_event_id(
+pub fn contribution_emission_event_id(
     request_id: &RequestId,
-    emission: &AgentStatusEmission,
+    producer: &crate::runtime::identity::ContextContributorIdentity,
+    emission: &ContributionEmission,
 ) -> EventId {
+    let owner = producer.durable_key();
     EventId::new(format!(
-        "agent-status-emitted:{request_id}:{}:{}",
-        emission.module_id.as_str(),
+        "context-contribution-emitted:{}:{request_id}:{}:{owner}:{}:{}",
+        request_id.as_str().len(),
+        owner.len(),
+        emission.key.len(),
         emission.key
     ))
 }

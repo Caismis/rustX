@@ -600,9 +600,9 @@ observed the turn). A safe-boundary mailbox drain appends the whole batch to
 canonical history and establishes one new `FreshInboundTurn` from the
 drained ids in sequence order. After all sibling tools settle, the one
 canonical ToolResult batch commit marks `PostToolBatch` in attempt memory.
-`prepare_model_turn` then consumes the pending opportunity members together,
-freezes/captures Agent Status once, and admits at most one canonical Runtime
-context fact. Neither marker creates a request nor is it reconstructed during
+Logical-step preparation passes both opportunity members to every registered
+contributor once. One `AcceptedContext` freezes the complete admitted subset,
+including content, provenance, typed presentation, anchors, and receipts. Neither marker creates a request nor is it reconstructed during
 recovery. A `ContextWindowExceeded` overflow does not consume the fresh
 trigger and the retry reuses the already accepted status generation; it does
 not resample, reinvoke contributors, or append duplicate context. A
@@ -617,9 +617,10 @@ modules: each captures once into a finite immutable snapshot and evaluates
 only that snapshot. Todo's snapshot is the presentation its owner supplied, so
 Agent Status holds no Todo state, drives no Todo recovery, derives no Todo
 fingerprint of its own, and can never fabricate a Todo section for a
-composition that has no Todo extension. Module capture/evaluation/payload failures are
-attempt-scoped quarantine events; they omit that module and do not fail
-preparation, alter provider request count, or create a continuation.
+composition that has no Todo extension. Optional section acquisition/evaluation failures are attempt-scoped quarantine
+events; invalid payloads and persistence failures propagate. The small section
+contract owns capture/evaluation without a central per-module behavior switch.
+See [native contribution lifecycle](native-context-contributions.md).
 
 ## 4.2 Context Assembly and model-turn start
 
@@ -728,7 +729,7 @@ published as runtime-owned `ConversationObservation`s
 **exactly once**, by the Runtime Client projection; the runtime keeps no
 mirrored attempt/status/compaction read model. It does not need one: a
 model-turn-start commit returns a typed receipt whose fresh transition lists
-`ModelRequestStarted` and any `AgentStatusEmitted` facts in durable order;
+`ModelRequestStarted` and any `ContextContributionEmitted` facts in durable order;
 the loop publishes those committed facts through `observe_event` in that same
 order. An idempotent start verification returns the historical receipt but
 does not republish it. A Runtime Client host binds before the conversation
@@ -810,9 +811,8 @@ nothing on its own.
 
 At assembly time each deferred producer is resolved:
 
-- `NativeRuntimeObservation` → the rustX-owned native runtime observation
-  owner; no registration is required because rustX owns it, and it carries no
-  attestation;
+- `Native { identity }` → the same frozen native registration used at request
+  time; the built-in runtime observation owner is registered by composition;
 - `CertifiedExtension { identity }` → the matching extension registered with
   the attempt's `ContextAssembly`, using **that registration's own**
   `ContributorGeneration` and attestation.
@@ -1074,7 +1074,7 @@ never appear in the key.
 Where those facts land in the next primary step is a **semantic ownership**
 question, answered by the producer identity and nothing else:
 
-- `NativeRuntimeObservation` → the native-reserved
+- `Native { identity: RuntimeToolObservation }` → the native-reserved
   `UserContextLane::RuntimeToolObservation`, immediately after `ClaimedInbound`
   and before every request-time lane, committed with `UserSource::Runtime` and
   `InboundKind::Context(ContextKind::RuntimeToolObservation)`;
@@ -1971,7 +1971,7 @@ Event Journal    = execution facts
   fingerprint is the SHA-256 of the bounded structured presentation, and an
   identical fingerprint is suppressed while fewer than four later newly
   committed first requests of logical primary model steps follow the
-  reminder's store-assigned `todo_progress_sequence` origin; it is eligible
+  reminder's store-assigned `logical_step_sequence` origin; it is eligible
   again at exactly four, while changed state is eligible at the next
   opportunity. One successful `retry_number == 0` model-turn start advances
   that sequence once. Same-start context/status, RuntimeToolObservation,

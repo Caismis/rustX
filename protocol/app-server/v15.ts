@@ -1171,15 +1171,14 @@ export type ModelErrorKind =
  * containing the predecessor would.
  */
 export type TraceSystemPromptState = 'initial' | 'changed' | 'unchanged' | 'previous_unavailable';
-/**
- * The closed presentation family of one admitted model-visible context fact.
- *
- * This is a presentation vocabulary, not the internal `ContextKind` payload:
- * a complete `GoalSnapshot` or Agent Status generation metadata never enters
- * a pageable summary through it.
- */
-export type TraceContextKind =
-  'goal_status' | 'runtime_tool_observation' | 'extension_environment' | 'agent_status';
+export type NativeContextContributor =
+  | 'goal_status'
+  | 'workspace_instructions'
+  | 'skill_guidance'
+  | 'agent_status'
+  | 'core_system_identity'
+  | 'agent_profile'
+  | 'runtime_tool_observation';
 /**
  * The stable logical key of one certified extension.
  *
@@ -1188,6 +1187,19 @@ export type TraceContextKind =
  * the assembly generation records the attestation separately.
  */
 export type CertifiedExtensionIdentity = string;
+/**
+ * The closed presentation family of one admitted model-visible context fact.
+ *
+ * This is a presentation vocabulary, not the internal `ContextKind` payload:
+ * a complete `GoalSnapshot` or Agent Status generation metadata never enters
+ * a pageable summary through it.
+ */
+export type TraceContextKind =
+  | 'native_environment'
+  | 'goal_status'
+  | 'runtime_tool_observation'
+  | 'extension_environment'
+  | 'agent_status';
 /**
  * Provider/model-issued opaque correlation string, scoped to a request/publication.
  * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
@@ -1203,65 +1215,121 @@ export type ToolId = string;
 export type TraceToolOutcome =
   'success' | 'failed' | 'denied' | 'cancelled' | 'timed_out' | 'outcome_unknown';
 /**
- * The role of one reconstructed request item.
- */
-export type TraceMessageRole = ('user' | 'assistant' | 'tool') | 'request_only';
-/**
- * The closed projected content vocabulary.
+ * The rustX-owned logical identity of a context contributor.
  *
- * Each variant is a semantic the browser can render with the matching
- * presentation primitive: prose as Markdown, structure as a JSON reader,
- * source as code, artifacts through the existing durable carrier.
+ * The identity is independent from registration order, process-local object
+ * identity, and package/content generation.  The Context Assembly boundary
+ * derives trusted native provenance itself; contributors never provide it.
  */
-export type TraceContentBlock =
+export type ContextContributorIdentity =
   | {
-      text: TraceText;
-      type: 'text';
+      Native: NativeContextContributor;
     }
   | {
-      text: TraceText;
-      type: 'reasoning';
-    }
-  | {
-      text: TraceText;
-      type: 'refusal';
-    }
-  | {
-      value: TraceJson;
-      type: 'json';
-    }
-  | {
-      call_id: ToolCallId;
-      tool_id: ToolId;
-      name: string;
-      arguments: TraceJson;
-      type: 'tool_call';
-    }
-  | {
-      call_id: ToolCallId;
-      tool_id: ToolId;
-      outcome: TraceToolOutcome;
-      blocks: TraceContentBlock[];
-      truncated: boolean;
-      type: 'tool_result';
-    }
-  | {
-      artifact: TraceArtifact;
-      alt?: string | null;
-      type: 'image';
-    }
-  | {
-      artifact: TraceArtifact;
-      type: 'file';
-    }
-  | {
-      name: string;
-      type: 'upload';
+      CertifiedExtension: CertifiedExtensionIdentity;
     };
 /**
- * How far one Tool call progressed, by its own native evidence.
+ * The semantic family of one admitted model-visible context fact.
  */
-export type TraceToolLifecycle = 'proposed' | 'started' | 'settled';
+export type ContextKind =
+  | 'native_environment'
+  | {
+      goal_status: GoalSnapshot;
+    }
+  | 'runtime_tool_observation'
+  | 'extension_environment'
+  | {
+      agent_status: AgentStatusGenerationMetadata;
+    };
+/**
+ * The single durable Goal lifecycle authority.
+ *
+ * - `Active`: continuation is authorized when runtime admission is eligible.
+ * - `Paused` / `Blocked`: continuation is not authorized.
+ * - `Complete`: terminal.
+ */
+export type GoalPhase = 'active' | 'paused' | 'blocked' | 'complete';
+/**
+ * Trusted origin supplied by runtime, never by model arguments.
+ */
+export type GoalOrigin =
+  | {
+      message_id: MessageId;
+      attempt_id: AttemptId;
+      kind: 'human_attempt';
+    }
+  | {
+      kind: 'runtime_control';
+    };
+/**
+ * The stable identity of one code-owned Agent Status module.
+ *
+ * This identity belongs to the canonical message layer because an active
+ * Agent Status message must carry enough durable information for a later
+ * Surface scan to identify the modules it contains. It is intentionally a
+ * closed enum rather than extension metadata or a generic key/value field.
+ */
+export type AgentStatusModuleId = 'time' | 'background' | 'todo';
+export type TraceContributionPresentation = {
+  AgentStatus: AgentStatusView;
+};
+/**
+ * One structured Agent Status section of the external view.
+ */
+export type RuntimeClientStatusSection =
+  | {
+      /**
+       * The runtime clock value sampled at composition time.
+       */
+      current_time: string;
+      /**
+       * The Time status timezone, when configured.
+       */
+      timezone?: string | null;
+      type: 'temporal';
+    }
+  | {
+      /**
+       * The active background executions in allocation order.
+       */
+      executions: RuntimeClientBackgroundExecution[];
+      /**
+       * Active executions omitted by the module-local bound.
+       */
+      omitted_count: number;
+      type: 'background_executions';
+    }
+  | {
+      /**
+       * The first committed in-progress task, when any.
+       */
+      current?: RuntimeClientTodoStatusTask | null;
+      /**
+       * Remaining committed active tasks in creation order.
+       */
+      tasks?: RuntimeClientTodoStatusTask[];
+      /**
+       * Number of committed active tasks.
+       */
+      active_count: number;
+      /**
+       * Number of active tasks blocked by active dependencies.
+       */
+      blocked_count: number;
+      /**
+       * Number of committed completed tasks.
+       */
+      completed_count: number;
+      /**
+       * Number of committed deleted tasks.
+       */
+      deleted_count: number;
+      /**
+       * Number of active tasks omitted from the bounded view.
+       */
+      omitted_count: number;
+      type: 'todo';
+    };
 /**
  * A content block inside a tool result.
  */
@@ -1369,6 +1437,66 @@ export type ManagedOutputContinuation =
       type: 'unavailable';
     };
 /**
+ * The role of one reconstructed request item.
+ */
+export type TraceMessageRole = ('user' | 'assistant' | 'tool') | 'request_only';
+/**
+ * The closed projected content vocabulary.
+ *
+ * Each variant is a semantic the browser can render with the matching
+ * presentation primitive: prose as Markdown, structure as a JSON reader,
+ * source as code, artifacts through the existing durable carrier.
+ */
+export type TraceContentBlock =
+  | {
+      text: TraceText;
+      type: 'text';
+    }
+  | {
+      text: TraceText;
+      type: 'reasoning';
+    }
+  | {
+      text: TraceText;
+      type: 'refusal';
+    }
+  | {
+      value: TraceJson;
+      type: 'json';
+    }
+  | {
+      call_id: ToolCallId;
+      tool_id: ToolId;
+      name: string;
+      arguments: TraceJson;
+      type: 'tool_call';
+    }
+  | {
+      call_id: ToolCallId;
+      tool_id: ToolId;
+      outcome: TraceToolOutcome;
+      blocks: TraceContentBlock[];
+      truncated: boolean;
+      type: 'tool_result';
+    }
+  | {
+      artifact: TraceArtifact;
+      alt?: string | null;
+      type: 'image';
+    }
+  | {
+      artifact: TraceArtifact;
+      type: 'file';
+    }
+  | {
+      name: string;
+      type: 'upload';
+    };
+/**
+ * How far one Tool call progressed, by its own native evidence.
+ */
+export type TraceToolLifecycle = 'proposed' | 'started' | 'settled';
+/**
  * A content block inside a `UserMessageBlock`.
  */
 export type UserContentBlock =
@@ -1422,47 +1550,6 @@ export type UserContentBlock =
       description?: string | null;
       type: 'file';
     };
-/**
- * The semantic family of one admitted model-visible context fact.
- */
-export type ContextKind =
-  | {
-      goal_status: GoalSnapshot;
-    }
-  | 'runtime_tool_observation'
-  | 'extension_environment'
-  | {
-      agent_status: AgentStatusGenerationMetadata;
-    };
-/**
- * The single durable Goal lifecycle authority.
- *
- * - `Active`: continuation is authorized when runtime admission is eligible.
- * - `Paused` / `Blocked`: continuation is not authorized.
- * - `Complete`: terminal.
- */
-export type GoalPhase = 'active' | 'paused' | 'blocked' | 'complete';
-/**
- * Trusted origin supplied by runtime, never by model arguments.
- */
-export type GoalOrigin =
-  | {
-      message_id: MessageId;
-      attempt_id: AttemptId;
-      kind: 'human_attempt';
-    }
-  | {
-      kind: 'runtime_control';
-    };
-/**
- * The stable identity of one code-owned Agent Status module.
- *
- * This identity belongs to the canonical message layer because an active
- * Agent Status message must carry enough durable information for a later
- * Surface scan to identify the modules it contains. It is intentionally a
- * closed enum rather than extension metadata or a generic key/value field.
- */
-export type AgentStatusModuleId = 'time' | 'background' | 'todo';
 /**
  * A content block inside an `AssistantMessageBlock`.
  */
@@ -1859,63 +1946,6 @@ export type InFlightBlock =
        */
       arguments: string;
       type: 'tool_call';
-    };
-/**
- * One structured Agent Status section of the external view.
- */
-export type RuntimeClientStatusSection =
-  | {
-      /**
-       * The runtime clock value sampled at composition time.
-       */
-      current_time: string;
-      /**
-       * The Time status timezone, when configured.
-       */
-      timezone?: string | null;
-      type: 'temporal';
-    }
-  | {
-      /**
-       * The active background executions in allocation order.
-       */
-      executions: RuntimeClientBackgroundExecution[];
-      /**
-       * Active executions omitted by the module-local bound.
-       */
-      omitted_count: number;
-      type: 'background_executions';
-    }
-  | {
-      /**
-       * The first committed in-progress task, when any.
-       */
-      current?: RuntimeClientTodoStatusTask | null;
-      /**
-       * Remaining committed active tasks in creation order.
-       */
-      tasks?: RuntimeClientTodoStatusTask[];
-      /**
-       * Number of committed active tasks.
-       */
-      active_count: number;
-      /**
-       * Number of active tasks blocked by active dependencies.
-       */
-      blocked_count: number;
-      /**
-       * Number of committed completed tasks.
-       */
-      completed_count: number;
-      /**
-       * Number of committed deleted tasks.
-       */
-      deleted_count: number;
-      /**
-       * Number of active tasks omitted from the bounded view.
-       */
-      omitted_count: number;
-      type: 'todo';
     };
 export type ResourceFamily = 'agent' | 'workflow' | 'managed_python' | 'mcp' | 'skill';
 export type AgentIdentity =
@@ -4778,6 +4808,16 @@ export interface TraceSystemPromptPresentation {
  */
 export interface TraceContextPresentation {
   message_id: MessageId;
+  /**
+   * Exact producer from the committed accepted-contribution record.
+   */
+  producer:
+    | {
+        Native: NativeContextContributor;
+      }
+    | {
+        CertifiedExtension: CertifiedExtensionIdentity;
+      };
   context_kind: TraceContextKind;
   /**
    * The exact native producer, copied from the canonical message's own
@@ -4867,6 +4907,10 @@ export interface TraceDetail {
  * still shows what was actually sent.
  */
 export interface TraceRequestDetail {
+  /**
+   * Typed historical context, never the current domain projection.
+   */
+  contributions: TraceContributionMetadata[];
   request_id: RequestId2;
   attempt_id: AttemptId;
   step_id: TurnId;
@@ -4902,6 +4946,403 @@ export interface TraceRequestDetail {
   usage?: ModelUsage | null;
   failure?: TraceRequestFailure | null;
   generation?: TraceGeneration | null;
+}
+/**
+ * The exact producer and typed data accepted for one historical request.
+ */
+export interface TraceContributionMetadata {
+  message_id: MessageId;
+  producer: ContextContributorIdentity;
+  metadata: ContextKind;
+  presentation?: TraceContributionPresentation | null;
+}
+/**
+ * Authoritative bounded durable record.
+ */
+export interface GoalSnapshot {
+  reference: GoalRef;
+  objective: string;
+  phase: GoalPhase;
+  blocked_reason?: string | null;
+  autonomous_round_budget: number;
+  autonomous_rounds_consumed: number;
+  origin: GoalOrigin;
+  last_round_message_id?: MessageId | null;
+}
+/**
+ * The structured durable identity of one canonical Agent Status generation.
+ *
+ * The descriptor is attached to [`ContextKind::AgentStatus`] itself. Its
+ * timestamp is the single Agent Status clock sample used to produce the
+ * generation, and its typed module list is the source of truth for active
+ * Surface visibility. Renderer text is never consulted for either fact.
+ *
+ * The fields are private so every value, including one decoded from durable
+ * JSON, has non-empty, duplicate-free membership in deterministic semantic
+ * order.
+ *
+ * ```compile_fail
+ * use rustx::message::types::AgentStatusGenerationMetadata;
+ *
+ * fn mutate(metadata: &mut AgentStatusGenerationMetadata) {
+ *     metadata.modules = Vec::new();
+ * }
+ * ```
+ */
+export interface AgentStatusGenerationMetadata {
+  generated_at: string;
+  modules: AgentStatusModuleId[];
+}
+/**
+ * The structured Agent Status view of one composition.
+ *
+ * Derived from the exact composed status the model path consumed: the
+ * structured sections and the canonical rendered representation originate
+ * from the same composition, so a client never parses the rendered text
+ * to recover structure and never triggers a second composition.
+ *
+ * The view also carries the runtime facts that place the composition in
+ * conversation order: the eligible
+ * [`opportunities`](Self::opportunities), each with the durable identity it
+ * was established against. Placement is a runtime fact because only the
+ * runtime knows it, and it is frozen where it is determined rather than
+ * reconstructed downstream; how a client draws a status at that place is
+ * presentation and stays entirely outside this type.
+ */
+export interface AgentStatusView {
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  attempt_id: string;
+  /**
+   * The turn number of the request preparation.
+   */
+  turn: number;
+  /**
+   * Identifies a committed canonical message block.
+   */
+  status_message_id: string;
+  opportunities: AgentStatusOpportunityView;
+  /**
+   * The ordered structured sections.
+   */
+  sections: RuntimeClientStatusSection[];
+  /**
+   * The canonical rendered representation, derived from the same
+   * composition as the sections.
+   *
+   * It exists for diagnostics and for proving that a client and the model
+   * saw one composition. It is **not** a presentation source: a client
+   * renders [`sections`](Self::sections) and never parses this text back
+   * into structure.
+   */
+  rendered: string;
+}
+/**
+ * The delivery opportunities that made this generation eligible, each
+ * carrying its own placement fact.
+ *
+ * The Agent Status Context message is request-scoped model history: it
+ * carries no transcript cursor of its own and never becomes a transcript
+ * item, so placement has to be published or it cannot be known. Each
+ * opportunity publishes the identity it was established against —
+ * `FreshInbound` the exact inbound message, `PostToolBatch` the durable
+ * position of its settled tool batch — and both were frozen by the
+ * semantic owner at that establishment, not sampled when this
+ * observation was folded.
+ */
+export interface AgentStatusOpportunityView {
+  /**
+   * The `FreshInbound` opportunity that produced this status, when one is
+   * present. Future delivery opportunities can be added alongside it
+   * without making this member structurally mandatory.
+   */
+  fresh_inbound?: FreshInboundOpportunityView | null;
+  /**
+   * The complete settled tool batch that made this existing primary step
+   * eligible, when present.
+   */
+  post_tool_batch?: PostToolBatchOpportunityView | null;
+}
+/**
+ * The external view of one `FreshInbound` status opportunity.
+ */
+export interface FreshInboundOpportunityView {
+  /**
+   * Identifies a committed canonical message block.
+   */
+  target_message_id: string;
+}
+/**
+ * The external view of one `PostToolBatch` status opportunity.
+ *
+ * The opportunity itself remains a marker with no durable or scheduling
+ * metadata. What it carries here is the one ordering fact that places a
+ * composition made from it: the durable transcript position of the canonical
+ * `ToolResult` batch that established it, frozen by the Agent Loop at that
+ * batch's commit.
+ *
+ * The freeze point matters and is the whole reason this is a published fact
+ * rather than something a client or the projection reconstructs. A status is
+ * composed at the primary-step preparation that consumes this opportunity,
+ * but it is not observed until the durable model-turn-start commit lands,
+ * and inbound acceptance is an independent durable boundary that may commit
+ * in between. Anything that read "the newest durable position" at fold time
+ * would place the status after an unrelated inbound turn.
+ */
+export interface PostToolBatchOpportunityView {
+  /**
+   * The durable position of the settled `ToolResult` batch this
+   * opportunity belongs to.
+   *
+   * `None` only when that batch committed no visible transcript item, in
+   * which case the composition carries no transcript-position placement
+   * and a client draws no annotation for it.
+   */
+  transcript_anchor?: RuntimeClientTranscriptCursor | null;
+}
+/**
+ * The external background execution read model.
+ *
+ * Projected from the authoritative [`ConversationBackgroundRegistry`]
+ * ([`crate::tools::background::ConversationBackgroundRegistry`]); the
+ * container shape belongs to the Runtime Client protocol while the
+ * lifecycle, progress, and result leaf types are stable runtime-owned
+ * value contracts. No internal task handles or process ids ever appear.
+ */
+export interface RuntimeClientBackgroundExecution {
+  /**
+   * The detached runtime execution identity.
+   */
+  execution_id: string;
+  /**
+   * Identifies a tool definition in the capability set.
+   */
+  tool_id: string;
+  /**
+   * The model-facing tool name.
+   */
+  tool_name: string;
+  /**
+   * The authoritative lifecycle state.
+   */
+  state:
+    | 'starting'
+    | 'running'
+    | 'cancelling'
+    | 'publishing_terminal'
+    | 'succeeded'
+    | 'failed'
+    | 'denied'
+    | 'cancelled'
+    | 'timed_out'
+    | 'outcome_unknown';
+  /**
+   * The latest bounded progress, when any was reported.
+   */
+  progress?: ToolProgress | null;
+  /**
+   * The bounded terminal result, when terminal.
+   */
+  result?: ToolExecutionResult | null;
+}
+/**
+ * A bounded structured progress notification of one tool execution.
+ *
+ * Progress is an execution fact, never canonical message history. All
+ * fields are optional; an empty `ToolProgress` is a bare tick. The progress
+ * message text is bounded by [`MAX_PROGRESS_MESSAGE_BYTES`].
+ *
+ * [`MAX_PROGRESS_MESSAGE_BYTES`]: crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES
+ */
+export interface ToolProgress {
+  /**
+   * A short human-readable progress message, when there is one.
+   */
+  message?: string | null;
+  /**
+   * Completed units, when a total is known.
+   */
+  completed?: number | null;
+  /**
+   * Total units, when known.
+   */
+  total?: number | null;
+}
+/**
+ * The normalized outcome of one tool execution.
+ *
+ * `ToolMessageBlock` composes this type instead of duplicating its fields,
+ * keeping one source of truth for tool results.
+ */
+export interface ToolExecutionResult {
+  /**
+   * Immutable native Workflow identity on the existing outer result.
+   * Historical identity only: no execution state or continuation authority.
+   * Its retention is exactly that of this result, never a separate registry.
+   */
+  workflow?: WorkflowToolIdentity | null;
+  /**
+   * Typed execution status, including unknown external outcomes.
+   */
+  status:
+    | {
+        type: 'success';
+      }
+    | {
+        /**
+         * Human-readable error message.
+         */
+        error: string;
+        type: 'failed';
+      }
+    | {
+        /**
+         * The policy or human-readable approval reason.
+         */
+        reason: string;
+        type: 'denied';
+      }
+    | {
+        /**
+         * Why the execution was cancelled.
+         */
+        reason:
+          | 'user_requested'
+          | 'runtime_shutdown'
+          | 'parent_cancelled'
+          | 'subagent_execution_deadline_exceeded';
+        /**
+         * Whether cancellation won before executor start or while execution
+         * was already in flight.
+         */
+        phase: 'before_start' | 'during_execution';
+        type: 'cancelled';
+      }
+    | {
+        type: 'timed_out';
+      }
+    | {
+        /**
+         * A producer-owned diagnostic describing why certainty is
+         * unavailable. It is rendered into the bounded model-facing
+         * projection and is never parsed to decide semantics; the typed
+         * variant itself is the certainty claim.
+         */
+        detail: string;
+        type: 'outcome_unknown';
+      };
+  /**
+   * Tool-owned result content.
+   *
+   * This content is TOOL-OWNED: [`ToolResultContent::Json`] is arbitrary
+   * tool-owned structured data, and the runtime never infers semantics
+   * from its property names. rustX reserves no ordinary JSON field names;
+   * runtime-owned facts live in the typed fields of this struct. A
+   * provider-independent, bounded model-facing representation is produced
+   * by [`Self::model_facing_projection`]; producers do not append runtime
+   * status or managed-output continuation text here.
+   */
+  content?: ToolResultContent[];
+  /**
+   * Execution duration in integer milliseconds (stable for persistence).
+   */
+  duration_ms: number;
+  /**
+   * Process exit code where the tool executed a process.
+   */
+  exit_code?: number | null;
+  /**
+   * Durable artifact/file references produced by the execution.
+   */
+  artifacts?: FileReference[];
+  /**
+   * Truncation metadata where output was truncated.
+   */
+  truncation?: TruncationState | null;
+  /**
+   * Runtime-owned managed textual-output continuation metadata: where
+   * the complete — or honestly partial — textual output of this result
+   * lives in the conversation's managed tool-output store (Issue #86).
+   * Absent for results whose output fits the model-facing content.
+   *
+   * This is the one typed source of truth for complete-vs-partial
+   * managed output; producers never encode these facts as magic
+   * properties of tool-owned JSON, and generic runtime publication code
+   * consumes only this typed field, never arbitrary JSON keys.
+   */
+  managed_output?: ManagedOutputContinuation | null;
+}
+/**
+ * Runtime-owned identity, independent of model `ToolCall` text.
+ * Retained with the canonical outer result, not with an execution owner.
+ */
+export interface WorkflowToolIdentity {
+  workflow_id: WorkflowId;
+  program_digest: string;
+}
+/**
+ * A reference to a Tool-generated managed file artifact; never a user upload.
+ */
+export interface FileReference {
+  /**
+   * Identifies a durable artifact produced or referenced by the runtime.
+   *
+   * An artifact is identified by an opaque runtime-owned id, never by a
+   * local filesystem path: paths are executor concerns and are not a
+   * universal durable artifact identity.
+   */
+  artifact_id: string;
+  /**
+   * Optional display name.
+   */
+  name?: string | null;
+  /**
+   * Optional MIME type.
+   */
+  mime_type?: string | null;
+  /**
+   * Optional human-readable description.
+   */
+  description?: string | null;
+}
+/**
+ * Truncation metadata for tool output.
+ */
+export interface TruncationState {
+  /**
+   * Whether the result content was truncated.
+   */
+  truncated: boolean;
+  /**
+   * Size of the untruncated output in bytes, when known.
+   */
+  original_bytes?: number | null;
+}
+/**
+ * One bounded Todo task in the Agent Status client view.
+ */
+export interface RuntimeClientTodoStatusTask {
+  /**
+   * The conversation-owned task id.
+   */
+  id: string;
+  /**
+   * The bounded task subject.
+   */
+  subject: string;
+  /**
+   * The bounded in-progress label, when present.
+   */
+  active_form?: string | null;
+  /**
+   * The committed lifecycle status.
+   */
+  status: 'pending' | 'in_progress' | 'completed' | 'deleted';
+  /**
+   * Whether an active dependency still blocks this task.
+   */
+  blocked: boolean;
 }
 /**
  * One allowlisted provider-neutral request option.
@@ -5402,37 +5843,17 @@ export interface ForegroundToolExecution {
          * The assembled JSON arguments.
          */
         arguments: string;
-        result: ToolExecutionResult;
+        result: ToolExecutionResult1;
         type: 'settled';
       };
 }
 /**
- * A bounded structured progress notification of one tool execution.
+ * The normalized outcome of one tool execution.
  *
- * Progress is an execution fact, never canonical message history. All
- * fields are optional; an empty `ToolProgress` is a bare tick. The progress
- * message text is bounded by [`MAX_PROGRESS_MESSAGE_BYTES`].
- *
- * [`MAX_PROGRESS_MESSAGE_BYTES`]: crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES
+ * `ToolMessageBlock` composes this type instead of duplicating its fields,
+ * keeping one source of truth for tool results.
  */
-export interface ToolProgress {
-  /**
-   * A short human-readable progress message, when there is one.
-   */
-  message?: string | null;
-  /**
-   * Completed units, when a total is known.
-   */
-  completed?: number | null;
-  /**
-   * Total units, when known.
-   */
-  total?: number | null;
-}
-/**
- * The normalized execution result.
- */
-export interface ToolExecutionResult {
+export interface ToolExecutionResult1 {
   /**
    * Immutable native Workflow identity on the existing outer result.
    * Historical identity only: no execution state or continuation authority.
@@ -5529,52 +5950,6 @@ export interface ToolExecutionResult {
    * consumes only this typed field, never arbitrary JSON keys.
    */
   managed_output?: ManagedOutputContinuation | null;
-}
-/**
- * Runtime-owned identity, independent of model `ToolCall` text.
- * Retained with the canonical outer result, not with an execution owner.
- */
-export interface WorkflowToolIdentity {
-  workflow_id: WorkflowId;
-  program_digest: string;
-}
-/**
- * A reference to a Tool-generated managed file artifact; never a user upload.
- */
-export interface FileReference {
-  /**
-   * Identifies a durable artifact produced or referenced by the runtime.
-   *
-   * An artifact is identified by an opaque runtime-owned id, never by a
-   * local filesystem path: paths are executor concerns and are not a
-   * universal durable artifact identity.
-   */
-  artifact_id: string;
-  /**
-   * Optional display name.
-   */
-  name?: string | null;
-  /**
-   * Optional MIME type.
-   */
-  mime_type?: string | null;
-  /**
-   * Optional human-readable description.
-   */
-  description?: string | null;
-}
-/**
- * Truncation metadata for tool output.
- */
-export interface TruncationState {
-  /**
-   * Whether the result content was truncated.
-   */
-  truncated: boolean;
-  /**
-   * Size of the untruncated output in bytes, when known.
-   */
-  original_bytes?: number | null;
 }
 /**
  * Inbound information supplied to the current agent.
@@ -5685,43 +6060,6 @@ export interface CompactionSummaryMetadata {
   modified_files?: string[];
 }
 /**
- * Authoritative bounded durable record.
- */
-export interface GoalSnapshot {
-  reference: GoalRef;
-  objective: string;
-  phase: GoalPhase;
-  blocked_reason?: string | null;
-  autonomous_round_budget: number;
-  autonomous_rounds_consumed: number;
-  origin: GoalOrigin;
-  last_round_message_id?: MessageId | null;
-}
-/**
- * The structured durable identity of one canonical Agent Status generation.
- *
- * The descriptor is attached to [`ContextKind::AgentStatus`] itself. Its
- * timestamp is the single Agent Status clock sample used to produce the
- * generation, and its typed module list is the source of truth for active
- * Surface visibility. Renderer text is never consulted for either fact.
- *
- * The fields are private so every value, including one decoded from durable
- * JSON, has non-empty, duplicate-free membership in deterministic semantic
- * order.
- *
- * ```compile_fail
- * use rustx::message::types::AgentStatusGenerationMetadata;
- *
- * fn mutate(metadata: &mut AgentStatusGenerationMetadata) {
- *     metadata.modules = Vec::new();
- * }
- * ```
- */
-export interface AgentStatusGenerationMetadata {
-  generated_at: string;
-  modules: AgentStatusModuleId[];
-}
-/**
  * One completed model generation produced by the current agent.
  *
  * One generation becomes one immutable `AssistantMessageBlock` containing
@@ -5828,7 +6166,7 @@ export interface ToolMessageBlock {
    * Identifies a tool definition in the capability set.
    */
   tool_id: string;
-  result: ToolExecutionResult1;
+  result: ToolExecutionResult2;
 }
 /**
  * Exact native canonical owner of this result.
@@ -5844,9 +6182,12 @@ export interface ToolCallOccurrenceRef {
   block_index: number;
 }
 /**
- * The normalized execution result.
+ * The normalized outcome of one tool execution.
+ *
+ * `ToolMessageBlock` composes this type instead of duplicating its fields,
+ * keeping one source of truth for tool results.
  */
-export interface ToolExecutionResult1 {
+export interface ToolExecutionResult2 {
   /**
    * Immutable native Workflow identity on the existing outer result.
    * Historical identity only: no execution state or continuation authority.
@@ -6173,155 +6514,6 @@ export interface QuestionnaireSubmission1 {
  */
 export interface GoalView {
   current?: GoalSnapshot | null;
-}
-/**
- * The external background execution read model.
- *
- * Projected from the authoritative [`ConversationBackgroundRegistry`]
- * ([`crate::tools::background::ConversationBackgroundRegistry`]); the
- * container shape belongs to the Runtime Client protocol while the
- * lifecycle, progress, and result leaf types are stable runtime-owned
- * value contracts. No internal task handles or process ids ever appear.
- */
-export interface RuntimeClientBackgroundExecution {
-  /**
-   * The detached runtime execution identity.
-   */
-  execution_id: string;
-  /**
-   * Identifies a tool definition in the capability set.
-   */
-  tool_id: string;
-  /**
-   * The model-facing tool name.
-   */
-  tool_name: string;
-  /**
-   * The authoritative lifecycle state.
-   */
-  state:
-    | 'starting'
-    | 'running'
-    | 'cancelling'
-    | 'publishing_terminal'
-    | 'succeeded'
-    | 'failed'
-    | 'denied'
-    | 'cancelled'
-    | 'timed_out'
-    | 'outcome_unknown';
-  /**
-   * The latest bounded progress, when any was reported.
-   */
-  progress?: ToolProgress | null;
-  /**
-   * The bounded terminal result, when terminal.
-   */
-  result?: ToolExecutionResult2 | null;
-}
-/**
- * The normalized outcome of one tool execution.
- *
- * `ToolMessageBlock` composes this type instead of duplicating its fields,
- * keeping one source of truth for tool results.
- */
-export interface ToolExecutionResult2 {
-  /**
-   * Immutable native Workflow identity on the existing outer result.
-   * Historical identity only: no execution state or continuation authority.
-   * Its retention is exactly that of this result, never a separate registry.
-   */
-  workflow?: WorkflowToolIdentity | null;
-  /**
-   * Typed execution status, including unknown external outcomes.
-   */
-  status:
-    | {
-        type: 'success';
-      }
-    | {
-        /**
-         * Human-readable error message.
-         */
-        error: string;
-        type: 'failed';
-      }
-    | {
-        /**
-         * The policy or human-readable approval reason.
-         */
-        reason: string;
-        type: 'denied';
-      }
-    | {
-        /**
-         * Why the execution was cancelled.
-         */
-        reason:
-          | 'user_requested'
-          | 'runtime_shutdown'
-          | 'parent_cancelled'
-          | 'subagent_execution_deadline_exceeded';
-        /**
-         * Whether cancellation won before executor start or while execution
-         * was already in flight.
-         */
-        phase: 'before_start' | 'during_execution';
-        type: 'cancelled';
-      }
-    | {
-        type: 'timed_out';
-      }
-    | {
-        /**
-         * A producer-owned diagnostic describing why certainty is
-         * unavailable. It is rendered into the bounded model-facing
-         * projection and is never parsed to decide semantics; the typed
-         * variant itself is the certainty claim.
-         */
-        detail: string;
-        type: 'outcome_unknown';
-      };
-  /**
-   * Tool-owned result content.
-   *
-   * This content is TOOL-OWNED: [`ToolResultContent::Json`] is arbitrary
-   * tool-owned structured data, and the runtime never infers semantics
-   * from its property names. rustX reserves no ordinary JSON field names;
-   * runtime-owned facts live in the typed fields of this struct. A
-   * provider-independent, bounded model-facing representation is produced
-   * by [`Self::model_facing_projection`]; producers do not append runtime
-   * status or managed-output continuation text here.
-   */
-  content?: ToolResultContent[];
-  /**
-   * Execution duration in integer milliseconds (stable for persistence).
-   */
-  duration_ms: number;
-  /**
-   * Process exit code where the tool executed a process.
-   */
-  exit_code?: number | null;
-  /**
-   * Durable artifact/file references produced by the execution.
-   */
-  artifacts?: FileReference[];
-  /**
-   * Truncation metadata where output was truncated.
-   */
-  truncation?: TruncationState | null;
-  /**
-   * Runtime-owned managed textual-output continuation metadata: where
-   * the complete — or honestly partial — textual output of this result
-   * lives in the conversation's managed tool-output store (Issue #86).
-   * Absent for results whose output fits the model-facing content.
-   *
-   * This is the one typed source of truth for complete-vs-partial
-   * managed output; producers never encode these facts as magic
-   * properties of tool-owned JSON, and generic runtime publication code
-   * consumes only this typed field, never arbitrary JSON keys.
-   */
-  managed_output?: ManagedOutputContinuation | null;
 }
 /**
  * The Runtime Client view of one subagent child (Issue #60).
@@ -7997,139 +8189,6 @@ export interface QuestionnaireSpecification1 {
   questions: QuestionSpecification[];
 }
 /**
- * The structured Agent Status view of one composition.
- *
- * Derived from the exact composed status the model path consumed: the
- * structured sections and the canonical rendered representation originate
- * from the same composition, so a client never parses the rendered text
- * to recover structure and never triggers a second composition.
- *
- * The view also carries the runtime facts that place the composition in
- * conversation order: the eligible
- * [`opportunities`](Self::opportunities), each with the durable identity it
- * was established against. Placement is a runtime fact because only the
- * runtime knows it, and it is frozen where it is determined rather than
- * reconstructed downstream; how a client draws a status at that place is
- * presentation and stays entirely outside this type.
- */
-export interface AgentStatusView {
-  /**
-   * Identifies one attempt to execute an agent manifest.
-   */
-  attempt_id: string;
-  /**
-   * The turn number of the request preparation.
-   */
-  turn: number;
-  /**
-   * Identifies a committed canonical message block.
-   */
-  status_message_id: string;
-  opportunities: AgentStatusOpportunityView;
-  /**
-   * The ordered structured sections.
-   */
-  sections: RuntimeClientStatusSection[];
-  /**
-   * The canonical rendered representation, derived from the same
-   * composition as the sections.
-   *
-   * It exists for diagnostics and for proving that a client and the model
-   * saw one composition. It is **not** a presentation source: a client
-   * renders [`sections`](Self::sections) and never parses this text back
-   * into structure.
-   */
-  rendered: string;
-}
-/**
- * The delivery opportunities that made this generation eligible, each
- * carrying its own placement fact.
- *
- * The Agent Status Context message is request-scoped model history: it
- * carries no transcript cursor of its own and never becomes a transcript
- * item, so placement has to be published or it cannot be known. Each
- * opportunity publishes the identity it was established against —
- * `FreshInbound` the exact inbound message, `PostToolBatch` the durable
- * position of its settled tool batch — and both were frozen by the
- * semantic owner at that establishment, not sampled when this
- * observation was folded.
- */
-export interface AgentStatusOpportunityView {
-  /**
-   * The `FreshInbound` opportunity that produced this status, when one is
-   * present. Future delivery opportunities can be added alongside it
-   * without making this member structurally mandatory.
-   */
-  fresh_inbound?: FreshInboundStatusOpportunityView | null;
-  /**
-   * The complete settled tool batch that made this existing primary step
-   * eligible, when present.
-   */
-  post_tool_batch?: PostToolBatchStatusOpportunityView | null;
-}
-/**
- * The external view of one `FreshInbound` status opportunity.
- */
-export interface FreshInboundStatusOpportunityView {
-  /**
-   * Identifies a committed canonical message block.
-   */
-  target_message_id: string;
-}
-/**
- * The external view of one `PostToolBatch` status opportunity.
- *
- * The opportunity itself remains a marker with no durable or scheduling
- * metadata. What it carries here is the one ordering fact that places a
- * composition made from it: the durable transcript position of the canonical
- * `ToolResult` batch that established it, frozen by the Agent Loop at that
- * batch's commit.
- *
- * The freeze point matters and is the whole reason this is a published fact
- * rather than something a client or the projection reconstructs. A status is
- * composed at the primary-step preparation that consumes this opportunity,
- * but it is not observed until the durable model-turn-start commit lands,
- * and inbound acceptance is an independent durable boundary that may commit
- * in between. Anything that read "the newest durable position" at fold time
- * would place the status after an unrelated inbound turn.
- */
-export interface PostToolBatchStatusOpportunityView {
-  /**
-   * The durable position of the settled `ToolResult` batch this
-   * opportunity belongs to.
-   *
-   * `None` only when that batch committed no visible transcript item, in
-   * which case the composition carries no transcript-position placement
-   * and a client draws no annotation for it.
-   */
-  transcript_anchor?: RuntimeClientTranscriptCursor | null;
-}
-/**
- * One bounded Todo task in the Agent Status client view.
- */
-export interface RuntimeClientTodoStatusTask {
-  /**
-   * The conversation-owned task id.
-   */
-  id: string;
-  /**
-   * The bounded task subject.
-   */
-  subject: string;
-  /**
-   * The bounded in-progress label, when present.
-   */
-  active_form?: string | null;
-  /**
-   * The committed lifecycle status.
-   */
-  status: 'pending' | 'in_progress' | 'completed' | 'deleted';
-  /**
-   * Whether an active dependency still blocks this task.
-   */
-  blocked: boolean;
-}
-/**
  * The context diagnostics carried by the Runtime Client snapshot.
  */
 export interface RuntimeClientContextView1 {
@@ -9389,7 +9448,7 @@ export interface RuntimeClientBackgroundExecution1 {
   /**
    * The bounded terminal result, when terminal.
    */
-  result?: ToolExecutionResult2 | null;
+  result?: ToolExecutionResult | null;
 }
 /**
  * The Runtime Client view of one subagent child (Issue #60).

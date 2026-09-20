@@ -870,7 +870,7 @@ fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::TurnStarted
         | RuntimeEvent::TurnCompleted
         | RuntimeEvent::ModelRequestStarted { .. }
-        | RuntimeEvent::AgentStatusEmitted { .. }
+        | RuntimeEvent::ContextContributionEmitted { .. }
         | RuntimeEvent::ModelRequestCompleted { .. }
         | RuntimeEvent::ModelRequestFailed { .. }
         | RuntimeEvent::ModelRetryScheduled { .. }
