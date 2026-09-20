@@ -245,7 +245,7 @@ The physical tables are deliberately semantic rather than generic:
 | `context_checkpoints` | Current structural/index checkpoint matching `surface_head`; it is not message history. |
 | `request_snapshots` | One immutable non-history snapshot per `RequestId`, its frozen provisional Assistant identity, Surface revision, committed start sequence, and optional request-only carryover source/representation/anchor. |
 | `events` | Append-only typed envelopes keyed by per-conversation Event Journal sequence and unique `EventId`. |
-| `contribution_emission_heads` | One materialized latest-emission record per `(AgentStatusModuleId, semantic key)`, including the store-assigned Todo cooldown origin, maintained only by the combined model-turn-start transaction. |
+| `contribution_emission_heads` | One materialized latest-emission record per `(producer identity, semantic key)`, including the store-assigned logical-step origin, maintained only by the combined model-turn-start transaction. |
 | `lifecycle_state` | Durable terminal markers enforcing zero-or-one terminal event and terminal absorption for attempt, turn, and background-execution lifecycles. |
 | `publication_streams` | One frozen publication generation per provider request, with terminal marker and one of the three settlements. |
 | `publication_frames` | Contiguous transient release staging for one publication stream. |
@@ -2001,11 +2001,10 @@ Key contracts:
 - Agent Status is an optional delivery opportunity, not an automatic emission
   rule. One logical primary step owns one finite
   `ContributionOpportunities`; its independent FreshInbound and PostToolBatch
-  members may coexist. At preparation, execution freezes one finite Pre-Status
-  Surface from active identities plus keyed Message Ledger hydration, samples
-  the clock once, and captures one immutable authoritative Background and
-  committed Todo snapshot. The closed engine evaluates each interested module
-  once against that set, then admits any contributing sections as one
+  members may coexist. Runtime preparation freezes finite execution facts and
+  a pre-contribution Surface. The registered Status contributor captures its
+  clock and read-only Background/Todo projections. Its section contract
+  evaluates each interested section once against that set, then admits any contributing sections as one
   canonical `UserSource::Runtime` context message with
   `InboundKind::Context(ContextKind::AgentStatus(metadata))`. The metadata is
   the durable typed membership/timestamp descriptor tied to that canonical
@@ -2020,8 +2019,8 @@ Key contracts:
 - Todo status reads only the bounded presentation `ConversationTodoList`
   derives from its own `committed()` snapshot, and only when the Todo
   extension is composed at all. The derivation happens at the runtime capture
-  boundary — `ConversationToolRuntime::todo_status_presentation`, beside the
-  owner — so the strongest Todo value the Agent Status engine can receive is
+  boundary through the composition-bound read closure calling
+  `ConversationTodoList::committed().status_presentation()` — so the strongest Todo value the Agent Status engine can receive is
   `Option<TodoStatusPresentation>`: a finite immutable value carrying its own
   Todo-owned fingerprint. Production `context/status.rs` names no
   `ConversationTodoList`, `TodoSnapshot`, or `TodoWriter` at all, so Agent

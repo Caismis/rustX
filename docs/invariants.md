@@ -6201,10 +6201,10 @@ semantic normalization boundary. The frozen invariants:
   terminal settlement: the Agent Loop remains the settlement authority,
   and the coordinator holds the exact cancellation trigger the attempt
   task runs against.
-- **One frozen Agent Status input per primary step.** The context preparation
-  boundary creates exactly one finite immutable Pre-Status Surface view, one
-  clock instant, one authoritative active-Background snapshot, and one
-  committed Todo snapshot for one `ContributionOpportunities`. Its independent
+- **One accepted contribution freeze per primary step.** Generic preparation
+  supplies a finite Surface and `ContributionOpportunities`. Registered producers
+  capture their own read-only domain inputs. Agent Status captures one clock,
+  Background projection, and committed Todo presentation within that lifecycle. Its independent
   FreshInbound and PostToolBatch members may coexist. The closed Agent Status
   engine traverses its code-owned `Time -> Background -> Todo` modules once:
   each interested module captures at most one module snapshot and evaluates it

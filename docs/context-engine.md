@@ -409,7 +409,7 @@ struct RequestSnapshot {
     unresolved_output_carryover_source: Option<PublicationStreamId>,
     unresolved_output_carryover: Option<RenderedUnresolvedOutputCarryover>,
     unresolved_output_carryover_anchor: Option<RequestOnlyInsertionAnchor>,
-    agent_status: Option<AgentStatusStart>,
+    contributions: Vec<ContributionStart>,
 }
 ~~~
 

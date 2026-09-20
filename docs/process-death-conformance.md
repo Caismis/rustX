@@ -139,7 +139,7 @@ The converse boundary is the combined model-turn-start commit: the canonical
 Agent Status User message, its canonical-message-bound emission fact(s), and
 the bounded latest-emission head(s) commit with the Request Snapshot and
 `ModelRequestStarted`. Reopen therefore preserves suppression through one
-bounded `(module, key)` lookup even when compaction has retired the status
+bounded `(producer, key)` lookup even when compaction has retired the status
 message from the active Surface. Todo suppresses an identical bounded
 fingerprint while fewer than four later newly committed first requests of
 logical primary model steps have followed its store-assigned durable origin,
