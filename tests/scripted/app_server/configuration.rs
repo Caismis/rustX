@@ -970,9 +970,11 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
     let (source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
     let mut document: toml::Value =
         toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
+    let project_file = fixture.workspaces[0].join("root-context.md");
+    std::fs::write(&project_file, "Workspace I2 project input").unwrap();
     std::fs::write(
         fixture.workspaces[0].join("rustx.toml"),
-        "approval_mode='full_access'\n[subagents]\nmax_concurrent=3\n[agent]\ninstructions='independent instructions P2'\n",
+        "approval_mode='full_access'\n[subagents]\nmax_concurrent=3\n[agent]\ninstructions='independent instructions P2'\n[agent.agents_md]\nfiles=['root-context.md']\n",
     )
     .unwrap();
     document["agent"]["tools"]["builtin"] = toml::Value::try_from(vec!["read"]).unwrap();
@@ -1063,6 +1065,29 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
             .clone()
     };
     let c1i2 = retained(&second);
+    assert_eq!(
+        c1i2.config.agent.agents_md.files,
+        vec![project_file.clone()]
+    );
+    assert_eq!(
+        c1i2.root_agent_project_files,
+        after.root_profile().unwrap().project_instructions.files
+    );
+    assert!(matches!(
+        c1i2.provenance["agent.agents_md"],
+        crate::local_runtime::configuration::Origin::Workspace { .. }
+    ));
+    // The composed descriptor must retain the I2 Workspace path boundary,
+    // rather than the empty validation-path set from C1+I1.
+    let outside = fixture.workspaces[1].join("outside-context.md");
+    std::fs::write(&outside, "outside workspace").unwrap();
+    std::fs::remove_file(&project_file).unwrap();
+    std::os::unix::fs::symlink(&outside, &project_file).unwrap();
+    assert!(c1i2.validate_resource_authority().is_err());
+    std::fs::remove_file(&project_file).unwrap();
+    std::fs::write(&project_file, "Workspace I2 project input").unwrap();
+    c1i2.validate_resource_authority().unwrap();
+
     assert_eq!(
         c1i2.config.approval_mode,
         crate::runtime::ApprovalMode::FullAccess

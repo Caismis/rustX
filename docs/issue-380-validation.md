@@ -53,7 +53,9 @@ Commands were executed in this worktree on Linux. Directories are relative to it
   natural-load preparation.
 - T03/T05: mixed C1+I2 carries Workspace Instructions provenance in source and runtime,
   retains C1 capability identity and the earlier diagnostic source manifest, and
-  registers unresolved C2 work. Retry makes C2+I2 available without rewriting S2.
+  registers unresolved C2 work. An escaping symlink replacing the new Workspace
+  project input is rejected by the composed descriptor’s physical-authority check.
+  Retry makes C2+I2 available without rewriting S2.
 
 - T09/T15: the preparation-window regression from the earlier registration repair
   remains intact and passes: S2 initially adopts N, naturally loads N after N+1 is Ready,

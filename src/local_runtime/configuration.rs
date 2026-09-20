@@ -545,6 +545,10 @@ impl ProspectiveSessionConfig {
             .clone_from(&adopted.project_context_files);
         self.root_agent_project_files
             .clone_from(&adopted.root_agent_project_files);
+        // These paths are exclusively the Workspace-authored agents_md inputs
+        // retained for physical-authority validation after path rebasing.
+        self.project_resources
+            .clone_from(&adopted.project_resources);
         let context = self.effective.agent.get_or_insert_with(Default::default);
         context.instructions = adopted
             .effective
