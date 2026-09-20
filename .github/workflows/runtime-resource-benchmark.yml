@@ -1,0 +1,71 @@
+name: Runtime Resource Benchmark
+
+on:
+  push:
+    branches:
+      - bench/runtime-resource-20260920
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: rustX vs OpenCode resource benchmark
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout benchmark branch
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build rustX release binary
+        run: cargo build --release --bin rustx
+
+      - name: Download fixed OpenCode release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/opencode
+          curl -fL --retry 3 \
+            https://github.com/anomalyco/opencode/releases/download/v1.18.31/opencode-linux-x64.tar.gz \
+            -o /tmp/opencode.tar.gz
+          echo "e9312be75ed803b7415fc2aeabda1f4fe938912a39673762dc0c38c0e11ebde4  /tmp/opencode.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/opencode.tar.gz -C /tmp/opencode
+          test -x /tmp/opencode/opencode
+
+      - name: Print benchmark system information
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo BENCH_SYSTEM_BEGIN
+          echo "runner_image=ubuntu-24.04"
+          echo "rustx_commit=$(git rev-parse HEAD)"
+          echo "opencode_version=$(/tmp/opencode/opencode --version)"
+          echo "rustc=$(rustc --version)"
+          echo "cargo=$(cargo --version)"
+          uname -a
+          cat /etc/os-release
+          lscpu
+          free -h
+          echo "clk_tck=$(getconf CLK_TCK)"
+          echo BENCH_SYSTEM_END
+
+      - name: Run resource benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/bench/runtime_resource_benchmark.py \
+            --rustx "$PWD/target/release/rustx" \
+            --opencode /tmp/opencode/opencode \
+            | tee /tmp/runtime-resource-benchmark.log
+
+      - name: Upload benchmark log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-resource-benchmark
+          path: /tmp/runtime-resource-benchmark.log
+          if-no-files-found: warn
