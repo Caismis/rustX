@@ -4194,19 +4194,21 @@ impl ConversationRuntime {
         self.submit_sourced_inbound(UserSource::Human, content)
     }
 
-    /// Prepare a complete captured binding without holding execution admission.
+    /// Prepare a source binding for its explicit selection without holding
+    /// execution admission. Availability uses the captured default; rebinding
+    /// to an existing Session is a separate preparation step.
     pub(crate) async fn prepare_configuration(
         &self,
         capture: crate::local_runtime::configuration::ProspectiveSessionConfig,
+        selection: crate::model::session::SessionModelConfig,
         cancellation: &crate::runtime::cancellation::CancellationSignal,
     ) -> Result<crate::local_runtime::configuration::application::PreparedConfiguration, String>
     {
-        let (baseline, old, selection, old_model) = {
+        let (baseline, old, old_model) = {
             let state = self.inner.lock_state();
             (
                 state.binding_revision,
                 state.resources.clone(),
-                state.model.config().clone(),
                 state.model.clone(),
             )
         };
@@ -4269,7 +4271,7 @@ impl ConversationRuntime {
         capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
         models: crate::model::invocation::ModelBindingRegistry,
     ) -> Result<(), String> {
-        let model = SessionModelState::new(models.clone(), candidate.model.config().clone())
+        let model = SessionModelState::new(models.clone(), capture.session_model().clone())
             .map_err(|error| error.to_string())?;
         validate_context_policy(&capture.config.context_policy(), &model.snapshot())
             .map_err(|error| error.message)?;

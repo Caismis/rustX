@@ -24,9 +24,9 @@ Commands were executed in this worktree on Linux. Directories are relative to it
 | root | `git diff --check` | PASS |
 | root | `cargo build --bins` | PASS |
 | root | `cargo test --lib --all-features resubscription_is_superseded_before_local_handle_publication` | PASS; deterministic native registration/publication boundary |
-| root | `cargo test --lib --all-features local_runtime::session_runtime_manager::tests::configuration -- --nocapture` | PASS; 18 deterministic configuration tests |
-| root | `cargo test --lib --all-features local_runtime::session_runtime_manager::tests:: -- --nocapture` | PASS; 111 manager, protocol and transport tests |
-| root | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | PASS; 2,970 tests, one intentional fixture-generator ignore |
+| root | `cargo test --lib --all-features local_runtime::session_runtime_manager::tests::configuration -- --nocapture` | PASS; 19 deterministic configuration tests |
+| root | `cargo test --lib --all-features local_runtime::session_runtime_manager::tests:: -- --nocapture` | PASS; 112 manager, protocol and transport tests |
+| root | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | PASS; 2,971 tests, one intentional fixture-generator ignore |
 | root | `cargo test --test contracts --test provider --all-features` | PASS; 27 contracts and 166 provider tests; five opt-in live-provider tests ignored |
 | root | `cargo test --lib --all-features -- boundary_suites::` | PASS; 223 tests |
 | root | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | PASS; 407 tests |
@@ -69,6 +69,13 @@ could mistake resync for retirement. Retirement now checks the host's authoritat
 registration under its existing lock. A deterministic regression holds that exact
 publication interval open without a timer. The client protocol and TUI implementation
 remain unchanged. All applicable local Rust, protocol, TUI and browser lanes were rerun successfully after this correction.
+
+The final source-default refinement also passed all 19 configuration regressions
+and the full 112-test manager/protocol subset. One full Rust rerun observed an
+existing background-publication test reading its terminal registry before its
+host cursor advanced (`background_durable_commit_cannot_publish_a_half_semantic_snapshot`).
+The isolated test and a subsequent complete 2,971-test run passed unchanged. No
+Trace code or assertions were changed.
 
 ## Environment limits
 

@@ -1378,3 +1378,70 @@ async fn t09_t15_new_session_during_preparation_keeps_available_binding_after_su
     }))
     .await;
 }
+
+#[tokio::test]
+async fn t09_available_default_preparation_is_independent_of_retained_session_selection() {
+    let fixture = Fixture::new().await;
+    let id = &fixture.sessions[0].id;
+    fixture.manager.load(id, None).await.unwrap();
+    let runtime = fixture.manager.configuration_runtime(id).unwrap();
+    let old = runtime.runtime_resources();
+    let (source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
+    let mut document: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
+    document["agent"]["model"]["model"] = "local/b".into();
+    document["models"].as_table_mut().unwrap().remove("local/a");
+    // Require real capability construction as well as new provider/default
+    // preparation; the old Session cannot bind this catalog to its selection.
+    document.as_table_mut().unwrap().insert(
+        "native_tools".into(),
+        toml::toml! { read = { approval = "always" } }.into(),
+    );
+    std::fs::write(&source.user.path, toml::to_string(&document).unwrap()).unwrap();
+    fixture.manager.reconcile_configuration(id).await.unwrap();
+    let pending = settled(&fixture, 0).await;
+    assert!(
+        matches!(
+            pending.units[&ApplyUnit::Provider],
+            UnitApplication::Failed { .. }
+        ),
+        "{pending:?}"
+    );
+    assert_eq!(runtime.model_view().configured.model.to_string(), "local/a");
+    assert!(Arc::ptr_eq(
+        old.capability().tool_registry(),
+        runtime.runtime_resources().capability().tool_registry()
+    ));
+    let created = fixture
+        .manager
+        .create_session(SessionPersistentState {
+            cwd: fixture.workspaces[0].clone(),
+            model: None,
+        })
+        .await
+        .unwrap();
+    fixture
+        .manager
+        .load(&created.session.id, None)
+        .await
+        .unwrap();
+    let new = fixture
+        .manager
+        .configuration_runtime(&created.session.id)
+        .unwrap();
+    assert_eq!(new.model_view().configured.model.to_string(), "local/b");
+    let resources = new.runtime_resources();
+    assert_eq!(
+        resources
+            .capability()
+            .tool_registry()
+            .definitions()
+            .into_iter()
+            .find(|tool| tool.name == "read")
+            .unwrap()
+            .approval_policy,
+        crate::tools::types::ToolApprovalPolicy::Always
+    );
+    assert_eq!(runtime.model_view().configured.model.to_string(), "local/a");
+    fixture.close().await;
+}

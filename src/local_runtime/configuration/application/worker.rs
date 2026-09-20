@@ -249,9 +249,12 @@ impl ConfigurationApplications {
             if injected_failure {
                 Err("injected preparation failure".into())
             } else {
-                bindings(&capture).and_then(|models| {
-                    runtime.prepare_context_configuration(&capture, models, None)
-                })
+                self.lock()
+                    .make_available(scope, identity, &capture, &manager.credentials)
+                    .and_then(|()| bindings(&capture))
+                    .and_then(|models| {
+                        runtime.prepare_context_configuration(&capture, models, None)
+                    })
             }
         } else {
             let capability_capture = adopted.as_ref().map_or_else(
@@ -259,8 +262,11 @@ impl ConfigurationApplications {
                 |old| capture.clone().retaining_context_from(old),
             );
             let cancellation = crate::runtime::cancellation::CancellationSignal::new();
-            let mut preparation =
-                Box::pin(runtime.prepare_configuration(capability_capture.clone(), &cancellation));
+            let mut preparation = Box::pin(runtime.prepare_configuration(
+                capture.clone(),
+                capture.config.initial_model().clone(),
+                &cancellation,
+            ));
             let prepared =
                 tokio::time::timeout(std::time::Duration::from_mins(2), &mut preparation).await;
             if prepared.is_err() {
@@ -279,7 +285,32 @@ impl ConfigurationApplications {
                             .into(),
                     )
                 }
-                Ok(Ok(candidate)) => Ok(candidate),
+                Ok(Ok(mut candidate)) => {
+                    // Source availability belongs to the captured default's
+                    // complete prepared configuration, not an old Session's
+                    // selected model. The latter may no longer be in the new
+                    // catalog and must not veto new Session availability.
+                    let result = self
+                        .lock()
+                        .make_available(scope, identity, &capture, &manager.credentials)
+                        .and_then(|()| bindings(&capability_capture))
+                        .and_then(|models| {
+                            runtime.complete_candidate_context(
+                                &mut candidate,
+                                &capability_capture,
+                                models,
+                            )
+                        });
+                    match result {
+                        Ok(()) => Ok(candidate),
+                        Err(diagnostic) => {
+                            if let Some(capability) = candidate.capability.take() {
+                                capability.retire_uncommitted().await;
+                            }
+                            Err(diagnostic)
+                        }
+                    }
+                }
                 result => {
                     let diagnostic = match result {
                         Ok(Err(error)) => error,
