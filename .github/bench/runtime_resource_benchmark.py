@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import http.server
 import json
 import os
 import pathlib
@@ -21,6 +22,9 @@ SESSION_COUNT = 150
 READ_OPS = 5000
 LIST_OPS = 300
 IDLE_SECONDS = 4.0
+TURN_SESSION_COUNT = 48
+TURN_SETTLE_SECONDS = 1.5
+MOCK_RESPONSE_DELAY_SECONDS = 0.5
 
 
 def proc_tree(root_pid):
@@ -150,8 +154,124 @@ def reserve_port():
     return port
 
 
+class MockLLMHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *_args):
+        pass
+
+    def do_POST(self):
+        length = int(self.headers.get("content-length", "0"))
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            request = json.loads(raw)
+        except json.JSONDecodeError:
+            self.send_error(400)
+            return
+        if not self.path.endswith("/chat/completions"):
+            self.send_error(404)
+            return
+
+        with self.server.counter_lock:
+            self.server.request_count += 1
+
+        time.sleep(MOCK_RESPONSE_DELAY_SECONDS)
+        model = request.get("model") or "bench"
+        if request.get("stream", False):
+            chunks = [
+                {
+                    "id": "chatcmpl-bench",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": "ok"},
+                            "finish_reason": None,
+                        }
+                    ],
+                },
+                {
+                    "id": "chatcmpl-bench",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                },
+                {
+                    "id": "chatcmpl-bench",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": model,
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 8,
+                        "completion_tokens": 1,
+                        "total_tokens": 9,
+                    },
+                },
+            ]
+            body = "".join(f"data: {json.dumps(chunk, separators=(',', ':'))}\n\n" for chunk in chunks)
+            body += "data: [DONE]\n\n"
+            encoded = body.encode()
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("cache-control", "no-cache")
+            self.send_header("content-length", str(len(encoded)))
+            self.send_header("connection", "close")
+            self.end_headers()
+            self.wfile.write(encoded)
+            self.close_connection = True
+            return
+
+        payload = {
+            "id": "chatcmpl-bench",
+            "object": "chat.completion",
+            "created": 1,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 8, "completion_tokens": 1, "total_tokens": 9},
+        }
+        encoded = json.dumps(payload, separators=(",", ":")).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(encoded)))
+        self.send_header("connection", "close")
+        self.end_headers()
+        self.wfile.write(encoded)
+        self.close_connection = True
+
+
+class MockLLM:
+    def __init__(self):
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), MockLLMHandler)
+        self.server.daemon_threads = True
+        self.server.request_count = 0
+        self.server.counter_lock = threading.Lock()
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        host, port = self.server.server_address
+        self.base_url = f"http://{host}:{port}"
+
+    def count(self):
+        with self.server.counter_lock:
+            return self.server.request_count
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+
 class RustX:
-    def __init__(self, binary, root):
+    def __init__(self, binary, root, mock_base_url):
         self.binary = binary
         self.root = pathlib.Path(root)
         self.home = self.root / "home"
@@ -164,7 +284,7 @@ class RustX:
         self.env.update(
             {
                 "HOME": str(self.home),
-                "RUSTX_BENCH_KEY": "bench-only-unused",
+                "RUSTX_BENCH_KEY": "bench-only",
             }
         )
         for key in ("XDG_CONFIG_HOME", "XDG_STATE_HOME"):
@@ -180,7 +300,7 @@ class RustX:
                 "--model-id",
                 "bench",
                 "--endpoint",
-                "http://127.0.0.1:9/v1",
+                mock_base_url + "/v1",
                 "--credential-env",
                 "RUSTX_BENCH_KEY",
                 "--context-window",
@@ -256,10 +376,7 @@ class RustX:
         self.request("session/list", {"offset": 0, "limit": 32})
 
     def create_session(self):
-        result = self.request(
-            "session/create",
-            {"settings": {"cwd": str(self.workspace)}},
-        )
+        result = self.request("session/create", {"settings": {"cwd": str(self.workspace)}})
         session = result.get("session", result)
         return session["id"]
 
@@ -268,6 +385,21 @@ class RustX:
 
     def list_sessions(self):
         return self.request("session/list", {"offset": 0, "limit": 32})
+
+    def activate_session(self, session_id):
+        result = self.request("session/attach", {"session_id": session_id})
+        return result["target"]
+
+    def start_turn(self, target, text):
+        return self.request(
+            "turn/start",
+            {"target": target, "content": [{"type": "text", "text": text}]},
+        )
+
+    def settled(self, target):
+        result = self.request("session/snapshot", {"target": target})
+        attempt = result["snapshot"].get("attempt")
+        return bool(attempt) and attempt.get("phase", {}).get("type") == "terminal"
 
     def close(self):
         if self.proc.poll() is None:
@@ -286,7 +418,7 @@ class RustX:
 
 
 class OpenCode:
-    def __init__(self, binary, root):
+    def __init__(self, binary, root, mock_base_url):
         self.binary = binary
         self.root = pathlib.Path(root)
         self.home = self.root / "home"
@@ -294,6 +426,38 @@ class OpenCode:
         self.workspace.mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(self.workspace)], check=True)
         self.home.mkdir(parents=True)
+        config = {
+            "formatter": False,
+            "lsp": False,
+            "model": "test/test-model",
+            "small_model": "test/test-model",
+            "provider": {
+                "test": {
+                    "name": "Test",
+                    "id": "test",
+                    "env": [],
+                    "npm": "@ai-sdk/openai-compatible",
+                    "models": {
+                        "test-model": {
+                            "id": "test-model",
+                            "name": "Test Model",
+                            "attachment": False,
+                            "reasoning": False,
+                            "temperature": False,
+                            "tool_call": False,
+                            "release_date": "2025-01-01",
+                            "limit": {"context": 100000, "output": 10000},
+                            "cost": {"input": 0, "output": 0},
+                            "options": {},
+                        }
+                    },
+                    "options": {
+                        "apiKey": "test-key",
+                        "baseURL": mock_base_url + "/v1",
+                    },
+                }
+            },
+        }
         self.env = os.environ.copy()
         self.env.update(
             {
@@ -301,10 +465,15 @@ class OpenCode:
                 "XDG_CONFIG_HOME": str(self.root / "xdg-config"),
                 "XDG_DATA_HOME": str(self.root / "xdg-data"),
                 "XDG_CACHE_HOME": str(self.root / "xdg-cache"),
+                "OPENCODE_CONFIG_CONTENT": json.dumps(config, separators=(",", ":")),
+                "OPENCODE_AUTH_CONTENT": "{}",
                 "OPENCODE_DISABLE_AUTOUPDATE": "1",
                 "OPENCODE_DISABLE_PRUNE": "1",
                 "OPENCODE_DISABLE_DEFAULT_PLUGINS": "1",
                 "OPENCODE_DISABLE_LSP_DOWNLOAD": "1",
+                "OPENCODE_DISABLE_MODELS_FETCH": "1",
+                "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1",
+                "OPENCODE_DISABLE_AUTOCOMPACT": "1",
             }
         )
         self.port = reserve_port()
@@ -366,13 +535,35 @@ class OpenCode:
         self.request("GET", "/session?limit=32")
 
     def create_session(self):
-        return self.request("POST", "/session", {})["id"]
+        return self.request("POST", "/session", {"title": "bench"})["id"]
 
     def read_session(self, session_id):
         return self.request("GET", "/session/" + urllib.parse.quote(session_id, safe=""))
 
     def list_sessions(self):
         return self.request("GET", "/session?limit=32")
+
+    def activate_session(self, session_id):
+        self.read_session(session_id)
+        return session_id
+
+    def start_turn(self, session_id, text):
+        payload = {
+            "model": {"providerID": "test", "modelID": "test-model"},
+            "agent": "build",
+            "parts": [{"type": "text", "text": text}],
+            "tools": {},
+        }
+        return self.request(
+            "POST",
+            "/session/" + urllib.parse.quote(session_id, safe="") + "/prompt_async",
+            payload,
+        )
+
+    def settled(self, session_id):
+        statuses = self.request("GET", "/session/status")
+        status = statuses.get(session_id) if isinstance(statuses, dict) else None
+        return status is None or status.get("type") == "idle"
 
     def close(self):
         if self.proc.poll() is None:
@@ -386,16 +577,29 @@ class OpenCode:
         self.stderr.close()
 
 
-def one_run(product, run_index, binary):
+def verify_settled(impl, active):
+    deadline = time.time() + 20
+    remaining = list(active)
+    while remaining and time.time() < deadline:
+        remaining = [item for item in remaining if not impl.settled(item)]
+        if remaining:
+            time.sleep(0.05)
+    if remaining:
+        raise RuntimeError(f"{len(remaining)} turn sessions did not settle")
+
+
+def one_run(product, run_index, binary, mock):
     with tempfile.TemporaryDirectory(prefix=f"bench-{product}-{run_index}-") as root:
-        impl = RustX(binary, root) if product == "rustx" else OpenCode(binary, root)
+        impl = RustX(binary, root, mock.base_url) if product == "rustx" else OpenCode(binary, root, mock.base_url)
         sampler = Sampler(impl.proc.pid)
         try:
             impl.warm()
-            time.sleep(1.0)
             records = []
 
-            metric, _ = phase(sampler, "idle_empty", duration=IDLE_SECONDS)
+            metric, _ = phase(sampler, "idle_startup_early", duration=IDLE_SECONDS)
+            records.append(metric)
+            time.sleep(IDLE_SECONDS)
+            metric, _ = phase(sampler, "idle_empty_steady", duration=IDLE_SECONDS)
             records.append(metric)
 
             ids = []
@@ -404,12 +608,7 @@ def one_run(product, run_index, binary):
                 for _ in range(SESSION_COUNT):
                     ids.append(impl.create_session())
 
-            metric, _ = phase(
-                sampler,
-                "create_sessions",
-                fn=creates,
-                ops=SESSION_COUNT,
-            )
+            metric, _ = phase(sampler, "create_sessions", fn=creates, ops=SESSION_COUNT)
             records.append(metric)
 
             metric, _ = phase(sampler, "idle_after_sessions", duration=IDLE_SECONDS)
@@ -427,6 +626,48 @@ def one_run(product, run_index, binary):
                     impl.list_sessions()
 
             metric, _ = phase(sampler, "list_sessions", fn=lists, ops=LIST_OPS)
+            records.append(metric)
+
+            active = []
+
+            def activate():
+                for session_id in ids[:TURN_SESSION_COUNT]:
+                    active.append(impl.activate_session(session_id))
+
+            metric, _ = phase(
+                sampler,
+                "activate_turn_sessions",
+                fn=activate,
+                ops=TURN_SESSION_COUNT,
+            )
+            records.append(metric)
+
+            metric, _ = phase(sampler, "idle_after_activation", duration=IDLE_SECONDS)
+            records.append(metric)
+
+            before_requests = mock.count()
+
+            def turns():
+                for i, item in enumerate(active):
+                    impl.start_turn(item, f"benchmark turn {i}")
+                time.sleep(TURN_SETTLE_SECONDS)
+
+            metric, _ = phase(
+                sampler,
+                "concurrent_turn_batch",
+                fn=turns,
+                ops=TURN_SESSION_COUNT,
+            )
+            metric["model_requests"] = mock.count() - before_requests
+            records.append(metric)
+            if metric["model_requests"] != TURN_SESSION_COUNT:
+                raise RuntimeError(
+                    f"{product} expected {TURN_SESSION_COUNT} mock model requests, "
+                    f"observed {metric['model_requests']}"
+                )
+            verify_settled(impl, active)
+
+            metric, _ = phase(sampler, "idle_after_turns", duration=IDLE_SECONDS)
             records.append(metric)
 
             for rec in records:
@@ -452,6 +693,7 @@ def summarize(raw):
         "end_rss_mib",
         "ops_s",
         "cpu_ms_per_op",
+        "model_requests",
     ]
     for (product, phase_name), records in sorted(grouped.items()):
         item = {"product": product, "phase": phase_name, "runs": len(records)}
@@ -471,34 +713,39 @@ def main():
     parser.add_argument("--opencode", required=True)
     args = parser.parse_args()
 
+    mock = MockLLM()
     raw = []
-    # Alternate products to reduce one-sided runner drift.
-    for run_index in range(1, RUNS + 1):
-        order = ["rustx", "opencode"] if run_index % 2 else ["opencode", "rustx"]
-        for product in order:
-            binary = args.rustx if product == "rustx" else args.opencode
-            print(f"BENCH_PROGRESS product={product} run={run_index}", flush=True)
-            rows = one_run(product, run_index, binary)
-            raw.extend(rows)
-            for row in rows:
-                print(
-                    "BENCH_ROW "
-                    + " ".join(
-                        [
-                            f"product={row['product']}",
-                            f"run={row['run']}",
-                            f"phase={row['phase']}",
-                            f"wall_s={row['wall_s']:.6f}",
-                            f"cpu_s={row['cpu_s']:.6f}",
-                            f"cpu_pct={row['cpu_pct_one_core']:.3f}",
-                            f"peak_rss_mib={row['peak_rss_mib']:.3f}",
-                            f"avg_rss_mib={row['avg_rss_mib']:.3f}",
-                            f"ops_s={row.get('ops_s', 0.0):.3f}",
-                            f"cpu_ms_op={row.get('cpu_ms_per_op', 0.0):.6f}",
-                        ]
-                    ),
-                    flush=True,
-                )
+    try:
+        # Alternate products to reduce one-sided runner drift.
+        for run_index in range(1, RUNS + 1):
+            order = ["rustx", "opencode"] if run_index % 2 else ["opencode", "rustx"]
+            for product in order:
+                binary = args.rustx if product == "rustx" else args.opencode
+                print(f"BENCH_PROGRESS product={product} run={run_index}", flush=True)
+                rows = one_run(product, run_index, binary, mock)
+                raw.extend(rows)
+                for row in rows:
+                    print(
+                        "BENCH_ROW "
+                        + " ".join(
+                            [
+                                f"product={row['product']}",
+                                f"run={row['run']}",
+                                f"phase={row['phase']}",
+                                f"wall_s={row['wall_s']:.6f}",
+                                f"cpu_s={row['cpu_s']:.6f}",
+                                f"cpu_pct={row['cpu_pct_one_core']:.3f}",
+                                f"peak_rss_mib={row['peak_rss_mib']:.3f}",
+                                f"avg_rss_mib={row['avg_rss_mib']:.3f}",
+                                f"ops_s={row.get('ops_s', 0.0):.3f}",
+                                f"cpu_ms_op={row.get('cpu_ms_per_op', 0.0):.6f}",
+                                f"model_requests={row.get('model_requests', 0)}",
+                            ]
+                        ),
+                        flush=True,
+                    )
+    finally:
+        mock.close()
 
     summary = summarize(raw)
     print("BENCH_SUMMARY_BEGIN", flush=True)
@@ -516,6 +763,9 @@ def main():
                     "list_ops": LIST_OPS,
                     "idle_seconds": IDLE_SECONDS,
                     "sample_interval_s": SAMPLE_INTERVAL,
+                    "turn_session_count": TURN_SESSION_COUNT,
+                    "turn_settle_seconds": TURN_SETTLE_SECONDS,
+                    "mock_response_delay_seconds": MOCK_RESPONSE_DELAY_SECONDS,
                 },
                 "summary": summary,
                 "raw": raw,
