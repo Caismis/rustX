@@ -219,6 +219,10 @@ async fn issue383_retry_and_corrective_requests_freeze_goal_and_native_receipts(
         let store = runtime.durable_store();
         let snapshots = store.read_request_snapshots(None, 10).unwrap().snapshots;
         assert_eq!(snapshots[0].contributions, snapshots[1].contributions);
+        assert_eq!(
+            snapshots[0].context_generation,
+            snapshots[1].context_generation
+        );
         assert!(snapshots[1].request_context_ids.is_empty());
         let goal_revision = |snapshot: &crate::model::RequestSnapshot| {
             snapshot
@@ -299,6 +303,17 @@ async fn issue383_common_budget_drops_content_and_receipt_together() {
             accepted
         );
     }
+    let snapshot = &snapshots.snapshots[0];
+    let alpha = ContextContributorIdentity::Native(NativeContextContributor::TestAlpha);
+    assert_eq!(snapshot.contributions[0].producer, alpha);
+    assert_eq!(
+        snapshot.context_generation.contributors,
+        vec![crate::context::ContributorGeneration {
+            identity: alpha,
+            attestation: None,
+        }],
+        "persisted generation describes only the final accepted producer"
+    );
 }
 
 #[tokio::test]
@@ -427,6 +442,21 @@ async fn issue383_production_composed_noop_and_optional_failure_preserve_runtime
             result.outcome
         );
         assert_eq!(model.requests().len(), 1);
+        let store = runtime.durable_store();
+        let snapshots = store.read_request_snapshots(None, 10).unwrap().snapshots;
+        assert_eq!(snapshots.len(), 1);
+        assert!(snapshots[0].request_context_ids.is_empty());
+        assert!(snapshots[0].contributions.is_empty());
+        assert!(snapshots[0].context_generation.contributors.is_empty());
+        assert!(
+            store
+                .latest_contribution_emission(
+                    &ContextContributorIdentity::Native(NativeContextContributor::TestAlpha),
+                    "active",
+                )
+                .unwrap()
+                .is_none()
+        );
         let semantics = ordinary_semantics(&result, runtime.durable_store().as_ref());
         if let Some(expected) = &expected {
             assert_eq!(&semantics, expected);

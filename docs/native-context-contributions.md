@@ -125,3 +125,20 @@ live with their owners.
 Race timeouts are liveness guards only. Watches, channels, the existing startup
 gate, and transaction fault scripts establish ordering; no sleeps or scheduler
 yields prove the new races.
+
+Accepted `ContextGeneration` membership is derived after final admission from
+surviving User contributions and request-time System sections. Registration,
+invocation, empty output, isolated optional acquisition failure, and fully dropped
+proposals do not establish membership. Each accepted owner appears once in stable
+identity order with its authoritative registered attestation; native static System
+owners remain represented when their sections are present. Same-step retries reuse
+this frozen generation without invoking contributors again.
+
+The persisted subset is covered by
+`issue383_common_budget_drops_content_and_receipt_together` and
+`issue383_production_composed_noop_and_optional_failure_preserve_runtime_semantics`.
+`accepted_generation_retains_system_only_owners_and_registered_attestation` covers
+System-only extensions (including failed optional User acquisition) and all static
+native System owners. `accepted_generation_retains_partial_survivors_and_system_only_budget_exclusions`
+covers partial survival, full exclusion, System-only survival, authoritative
+attestations, and registration-order independence.

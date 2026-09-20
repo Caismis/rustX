@@ -376,7 +376,8 @@ pub struct ContributorGeneration {
 pub struct ContextGeneration {
     /// Monotonic per-attempt generation assigned by the Agent Loop.
     pub id: u64,
-    /// The active contributor identities and their attestation generations.
+    /// Owners of final accepted User contributions or System sections, sorted
+    /// and deduplicated by identity, with their authoritative attestations.
     pub contributors: Vec<ContributorGeneration>,
 }
 
@@ -854,27 +855,6 @@ impl ContextAssembly {
     ) -> Result<AcceptedContext, ContextAssemblyError> {
         let mut entries = Vec::new();
         let mut native_sections = self.system_sections(native)?;
-        let mut generations = vec![
-            native
-                .workspace_instructions
-                .as_ref()
-                .map(|_| native_generation(NativeContextContributor::WorkspaceInstructions)),
-            native
-                .skill_guidance
-                .as_ref()
-                .map(|_| native_generation(NativeContextContributor::SkillGuidance)),
-            native
-                .core_runtime_identity
-                .as_ref()
-                .map(|_| native_generation(NativeContextContributor::CoreSystemIdentity)),
-            native
-                .agent_profile
-                .as_ref()
-                .map(|_| native_generation(NativeContextContributor::AgentProfile)),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
 
         // Deferred context. The Agent Loop already staged these in canonical
         // `(ToolCall batch position, producer identity, proposal FIFO)` order,
@@ -898,7 +878,6 @@ impl ContextAssembly {
                 ContributionPhase::Deferred,
                 sequence,
             )?);
-            generations.push(generation);
         }
 
         let mut extensions = self.extensions.clone();
@@ -911,16 +890,12 @@ impl ContextAssembly {
                         == ContributionRequirement::Optional =>
                 {
                     tracing::warn!(producer = ?registered.identity, %detail, "optional contribution acquisition failed");
-                    generations.push(registered.generation);
                     continue;
                 }
                 Err(error) => return Err(error),
             };
             if proposals.len() > MAX_PROPOSALS_PER_CONTRIBUTOR {
                 return Err(ContextAssemblyError::ProposalLimitExceeded);
-            }
-            if proposals.is_empty() && registered.system_sections.is_empty() {
-                continue;
             }
             for (sequence, proposal) in proposals.into_iter().enumerate() {
                 entries.push(contribution_entry(
@@ -930,7 +905,6 @@ impl ContextAssembly {
                     sequence,
                 )?);
             }
-            generations.push(registered.generation);
         }
 
         let mut receipt_keys = std::collections::BTreeSet::new();
@@ -994,18 +968,40 @@ impl ContextAssembly {
                 .cmp(&right.lane)
                 .then_with(|| left.contributor.cmp(&right.contributor))
         });
-        // One semantic owner appears exactly once in the accepted generation:
-        // deferred and request-time participation of the same registered
-        // extension collapse to one authoritative generation, because the
-        // deferred path resolves through this same registration and its
-        // generations already carry the registered attestation. No extension
-        // generation is synthesized.
-        generations.sort_by(|left, right| {
-            left.identity
-                .cmp(&right.identity)
-                .then_with(|| right.attestation.cmp(&left.attestation))
-        });
-        generations.dedup_by(|later, first| later.identity == first.identity);
+        // Generation membership comes only from final accepted semantics, never
+        // invocation or proposal production. Resolve each surviving owner through
+        // its authoritative registration; deferred/request-time and User/System
+        // participation collapse to the same identity without losing attestation.
+        let owners = entries
+            .iter()
+            .map(|entry| &entry.identity)
+            .chain(native_sections.iter().map(|section| &section.contributor))
+            .collect::<std::collections::BTreeSet<_>>();
+        let generations = owners
+            .into_iter()
+            .map(|identity| {
+                if let Some(registered) = self
+                    .extensions
+                    .iter()
+                    .find(|entry| &entry.identity == identity)
+                {
+                    return Ok(registered.generation.clone());
+                }
+                match identity {
+                    // These resource-only native owners use the core's fixed
+                    // generation authority, not dynamic contributor registration.
+                    ContextContributorIdentity::Native(
+                        owner @ (NativeContextContributor::WorkspaceInstructions
+                        | NativeContextContributor::SkillGuidance
+                        | NativeContextContributor::CoreSystemIdentity
+                        | NativeContextContributor::AgentProfile),
+                    ) => Ok(native_generation(*owner)),
+                    _ => Err(ContextAssemblyError::InvalidProposal(
+                        "accepted context has no authoritative producer generation".to_owned(),
+                    )),
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(AcceptedContext {
             opportunities: input.opportunities.clone(),
@@ -1333,6 +1329,116 @@ mod tests {
                 .await,
             Err(ContextAssemblyError::InvalidProposal(_))
         ));
+    }
+
+    struct OptionalProposals(Result<Vec<ContextProposal>, ContextAssemblyError>);
+
+    impl ContextContributor for OptionalProposals {
+        fn requirement(&self) -> ContributionRequirement {
+            ContributionRequirement::Optional
+        }
+
+        fn contribute<'a>(
+            &'a self,
+            _: &'a ContributorInputSnapshot,
+        ) -> BoxFuture<'a, Result<Vec<ContextProposal>, ContextAssemblyError>> {
+            Box::pin(async { self.0.clone() })
+        }
+    }
+
+    #[tokio::test]
+    async fn accepted_generation_retains_system_only_owners_and_registered_attestation() {
+        for acquisition in [
+            Ok(Vec::new()),
+            Err(ContextAssemblyError::AcquisitionFailed(
+                "unavailable".into(),
+            )),
+        ] {
+            let mut assembly = ContextAssembly::new();
+            let identity = assembly
+                .register_extension(
+                    "system.only",
+                    Some("package-7".into()),
+                    Arc::new(OptionalProposals(acquisition)),
+                )
+                .unwrap();
+            assembly
+                .register_extension_system_section(&identity, "extension system")
+                .unwrap();
+            let native = NativeContextInput {
+                workspace_instructions: Some("workspace".into()),
+                skill_guidance: Some("skills".into()),
+                core_runtime_identity: Some("core".into()),
+                agent_profile: Some("profile".into()),
+            };
+            let accepted = assembly.assemble(&input(), &native, &[]).await.unwrap();
+            assert!(accepted.user_messages.is_empty());
+            assert_eq!(
+                render_effective_system_prompt(&accepted.system_sections),
+                "core\n\nprofile\n\nworkspace\n\nextension system\n\nskills"
+            );
+            let mut expected = vec![
+                native_generation(NativeContextContributor::WorkspaceInstructions),
+                native_generation(NativeContextContributor::SkillGuidance),
+                native_generation(NativeContextContributor::CoreSystemIdentity),
+                native_generation(NativeContextContributor::AgentProfile),
+                ContributorGeneration {
+                    identity: ContextContributorIdentity::CertifiedExtension(identity),
+                    attestation: Some("package-7".into()),
+                },
+            ];
+            expected.sort_by(|left, right| left.identity.cmp(&right.identity));
+            assert_eq!(accepted.generation.contributors, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn accepted_generation_retains_partial_survivors_and_system_only_budget_exclusions() {
+        for reverse in [false, true] {
+            let mut assembly = ContextAssembly::new();
+            let mut registrations = [
+                ("alpha", vec!["a".repeat(600_000), "b".repeat(600_000)]),
+                ("beta", vec!["c".repeat(600_000)]),
+                ("gamma", vec!["d".repeat(600_000)]),
+            ];
+            if reverse {
+                registrations.reverse();
+            }
+            for (key, texts) in registrations {
+                let identity = assembly
+                    .register_extension(
+                        key,
+                        Some(format!("{key}-package")),
+                        Arc::new(OptionalProposals(Ok(texts
+                            .into_iter()
+                            .map(|text| ContextProposal::UserMessage(user_message(&text)))
+                            .collect()))),
+                    )
+                    .unwrap();
+                if key == "gamma" {
+                    assembly
+                        .register_extension_system_section(&identity, "surviving system")
+                        .unwrap();
+                }
+            }
+            let accepted = assembly
+                .assemble(&input(), &NativeContextInput::default(), &[])
+                .await
+                .unwrap();
+            assert_eq!(accepted.user_messages.len(), 1);
+            assert_eq!(
+                accepted.user_messages[0].producer,
+                extension_identity("alpha")
+            );
+            assert_eq!(accepted.system_sections.len(), 1);
+            assert_eq!(
+                accepted.generation.contributors,
+                ["alpha", "gamma"].map(|key| ContributorGeneration {
+                    identity: extension_identity(key),
+                    attestation: Some(format!("{key}-package")),
+                })
+            );
+        }
     }
 
     #[tokio::test]
