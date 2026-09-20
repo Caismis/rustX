@@ -55,7 +55,8 @@ test('browser native download and remote TUI consume the same authenticated nati
     const web = logicalArchive(browserPath), tui = logicalArchive(localPath);
     expect(tui).toEqual(web);
     const manifest = JSON.parse(Buffer.from(web['manifest.json'], 'base64').toString());
-    expect(manifest.format).toBe('rustx-session-archive/v1');
+    expect(manifest.format).toBe('rustx-session-archive/v2');
+    expect(manifest.schemas).toEqual({ journal: 2, messages: 1, surface: 1, requests: 2, generations: 1, publication_audits: 1, inherited_responses: 1 });
     expect(Object.keys(web).some(key => key.endsWith('/generations.jsonl'))).toBe(true);
     const logical = Object.values(web).map(value => Buffer.from(value as string, 'base64').toString()).join('\n');
     expect(logical).toContain('Archive fixture settled.');

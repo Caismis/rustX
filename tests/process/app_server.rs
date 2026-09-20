@@ -1255,7 +1255,14 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
             .read_to_string(&mut manifest)
             .unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
-        assert_eq!(manifest["format"], "rustx-session-archive/v1");
+        assert_eq!(manifest["format"], "rustx-session-archive/v2");
+        assert_eq!(
+            manifest["schemas"],
+            serde_json::json!({
+                "journal": 2, "messages": 1, "surface": 1, "requests": 2,
+                "generations": 1, "publication_audits": 1, "inherited_responses": 1,
+            })
+        );
         assert_eq!(manifest["session"]["id"], f.sessions[0].as_str());
         client.close().await;
         detach_then_shutdown(&mut child).await;

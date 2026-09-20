@@ -1,11 +1,11 @@
-//! Archive v1 boundaries for native types with mixed historical/private ownership.
+//! Archive v2 boundaries for native types with mixed historical/private ownership.
 use crate::model::snapshot::RequestSnapshot;
 use serde::Serialize;
 use serde_json::{Value, json};
 
 /// Explicit schema: new durable fields cannot silently become archive fields.
 #[derive(Serialize)]
-struct ArchiveRequestSnapshotV1<'a> {
+struct ArchiveRequestSnapshotV2<'a> {
     upload_projection: &'a crate::model::uploads::UploadProjection,
     request_id: &'a crate::runtime::identity::RequestId,
     identity: &'a crate::model::snapshot::RequestIdentity,
@@ -44,7 +44,7 @@ pub(super) fn request(snapshot: &RequestSnapshot) -> Value {
         })
         .map(|(name, value)| (name.as_str(), value))
         .collect();
-    json!(ArchiveRequestSnapshotV1 {
+    json!(ArchiveRequestSnapshotV2 {
         upload_projection: &snapshot.upload_projection,
         request_id: &snapshot.request_id,
         identity: &snapshot.identity,
@@ -89,7 +89,7 @@ pub(super) fn message(message: &crate::message::types::MessageBlock) -> Value {
 }
 
 /// Journal envelopes keep their native coordinates; mixed diagnostic events
-/// have explicit v1 payloads. The exhaustive match requires review of new facts.
+/// have explicit restricted payloads. The exhaustive match requires review of new facts.
 pub(super) fn journal(envelope: &crate::events::types::RuntimeEventEnvelope) -> Value {
     json!({"schema_version": envelope.schema_version, "event_id": envelope.event_id,
         "sequence": envelope.sequence, "conversation_id": envelope.conversation_id,
@@ -97,7 +97,7 @@ pub(super) fn journal(envelope: &crate::events::types::RuntimeEventEnvelope) -> 
         "timestamp": envelope.timestamp, "event": event(&envelope.event)})
 }
 /// Archive Journal status is outcome evidence, not executor diagnostic prose.
-/// Exhaustive by design: a new status must receive an explicit v1 decision.
+/// Exhaustive by design: a new status must receive an explicit projection decision.
 fn tool_execution_status(status: &crate::tools::types::ToolExecutionStatus) -> Value {
     use crate::tools::types::ToolExecutionStatus;
     match status {
@@ -119,7 +119,7 @@ fn tool_execution_status(status: &crate::tools::types::ToolExecutionStatus) -> V
 }
 
 /// Continuation state and locators are history; storage diagnostics are not.
-/// Exhaustive by design so new continuation variants require a v1 decision.
+/// Exhaustive by design so new continuation variants require a projection decision.
 fn managed_output_continuation(
     continuation: &crate::tools::types::ManagedOutputContinuation,
 ) -> Value {
