@@ -540,3 +540,41 @@ span is also a window with no earlier cursor. The marker therefore lives where
 upstream puts it, inside the positioned `.canvas`, and the empty overview is a
 plain message. Malformed or incomplete DTO states are not modelled as product
 modes.
+
+## Issue #377 — Agent Status placement and Todo composer-dock semantics
+
+Reference checkout: `deepseek-ai/deepseek-harness` at
+**`c291e7961a515f6d7af9304e7fd1d257929aef26`**, the commit the Todo dock records
+already pin. It was read at that exact revision in a separate checkout outside
+every rustX worktree; upstream HEAD was not substituted and no build or runtime
+step downloads Harness code.
+
+Files read for this change:
+
+| Upstream at `c291e79` | Use |
+| --- | --- |
+| `ui-conversation/src/client/skeleton/TodoPanel.tsx` | already the derived source of `TodoDock.tsx`; its `if (todos.length === 0) return null` is the behaviour rustX had diverged from |
+| `ui-conversation/tests/todo-panel.client.spec.tsx` | acceptance behaviour: empty renders nothing, collapsed count summary with zero segments omitted, every parallel `in_progress` row counted, all-completed is not empty |
+| `.agents/notes/archived/feature/2026-07-23-web-todo-display.md` | the current standing-plan strip versus the historical tool row |
+| `.agents/notes/archived/feature/2026-07-28-todo-plan-clears-on-next-turn.md` | Harness's turn-scoped plan lifetime — read to exclude it deliberately |
+| `ui-tool/src/client/tool/toolviews/todo-row.tsx` | historical todo evidence stays at its own transcript location |
+
+Adopted: the empty-renders-nothing result, the collapsed count-summary header with
+no activity ticker, the disclosure interaction, the status glyph family already
+present locally, and the current-panel / historical-row separation.
+
+**Deliberately excluded: Harness's Todo ownership and lifetime.** Its standing plan
+is turn-scoped and clears on the next `turn/start`; that rule belongs to its
+`todo/write` domain. rustX Todo is the conversation-owned `ConversationTodoList`
+authority projected as `snapshot.todos`, and the browser clears nothing.
+
+No upstream source was copied for this change. `TodoDock.tsx` is an existing derived
+file whose local hash and treatment are refreshed in
+[source-inventory.json](source-inventory.json); the four newly read files are
+recorded under `inspected_only`. The Agent Status binding
+(`src/bindings/agent-status.ts`) and annotation (`src/app/agent/AgentStatus.tsx`)
+are rustX-authored against the native `AgentStatusView` contract and reuse the
+existing derived `DisclosureRow` primitive and icon set; they carry no Harness
+copyright header because no Harness source is present in them. Upstream hashes, the
+pinned reset commit, licensing, classifications and dependency closure are otherwise
+unchanged, and no Harness or Cordis build-time or runtime dependency is introduced.

@@ -57,6 +57,11 @@ image_fixture = ["render_image"]
 enabled = true
 [agent.plugins.goal]
 enabled = true
+[agent.plugins.agent_status]
+enabled = true
+[agent.plugins.agent_status.time]
+enabled = true
+timezone = "UTC"
 ` : '';
     const writeSettings = (model = 'console-model') => writeFileSync(settings, catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "ask_user", "execution"]\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
     writeSettings();

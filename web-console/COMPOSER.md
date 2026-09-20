@@ -37,15 +37,39 @@ the common snapshot.
 ### Todo
 
 `snapshot.todos` is present exactly when the attached runtime composes the Todo
-extension. Three states stay distinct:
+extension. The native facts stay distinct; two of them share one visual result:
 
 - absent: no dock;
-- composed with an empty list: a bounded "No current tasks" strip;
+- composed with an empty current list: no dock. The list is a current fact, not an
+  absence, but an empty card is not capability discovery — that belongs to the
+  capability/settings surfaces. A deleted-only list is empty after the presentation
+  filter and is therefore also no dock. There is no "No current tasks" strip, no
+  Todo wrapper and no reserved composer-stack height (Issue #377, matching the
+  pinned Harness `TodoPanel`, which renders nothing for an empty plan);
 - composed with tasks: a collapsed per-status summary and a bounded list in native
   task order. Only native statuses render (`pending`, `in_progress`,
   `completed`); `deleted` tombstones are dependency targets, not current work.
   `blocked_by` is shown as the native relation (`after #1`), never as an invented
-  status. An in-progress task shows its `active_form`.
+  status. An in-progress task shows its `active_form`. A non-empty all-completed
+  list is not an empty list: it keeps its dock and a `2 completed` summary, because
+  a just-finished plan stays useful while the answer is read.
+
+The dock starts collapsed and owns only its disclosure state. When the visible
+list disappears, disclosure resets; a later non-empty list is a new presentation
+and starts collapsed. Ordinary non-empty updates — a task completing, a task
+arriving — never close an open list.
+
+Todo lifetime is native rustX authority. Harness's own plan is turn-scoped and
+clears on the next `turn/start`; that rule belongs to its `todo/write` domain and
+is deliberately **not** imported. Nothing in the browser clears or mutates Todo on
+user input, turn start, Assistant completion, navigation, reconnect, timers or
+disclosure changes. The dock disappears exactly when the authoritative current
+visible list is empty.
+
+Current Todo comes only from `snapshot.todos`. It is never reconstructed from a
+historical `todo` Tool call/result, and never from a Todo section inside a
+historical Agent Status composition — see
+[CHAT.md](CHAT.md#agent-status-annotations).
 
 The dock has no mutation. Todo tasks are never written to `rustx.toml`,
 Agent TOML, `SessionPersistentState` or browser storage. Whether

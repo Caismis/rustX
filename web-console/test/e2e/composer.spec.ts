@@ -40,14 +40,47 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.getByLabel('Session location', { exact: true })).toHaveText(`${fixture.workspaceA}`);
-    // Composed Todo with no current list is its own bounded fact; no Goal and no queue take space.
-    await expect(todo).toHaveAttribute('data-todo-state', 'empty');
+    // Composed Todo with no current list stays a distinct native fact, and its
+    // ordinary visual result is the same as extension absence: no dock at all.
+    // Measured, not asserted from the DOM alone — the composer stack must reserve
+    // no Todo height, wrapper or separator while the current list is empty.
+    await expect(todo).toHaveCount(0);
+    await expect(page.getByText('No current tasks')).toHaveCount(0);
+    await expect(page.locator('[data-todo-state]')).toHaveCount(0);
     await expect(goal).toHaveCount(0); await expect(queue).toHaveCount(0);
+    await expect(page.locator('[data-composer-context-stack] > *')).toHaveCount(1);
+    const stackGeometry = async () => {
+      const stack = (await page.locator('[data-composer-context-stack]').boundingBox())!;
+      const seat = (await page.locator('[data-composer-context-stack] > *').boundingBox())!;
+      return { lead: Math.round(seat.y - stack.y), trail: Math.round(stack.y + stack.height - seat.y - seat.height) };
+    };
+    // The stack's whole height is its own 6px rhythm plus the one remaining seat:
+    // no Todo wrapper, separator, gap or reserved height is left behind.
+    expect(await stackGeometry()).toEqual({ lead: 6, trail: 0 });
+    await page.screenshot({ path: 'test-results/composer-no-todo-dock.png', fullPage: true });
 
     await message.fill('Plan the composer docks'); await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Plan recorded.', { exact: true })).toBeVisible();
     await expect(todo).toHaveAttribute('data-todo-state', 'current');
     await expect(todo.getByRole('button', { expanded: false })).toContainText(/1 in progress\s·\s1 pending/);
+    // Real composed Agent Status, placed only by the runtime-published anchors it
+    // carries: every composition renders exactly once, subordinate to its own
+    // anchor row, and never repeats under later messages.
+    const notes = page.getByRole('note', { name: 'Agent Status' });
+    await expect(notes).not.toHaveCount(0);
+    const placement = async () => page.locator('[data-agent-status]').evaluateAll(nodes =>
+      nodes.map(node => [node.getAttribute('data-agent-status'), node.closest('[data-chat-anchor-key]')?.getAttribute('data-chat-anchor-key') ?? null] as const));
+    const placed = await placement();
+    expect(new Set(placed.map(([id]) => id)).size).toBe(placed.length);
+    expect(placed.every(([, anchor]) => anchor !== null)).toBe(true);
+    await notes.first().getByRole('button').click();
+    await page.screenshot({ path: 'test-results/agent-status-annotation.png', fullPage: true });
+    // The canonical Agent Status Context message never reappears as ordinary chat:
+    // its model-facing rendered prose is nowhere in the conversation column, and no
+    // "Current context" disclosure carries it.
+    const conversation = page.getByLabel('Canonical conversation');
+    await expect(conversation).not.toContainText('Timezone:');
+    await expect(conversation).not.toContainText('<system-reminder>');
     await todo.getByRole('button', { expanded: false }).click();
     await expect(todo.locator('li')).toHaveCount(2);
     await expect(todo.locator('li').nth(0)).toHaveAttribute('data-status', 'in_progress');
@@ -153,9 +186,13 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     expect(await revision()).toBe(settled);
     await expect(todo.locator('li')).toHaveCount(2);
 
+    const beforeReload = await placement();
     await page.reload(); await connect();
     // Reload rebuilds from the authoritative snapshot; disclosure state is presentation-local.
     await expect(todo.getByRole('button', { expanded: false })).toContainText(/1 in progress\s·\s1 pending/);
+    // Cold attach reconstructs exactly the placement that live observation produced.
+    await expect(notes).toHaveCount(beforeReload.length);
+    expect(await placement()).toEqual(beforeReload);
     await expect(goal).toContainText('Verify the composer docks end to end');
     expect(await revision()).toBe(settled);
     await expect(queue).toHaveCount(0);

@@ -288,7 +288,7 @@
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
       "destination": "web-console/src/app/composer/TodoDock.tsx",
-      "treatment": "adapted: collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds a composed-empty strip, blocked_by and active_form",
+      "treatment": "adapted: Harness empty-renders-nothing, collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds blocked_by and active_form. Issue #377 removes the composed-empty strip so extension-absent and composed-empty share one visual result; Harness turn-scoped plan clearing is deliberately excluded.",
       "upstream_sha256": "1d1e9d87c12b505fc8bc2bdf9973fc349fb80b9385419e0247420ecdb1fc2f4a",
       "retained_dependencies": [
         "../../../../protocol/app-server/v13",
@@ -305,7 +305,7 @@
         "Harness locale runtime"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "b38082c0eb224a2592ad8b4512cbfd98aec8b3df91818037216a34fd4f7e1ff7"
+      "local_sha256": "1ce52f46cd556753955e78de755f32ad9e7cb42431bcf1770839f21995152897"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
@@ -2479,6 +2479,30 @@
     }
   ],
   "inspected_only": [
+    {
+      "upstream": "packages/client/ui-conversation/tests/todo-panel.client.spec.tsx",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "upstream_sha256": "0dbd78b6351e3b628750335a91ec49c7b87f53cbb83952184985054a339626d2",
+      "treatment": "Issue #377 inspected only: Harness Todo acceptance behaviour (empty renders nothing, collapsed count summary, parallel in-progress rows, all-completed is not empty). rustX regression coverage is independently authored against the native TodoTask contract."
+    },
+    {
+      "upstream": ".agents/notes/archived/feature/2026-07-23-web-todo-display.md",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "upstream_sha256": "30e1c989eec6d52232c75a52c4ea38cf8515e685168bc5bf74f0d317f33baa36",
+      "treatment": "Issue #377 inspected only: Harness rationale for the current standing-plan strip versus the historical tool row. rustX keeps the same conceptual split and adds its own Agent Status history surface."
+    },
+    {
+      "upstream": ".agents/notes/archived/feature/2026-07-28-todo-plan-clears-on-next-turn.md",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "upstream_sha256": "af16dd33b87cf31d097e8e1292c590461a6e4428f80b21580c724c61ae602b51",
+      "treatment": "Issue #377 inspected only: Harness turn-scoped plan lifetime. Deliberately NOT adopted — rustX Todo is the conversation-owned ConversationTodoList authority and is never cleared by a browser lifetime rule."
+    },
+    {
+      "upstream": "packages/client/ui-tool/src/client/tool/toolviews/todo-row.tsx",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "upstream_sha256": "f58d4119eedc1a21bcdb0a16a9eddbaa644a9ad14e08cab1bb43342a55a7a59f",
+      "treatment": "Issue #377 inspected only: Harness historical todo tool row, confirming that historical evidence stays at its own transcript location and never repopulates the current dock. rustX renders historical todo calls through its existing native Tool projection."
+    },
     {
       "upstream": "packages/client/connection/src/browser-auth.ts",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",

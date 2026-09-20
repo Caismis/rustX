@@ -44,6 +44,76 @@ Edit/Write diffs show **requested changes**, not an inferred filesystem diff.
 Background execution uses its native ExecutionId, not a fabricated call identity.
 No process folding or subcall nesting is inferred from adjacency or Tool names.
 
+## Agent Status annotations
+
+One composed Agent Status is one historical, request-scoped fact of the
+conversation. It is **not** current Todo, Goal, Queue or live execution state:
+those are `snapshot.todos`, `snapshot.goal`, `snapshot.inbound` and the native live
+projections. `snapshot.statuses` is the runtime's bounded window of past
+compositions in composition order, oldest first — a list, not a latest value.
+
+The Runtime Client already publishes where each composition belongs, so the browser
+never infers a position (Issue #194):
+
+```text
+opportunities.fresh_inbound        -> the exact inbound message identity
+opportunities.post_tool_batch      -> the durable transcript cursor of the
+                                      settled ToolResult batch
+```
+
+`bindings/agent-status.ts` selects exactly one anchor per composition:
+
+```text
+fresh_inbound present              -> anchor = its target_message_id
+else post_tool_batch.transcript_anchor present
+                                   -> anchor = that transcript cursor
+else                               -> unplaced; nothing is drawn
+```
+
+`FreshInbound` wins unconditionally when both exist: an exact message identity is a
+stronger fact than a position, and choosing it without consulting the loaded page is
+what keeps a doubly-eligible composition from being drawn twice. Anchor selection
+never depends on what is on screen. If the selected `FreshInbound` target is off
+page, the composition stays undrawn — it never falls back to a visible
+`PostToolBatch` anchor, and it never relocates to a neighbouring message, the latest
+Assistant response, the streaming response or a global panel. Paging its anchor in
+later reveals it at that position.
+
+`agentStatusPlacement` builds finite `byMessageId` / `byCursor` indexes from the
+authoritative window, collapsing repeated observations of one `status_message_id` to
+one composition before any rendering happens — a React key is not a deduplication
+mechanism. `statusesAt` merges both indexes for one transcript entry and orders them
+by the runtime's composition ordinal, so a message-anchored and a position-anchored
+composition that resolve to the same row still interleave correctly. Nothing reads a
+timestamp, a label, status text, or an array index as an identity.
+
+The transcript traverses the complete ordered page. A standalone `ToolResult` body is
+suppressed — the native call projection already renders that content beside its call —
+but suppressing a body does not erase the entry's authoritative transcript position:
+`AgentTranscript` separates *content visibility* from *annotation-anchor existence*, so
+a `PostToolBatch` anchor on a suppressed entry renders an annotation-only slot in the
+exact right place. An entry with neither a body nor an annotation contributes no row
+and no scroll anchor.
+
+`app/agent/AgentStatus` renders the typed `sections` vocabulary (`temporal`,
+`background_executions`, `todo`) as a subordinate `note`, collapsed to a one-line
+summary with the shared `DisclosureRow` affordance. It is not a conversation speaker,
+a user bubble or a current-state panel, and it carries no response actions.
+`AgentStatusView.rendered` is the exact text the model saw: it stays diagnostics and is
+never parsed for semantics, identity, placement or current tasks.
+
+The canonical Agent Status Context message is request-scoped model history that never
+becomes a transcript item. It is excluded from the generic Context / "Current context"
+disclosure by typed context kind — never by text matching — so one composition has
+exactly one representation and no stale Todo section is presented as live state. Other
+context kinds are unaffected, and the Inspector keeps the raw window, including
+`rendered`, under **Agent Status history**.
+
+The browser owns no status retention. The window, its bound and its eviction are the
+runtime's; the client has no event fold (a `session/event` invalidates, a
+`session/snapshot` replaces), so cold attach, live observation and resync converge on
+the same identity, placement and order by construction.
+
 ## Paging and reconnect
 
 The cache holds at most 512 entries and an 8 MiB conservative UTF-16 serialization

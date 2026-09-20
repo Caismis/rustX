@@ -45,7 +45,12 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
     <SettingsCard title="Identity"><Facts rows={[["Session ID", view?.id], ["Conversation ID", facts.ConversationId], ["cwd", facts.cwd]]} /></SettingsCard>
     <SettingsCard title="Execution"><Facts rows={[["Attempt ID", snapshot?.attempt?.attempt_id], ["Exact phase", snapshot?.attempt?.phase.type], ["Exact outcome", snapshot?.attempt?.phase.type === 'settled' ? snapshot.attempt.phase.outcome.type : undefined], ["Cancellation request", view?.cancellation?.status]]} />
       <details><summary>Attempt and cancellation evidence</summary><pre>{json({ attempt: snapshot?.attempt, cancellation: view?.cancellation })}</pre></details>
-      <details><summary>Tools, Subagents, Workflows and Agent status</summary><pre>{json({ background: facts.background, subagents: facts.subagents, workflows: facts.workflows, statuses: facts.statuses })}</pre></details>
+      <details><summary>Tools, Subagents and Workflows</summary><pre>{json({ background: facts.background, subagents: facts.subagents, workflows: facts.workflows })}</pre></details>
+      {/* `statuses` is the runtime's bounded window of past compositions, oldest
+          first — not one current Agent Status value, and not current Todo, Goal or
+          Queue state. The raw facts, including each composition's `rendered` text,
+          stay here as diagnostics. */}
+      <details><summary>Agent Status history · recent compositions</summary><p className="muted">Bounded history of past Agent Status compositions, oldest first. Each is a historical request-scoped fact anchored in the transcript, not current Agent, Todo, Goal or Queue state.</p><pre>{json({ statuses: facts.statuses })}</pre></details>
       <details><summary>Trace and Request Snapshot identities</summary><pre>{json(facts.trace)}</pre></details>
     </SettingsCard>
     <SettingsCard title="Attachment / residency"><Facts rows={[["Attachment intent", facts.attachment_intent], ["Observed attachment", facts.attachment], ["Attachment ID", facts.attachment_id], ["Runtime incarnation", facts.runtime_incarnation], ["Observed residency", facts.residency]]} /></SettingsCard>
