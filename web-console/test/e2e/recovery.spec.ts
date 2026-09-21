@@ -26,13 +26,13 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       await expect(page.getByLabel('Transport token')).toHaveCount(0);
       await settings.getByRole('button', { name: 'Read current sources', exact: true }).click();
     };
-    await settings.getByRole('tab', { name: 'User', exact: true }).click();
+    await settings.getByLabel('Configuration owner').selectOption('');
     await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();
     await settings.getByRole('button', { name: 'Edit Model fixture/console-model', exact: true }).click();
     await settings.getByLabel('Context window').fill('250000');
     appendFileSync(fixture.settings, '\n# external revision before save\n');
     await settings.getByRole('button', { name: 'Save Model fixture/console-model', exact: true }).click();
-    await expect(settings.getByRole('alert')).toContainText('Conflict');
+    await expect(settings.getByRole('alert')).toContainText('Source changed');
     await expect(settings.getByLabel('Context window')).toHaveValue('250000');
     expect(readFileSync(fixture.settings, 'utf8')).not.toContain('250000');
     expect(writes()).toHaveLength(1);
@@ -42,7 +42,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     await expect.poll(wire.lost).toBe(1);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('250000');
     await reconnect();
-    await settings.getByRole('tab', { name: 'User', exact: true }).click();
+    await settings.getByLabel('Configuration owner').selectOption('');
     await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();
     await settings.getByRole('button', { name: 'Edit Model fixture/console-model', exact: true }).click();
     await expect(settings.getByLabel('Context window')).toHaveValue('250000');
@@ -56,19 +56,19 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     await expect.poll(wire.lost).toBe(2);
     expect(readFileSync(join(fixture.directory, 'home/rustx/.agents/mcp.toml'), 'utf8')).toContain('inert-fixture');
     await reconnect();
-    await settings.getByRole('tab', { name: 'User', exact: true }).click();
+    await settings.getByLabel('Configuration owner').selectOption('');
     await settings.getByRole('button', { name: 'MCP', exact: true }).click();
     await settings.getByRole('button', { name: 'Edit MCP loss-fixture', exact: true }).click();
     await expect(settings.getByLabel('MCP command', { exact: true })).toHaveValue('inert-fixture');
     expect(writes()).toHaveLength(3);
     wire.loseNext('configuration/reconcile');
-    await settings.getByRole('button', { name: 'Diagnostics & source facts', exact: true }).click();
+    await settings.getByRole('button', { name: 'Server & source diagnostics', exact: true }).click();
     await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
     await expect.poll(wire.lost).toBe(3); await reconnect();
     await expect(settings.getByText(/Preparing configuration/)).toHaveCount(0);
     expect(wire.requests.filter(request => request.method === 'configuration/reconcile')).toHaveLength(1);
     expect(writes()).toHaveLength(3);
-    // Remounting a different Session reconstructs its own authoritative source scope.
+    // A User draft remains User-owned across Session focus changes.
     await settings.getByRole('button', { name: 'MCP', exact: true }).click();
     await settings.getByRole('button', { name: 'Edit MCP loss-fixture', exact: true }).click();
     await settings.getByLabel('MCP command', { exact: true }).fill('unsaved-draft');
@@ -77,10 +77,10 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     await expect(page.getByLabel('Session location', { exact: true })).toContainText(fixture.workspaceB);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
-    await settings.getByRole('tab', { name: 'User', exact: true }).click();
+    await settings.getByLabel('Configuration owner').selectOption('');
     await settings.getByRole('button', { name: 'MCP', exact: true }).click();
     await settings.getByRole('button', { name: 'Edit MCP loss-fixture', exact: true }).click();
-    await expect(settings.getByLabel('MCP command', { exact: true })).toHaveValue('inert-fixture');
+    await expect(settings.getByLabel('MCP command', { exact: true })).toHaveValue('unsaved-draft');
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toMatch(/250000|loss-fixture|unsaved-draft/);
   } finally { await page.close(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
 });

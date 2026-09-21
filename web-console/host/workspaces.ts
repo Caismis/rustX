@@ -3,9 +3,12 @@ import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, exists
 import { isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
-import type { ProductHostWorkspaces, WorkspaceCatalog, SessionLocation } from '../src/workspaces/host.ts';
+import type { ProductHostWorkspaces, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation } from '../src/workspaces/host.ts';
+import { AppServerClient } from '../../tui/src/app-server/client.ts';
+import { WebSocketTransport } from '../../tui/src/app-server/websocket-transport.ts';
 
 export interface LocalHostConfig {
+  transportToken?: string;
   endpoint: string;
   roots: { id: string; cwd: string; displayName: string }[];
   picker: boolean;
@@ -74,8 +77,41 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     rows.splice(before ? rows.findIndex(row => row.id === before) : rows.length, 0, row);
     this.commit(rows);
   }
-  async removeWorkspace(id: string) { this.registered(id); this.commit(this.registrations.filter(row => row.id !== id)); }
+  /** Per-registration authority lane. A native configuration mutation holds its
+   * registration's lane from first resolution to final reread, so removal can
+   * never commit while that registration still has a native write in flight.
+   * rename/reorder/adopt commit synchronously between awaits and the reads are
+   * pure, so they need no lane. */
+  private lanes = new Map<string, Promise<unknown>>();
+  private lane<T>(id: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.lanes.get(id) ?? Promise.resolve();
+    const work = previous.catch(() => {}).then(operation);
+    this.lanes.set(id, work);
+    return work.finally(() => { if (this.lanes.get(id) === work) this.lanes.delete(id); });
+  }
+  async removeWorkspace(id: string) {
+    return this.lane(id, async () => { this.registered(id); this.commit(this.registrations.filter(row => row.id !== id)); });
+  }
   async resolveWorkspace(id: string, endpoint: string) { this.route(endpoint); return { cwd: this.cwd(this.registered(id).location) }; }
+  async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation) {
+    return this.lane(id, async () => {
+      const { cwd } = await this.resolveWorkspace(id, endpoint);
+      if (!this.config.transportToken) throw new Error('Workspace Host has no native configuration connection');
+      const transport = await WebSocketTransport.connect({ endpoint: this.config.endpoint, token: this.config.transportToken });
+      const client = await AppServerClient.initialize({ transport, identity: { name: 'rustx-product-host', version: '0.1.0' } }).catch(error => { transport.close(); throw error; });
+      try {
+        // Resolve again after asynchronous admission, immediately before submission.
+        if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
+        const target = { kind: 'workspace' as const, directory: cwd };
+        if (operation.kind === 'write') await client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: operation.mutation }, 'source_settings');
+        else if (operation.kind === 'reconcile') await client.call('configuration/reconcile', { target }, 'configuration_application');
+        else if (operation.kind !== 'read') throw new Error('Unknown configuration operation');
+        const result = await client.call('configuration/sourcesRead', { target }, 'source_settings');
+        if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
+        return result.projection;
+      } finally { await client.close(); }
+    });
+  }
   async classifyLocations(cwds: readonly string[], endpoint: string): Promise<SessionLocation[]> {
     this.route(endpoint);
     if (cwds.length > 32) throw new Error('Host classification is bounded to 32 summaries');

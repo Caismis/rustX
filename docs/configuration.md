@@ -372,7 +372,7 @@ A ready candidate is not an adopted binding.
 An independent Attempt captures complete execution configuration once. Requests,
 Steps, retries, recovery, Tool batches, Subagents and Workflow children inherit
 that capture even after new policy publishes. Session creation resolves its model
-once; changing global defaults does not replace it. `settings/setModel` is the
+once; changing global defaults does not replace it. `session/setModel` is the
 single deliberate Session model mutation and uses the same preparation/commit
 primitive, with Session and model baseline fences.
 
@@ -417,19 +417,20 @@ identity reservation.
 
 ## Clients and format replacement
 
-Web Settings has **Effective | User | Workspace** views. Effective is read-only
-and shows native configuration, origins, selections, readiness and generation.
-User and Workspace edit native structured drafts for Providers, Models, Root
+Global Settings authors User definitions; explicit Workspace Settings authors the
+registered Workspace without Session focus or runtime allocation. Session Settings
+owns only durable Session selections/status. User and Workspace edit native structured drafts for Providers, Models, Root
 selection, policies, Plugins, MCP definitions and complete named-Agent profiles.
 The User config pathname and fixed User resource root are shown separately.
 Save starts native application automatically. Settings presents independent
-application, explicit context adoption, failure/retry and process restart state.
+application, failure/retry and actual-versus-desired process state. The only ordinary
+Web adoption surface is below the focused Session title, using native eligibility.
 CAS conflicts preserve drafts. Rescan is a diagnostics action.
 
-TUI `/settings` presents native effective/source facts; `/configuration` inspects
-application state and provides explicit rescan, retry and inspected-candidate
-adoption. `/model` changes Session selection. Neither client parses, merges or
-classifies configuration. App Server protocol 15 is generated from Rust; obsolete
+TUI `/settings` authors explicit User/Workspace sources; `/session settings` inspects
+Session selections and application, and `/session adopt` submits the inspected
+candidate and binding. `/model` changes Session selection. Neither client parses,
+merges or classifies configuration. App Server protocol 16 is generated from Rust; obsolete
 development protocols are rejected without compatibility decoding.
 
 CFG3 intentionally replaces the previous development configuration and durable

@@ -8,26 +8,30 @@ use crate::runtime::resources::{
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// Captures both explicitly bound resource roots, shadowing before parsing.
+/// Captures the User root and the explicitly supplied Workspace, shadowing before parsing.
+/// With no Workspace, discovery reads only User resources; it never infers a cwd.
 /// This operation reads package bytes but never imports code or prepares Python.
 ///
 /// # Errors
 /// Returns a bounded resource error when discovery cannot produce a catalog.
 pub fn discover(
-    workspace: &Path,
+    workspace: Option<&Path>,
     user_root: &Path,
 ) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
     let mut candidates = BTreeMap::new();
     let mut locations = BTreeMap::new();
     let mut diagnostics = Vec::new();
-    for (boundary, root, scope) in [
-        (user_root, user_root.join("tools"), SourceScope::User),
-        (
-            workspace,
-            workspace.join(".agents/tools"),
-            SourceScope::Workspace,
-        ),
-    ] {
+    for (boundary, root, scope) in
+        std::iter::once((user_root, user_root.join("tools"), SourceScope::User)).chain(
+            workspace.map(|workspace| {
+                (
+                    workspace,
+                    workspace.join(".agents/tools"),
+                    SourceScope::Workspace,
+                )
+            }),
+        )
+    {
         let paths = match super::resource_directory::entries(boundary, &root) {
             Ok(paths) => paths,
             Err(error) => {
@@ -73,8 +77,13 @@ pub fn discover(
     }
     if candidates.len() > 128 {
         diagnostics.push(
-            RuntimeResourceLoadError::new("Managed Python catalog exceeds 128 packages")
-                .at(&workspace.join(".agents/tools"), "tools"),
+            RuntimeResourceLoadError::new("Managed Python catalog exceeds 128 packages").at(
+                &workspace.map_or_else(
+                    || user_root.join("tools"),
+                    |workspace| workspace.join(".agents/tools"),
+                ),
+                "tools",
+            ),
         );
         candidates.clear();
         locations.clear();
@@ -100,11 +109,43 @@ pub fn discover(
 mod tests {
     use super::*;
     #[test]
+    fn user_discovery_does_not_read_workspace_packages() {
+        let dir = tempfile::tempdir().unwrap();
+        // The workspace argument is canonical authority; model the production
+        // binding point instead of passing an aliased temporary root.
+        let root = dir.path().canonicalize().unwrap();
+        let user = root.join("user");
+        std::fs::create_dir_all(user.join("tools/user-package")).unwrap();
+        std::fs::create_dir_all(root.join(".agents/tools/workspace-package")).unwrap();
+        crate::tools::python::PACKAGE_PARSE_COUNT.with(|count| count.set(0));
+        let (catalog, effects) =
+            super::super::static_effects::measure(|| discover(None, &user).unwrap());
+        assert_eq!(
+            catalog
+                .packages()
+                .keys()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["python:user-package"]
+        );
+        assert!(catalog.packages().values().all(Result::is_err));
+        assert!(
+            catalog
+                .locations
+                .values()
+                .all(|location| location.scope == SourceScope::User)
+        );
+        crate::tools::python::PACKAGE_PARSE_COUNT.with(|count| assert_eq!(count.get(), 1));
+        assert_eq!(effects, [0; 12]);
+        assert_eq!(discover(Some(&root), &user).unwrap().packages().len(), 2);
+    }
+
+    #[test]
     fn discovery_is_inert_even_for_unprepared_packages() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = dir.path().canonicalize().unwrap();
         assert!(
-            discover(&workspace, &workspace.join("user/.agents"))
+            discover(Some(&workspace), &workspace.join("user/.agents"))
                 .unwrap()
                 .packages()
                 .is_empty()
@@ -112,7 +153,7 @@ mod tests {
         let root = workspace.join(".agents/tools");
         std::fs::create_dir_all(&root).unwrap();
         assert!(
-            discover(&workspace, &workspace.join("user/.agents"))
+            discover(Some(&workspace), &workspace.join("user/.agents"))
                 .unwrap()
                 .packages()
                 .is_empty()
@@ -123,7 +164,7 @@ mod tests {
         std::fs::write(root.join("README.md"), "incidental").unwrap();
         crate::tools::python::PACKAGE_PARSE_COUNT.with(|count| count.set(0));
         let (catalog, effects) = crate::local_runtime::static_effects::measure(|| {
-            discover(&workspace, &workspace.join("user/.agents")).unwrap()
+            discover(Some(&workspace), &workspace.join("user/.agents")).unwrap()
         });
         assert_eq!(effects, [0; 12]);
         crate::tools::python::PACKAGE_PARSE_COUNT.with(|count| assert_eq!(count.get(), 2));
@@ -138,7 +179,7 @@ mod tests {
         std::fs::remove_dir(root.join("alpha")).unwrap();
         assert_eq!(catalog.packages().len(), 2);
         assert_eq!(
-            discover(&workspace, &workspace.join("user/.agents"))
+            discover(Some(&workspace), &workspace.join("user/.agents"))
                 .unwrap()
                 .packages()
                 .len(),
@@ -154,7 +195,7 @@ mod tests {
                 std::fs::create_dir_all(workspace.join(".agents/tools").join(name)).unwrap();
             }
             assert_eq!(
-                discover(&workspace, &workspace.join("user/.agents"))
+                discover(Some(&workspace), &workspace.join("user/.agents"))
                     .unwrap()
                     .packages()
                     .keys()
@@ -171,7 +212,7 @@ mod tests {
         let workspace = dir.path().canonicalize().unwrap();
         std::fs::create_dir_all(workspace.join(".agents/tools")).unwrap();
         std::os::unix::fs::symlink("/tmp", workspace.join(".agents/tools/escape")).unwrap();
-        let catalog = discover(&workspace, &workspace.join("user/.agents")).unwrap();
+        let catalog = discover(Some(&workspace), &workspace.join("user/.agents")).unwrap();
         assert!(catalog.packages()[&ToolSourceId::ManagedPython("escape".into())].is_err());
     }
 }

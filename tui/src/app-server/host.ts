@@ -462,7 +462,7 @@ export class AppServerHost {
     sessionId: SessionId,
   ): Promise<{ revision: string; settings: SessionPersistentState }> {
     const read = await this.client.call(
-      "settings/read",
+      "session/settings",
       { session_id: sessionId },
       "settings",
     );

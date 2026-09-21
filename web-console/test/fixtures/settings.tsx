@@ -12,7 +12,7 @@ import '../../src/presentation/theme/shiki.css';
 import '../../src/presentation/theme/reset.css';
 import '../../src/app/console.css';
 const server = new Server(), source = cfg3Source(), effective = cfg3Effective();
-source.workspace.authored = { agent_id: 'rustx', agent: { description: 'A native coding assistant', instructions: 'Inspect the source, implement the change, and verify native boundaries.', tools: { builtin: ['read', 'glob'], sources: { 'python:analysis': 'all' } }, plugins: { goal: { enabled: true }, todo: { enabled: true } } }, models: effective.document.models, providers: source.user.authored!.providers };
+source.workspace!.authored = { agent_id: 'rustx', agent: { description: 'A native coding assistant', instructions: 'Inspect the source, implement the change, and verify native boundaries.', tools: { builtin: ['read', 'glob'], sources: { 'python:analysis': 'all' } }, plugins: { goal: { enabled: true }, todo: { enabled: true } } }, models: effective.document.models, providers: source.user.authored!.providers };
 effective.document.providers = source.user.authored!.providers;
 effective.provenance = { 'models.main': { kind: 'workspace', base: '/workspace', document: '/workspace/rustx.toml' }, 'providers.transport': { kind: 'user', base: '/bound', document: '/bound/rustx.toml' } };
 effective.resources.definitions = [
@@ -24,8 +24,10 @@ effective.resources.resource_diagnostics = [{ identity: 'incomplete', file: '/wo
 effective.resources.sources = { 'python:analysis': { status: 'unprepared' } };
 source.prospective_resources = effective.resources;
 source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/workspace/.agents/agents/reviewer.toml', revision: 'agent-1', authored: { description: 'Independent code review', instructions: 'Inspect changed boundaries and report findings.', tools: { builtin: ['read', 'grep'] }, skills: ['review'] } } }];
-server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: source, session_revision: '1' }));
-server.handlers.set('configuration/effective', () => ({ type: 'effective_configuration', projection: effective }));
+source.resolved = { ...source.user.authored, ...source.workspace!.authored };
+server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: { ...source, target: { kind: 'user' } } }));
+server.workspaceHost.configureWorkspace = async () => ({ ...source, target: { kind: 'workspace', directory: '/workspace' } });
+server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_configuration', projection: effective }));
 await server.attached('A');
 localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
 createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost} />);

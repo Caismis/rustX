@@ -441,6 +441,21 @@ struct ResolvedRoot {
 }
 
 impl SkillDiscovery {
+    /// Discover only the explicitly bound User collection, without Workspace authority.
+    #[must_use]
+    pub fn user_root(root: PathBuf) -> Self {
+        Self {
+            workspace: None,
+            config: SkillDiscoveryConfig {
+                automatic: vec![AutomaticSkillRoot {
+                    source: SkillSource::User,
+                    root,
+                }],
+            },
+            source_budget: MAX_SOURCE_SKILL_PACKAGES,
+        }
+    }
+
     /// Creates discovery with explicit current runtime authorities.
     ///
     /// There is deliberately no process-environment constructor: the

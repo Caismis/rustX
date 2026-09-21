@@ -2,7 +2,8 @@
 
 DeepSeek Harness supplies presentation. Rust owns CFG3 parsing, semantic validation,
 overlays, identity, provenance, CAS, serialization, publication and execution.
-The browser has exactly Effective, User and Workspace configuration views.
+The browser separates User/Workspace source authoring from Session selection and
+adoption. No Session is an authority for source reads, writes or rescans.
 
 ## Composition
 
@@ -15,9 +16,10 @@ rustX-authored presentation seats, with no protocol imports or persistence.
 
 `app/settings/Settings` reads the existing typed AppServerClient operations. It
 composes runtime, catalog, Root, MCP and named-Agent adapters with the resource
-inventory. `UnitForm` owns one native mutation's editable intent. The session-keyed
+inventory. `UnitForm` owns one native mutation's editable intent. The target-keyed
 `SettingsDrafts` map retains only modified drafts and their exact base revisions
-while navigating scopes/sections/identities. Closing Settings drops this memory.
+while navigating targets/sections/identities. Identity includes endpoint and client
+authority, not source revision or focused Session. Base revision is independent.
 No draft, credential, configuration or runtime snapshot goes into browser storage.
 Clean forms follow authoritative source updates; dirty forms require review.
 
@@ -54,7 +56,7 @@ objects remain distinct generated values. No recursive merge or config-file
 serialization is implemented in TypeScript.
 
 Lost Save/adoption replies and reconnect cause authoritative rereads, never replay.
-Connection/attachment epochs fence obsolete work, and a read sequence prevents an
+Connection/target epochs fence obsolete work, and a read sequence prevents an
 older overlapping read from replacing a newer observation or a write acknowledgement.
 Both success and rejection commit only within the same epoch and read sequence,
 including explicit refresh failures.
@@ -65,8 +67,9 @@ available. Settings renders native per-unit state without inferring field impact
 
 General edits Root identity/description/instructions, approval, context, model
 and Tool deadlines, environment and child capacity. App Server process policy is
-User-only and restart-required. Effective shows that authored process intent is
-not evidence of a live process policy change.
+User-only. Native classification distinguishes hot fields from restart fields;
+the source projection retains desired and actual process bindings across reopening.
+Reverting desired to actual clears restart state through native authority.
 
 Root model selection, Native/source Tools, Skills, Plugins, named Agents,
 Workflows and AGENTS.md guidance use native semantic units. Agent Status

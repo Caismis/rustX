@@ -30,7 +30,7 @@ it('switching and unmounting open Session views remains presentation-only', asyn
   expect(screen.getAllByRole('tree', { name: 'Session browser' })).toHaveLength(1);
   expect(screen.queryByRole('tablist', { name: 'Open Session views' })).toBeNull();
   ui.unmount();
-  expect(server.requests.slice(baseline).every(row => ['settings/read', 'session/snapshot'].includes(row.request.method))).toBe(true);
+  expect(server.requests.slice(baseline).every(row => ['session/settings', 'session/snapshot', 'session/configuration'].includes(row.request.method))).toBe(true);
   expect(server.client.getSnapshot().views.A.attachment).toBe('attached');
   expect(server.client.getSnapshot().views.B.attachment).toBe('attached');
 });
@@ -95,7 +95,7 @@ it('closing A immediately emits exactly its detach, preserving B, runtime work a
   expect(screen.getByLabelText('Session title').textContent).toBe('Session B');
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   const detach = await server.waitFor('session/detach', 1);
-  expect(server.requests.slice(baseline).filter(({ request }) => request.method !== 'settings/read').map(({ request }) => ({ method: request.method, params: request.params }))).toEqual([{ method: 'session/detach', params: { target } }]);
+  expect(server.requests.slice(baseline).filter(({ request }) => !['session/settings', 'session/configuration'].includes(request.method)).map(({ request }) => ({ method: request.method, params: request.params }))).toEqual([{ method: 'session/detach', params: { target } }]);
   expect(server.client.getSnapshot().views.A.attachment).toBe('attached'); // No optimistic server fact.
   await act(async () => { server.reply(detach); await server.client.release('A'); });
   expect(server.claims().map(item => item.session_id)).toEqual(['B']);

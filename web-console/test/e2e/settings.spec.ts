@@ -18,8 +18,8 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
-    const saved = async () => { await expect(settings.getByText(/Source saved. Native application/)).toBeVisible(); };
-    await settings.getByRole('tab', { name: 'User', exact: true }).click();
+    const saved = async () => { await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible(); };
+    await settings.getByLabel('Configuration owner').selectOption('');
     await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();
     await settings.getByLabel('New Provider identity').fill('acceptance');
     await settings.getByRole('button', { name: 'Add Provider', exact: true }).click();
@@ -36,7 +36,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await settings.getByRole('button', { name: 'Save Model independent', exact: true }).click(); await saved();
     await settings.getByRole('heading', { name: 'Providers & Models', exact: true }).scrollIntoViewIfNeeded();
     await settings.screenshot({ path: test.info().outputPath('cfg3-user-model.png') });
-    await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
+    await settings.getByLabel('Configuration owner').selectOption({ label: 'Workspace A' });
     await settings.getByLabel('New Model identity').fill('independent');
     await settings.getByRole('button', { name: 'Add Model', exact: true }).click();
     await expect(settings.getByLabel('Wire model identity')).toHaveValue('');
@@ -51,7 +51,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await settings.getByLabel('Endpoint', { exact: true }).fill('http://127.0.0.1:2/v1');
     await settings.getByLabel('Environment variable', { exact: true }).fill('RUSTX_CONSOLE_FIXTURE_KEY');
     await settings.getByRole('button', { name: 'Save Provider acceptance', exact: true }).click(); await saved();
-    await expect(settings.getByText(/Applicable changes are applied/)).toBeVisible();
+    await expect(settings.getByText(/Revision:/)).toBeVisible();
     await expect(settings.getByRole('button', { name: 'Adopt prepared context', exact: true })).toHaveCount(0);
     await settings.getByRole('button', { name: 'Tools', exact: true }).click();
     await expect(settings.getByLabel('read', { exact: true })).not.toBeChecked();
@@ -84,19 +84,18 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await settings.getByRole('button', { name: 'Agents & Workflows', exact: true }).click();
     await expect(settings.getByRole('group', { name: 'agents', exact: true }).getByRole('textbox')).toHaveCount(0);
     await settings.getByRole('button', { name: 'Save Agent allowlist', exact: true }).click(); await saved();
-    await settings.getByRole('button', { name: 'Adopt prepared context', exact: true }).click();
     await expect(settings.getByRole('button', { name: 'Adopt prepared context', exact: true })).toHaveCount(0);
-    await settings.getByRole('button', { name: 'Diagnostics & source facts', exact: true }).click();
+    await settings.getByRole('button', { name: 'Server & source diagnostics', exact: true }).click();
     const authored = readFileSync(fixture.settings, 'utf8');
     writeFileSync(fixture.settings, 'invalid = [');
     await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
-    await expect(settings.getByRole('alert')).toContainText('Some configuration could not be applied');
-    await settings.getByText('Application diagnostics', { exact: true }).click();
-    await expect(settings).toContainText('TOML error');
+    await expect(settings).toContainText('Source cannot be resolved');
+    await settings.getByText('Source and application diagnostics', { exact: true }).click();
+    await expect(settings).toContainText('invalid rustx.toml');
     await settings.screenshot({ path: test.info().outputPath('cfg3-application-failed.png') });
     writeFileSync(fixture.settings, authored);
     await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
-    await expect(settings.getByText(/Applicable changes are applied/)).toBeVisible();
+    await expect(settings.getByText(/Revision:/)).toBeVisible();
     // Independent removal of each authored identity is revision fenced too.
     await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();
     await settings.getByRole('button', { name: 'Edit Model independent', exact: true }).click();

@@ -1770,7 +1770,7 @@ pub fn discover_python_packages(
 ) -> Result<Vec<rustx::tools::python::DiscoveredPythonPackage>, rustx::tools::python::PythonToolError>
 {
     rustx::local_runtime::managed_python_resources::discover(
-        workspace.root(),
+        Some(workspace.root()),
         &workspace.root().join("absent-user/.agents"),
     )
     .map(|catalog| {

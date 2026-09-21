@@ -1037,7 +1037,7 @@ impl UserConfigManager {
         let mut config = merged.resolve()?;
         let mcp = super::mcp_resources::load(
             &self.sources.home_directory.join("rustx/.agents"),
-            &locations.workspace,
+            Some(&locations.workspace),
         );
         let mut diagnostics: Vec<_> = mcp
             .invalid_scopes
@@ -1156,7 +1156,7 @@ impl UserConfigManager {
                 .map_err(LaunchFailure::resource)?
         };
         let (subagents, role_sources) =
-            super::agent_resources::load_authorized(&locations.workspace, &agent_root)
+            super::agent_resources::load_authorized(Some(&locations.workspace), &agent_root)
                 .map_err(LaunchFailure::resource)?;
         revisions.extend(
             role_sources
@@ -1171,7 +1171,7 @@ impl UserConfigManager {
         }
         let mut workflows = {
             super::workflow_resources::load(
-                &locations.workspace,
+                Some(&locations.workspace),
                 &host.home_directory.join("rustx/.agents"),
             )
             .map_err(LaunchFailure::resource)?
@@ -1238,7 +1238,7 @@ impl UserConfigManager {
                 .map(|program| crate::tools::native::workflow_definition(program)),
         );
         let managed_python = super::managed_python_resources::discover(
-            &locations.workspace,
+            Some(&locations.workspace),
             &host.home_directory.join("rustx/.agents"),
         )
         .map_err(LaunchFailure::resource)?;

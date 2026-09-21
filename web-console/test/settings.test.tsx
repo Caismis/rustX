@@ -5,22 +5,76 @@ import { Settings } from '../src/app/settings/Settings';
 import { TextField, UnitForm } from '../src/app/settings/controls';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
 import { cfg3Application } from './cfg3-data';
-import { cfg3Client, cfg3Session } from './cfg3-fixture';
+import { cfg3Client, cfg3Host } from './cfg3-fixture';
 afterEach(cleanup);
+
+it('C09 Workspace A/B drafts survive navigation and Session focus without retargeting', async () => {
+ const s = cfg3Client(); const host = cfg3Host(s);
+ const ui = render(<Settings client={s.client} workspaceId="A" host={host}/>);
+ await screen.findByText(/Revision: workspace-1/); fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+ fireEvent.click(screen.getByLabelText('read'));
+ fireEvent.change(screen.getByLabelText('Configuration owner'), { target: { value: 'B' } });
+ await waitFor(() => expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(false));
+ fireEvent.click(screen.getByLabelText('write'));
+ fireEvent.change(screen.getByLabelText('Configuration owner'), { target: { value: 'A' } });
+ await waitFor(() => expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true));
+ expect((screen.getByLabelText('write') as HTMLInputElement).checked).toBe(false);
+ s.state.views = {}; ui.rerender(<Settings client={s.client} workspaceId="A" host={host}/>);
+ fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+ await waitFor(() => expect(s.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { mutation: { authored: ['read'] } } } }));
+});
+
+it('C09 external source revision notification preserves dirty draft and original CAS', async () => {
+ const s = cfg3Client(); const ui = render(<Settings client={s.client}/>);
+ await screen.findByText(/Revision: user-1/); fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+ fireEvent.click(screen.getByLabelText('read')); s.source.user.revision = 'external';
+ s.client.getSnapshot = () => state;
+ const state = { ...s.state, configuration: { 'source:user': { ...cfg3Application(), scope: 'source:user', version: '9' } } };
+ ui.rerender(<Settings client={s.client}/>);
+ await screen.findByText(/Revision: external/);
+ expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
+ fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+ await waitFor(() => expect(s.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'user-1' } }));
+});
+
+it('C10 Workspace revocation disables mutation and preserves local draft', async () => {
+ const s = cfg3Client(); const host = cfg3Host(s); const configure = host.configureWorkspace!;
+ let revoked = false; host.configureWorkspace = (...args) => revoked ? Promise.reject(new Error('Workspace revoked')) : configure(...args);
+ render(<Settings client={s.client} workspaceId="A" host={host}/>);
+ await screen.findByText(/Revision: workspace-1/); fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+ fireEvent.click(screen.getByLabelText('read')); revoked = true;
+ fireEvent.click(screen.getByRole('button', { name: 'Read current sources' })); await screen.findByRole('alert');
+ expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
+ fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+ expect(s.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
+});
+
+it.each(['target', 'connection'] as const)('C10 late response after %s replacement cannot overwrite new authority', async invalidation => {
+ let release!: (result: import('../../protocol/app-server/v16').MethodResult) => void;
+ const pending = new Promise<import('../../protocol/app-server/v16').MethodResult>(resolve => { release = resolve; });
+ let reads = 0;
+ const s = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++reads === 1) return pending; });
+ const host = cfg3Host(s); const ui = render(<Settings client={s.client} workspaceId="A" host={host}/>);
+ await waitFor(() => expect(reads).toBe(1)); const stale = structuredClone(s.source); stale.workspace!.revision = 'stale';
+ s.source.workspace!.revision = 'fresh';
+ if (invalidation === 'connection') { const state = { ...s.state, authorityRevision: 2 }; s.client.getSnapshot = () => state; }
+ ui.rerender(<Settings client={s.client} workspaceId={invalidation === 'target' ? 'B' : 'A'} host={host}/>);
+ await screen.findByText(/Revision: fresh/);
+ await act(async () => { release({ type: 'source_settings', projection: stale }); await pending; });
+ expect(screen.queryByText(/Revision: stale/)).toBeNull(); expect(screen.getByText(/Revision: fresh/)).toBeTruthy();
+});
 async function open(subject: ReturnType<typeof cfg3Client>, section: string, scope = 'Workspace') {
-  render(<Settings client={subject.client} sessionId={cfg3Session} />);
-  await screen.findByText('server-frozen-model');
-  fireEvent.click(screen.getByRole('tab', { name: scope }));
+  render(<Settings client={subject.client} workspaceId="A" host={subject.host ??= cfg3Host(subject)} />);
+  await screen.findByText(/Revision: workspace-1/);
+  if (scope === 'User') { fireEvent.change(screen.getByLabelText('Configuration owner'), { target: { value: '' } }); await screen.findByText(/Revision: user-1/); }
   fireEvent.click(screen.getByRole('button', { name: section }));
 }
-it('separates native Effective, User and Workspace; shows process paths without trust UI', async () => {
-  const subject = cfg3Client(); render(<Settings client={subject.client} sessionId={cfg3Session} />);
-  await screen.findByText('server-frozen-model');
-  expect(screen.getByRole('tab', { name: 'Effective' }).getAttribute('aria-selected')).toBe('true');
-  expect(screen.queryByText(/trusted/i)).toBeNull();
-  expect(screen.getByText('/bound/rustx.toml')).toBeTruthy();
-  expect(screen.getByText('/home/user/rustx/.agents')).toBeTruthy();
-  expect(screen.queryByRole('button', { name: /^Save / })).toBeNull();
+it('User Settings works without any Session and has no adopted-state or Effective editor', async () => {
+ const subject = cfg3Client(); subject.state.views = {}; render(<Settings client={subject.client}/>);
+ await screen.findByText(/Revision: user-1/);
+ expect(screen.queryByRole('tab')).toBeNull();
+ expect(subject.request.mock.calls.every(([op]) => op.method === 'configuration/sourcesRead')).toBe(true);
+ expect(subject.request.mock.calls[0][0]).toEqual({ method: 'configuration/sourcesRead', params: { target: { kind: 'user' } } });
 });
 it('saves a whole Workspace Provider with explicit credentials without copying User members', async () => {
   const subject = cfg3Client(); await open(subject, 'Providers & Models');
@@ -30,16 +84,14 @@ it('saves a whole Workspace Provider with explicit credentials without copying U
   fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://workspace.invalid' } });
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'WORKSPACE_KEY' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
-  await screen.findByText(/Source saved. Native application/);
-  expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toEqual({ method: 'configuration/sourceWrite', params: { session_id: cfg3Session, expected_revision: 'workspace-1', mutation: { kind: 'config', scope: 'workspace', mutation: { unit: 'provider', id: 'transport', authored: { base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } });
+  await screen.findByText(/Source saved. Native coordination/);
+  expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toEqual({ method: 'configuration/sourceWrite', params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } });
   expect(subject.request.mock.calls.filter(([operation]) => operation.method === 'session/adoptConfiguration')).toHaveLength(0);
-  expect(screen.getByText(/Prepared context changes await/)).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Adopt prepared context' }));
-  await waitFor(() => expect(screen.queryByRole('button', { name: 'Adopt prepared context' })).toBeNull());
+  expect(screen.queryByRole('button', { name: /Adopt/ })).toBeNull();
 });
 it('preserves stale drafts and exact revision until a separate explicit review gesture', async () => {
   const subject = cfg3Client(async (operation, source) => {
-    if (operation.method === 'configuration/sourceWrite') { source.workspace.revision = 'external-edit'; throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: operation.params.expected_revision, actual: 'external-edit' } }); }
+    if (operation.method === 'configuration/sourceWrite') { source.workspace!.revision = 'external-edit'; throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: operation.params.expected_revision, actual: 'external-edit' } }); }
   });
   await open(subject, 'Tools');
   fireEvent.click(screen.getByLabelText('read')); fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
@@ -59,13 +111,6 @@ it('repairs uncertain writes by rereading and never replays the mutation', async
   expect(subject.request.mock.calls.filter(([operation]) => operation.method === 'configuration/sourceWrite')).toHaveLength(1);
   expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
 });
-it('shows native adoption refusal without changing the effective generation', async () => {
-  const subject = cfg3Client(async operation => { if (operation.method === 'session/adoptConfiguration') throw new Error('busy: admitted work'); });
-  subject.source.application = cfg3Application();
-  render(<Settings client={subject.client} sessionId={cfg3Session} />); await screen.findByText('server-frozen-model');
-  fireEvent.click(screen.getByRole('button', { name: 'Adopt prepared context' }));
-  expect((await screen.findByRole('alert')).textContent).toContain('busy: admitted work');
-});
 it('edits an independent named-Agent whole resource with inherited model and Plugins off', async () => {
   const subject = cfg3Client(); await open(subject, 'Agents');
   fireEvent.change(screen.getByLabelText('New Agent identity'), { target: { value: 'researcher' } }); fireEvent.click(screen.getByRole('button', { name: 'Add Agent' }));
@@ -75,16 +120,16 @@ it('edits an independent named-Agent whole resource with inherited model and Plu
   fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'Read and report findings.' } });
   fireEvent.click(screen.getByLabelText('read')); fireEvent.click(screen.getByLabelText('todo'));
   fireEvent.click(screen.getByRole('button', { name: 'Save Agent researcher' }));
-  await waitFor(() => expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'missing', mutation: { kind: 'agent', scope: 'workspace', name: 'researcher', authored: { description: 'Research a topic', tools: { builtin: ['read'] }, plugins: { todo: { enabled: true } } } } } }));
+  await waitFor(() => expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'missing', mutation: { kind: 'agent', name: 'researcher', authored: { description: 'Research a topic', tools: { builtin: ['read'] }, plugins: { todo: { enabled: true } } } } } }));
 });
 
 it('keeps shadowed User resources visible using native shadowing facts', async () => {
   const subject = cfg3Client();
   subject.source.prospective_resources = { ...subject.effective.resources, definitions: [{ family: 'skill', name: 'review', valid: false, location: { scope: 'workspace', path: '/workspace/.agents/skills/review/SKILL.md', shadowed: '/home/user/rustx/.agents/skills/review/SKILL.md' } }] };
-  render(<Settings client={subject.client} sessionId={cfg3Session} />);
-  await screen.findByText('server-frozen-model');
-  fireEvent.click(screen.getByRole('tab', { name: 'User' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Skills' }));
+  render(<Settings client={subject.client} workspaceId="A" host={subject.host ??= cfg3Host(subject)} />);
+  await screen.findByText(/Revision: workspace-1/);
+  fireEvent.change(screen.getByLabelText('Configuration owner'), { target: { value: '' } });
+  await screen.findByText(/Revision: user-1/); fireEvent.click(screen.getByRole('button', { name: 'Skills' }));
   expect(screen.getByText(/Shadowed by Workspace/).textContent).toContain('/home/user/rustx/.agents/skills/review/SKILL.md');
   expect(screen.queryByText(/Root visible/)).toBeNull();
 });
@@ -92,15 +137,15 @@ it('keeps shadowed User resources visible using native shadowing facts', async (
 it('retains a draft and its original CAS revision across scope and section navigation', async () => {
   const subject = cfg3Client(); await open(subject, 'Tools');
   fireEvent.click(screen.getByLabelText('read'));
-  fireEvent.click(screen.getByRole('tab', { name: 'User' }));
-  expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(false);
+  fireEvent.change(screen.getByLabelText('Configuration owner'), { target: { value: '' } });
+  await screen.findByText(/Revision: user-1/); expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(false);
   fireEvent.click(screen.getByRole('button', { name: 'General' }));
-  subject.source.workspace.revision = 'external';
+  subject.source.workspace!.revision = 'external';
   fireEvent.click(screen.getByRole('button', { name: 'Read current sources' }));
-  await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead')).toHaveLength(2));
-  fireEvent.click(screen.getByRole('tab', { name: 'Workspace' }));
+  await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead')).toHaveLength(3));
+  fireEvent.change(screen.getByLabelText('Configuration owner'), { target: { value: 'A' } });
   fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
-  expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
+  await screen.findByText(/Revision: external/); expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
   await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'workspace-1' } }));
 });
@@ -108,13 +153,13 @@ it('retains a draft and its original CAS revision across scope and section navig
 it('replaces against the newer revision only after an explicit review gesture', async () => {
   let first = true;
   const subject = cfg3Client(async (op, source) => {
-    if (op.method === 'configuration/sourceWrite' && first) { first = false; source.workspace.revision = 'reviewed'; throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: 'workspace-1', actual: 'reviewed' } }); }
+    if (op.method === 'configuration/sourceWrite' && first) { first = false; source.workspace!.revision = 'reviewed'; throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: 'workspace-1', actual: 'reviewed' } }); }
   });
   await open(subject, 'Tools'); fireEvent.click(screen.getByLabelText('read'));
   fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Use reviewed revision' }));
   fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
-  await screen.findByText(/Source saved. Native application/);
+  await screen.findByText(/Source saved. Native coordination/);
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'reviewed', mutation: { mutation: { authored: ['read'] } } } });
 });
 
@@ -124,33 +169,20 @@ it.each(['empty', 'omit'] as const)('preserves native %s Tool selection as a dis
   await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'native_tools', authored: mode === 'empty' ? [] : null } } } }));
 });
 
-it('T12 repairs uncertain adoption by rereading authority without replay', async () => {
-  const subject = cfg3Client(async (op, source, effective) => { if (op.method === 'session/adoptConfiguration') { effective.generation = '8'; source.application = { ...cfg3Application(), version: '3', candidate: null, units: { instructions: { status: 'applied' } } }; throw new OutcomeUncertain(); } });
-  subject.source.application = cfg3Application();
-  render(<Settings client={subject.client} sessionId={cfg3Session} />); await screen.findByText('server-frozen-model');
-  fireEvent.click(screen.getByRole('button', { name: 'Adopt prepared context' }));
-  await waitFor(() => expect(screen.queryByRole('button', { name: 'Adopt prepared context' })).toBeNull());
-  expect(screen.getByRole('alert').textContent).toContain('will not be replayed');
-  expect(subject.request.mock.calls.filter(([op]) => op.method === 'session/adoptConfiguration')).toHaveLength(1);
-});
 
-it('presents native process policy ownership and Effective as read-only', async () => {
-  const subject = cfg3Client(); await open(subject, 'General', 'User');
-  expect(screen.getByText(/shutdown deadline requires restart/)).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Save App Server policy' })).toBeTruthy();
-  fireEvent.click(screen.getByRole('tab', { name: 'Workspace' }));
-  expect(screen.queryByRole('button', { name: 'Save App Server policy' })).toBeNull();
-  expect(screen.getByText(/process policy is User-only/)).toBeTruthy();
-  fireEvent.click(screen.getByRole('tab', { name: 'Effective' }));
-  expect(screen.queryByRole('button', { name: /^Save / })).toBeNull();
-  expect(screen.getByText(/Actual process bindings/)).toBeTruthy();
+it('process state comes from native classification, outside Session adoption', async () => {
+ const subject = cfg3Client(); subject.source.application = cfg3Application(); subject.source.application.units.process_bindings = { status: 'process_restart' };
+ await open(subject, 'Server & source diagnostics', 'User');
+ expect(screen.getByText(/Restart required/)).toBeTruthy();
+ expect(screen.queryByRole('button', { name: /Adopt/ })).toBeNull();
 });
 
 it('does not equate invalid resource existence with readiness or Root authority', async () => {
   const subject = cfg3Client();
-  subject.effective.resources.definitions = [{ name: 'unselected', family: 'managed_python', valid: false, location: { scope: 'workspace', path: '/workspace/.agents/python/unselected' } }];
-  subject.effective.resources.sources = { 'python:unselected': { status: 'unavailable' } };
-  render(<Settings client={subject.client} sessionId={cfg3Session} />); await screen.findByText('server-frozen-model');
+  subject.source.prospective_resources = structuredClone(subject.effective.resources);
+  subject.source.prospective_resources.definitions = [{ name: 'unselected', family: 'managed_python', valid: false, location: { scope: 'workspace', path: '/workspace/.agents/python/unselected' } }];
+  subject.source.prospective_resources.sources = { 'python:unselected': { status: 'unavailable' } };
+  render(<Settings client={subject.client} workspaceId="A" host={subject.host ??= cfg3Host(subject)} />); await screen.findByText(/Revision: workspace-1/);
   fireEvent.click(screen.getByRole('button', { name: 'Managed Python' }));
   expect(screen.getByText('Invalid definition')).toBeTruthy(); expect(screen.getByText('Defined only')).toBeTruthy();
   expect(screen.getAllByText('unavailable').length).toBeGreaterThan(0);
@@ -168,37 +200,37 @@ it('keeps contributor default intent unspecified when enabling the closed Agent 
 });
 
 it('reconnect rereads native sources without replaying a dirty draft', async () => {
-  const subject = cfg3Client(); const ui = render(<Settings client={subject.client} sessionId={cfg3Session} />);
-  await screen.findByText('server-frozen-model'); fireEvent.click(screen.getByRole('tab', { name: 'Workspace' })); fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+  const subject = cfg3Client(); const ui = render(<Settings client={subject.client} workspaceId="A" host={subject.host ??= cfg3Host(subject)} />);
+  await screen.findByText(/Revision: workspace-1/); fireEvent.change(screen.getByLabelText('Configuration owner'), { target: { value: 'A' } }); fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
   fireEvent.click(screen.getByLabelText('read'));
   const snapshot = { ...subject.state, generation: 2 };
   subject.client.getSnapshot = () => snapshot;
-  ui.rerender(<Settings client={subject.client} sessionId={cfg3Session} />);
+  ui.rerender(<Settings client={subject.client} workspaceId="A" host={subject.host ??= cfg3Host(subject)} />);
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead')).toHaveLength(2));
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
   expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
 });
 
 it('an older authoritative read cannot replace a newer read', async () => {
-  let release: (value: import('../../protocol/app-server/v15').MethodResult) => void = () => {};
+  let release: (value: import('../../protocol/app-server/v16').MethodResult) => void = () => {};
   let count = 0;
   const subject = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++count === 2) return new Promise(resolve => { release = resolve; }); });
-  render(<Settings client={subject.client} sessionId={cfg3Session} />); await screen.findByText('server-frozen-model');
+  render(<Settings client={subject.client} workspaceId="A" host={subject.host ??= cfg3Host(subject)} />); await screen.findByText(/Revision: workspace-1/);
   const stale = structuredClone(subject.source);
   fireEvent.click(screen.getByRole('button', { name: 'Read current sources' }));
   await waitFor(() => expect(count).toBe(2));
-  subject.source.workspace.revision = 'newest';
+  subject.source.workspace!.revision = 'newest';
   fireEvent.click(screen.getByRole('button', { name: 'Read current sources' }));
-  fireEvent.click(screen.getByRole('tab', { name: 'Workspace' }));
+  fireEvent.change(screen.getByLabelText('Configuration owner'), { target: { value: 'A' } });
   await screen.findByText(/Revision: newest/);
-  release({ type: 'source_settings', projection: stale, session_revision: '1', session_selection: null });
+  release({ type: 'source_settings', projection: stale });
   await waitFor(() => expect(screen.getByText(/Revision: newest/)).toBeTruthy());
 });
 
 it('removes literal credentials from a successful Provider draft using the redacted native acknowledgement', async () => {
   const subject = cfg3Client(async (op, source) => {
     if (op.method === 'configuration/sourceWrite' && op.params.mutation.kind === 'config' && op.params.mutation.mutation.unit === 'provider') {
-      source.workspace.authored = { providers: { secret: { base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
+      source.workspace!.authored = { providers: { secret: { base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
     }
   });
   await open(subject, 'Providers & Models');
@@ -206,7 +238,7 @@ it('removes literal credentials from a successful Provider draft using the redac
   fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } }); fireEvent.change(screen.getByLabelText('Credential source'), { target: { value: 'literal' } });
   fireEvent.change(screen.getByLabelText('New literal credential'), { target: { value: 'SECRET_SENTINEL' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
-  await screen.findByText(/Source saved. Native application/);
+  await screen.findByText(/Source saved. Native coordination/);
   await waitFor(() => expect(screen.queryByLabelText('New literal credential')).toBeNull());
   expect(document.body.innerHTML).not.toContain('SECRET_SENTINEL');
   fireEvent.click(screen.getByRole('button', { name: 'Back to catalog' })); fireEvent.click(screen.getByRole('button', { name: 'Edit Provider secret' }));
@@ -224,8 +256,8 @@ it('retains a Model draft when native validation rejects its semantic unit', asy
 it('preserves the original revision when removing an otherwise clean unit conflicts', async () => {
   const subject = cfg3Client(async (op, source) => {
     if (op.method === 'configuration/sourceWrite') {
-      source.workspace.revision = 'external-removal-conflict';
-      throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: op.params.expected_revision, actual: source.workspace.revision } });
+      source.workspace!.revision = 'external-removal-conflict';
+      throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: op.params.expected_revision, actual: source.workspace!.revision } });
     }
   });
   await open(subject, 'Tools');
@@ -236,31 +268,31 @@ it('preserves the original revision when removing an otherwise clean unit confli
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { mutation: { authored: null } } } });
 });
 it.each([
-  ['effect', 'refresh'], ['effect', 'write'], ['refresh', 'refresh'], ['refresh', 'write'],
+  ['effect', 'refresh'], ['refresh', 'refresh'], ['refresh', 'write'],
 ] as const)('fences an obsolete %s read rejection after a newer %s', async (readKind, successor) => {
   let rejectRead!: (error: Error) => void;
-  const pending = new Promise<import('../../protocol/app-server/v15').MethodResult>((_, reject) => { rejectRead = reject; });
+  const pending = new Promise<import('../../protocol/app-server/v16').MethodResult>((_, reject) => { rejectRead = reject; });
   let reads = 0;
   const subject = cfg3Client(async op => {
     if (op.method === 'configuration/sourcesRead' && ++reads === 2) return pending;
   });
-  const ui = render(<Settings client={subject.client} sessionId={cfg3Session} />);
-  await screen.findByText('server-frozen-model');
-  fireEvent.click(screen.getByRole('tab', { name: 'Workspace' }));
+  const ui = render(<Settings client={subject.client} workspaceId="A" host={subject.host ??= cfg3Host(subject)} />);
+  await screen.findByText(/Revision: workspace-1/);
+  fireEvent.change(screen.getByLabelText('Configuration owner'), { target: { value: 'A' } });
   fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
   if (readKind === 'effect') {
     const snapshot = { ...subject.state, generation: 2 };
     subject.client.getSnapshot = () => snapshot;
-    ui.rerender(<Settings client={subject.client} sessionId={cfg3Session} />);
+    ui.rerender(<Settings client={subject.client} workspaceId="A" host={subject.host ??= cfg3Host(subject)} />);
   } else fireEvent.click(screen.getByRole('button', { name: 'Read current sources' }));
   await waitFor(() => expect(reads).toBe(2));
   if (successor === 'refresh') {
-    subject.source.workspace.revision = 'new-authority';
+    subject.source.workspace!.revision = 'new-authority';
     fireEvent.click(screen.getByRole('button', { name: 'Read current sources' }));
   } else {
     fireEvent.click(screen.getByLabelText('read'));
     fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
-    await screen.findByText(/Source saved. Native application/);
+    await screen.findByText(/Source saved. Native coordination/);
   }
   const revision = successor === 'refresh' ? 'new-authority' : 'saved-2';
   await screen.findByText(new RegExp(`Revision: ${revision}`));
@@ -270,25 +302,6 @@ it.each([
   expect(document.body.textContent).not.toContain('obsolete read failed');
 });
 
-it('T03/T16 renders simultaneous native application outcomes without inferring field impact', async () => {
-  const subject = cfg3Client();
-  const application = cfg3Application();
-  application.units = {
-    execution_policy: { status: 'applied' },
-    instructions: { status: 'ready', impact: 'prefix_changed' },
-    provider: { status: 'failed', diagnostic: 'candidate rejected' },
-    capabilities: { status: 'preparing' },
-    process_bindings: { status: 'process_restart' },
-  };
-  subject.source.application = application;
-  render(<Settings client={subject.client} sessionId={cfg3Session} />);
-  await screen.findByText(/Preparing configuration/);
-  expect(screen.getByText(/applied for future independent Attempts/)).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Adopt prepared context' })).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Retry application' })).toBeTruthy();
-  expect(screen.getByText(/Process restart required/)).toBeTruthy();
-  expect(subject.request.mock.calls.every(([op]) => !['configuration/reconcile', 'session/adoptConfiguration', 'configuration/sourceWrite'].includes(op.method))).toBe(true);
-});
 
 
 it.each(['before acknowledgement', 'after acknowledgement', 'after the next edit'] as const)('T12/T16 source projection %s preserves subsequent drafts', async order => {
@@ -297,7 +310,7 @@ it.each(['before acknowledgement', 'after acknowledgement', 'after the next edit
   const save = async () => pending;
   const form = (initial: { command: string }, revision: string) => <UnitForm
     title="MCP acknowledgement" initial={initial} revision={revision} save={save}
-    mutation={value => ({ kind: 'mcp', scope: 'workspace', id: 'fixture', authored: value ? { definition: { type: 'stdio', command: value.command } } : null })}>
+    mutation={value => ({ kind: 'mcp', id: 'fixture', authored: value ? { definition: { type: 'stdio', command: value.command } } : null })}>
     {(value, change) => <TextField label="Acknowledged command" value={value.command} change={command => change({ command })} />}
   </UnitForm>;
   const ui = render(form({ command: 'original' }, 'r1'));

@@ -954,7 +954,14 @@ impl SessionRuntimeManager {
         &self,
         id: &SessionId,
     ) -> Option<super::configuration::application::ConfigurationApplication> {
-        self.applications.lock().view(id.as_ref())
+        let mut application = self.applications.lock().view(id.as_ref())?;
+        if application.candidate.is_some() {
+            application.eligibility = self.configuration_runtime(id).map_or(
+                super::configuration::application::AdoptionEligibility::Unavailable,
+                |runtime| runtime.configuration_adoption_eligibility(),
+            );
+        }
+        Some(application)
     }
 
     pub(crate) fn configuration_changes(&self) -> watch::Receiver<u64> {
@@ -1079,143 +1086,129 @@ impl SessionRuntimeManager {
 
     pub(crate) async fn reconcile_configuration(
         &self,
-        session: &SessionId,
+        target: &super::configuration::settings::SourceTarget,
     ) -> Result<super::configuration::application::ConfigurationApplication, SourceSettingsError>
     {
         let owner = self.clone();
-        let session = session.clone();
-        tokio::spawn(async move { owner.reconcile_configuration_owned(&session).await })
-            .await
-            .map_err(|_| {
-                SourceSettingsError::Source(
-                    super::configuration::settings::SettingsError::Committed,
-                )
-            })?
+        let target = target.clone();
+        tokio::spawn(async move {
+            owner.coordinate_source(&target).await?;
+            owner
+                .applications
+                .lock()
+                .view(&target.application_scope())
+                .ok_or(SourceSettingsError::Source(
+                    super::configuration::settings::SettingsError::Io,
+                ))
+        })
+        .await
+        .map_err(|_| {
+            SourceSettingsError::Source(super::configuration::settings::SettingsError::Committed)
+        })?
     }
 
-    async fn reconcile_configuration_owned(
+    async fn coordinate_source(
         &self,
-        session: &SessionId,
-    ) -> Result<super::configuration::application::ConfigurationApplication, SourceSettingsError>
-    {
-        let input = self
-            .sessions
-            .catalog
-            .lock()
-            .await
-            .lineage(session, None)
-            .map_err(SourceSettingsError::Session)?
-            .1
-            .input();
-        let input = self
-            .sessions
-            .configuration_bindings
-            .lock()
-            .expect("Session configuration bindings")
-            .get(session)
-            .map_or(input, |binding| binding.input.clone());
-        let owner = self.configuration.clone();
-        let applications = self.applications.clone();
-        let scope = session.to_string();
+        target: &super::configuration::settings::SourceTarget,
+    ) -> Result<(), SourceSettingsError> {
+        let owner = self.clone();
+        let target = target.clone();
         tokio::task::spawn_blocking(move || {
-            let mut state = applications.lock();
-            state.capture(scope, &input.cwd, owner.capture_application(&input));
-            applications.notify(&state);
+            target.validate().map_err(SourceSettingsError::Source)?;
+            let mut application = owner.applications.lock();
+            owner.capture_source_consumers(&mut application, &target);
+            owner.applications.notify(&application);
+            drop(application);
+            owner.applications.run(owner.clone());
+            Ok(())
         })
         .await
         .map_err(|_| {
             SourceSettingsError::Source(super::configuration::settings::SettingsError::Io)
-        })?;
-        let state = self.applications.lock();
-        let view = state
-            .view(session.as_ref())
-            .expect("registered application");
-        self.applications.notify(&state);
-        drop(state);
-        self.applications.run(self.clone());
-        Ok(view)
+        })?
     }
 
-    /// Read source provenance while retaining the Session revision it resolves.
+    fn capture_source_consumers(
+        &self,
+        application: &mut super::configuration::application::ApplicationState,
+        target: &super::configuration::settings::SourceTarget,
+    ) {
+        use super::configuration::settings::SourceTarget;
+        use sha2::Digest;
+        let captured = self.configuration.read_source_settings(target);
+        let revision = captured.as_ref().ok().map(|projection| {
+            format!(
+                "{:x}",
+                sha2::Sha256::digest(serde_json::to_vec(projection).expect("source projection"))
+            )
+        });
+        let process = captured
+            .as_ref()
+            .ok()
+            .and_then(|projection| projection.user.authored.as_ref())
+            .map(|document| document.app_server.clone().unwrap_or_default())
+            .ok_or_else(|| "User process policy source is invalid or unreadable".into())
+            .and_then(|policy| policy.validate().map(|()| policy));
+        application.capture_source(target.application_scope(), revision, process);
+        if let SourceTarget::Workspace { directory } = target {
+            let input = super::configuration::SessionConfigInput::new(directory.clone());
+            application.record_source(directory, &self.configuration.capture_application(&input));
+        }
+        if matches!(target, SourceTarget::User) {
+            // A User commit also refreshes the desired capture of every
+            // Workspace identity with retained native authority, including
+            // those without any live Session. This never touches `available`;
+            // only successful fenced preparation publishes there.
+            for directory in application.known_source_directories() {
+                let input = super::configuration::SessionConfigInput::new(directory.clone());
+                application
+                    .record_source(&directory, &self.configuration.capture_application(&input));
+            }
+        }
+        let inputs: Vec<_> = self
+            .sessions
+            .configuration_bindings
+            .lock()
+            .expect("Session configuration bindings")
+            .iter()
+            .filter(|(_, binding)| {
+                target
+                    .workspace()
+                    .is_none_or(|directory| directory == binding.input.cwd)
+            })
+            .map(|(session, binding)| (session.clone(), binding.input.clone()))
+            .collect();
+        for (session, input) in inputs {
+            application.capture(
+                session.to_string(),
+                &input.cwd,
+                self.configuration.capture_application(&input),
+            );
+        }
+    }
+
+    /// Source authoring never loads, creates, or derives authority from a Session.
+    /// Writes transfer to a native-owned task before persistence begins. Source
+    /// publication and coordinator capture are serialized by the application lock.
+    /// The task survives destruction of the RPC waiter, including after commit.
     /// # Errors
-    /// Session lookup, source validation and exact source conflicts are typed.
-    /// # Panics
-    /// Panics if a prior panic poisoned the resident-runtime registry mutex.
+    /// Returns typed source validation, CAS, I/O, or uncertain-commit errors.
     pub async fn source_settings(
         &self,
-        id: &super::session::SessionId,
+        target: &super::configuration::settings::SourceTarget,
         mutation: Option<(String, super::configuration::settings::SourceMutation)>,
-    ) -> Result<
-        (
-            super::configuration::settings::SourceSettings,
-            u64,
-            Option<crate::model::session::SessionModelConfig>,
-        ),
-        SourceSettingsError,
-    > {
-        if mutation.is_none() {
-            return self.source_settings_owned(id, mutation).await;
-        }
+    ) -> Result<super::configuration::settings::SourceSettings, SourceSettingsError> {
         let owner = self.clone();
-        let id = id.clone();
-        tokio::spawn(async move { owner.source_settings_owned(&id, mutation).await })
-            .await
-            .map_err(|_| {
-                SourceSettingsError::Source(
-                    super::configuration::settings::SettingsError::Committed,
-                )
-            })?
-    }
-
-    #[allow(clippy::too_many_lines)] // one ordered ownership transaction
-    async fn source_settings_owned(
-        &self,
-        id: &super::session::SessionId,
-        mutation: Option<(String, super::configuration::settings::SourceMutation)>,
-    ) -> Result<
-        (
-            super::configuration::settings::SourceSettings,
-            u64,
-            Option<crate::model::session::SessionModelConfig>,
-        ),
-        SourceSettingsError,
-    > {
-        let (revision, settings) = {
-            let catalog = self.sessions.catalog.lock().await;
-            let revision = catalog
-                .settings_revision(id)
-                .map_err(SourceSettingsError::Session)?;
-            let (_, settings) = catalog
-                .lineage(id, None)
-                .map_err(SourceSettingsError::Session)?;
-            (revision, settings)
-        };
-        let committed = mutation.is_some();
-        let owner = self.configuration.clone();
-        let input = settings.input();
-        let application_owner = self.applications.clone();
-        let session = id.clone();
-        let bindings = self.sessions.configuration_bindings.clone();
-        let credentials = self.credentials.clone();
-        let projection = tokio::task::spawn_blocking(move || {
-            let mut application = application_owner.lock();
-            // A cold persisted Session may not yet have joined this process's
-            // configuration owner. Establish its pre-write binding at the same
-            // source fence; the worker must never bootstrap from saved desired
-            // bytes merely because no runtime has been allocated.
-            if committed {
-                let mut retained = bindings.lock().expect("Session configuration bindings");
-                if !retained.contains_key(&session)
-                    && let Ok(binding) = application.initial_binding(&owner, &input, &credentials)
-                {
-                    retained.insert(session.clone(), binding);
-                }
-            }
+        let target = target.clone();
+        tokio::task::spawn_blocking(move || {
+            target.validate().map_err(SourceSettingsError::Source)?;
+            let mut application = owner.applications.lock();
+            let committed = mutation.is_some();
             let result = match mutation {
-                Some((expected, mutation)) => {
-                    owner.write_source_settings(&input, &expected, mutation)
-                }
-                None => owner.read_source_settings(&input),
+                Some((expected, mutation)) => owner
+                    .configuration
+                    .write_source_settings(&target, &expected, mutation),
+                None => owner.configuration.read_source_settings(&target),
             };
             if committed
                 && (result.is_ok()
@@ -1224,98 +1217,31 @@ impl SessionRuntimeManager {
                         Err(super::configuration::settings::SettingsError::Committed)
                     ))
             {
-                let mut inputs: std::collections::BTreeMap<_, _> = bindings
-                    .lock()
-                    .expect("Session configuration bindings")
-                    .iter()
-                    .map(|(session, binding)| (session.clone(), binding.input.clone()))
-                    .collect();
-                inputs.entry(session).or_insert(input);
-                for (session, input) in inputs {
-                    application.capture(
-                        session.to_string(),
-                        &input.cwd,
-                        owner.capture_application(&input),
-                    );
-                }
-                application_owner.notify(&application);
+                // Linearization: persisted source belongs to native coordination
+                // before releasing the publication lock or replying to the client.
+                owner.capture_source_consumers(&mut application, &target);
+                owner.applications.notify(&application);
             }
-            result
+            let mut projection = result;
+            if let Ok(projection) = &mut projection {
+                projection.application = application.view(&target.application_scope());
+                projection.process_bindings = Some(owner.process_policy());
+            }
+            drop(application);
+            if committed {
+                owner.applications.run(owner.clone());
+                #[cfg(test)]
+                owner
+                    .configuration
+                    .test_hooks
+                    .reach("after_coordination_transfer");
+            }
+            projection.map_err(SourceSettingsError::Source)
         })
         .await
         .map_err(|_| {
-            SourceSettingsError::Source(if committed {
-                super::configuration::settings::SettingsError::Committed
-            } else {
-                super::configuration::settings::SettingsError::Io
-            })
-        })?;
-        if committed {
-            self.applications.run(self.clone());
-            #[cfg(test)]
-            {
-                let node = self
-                    .sessions
-                    .catalog
-                    .lock()
-                    .await
-                    .lineage(id, None)
-                    .expect("test Session")
-                    .0;
-                self.probe(&node.conversation_id)
-                    .after_configuration_persistence
-                    .park()
-                    .await;
-            }
-        }
-        let projection = projection.map_err(SourceSettingsError::Source)?;
-        let actual = self
-            .sessions
-            .catalog
-            .lock()
-            .await
-            .settings_revision(id)
-            .map_err(|error| {
-                if committed {
-                    SourceSettingsError::Source(
-                        super::configuration::settings::SettingsError::Committed,
-                    )
-                } else {
-                    SourceSettingsError::Session(error)
-                }
-            })?;
-        if actual != revision {
-            return Err(if committed {
-                SourceSettingsError::Source(
-                    super::configuration::settings::SettingsError::Committed,
-                )
-            } else {
-                SourceSettingsError::Session(super::session::SessionError::StaleSettings {
-                    expected: revision,
-                    actual,
-                })
-            });
-        }
-        let resident = {
-            let state = self.registry.0.lock().expect("registry mutex");
-            state.by_session.get(id).and_then(|conversation| {
-                match state.entries.get(conversation) {
-                    Some(Entry::Loaded(resident)) => Some(resident.clone()),
-                    _ => None,
-                }
-            })
-        };
-        let projection = resident
-            .and_then(|resident| resident.shutdown_runtime())
-            .and_then(|runtime| runtime.configuration_view())
-            .map_or_else(
-                || projection.clone(),
-                |loaded| projection.clone().with_loaded(&loaded),
-            );
-        let mut projection = projection;
-        projection.application = self.applications.lock().view(id.as_ref());
-        projection.process_bindings = Some(self.process_policy());
-        Ok((projection, revision, settings.model))
+            SourceSettingsError::Source(super::configuration::settings::SettingsError::Committed)
+        })?
     }
     #[must_use]
     /// # Panics
@@ -2035,6 +1961,5 @@ mod tests;
 
 #[derive(Debug)]
 pub enum SourceSettingsError {
-    Session(super::session::SessionError),
     Source(super::configuration::settings::SettingsError),
 }

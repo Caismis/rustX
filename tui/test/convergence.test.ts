@@ -4,7 +4,6 @@ import { CURSOR_MARKER, TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { ComposerEditor, composerIntent } from "../src/ui/composer.ts";
 import { PromptHistory } from "../src/ui/components/prompt-history.ts";
 import { PendingInputView } from "../src/ui/components/pending-input.ts";
-import { PermissionsView } from "../src/ui/components/permissions.ts";
 import { PopupFrame } from "../src/ui/components/popup-frame.ts";
 import { renderResourceBanner } from "../src/ui/components/resources.ts";
 import { renderFooter } from "../src/ui/components/status.ts";
@@ -95,35 +94,7 @@ test("Welcome consumes native origins, complete tools, extensions and admitted d
   assert.equal(plain(renderResourceBanner(state)), banner);
 });
 
-function sources() {
-  return { prospective_approval_mode: "full_access" as const, absent_resource_revision: "absent", resource_revisions: {}, loaded: { generation: "1", changed_sources: ["workspace"] }, user: { path: "/user", revision: "u" }, workspace: { path: "/workspace", revision: "exact-cas" }, user_resource_root: "/ur", workspace_resource_root: "/wr", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, workspace_mcp: { path: "/wm", revision: "wm" }, agents: [] };
-}
-
-test("permissions write exact Workspace revision, reread, and keep frozen/effective policy", async () => {
-  const h = await harness(snapshot({ attempt: attemptView({ execution_settings: { resource_revision: "1", approval_mode: "policy" } }) }));
-  const view = new PermissionsView(h.session, sources(), () => {}, () => {});
-  const saving = view.save("full_access");
-  const write = await nextRequest(h, "configuration/sourceWrite", 0);
-  assert.deepEqual(write.params, { session_id: h.session.sessionId, expected_revision: "exact-cas", mutation: { kind: "config", scope: "workspace", mutation: { unit: "approval", authored: "full_access" } } });
-  h.transport.respond(write.id, { type: "source_settings", session_revision: "1", projection: sources() });
-  const read = await nextRequest(h, "configuration/sourcesRead", 0);
-  h.transport.respond(read.id, { type: "source_settings", session_revision: "1", projection: sources() });
-  await saving;
-  assert.equal(h.session.state.effectiveApprovalMode, "policy");
-  assert.match(view.render(160).join("\n"), /Current: policy[\s\S]*frozen[\s\S]*Desired: full access/i);
-  assert.equal(h.transport.transportCount("configuration/sourceWrite"), 1);
-  assert.equal(h.transport.transportCount("session/adoptConfiguration"), 0);
-  h.client.close();
-});
-
-test("uncertain permissions and upload responses are not replayed", async () => {
-  const h = await harness();
-  const view = new PermissionsView(h.session, sources(), () => {}, () => {});
-  const saving = view.save("full_access");
-  await nextRequest(h, "configuration/sourceWrite", 0);
-  h.client.close(); await saving;
-  assert.equal(h.transport.transportCount("configuration/sourceWrite"), 1);
-  assert.match(view.render(200).join("\n"), /unknown|not replayed/i);
+test("uncertain upload responses are not replayed", async () => {
   const u = await harness();
   const upload = u.session.upload("selected.txt", new TextEncoder().encode("bytes"));
   const rejected = assert.rejects(upload, /unknown/);
@@ -208,7 +179,7 @@ test("exact historical completed_response drives tails and whole-conversation st
 test("T12/T16 native application notifications reject reorder and adoption sends the inspected identity", async () => {
   const h = await harness();
   const candidate = { identity: { input_revision: "input", attempt: "4" }, expected_binding: "2", impact: "prefix_changed" as const };
-  const application = { scope: h.session.sessionId, version: "9007199254740993", desired: candidate.identity,
+  const application = { eligibility: { status: "eligible" as const }, scope: h.session.sessionId, version: "9007199254740993", desired: candidate.identity,
     units: { execution_policy: { status: "applied" as const }, instructions: { status: "ready" as const, impact: "prefix_changed" as const } }, candidate };
   h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application } });
   h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application: { ...application, version: "9", candidate: null } } });
@@ -218,6 +189,11 @@ test("T12/T16 native application notifications reject reorder and adoption sends
   assert.deepEqual(request.params, { session_id: h.session.sessionId, candidate: candidate.identity, expected_binding: candidate.expected_binding });
   h.transport.respond(request.id, { type: "configuration_application", application: { ...application, version: "9007199254740994", candidate: null } });
   await adopting;
+  assert.deepEqual(h.session.application?.candidate, candidate, "acknowledgement alone cannot clear pending state");
+  const reading = h.session.readConfiguration();
+  const read = await nextRequest(h, "session/configuration", 0);
+  h.transport.respond(read.id, { type: "session_configuration", application: { ...application, version: "9007199254740994", candidate: null } });
+  await reading;
   assert.equal(h.session.application?.candidate, null);
   assert.equal(h.transport.transportCount("session/adoptConfiguration"), 1);
   h.client.close();
@@ -234,7 +210,7 @@ test("settlement reads native response statistics instead of summing usage event
   assert.deepEqual(h.session.state.statistics, statistics); h.client.close();
 });
 
-test("40x15 through 160x50 keep HITL decisions and permission choices actionable", async () => {
+test("40x15 through 160x50 keep HITL decisions actionable", async () => {
   const { HumanInteractionOverlay } = await import("../src/ui/components/hitl.ts");
   const { defaultPreferences } = await import("../src/ui/preferences.ts");
   const { approvalInteraction } = await import("./support/fixtures.ts");
@@ -249,10 +225,6 @@ test("40x15 through 160x50 keep HITL decisions and permission choices actionable
     const content = frame.render(columns!);
     assert.ok(content.length <= rows!); assert.ok(content.every(row => visibleWidth(row) <= columns!));
     assert.match(plain(content.join("\n")), /Deny/); frame.handleInput("\r"); assert.equal(decisions, 1);
-    const permissions = new PopupFrame(new PermissionsView(h.session, sources(), () => {}, () => {}));
-    permissions.setViewportHeight(Math.floor(rows! * .75));
-    assert.match(plain(permissions.render(columns!).join("\n")), /Tool policy/);
-    assert.match(plain(permissions.render(columns!).join("\n")), /Full access/);
     const draft = new ComposerDraft(); draft.text = "中👩‍💻e\u0301".repeat(10000);
     const context = new ComposerContext(() => ({ state: h.session.state, draft }));
     assert.ok(context.render(columns!).length <= 4);
@@ -291,20 +263,4 @@ test("queued edit submits exact pre-submit whitespace and trailing newlines with
     assert.equal(h.transport.transportCount("session/snapshot"), 0);
     h.client.close();
   }
-});
-
-test("T03/T16 permissions render native mixed application state", async () => {
-  const h = await harness();
-  const application: import("../src/protocol/app-server.ts").ConfigurationApplication = {
-    scope: h.session.sessionId, version: "9", desired: { input_revision: "input", attempt: "2" },
-    units: { execution_policy: { status: "applied" }, capabilities: { status: "preparing" }, provider: { status: "failed", diagnostic: "failed" }, process_bindings: { status: "process_restart" } },
-    candidate: { identity: { input_revision: "input", attempt: "2" }, expected_binding: "1", impact: "prefix_changed" },
-  };
-  const view = new PermissionsView(h.session, { ...sources(), application }, () => {}, () => {});
-  view.setBodyHeight(30);
-  const rendered = plain(view.render(160).join("\n"));
-  for (const text of ["Preparing configuration", "Applied for future independent Attempts", "Context changes await adoption", "Application failed", "Process restart required"]) assert.ok(rendered.includes(text), text);
-  assert.equal(h.transport.transportCount("configuration/reconcile"), 0);
-  assert.equal(h.transport.transportCount("session/adoptConfiguration"), 0);
-  h.client.close();
 });

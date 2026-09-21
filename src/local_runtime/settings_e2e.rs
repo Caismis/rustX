@@ -1,5 +1,5 @@
 //! Native CFG3 source authoring and complete generation publication contracts.
-use super::configuration::settings::{ConfigMutation, SettingsError, SourceMutation, SourceScope};
+use super::configuration::settings::{ConfigMutation, SettingsError, SourceMutation};
 use super::launch::{HostEnvironment, LaunchRequest};
 
 fn fixture() -> (tempfile::TempDir, HostEnvironment, LaunchRequest) {
@@ -38,34 +38,45 @@ model = "a"
 fn root_identity_and_description_are_independent_cas_units() {
     let (_root, host, request) = fixture();
     let (manager, input) = request.session_input(&host).unwrap();
-    let source = manager.read_source_settings(&input).unwrap();
+    let source = manager
+        .read_source_settings(&rustx_target(&input.cwd))
+        .unwrap();
     let identity = SourceMutation::Config {
-        scope: SourceScope::Workspace,
         mutation: ConfigMutation::AgentIdentity {
             authored: Some(crate::runtime::identity::AgentId::new("reviewer")),
         },
     };
     let saved = manager
-        .write_source_settings(&input, &source.workspace.revision, identity.clone())
+        .write_source_settings(
+            &rustx_target(&input.cwd),
+            &source.workspace.as_ref().unwrap().revision,
+            identity.clone(),
+        )
         .unwrap();
-    assert_ne!(saved.workspace.revision, source.workspace.revision);
+    assert_ne!(
+        saved.workspace.as_ref().unwrap().revision,
+        source.workspace.as_ref().unwrap().revision
+    );
     assert!(matches!(
-        manager.write_source_settings(&input, &source.workspace.revision, identity),
+        manager.write_source_settings(
+            &rustx_target(&input.cwd),
+            &source.workspace.as_ref().unwrap().revision,
+            identity
+        ),
         Err(SettingsError::Conflict { .. })
     ));
     let saved = manager
         .write_source_settings(
-            &input,
-            &saved.workspace.revision,
+            &rustx_target(&input.cwd),
+            &saved.workspace.as_ref().unwrap().revision,
             SourceMutation::Config {
-                scope: SourceScope::Workspace,
                 mutation: ConfigMutation::Description {
                     authored: Some("Review changes".into()),
                 },
             },
         )
         .unwrap();
-    let document = saved.workspace.authored.unwrap();
+    let document = saved.workspace.as_ref().unwrap().authored.clone().unwrap();
     assert_eq!(document.agent_id.unwrap().as_str(), "reviewer");
     assert_eq!(
         document.agent.unwrap().description.as_deref(),
@@ -73,10 +84,9 @@ fn root_identity_and_description_are_independent_cas_units() {
     );
     let removed = manager
         .write_source_settings(
-            &input,
-            &saved.workspace.revision,
+            &rustx_target(&input.cwd),
+            &saved.workspace.as_ref().unwrap().revision,
             SourceMutation::Config {
-                scope: SourceScope::Workspace,
                 mutation: ConfigMutation::Description { authored: None },
             },
         )
@@ -84,9 +94,13 @@ fn root_identity_and_description_are_independent_cas_units() {
     assert!(
         removed
             .workspace
+            .as_ref()
+            .unwrap()
             .authored
+            .as_ref()
             .unwrap()
             .agent
+            .as_ref()
             .unwrap()
             .description
             .is_none()
@@ -97,7 +111,9 @@ fn root_identity_and_description_are_independent_cas_units() {
 fn t08_capture_rejects_external_change_between_layers_and_resource_manifest() {
     let (_root, host, request) = fixture();
     let (manager, input) = request.session_input(&host).unwrap();
-    let source = manager.read_source_settings(&input).unwrap();
+    let source = manager
+        .read_source_settings(&rustx_target(&input.cwd))
+        .unwrap();
     let path = source.user.path;
     let before = std::fs::read_to_string(&path).unwrap();
     // This hook is exactly after layer capture, before resource resolution and
@@ -112,4 +128,12 @@ fn t08_capture_rejects_external_change_between_layers_and_resource_manifest() {
     assert!(matches!(result, Err(diagnostic) if diagnostic.contains("changed during capture")));
     let captured = manager.capture_application(&input).unwrap();
     assert!(captured.context.is_ok(), "a stable rescan succeeds");
+}
+
+fn rustx_target(
+    directory: &std::path::Path,
+) -> crate::local_runtime::configuration::settings::SourceTarget {
+    crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+        directory: directory.to_path_buf(),
+    }
 }

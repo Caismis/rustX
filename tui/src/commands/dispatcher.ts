@@ -174,6 +174,7 @@ export interface DebugDiagnostics {
 
 export class CommandDispatcher {
   #context: DispatcherContext;
+  #inspected = new Map<string, import('../../../protocol/app-server/v16.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -203,6 +204,10 @@ export class CommandDispatcher {
    * typed whole-questionnaire response.
    */
   async submit(line: string): Promise<CommandOutcome> {
+    const globalCommand = parseCommandLine(line);
+    if (globalCommand?.name === "/settings") {
+      try { return await this.#settings(globalCommand.argument); } catch (error) { return failure(error); }
+    }
     const session = this.#context.session;
     if (session === undefined) return transient("info", "choose a Session before submitting commands");
     const command = parseCommandLine(line);
@@ -238,8 +243,6 @@ export class CommandDispatcher {
         }
         case "/help":
           return inspect("Help", renderHelp());
-        case "/settings":
-          return inspect("Effective settings", renderSettings(state, await session.configuration()));
         case "/model":
           return await this.#model(session, state, argument);
         case "/new":
@@ -247,7 +250,7 @@ export class CommandDispatcher {
         case "/resume":
           return await this.#resume(session, argument);
         case "/session":
-          return await this.#sessionInfo(session);
+          return argument ? await this.#configuration(session, argument) : await this.#sessionInfo(session);
         case "/name":
           return await this.#name(session, argument);
         case "/clone":
@@ -271,8 +274,6 @@ export class CommandDispatcher {
           return inspect("Agent Status", renderStatus(state));
         case "/compact":
           return await this.#compact(session, argument);
-        case "/configuration":
-          return await this.#configuration(session, argument);
         case "/debug":
           return inspect("Client diagnostics", renderDebug(state, this.#context.diagnostics()));
         case "/show-reasoning":
@@ -444,30 +445,46 @@ export class CommandDispatcher {
     return inspect("Goal", goalSummary(updated));
   }
 
+  async #settings(argument: string): Promise<CommandOutcome> {
+    const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
+    const owner = words.shift() ?? "user";
+    let target: import("../../../protocol/app-server/v16.ts").SourceTarget;
+    if (owner === "user") target = { kind: "user" };
+    else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
+    else return transient("error", 'usage: /settings [user | workspace "<canonical absolute path>"] [rescan | approval policy|full_access|inherit]');
+    const action = words.shift();
+    const client = this.#context.host.client;
+    let source = (await client.call("configuration/sourcesRead", { target }, "source_settings")).projection;
+    if (action === "rescan") await client.call("configuration/reconcile", { target }, "configuration_application");
+    else if (action === "approval") {
+      const mode = words.shift();
+      if (mode !== "policy" && mode !== "full_access" && mode !== "inherit") return transient("error", "approval expects policy, full_access, or inherit");
+      await client.call("configuration/sourceWrite", { target, expected_revision: source[target.kind]!.revision,
+        mutation: { kind: "config", mutation: { unit: "approval", authored: mode === "inherit" ? null : mode } } }, "source_settings");
+    } else if (action) return transient("error", "Unknown Settings action");
+    if (action) source = (await client.call("configuration/sourcesRead", { target }, "source_settings")).projection;
+    return inspect(target.kind === "user" ? "User Settings" : "Workspace Settings", JSON.stringify(source, null, 2));
+  }
+
   async #configuration(session: AppServerSession, argument: string): Promise<CommandOutcome> {
-    const source = await session.permissionSources();
-    const [action, candidateId] = argument.trim().split(/\s+/);
-    if (action === "rescan" || action === "retry") {
-      await session.reconcileConfiguration();
-      return transient("info", "Native reconciliation started. Use /configuration to inspect application.");
-    }
-    if (action === "adopt") {
-      const candidate = source.application?.candidate;
-      if (!candidate || candidate.identity.attempt !== candidateId) return transient("error", "Candidate changed or not ready. Inspect /configuration before adopting.");
-      await session.adoptConfiguration(candidate);
-      return transient("info", "Prepared configuration adopted by this Session.");
-    }
-    if (action) return transient("error", "usage: /configuration [rescan | retry | adopt <attempt>]");
-    const application = source.application;
-    const units = Object.values(application?.units ?? {});
-    return inspect("Configuration", [
-      "Save applies independent changes automatically. Running Attempts retain their captured configuration.",
-      ...(units.some(unit => unit?.status === "preparing") ? ["Preparing configuration…"] : []),
-      ...(units.some(unit => unit?.status === "applied") ? ["Applicable changes applied for future independent Attempts."] : []),
-      ...(units.some(unit => unit?.status === "failed") ? ["Application failed. /configuration retry"] : []),
-      ...(units.some(unit => unit?.status === "process_restart") ? ["Process restart required for pending bindings."] : []),
-      ...(application?.candidate ? [`Context awaiting adoption. /configuration adopt ${application.candidate.identity.attempt}`] : []),
-      JSON.stringify(application ?? {}, null, 2),
+    if (argument === "adopt") {
+      const candidate = this.#inspected.get(session.sessionId);
+      if (!candidate) return transient("error", "Inspect /session settings before adopting.");
+      try { await session.adoptConfiguration(candidate); }
+      catch (error) {
+        const authority = await session.readConfiguration();
+        if (authority?.candidate) this.#inspected.set(session.sessionId, authority.candidate);
+        else this.#inspected.delete(session.sessionId);
+        return transient("error", String(error) + "\nNot replayed. Native authority: " + JSON.stringify(authority));
+      }
+    } else if (argument !== "settings") return transient("error", "usage: /session [settings | adopt]");
+    const application = await session.readConfiguration();
+    if (application?.candidate) this.#inspected.set(session.sessionId, application.candidate);
+    else this.#inspected.delete(session.sessionId);
+    return inspect("Session settings", [
+      renderSettings(session.state, await session.configuration()),
+      JSON.stringify(application, null, 2),
+      application?.candidate ? "Inspect the exact candidate above; /session adopt explicitly adopts it." : "No pending candidate reported by native authority.",
     ].join("\n"));
   }
 
@@ -1123,6 +1140,6 @@ export function renderSettings(state: PresentationState, configuration?: import(
       `Admitted Attempt: ${JSON.stringify(configuration.admitted_attempt ?? null)}`,
       "Effective configuration and provenance:", JSON.stringify(configuration, null, 2),
     ] : []),
-    "Save starts native application. /configuration inspects application, rescans files, retries, and explicitly adopts prepared context.",
+    "/settings edits User/Workspace sources. /session settings inspects Session state; /session adopt explicitly adopts the inspected candidate.",
   ].join("\n");
 }

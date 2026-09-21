@@ -130,7 +130,7 @@ describe("command registry", () => {
     assert.deepEqual(
       COMMANDS.map((command) => command.name),
       [
-        "/capabilities", "/permissions", "/attach", "/queue",
+        "/capabilities", "/attach", "/queue",
         "/export",
         "/settings",
         "/help",
@@ -148,7 +148,6 @@ describe("command registry", () => {
         "/todos",
         "/status",
         "/compact",
-        "/configuration",
         "/debug",
         "/show-reasoning",
         "/expand",
@@ -199,7 +198,7 @@ describe("slash-command autocomplete", () => {
     assert.ok(suggestions);
     assert.deepEqual(
       suggestions.items.map((item) => item.value),
-      ["/model", "/permissions"],
+      ["/model"],
     );
   });
 
@@ -433,7 +432,7 @@ describe("CommandDispatcher", () => {
     const changing = h.dispatcher.submit("/model beta/model-b");
 
     // The client reads the runtime's own catalog. It never opens rustx.toml.
-    const catalog = await nextRequest(h, "settings/models");
+    const catalog = await nextRequest(h, "session/models");
     h.transport.respond(catalog.id, {
       type: "models",
       catalog: {
@@ -462,10 +461,10 @@ describe("CommandDispatcher", () => {
       },
     });
 
-    const modelSet = await nextRequest(h, "settings/setModel");
+    const modelSet = await nextRequest(h, "session/setModel");
     // A deliberate whole-state replacement: primary overrides reset, while
     // the independent summary policy survives exactly.
-    assert.deepEqual(paramsOf(modelSet, "settings/setModel").config, {
+    assert.deepEqual(paramsOf(modelSet, "session/setModel").config, {
       model: "beta/model-b",
       reasoningProfile: "off",
       requestParams: {},
@@ -544,7 +543,7 @@ describe("CommandDispatcher", () => {
   it("rejects a model the runtime catalog does not offer", async () => {
     const h = await harness();
     const changing = h.dispatcher.submit("/model made/up");
-    const catalog = await nextRequest(h, "settings/models");
+    const catalog = await nextRequest(h, "session/models");
     h.transport.respond(catalog.id, { type: "models", catalog: { models: [] } });
 
     const outcome = await changing;
@@ -554,14 +553,14 @@ describe("CommandDispatcher", () => {
       assert.match(outcome.text, /not in the runtime's catalog/);
     }
     // No mutation was attempted for an unknown reference.
-    assert.equal(h.transport.log.count("settings/setModel"), 0);
+    assert.equal(h.transport.log.count("session/setModel"), 0);
   });
 
   it("opens the model selector from the runtime catalog", async () => {
     const h = await harness();
     const choosing = h.dispatcher.submit("/model");
     // The selector reads the runtime catalog, never rustx.toml.
-    const catalog = await nextRequest(h, "settings/models");
+    const catalog = await nextRequest(h, "session/models");
     h.transport.respond(catalog.id, {
       type: "models",
       catalog: {
@@ -598,7 +597,7 @@ describe("CommandDispatcher", () => {
       );
     }
     // Opening the selector mutates nothing.
-    assert.equal(h.transport.log.count("settings/setModel"), 0);
+    assert.equal(h.transport.log.count("session/setModel"), 0);
   });
 
   it("reads authoritative Session metadata for /session", async () => {
@@ -917,7 +916,7 @@ describe("CommandDispatcher", () => {
       const command = h.dispatcher.submit(
         profile === null ? "/model profile clear" : `/model profile set ${profile}`,
       );
-      const read = await nextRequest(h, "settings/model");
+      const read = await nextRequest(h, "session/model");
       const current = sessionModel("alpha/model-a");
       current.configured.reasoningProfile = "previous";
       current.configured.requestParams = { temperature: 0.5 };
@@ -929,17 +928,17 @@ describe("CommandDispatcher", () => {
       };
       h.transport.respond(read.id, { type: "model", model: current });
 
-      const set = await nextRequest(h, "settings/setModel");
+      const set = await nextRequest(h, "session/setModel");
       const expected = { ...current.configured };
       if (profile === null) delete expected.reasoningProfile;
       else expected.reasoningProfile = profile;
-      assert.deepEqual(paramsOf(set, "settings/setModel").config, expected);
+      assert.deepEqual(paramsOf(set, "session/setModel").config, expected);
       h.transport.respond(set.id, {
         type: "model",
         model: { ...current, configured: expected },
       });
       assert.equal((await command).kind, "transient");
-      assert.equal(h.transport.log.count("settings/setModel"), 1);
+      assert.equal(h.transport.log.count("session/setModel"), 1);
       assert.deepEqual(
         h.session.state,
         before,
@@ -1183,15 +1182,17 @@ describe("CommandDispatcher", () => {
 
   it("T16 rescans only through native reconciliation", async () => {
     const h = await harness();
-    const operation = h.dispatcher.submit("/configuration rescan");
+    const operation = h.dispatcher.submit("/settings user rescan");
     const read = await nextRequest(h, "configuration/sourcesRead");
-    h.transport.respond(read.id, { type: "source_settings", session_revision: "1", projection: {
-      absent_resource_revision: "absent", resource_revisions: {}, user: { path: "/user", revision: "u" }, workspace: { path: "/workspace", revision: "w" },
+    h.transport.respond(read.id, { type: "source_settings", projection: {
+      target: { kind: "user" }, provenance: {}, process_policy_impacts: {}, absent_resource_revision: "absent", resource_revisions: {}, user: { path: "/user", revision: "u" }, workspace: { path: "/workspace", revision: "w" },
       user_resource_root: "/ur", workspace_resource_root: "/wr", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, workspace_mcp: { path: "/wm", revision: "wm" }, agents: [],
     } });
     const reconcile = await nextRequest(h, "configuration/reconcile");
-    h.transport.respond(reconcile.id, { type: "configuration_application", application: { scope: h.session.sessionId, version: "2", desired: { input_revision: "u", attempt: "1" }, units: { execution_policy: { status: "applied" } } } });
-    assert.deepEqual(await operation, { kind: "transient", level: "info", text: "Native reconciliation started. Use /configuration to inspect application." });
+    h.transport.respond(reconcile.id, { type: "configuration_application", application: { eligibility: { status: "unavailable" }, scope: h.session.sessionId, version: "2", desired: { input_revision: "u", attempt: "1" }, units: { execution_policy: { status: "applied" } } } });
+    const reread = await nextRequest(h, "configuration/sourcesRead", 1);
+    h.transport.respond(reread.id, { type: "source_settings", projection: { target: { kind: "user" }, provenance: {}, process_policy_impacts: {}, absent_resource_revision: "absent", resource_revisions: {}, user: { path: "/user", revision: "u" }, user_resource_root: "/ur", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, agents: [] } });
+    assert.equal((await operation).kind, "inspect");
   });
 
   it("renders bounded /debug diagnostics without any credential", async () => {

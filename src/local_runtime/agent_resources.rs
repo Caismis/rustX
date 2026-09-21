@@ -82,9 +82,10 @@ fn candidates(
     Ok(result)
 }
 
+/// User discovery has no Workspace authority unless one is explicitly supplied.
 #[allow(clippy::too_many_lines)] // One bounded, shadow-before-parse catalog pass.
 pub(crate) fn load_authorized(
-    workspace: &Path,
+    workspace: Option<&Path>,
     user_root: &Path,
 ) -> Result<(AgentCatalog, BTreeMap<SubagentName, AgentSource>), RuntimeResourceLoadError> {
     let mut diagnostics = Vec::new();
@@ -92,24 +93,35 @@ pub(crate) fn load_authorized(
         diagnostics.push(error);
         BTreeMap::new()
     });
-    let projects = candidates(
-        workspace,
-        &workspace.join(".agents/agents"),
-        &mut diagnostics,
-    )
-    .unwrap_or_else(|error| {
-        // An unreadable higher collection cannot authorize lower identities
-        // whose potential shadowing cannot be determined.
-        users.clear();
-        diagnostics.push(error);
-        BTreeMap::new()
-    });
+    let projects = workspace
+        .map_or_else(
+            || Ok(BTreeMap::new()),
+            |workspace| {
+                candidates(
+                    workspace,
+                    &workspace.join(".agents/agents"),
+                    &mut diagnostics,
+                )
+            },
+        )
+        .unwrap_or_else(|error| {
+            // An unreadable higher collection cannot authorize lower identities
+            // whose potential shadowing cannot be determined.
+            users.clear();
+            diagnostics.push(error);
+            BTreeMap::new()
+        });
     let mut selected = users.clone();
     selected.extend(projects.clone());
     if selected.len() > crate::runtime::subagent::MAX_SUBAGENT_DEFINITIONS {
         diagnostics.push(
-            RuntimeResourceLoadError::new("Agent catalog exceeds native count bound")
-                .at(&workspace.join(".agents/agents"), "agents"),
+            RuntimeResourceLoadError::new("Agent catalog exceeds native count bound").at(
+                &workspace.map_or_else(
+                    || user_root.to_path_buf(),
+                    |workspace| workspace.join(".agents/agents"),
+                ),
+                "agents",
+            ),
         );
         selected.clear();
     }
@@ -121,7 +133,10 @@ pub(crate) fn load_authorized(
         let user_exists = users.contains_key(name);
         let user = user_root.join(format!("{name}.toml"));
         let (boundary, layer) = if project_exists {
-            (workspace, "workspace")
+            (
+                workspace.expect("Workspace candidate has a Workspace owner"),
+                "workspace",
+            )
         } else {
             (user_root, "user")
         };
@@ -263,6 +278,34 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn user_discovery_does_not_read_workspace_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        // The workspace argument is canonical authority; model the production
+        // binding point instead of passing an aliased temporary root.
+        let root = dir.path().canonicalize().unwrap();
+        let user = root.join("user/agents");
+        write(
+            &user,
+            "helper",
+            "description = 'user'\ninstructions = 'user instructions'",
+        );
+        write(&root.join(".agents/agents"), "helper", "invalid = [");
+        let ((catalog, sources), effects) =
+            super::super::static_effects::measure(|| load_authorized(None, &user).unwrap());
+        let name = SubagentName::parse("helper").unwrap();
+        assert_eq!(
+            catalog.get(&name).unwrap().instructions(),
+            "user instructions"
+        );
+        assert_eq!(sources[&name].layer, "user");
+        assert!(sources[&name].overridden.is_none());
+        assert!(catalog.discovery_diagnostics.is_empty());
+        assert_eq!(effects, [0; 12]);
+        let (workspace, _) = load_authorized(Some(&root), &user).unwrap();
+        assert!(workspace.get(&name).is_none());
+    }
+
     fn write(root: &Path, name: &str, text: &str) {
         std::fs::create_dir_all(root).unwrap();
         std::fs::write(root.join(format!("{name}.toml")), text).unwrap();
@@ -291,7 +334,7 @@ mod tests {
                 "alpha",
                 "description = 'project'\ninstructions = 'project instructions'",
             );
-            let (catalog, sources) = load_authorized(&workspace, &user).unwrap();
+            let (catalog, sources) = load_authorized(Some(&workspace), &user).unwrap();
             assert_eq!(
                 catalog
                     .definitions()
@@ -312,7 +355,7 @@ mod tests {
                 "project instructions"
             );
             assert_eq!(
-                load_authorized(&workspace, &user)
+                load_authorized(Some(&workspace), &user)
                     .unwrap()
                     .0
                     .get(&alpha)
@@ -336,7 +379,7 @@ mod tests {
         let root = workspace.join(".agents/agents");
         write(&root, "zeta", "broken");
         write(&root, "alpha", "broken");
-        let first = load_authorized(&workspace, &workspace.join("user"))
+        let first = load_authorized(Some(&workspace), &workspace.join("user"))
             .unwrap()
             .0
             .invalid()
@@ -351,7 +394,7 @@ mod tests {
         );
         assert_eq!(
             first,
-            *load_authorized(&workspace, &workspace.join("user"))
+            *load_authorized(Some(&workspace), &workspace.join("user"))
                 .unwrap()
                 .0
                 .invalid()
@@ -367,7 +410,7 @@ mod tests {
             root.join("alpha.toml"),
             "description = 'Alpha'\ninstructions = 'Inspect'\n[agents_md]\nfiles = ['../outside.md']\n",
         ).unwrap();
-        let catalog = load_authorized(&workspace, &workspace.join("user"))
+        let catalog = load_authorized(Some(&workspace), &workspace.join("user"))
             .unwrap()
             .0;
         let error = catalog.invalid().values().next().unwrap();
@@ -385,7 +428,7 @@ mod tests {
         let root = workspace.join(".agents/agents");
         std::fs::create_dir_all(&root).unwrap();
         std::os::unix::fs::symlink("/etc/passwd", root.join("alpha.toml")).unwrap();
-        let catalog = load_authorized(&workspace, &workspace.join("user"))
+        let catalog = load_authorized(Some(&workspace), &workspace.join("user"))
             .unwrap()
             .0;
         assert!(

@@ -1,7 +1,8 @@
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
-import type { TraceDetail } from '../../protocol/app-server/v15';
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v15';
+import type { TraceDetail } from '../../protocol/app-server/v16';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v16';
 import { fixtures } from '../../protocol/app-server/fixtures';
+import { cfg3Source } from './cfg3-data';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
 
 export const TOKEN = 'fixture-transport-token-'.padEnd(43, 'x');
@@ -47,7 +48,10 @@ export class FakeSocket implements Socket {
 }
 export class Server {
   readonly workspaceHost: ProductHostWorkspaces = {
-    listWorkspaces: async () => ({ endpoint, workspaces: [], picker: { kind: 'unavailable', reason: 'Test Host has no picker' } }),
+    listWorkspaces: async () => ({ endpoint, workspaces: [
+      { id: 'workspace-a', displayName: 'Workspace A', location: '/workspace', displayPath: '/workspace' },
+      { id: 'workspace-b', displayName: 'Workspace B', location: '/workspace/B', displayPath: '/workspace/B' },
+    ], picker: { kind: 'configured', locations: [{ id: 'workspace-a', displayName: 'Workspace A' }, { id: 'workspace-b', displayName: 'Workspace B' }] } }),
     classifyLocations: async cwds => cwds.map(cwd => ({ authorized: ['/workspace/A', '/workspace/B', '/workspace/child', '/workspace/created', '/workspace/fork-child'].includes(cwd) })),
     resolveWorkspace: async () => { throw new Error('No test registration'); },
     adoptWorkspace: async () => {}, renameWorkspace: async () => {}, reorderWorkspace: async () => {}, removeWorkspace: async () => {},
@@ -70,12 +74,12 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 15;
+  version = 16;
   /** Record details this scenario staged, keyed by Trace record identity. */
   readonly traceDetails = new Map<string, TraceDetail>();
   capabilities = capabilities;
   socketFactory = (_url: string, protocols: string[]) => {
-    if (protocols[0] !== 'rustx.app-server.v15' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    if (protocols[0] !== 'rustx.app-server.v16' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   };
@@ -132,8 +136,8 @@ export class Server {
   }
   private execute(request: Request, socket: FakeSocket): MethodResult {
     const params = request.params;
-    const id = 'target' in params ? params.target.session_id : 'session_id' in params ? params.session_id : 'A';
-    if (socket.closed || ('target' in params && !sameTarget(this.targets.get(socket)?.get(id), params.target))) {
+    const id = 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : 'A';
+    if (socket.closed || ('target' in params && 'session_id' in params.target && !sameTarget(this.targets.get(socket)?.get(id), params.target))) {
       throw new RpcFailure({ code: -32000, message: 'Stale attachment', data: { kind: 'stale_attachment' } });
     }
     const handler = this.handlers.get(request.method);
@@ -155,7 +159,9 @@ export class Server {
         this.maxClaims = Math.max(this.maxClaims, targets.size);
         result = { type: 'attached', target: this.target(id, socket), snapshot: attachedSnapshot, cursor: String(this.cursor) }; break;
       }
-      case 'settings/read': result = { type: 'settings', revision: '0', settings: { cwd: `/workspace/${id}` } }; break;
+      case 'session/configuration': result = { type: 'session_configuration', application: null }; break;
+      case 'configuration/sourcesRead': result = { type: 'source_settings', projection: cfg3Source() }; break;
+      case 'session/settings': result = { type: 'settings', revision: '0', settings: { cwd: `/workspace/${id}` } }; break;
       case 'session/snapshot': result = { type: 'snapshot', snapshot: this.snapshots.get(id)!, cursor: String(this.cursor) }; break;
       case 'session/subscribe': result = { type: 'subscribed', after_cursor: request.params.after_cursor }; break;
       // Inspection detail is served per record, so the fixture answers from

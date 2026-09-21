@@ -70,7 +70,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 15;
+export const APP_SERVER_PROTOCOL_VERSION = 16;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -146,11 +146,11 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "artifact/read": "read",
   "session/upload": "side_effecting",
   "configuration/sourcesRead": "read",
-  "configuration/effective": "read",
+  "session/effectiveConfiguration": "read",
   "configuration/sourceWrite": "side_effecting",
-  "settings/model": "read",
-  "settings/models": "read",
-  "settings/setModel": "side_effecting",
+  "session/model": "read",
+  "session/models": "read",
+  "session/setModel": "side_effecting",
   "resources/read": "read",
   "context/compact": "side_effecting",
   "goal/control": "side_effecting",
@@ -188,7 +188,8 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "turn/cancel": "side_effecting",
   "interaction/respond": "side_effecting",
   "interaction/cancel": "side_effecting",
-  "settings/read": "read",
+  "session/settings": "read",
+  "session/configuration": "read",
   "configuration/reconcile": "side_effecting",
   "session/adoptConfiguration": "side_effecting",
 } satisfies Record<MethodName, ResponseLossClass>);
@@ -286,7 +287,7 @@ export class AppServerClient {
     params: MethodParams<M>,
     expect: T,
   ): Promise<ResultOf<T>> {
-    if ('target' in params && this.#deletingSessions.has(params.target.session_id) && method !== 'session/detach') {
+    if ('target' in params && 'session_id' in params.target && this.#deletingSessions.has(params.target.session_id) && method !== 'session/detach') {
       throw new Error('Session deletion has disabled controls. Verify its outcome before continuing.');
     }
     const result = await this.#request(method, params, expect);
@@ -348,7 +349,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v15 protocol message");
+      this.#fail("invalid App Server v16 protocol message");
       return;
     }
 

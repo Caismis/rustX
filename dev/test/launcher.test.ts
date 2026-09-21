@@ -89,7 +89,7 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   await h.count(2);
   const web = h.calls[1], configFile = web.spec.env!.RUSTX_WORKSPACE_HOST_CONFIG!;
   const config = JSON.parse(readFileSync(configFile, 'utf8'));
-  assert.deepEqual(config, { endpoint: 'ws://127.0.0.1:4242/', picker: true, metadataFile: join(scratch, 'workspaces.json'), roots: [
+  assert.deepEqual(config, { endpoint: 'ws://127.0.0.1:4242/', transportToken: readFileSync(tokenFile, 'utf8'), picker: true, metadataFile: join(scratch, 'workspaces.json'), roots: [
     { id: 'root-1', cwd: f.a, displayName: 'workspace with spaces' }, { id: 'root-2', cwd: f.b, displayName: 'second' },
   ] });
   assert.deepEqual(readdirSync(scratch).sort(), ['host-config.json', 'transport-token', 'web-bootstrap.json']);

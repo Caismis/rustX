@@ -33,7 +33,7 @@ Trace renderer change; no client-owned domain state was added.
 | `cargo test --lib --all-features -- boundary_suites::` | 223 passed |
 | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | 407 passed: 129 durable, 52 process, 43 subagent, 130 tools, 22 conformance, 26 catalog, 5 managed-output |
 | protocol/app-server, tui, dev, web-console: `pnpm install --frozen-lockfile` | Passed in all four packages |
-| protocol/app-server: `pnpm generate` | Passed; only v15 artifacts remain |
+| protocol/app-server: `pnpm generate` | Passed; generated v16 artifacts are coherent |
 | protocol/app-server: `pnpm check && pnpm typecheck` | Passed, including committed-generation drift check |
 | tui: `pnpm typecheck` | Passed |
 | tui: `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | 853 passed, including actual App Server integration |

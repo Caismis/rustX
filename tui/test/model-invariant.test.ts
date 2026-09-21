@@ -221,8 +221,8 @@ describe("session model A -> B invariant", () => {
 
     // The client requests B while the attempt runs; the runtime accepts.
     const setting = session.modelSet({ model: MODEL_B });
-    const modelSet = (await transport.log.awaitMethod("settings/setModel")).at(-1)!;
-    assert.deepEqual(paramsOf(modelSet, "settings/setModel").target, target);
+    const modelSet = (await transport.log.awaitMethod("session/setModel")).at(-1)!;
+    assert.deepEqual(paramsOf(modelSet, "session/setModel").target, target);
     transport.respond(modelSet.id, {
       type: "model",
       model: sessionModel(MODEL_B),

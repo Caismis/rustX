@@ -5,7 +5,455 @@ use super::*;
 use crate::local_runtime::configuration::application::{
     AdoptionError, ApplyUnit, ConfigurationApplication, UnitApplication,
 };
-use crate::local_runtime::configuration::settings::{ConfigMutation, SourceMutation, SourceScope};
+use crate::local_runtime::configuration::settings::{ConfigMutation, SourceMutation};
+
+async fn source_settled(
+    f: &Fixture,
+    target: &crate::local_runtime::configuration::settings::SourceTarget,
+) -> ConfigurationApplication {
+    let mut changes = f.manager.configuration_changes();
+    loop {
+        if let Some(application) = f
+            .manager
+            .applications
+            .lock()
+            .view(&target.application_scope())
+            && application
+                .units
+                .values()
+                .all(|unit| !matches!(unit, UnitApplication::Preparing))
+        {
+            return application;
+        }
+        changes.changed().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn c07_zero_session_commit_transfers_ownership_before_lost_response() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let source = f
+            .manager
+            .source_settings(&SourceTarget::User, None)
+            .await
+            .unwrap();
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        let (release, resume) = std::sync::mpsc::channel();
+        f.manager
+            .configuration
+            .test_hooks
+            .insert("after_coordination_transfer", move || {
+                entered.send(()).unwrap();
+                resume.recv().unwrap();
+            });
+        let manager = f.manager.clone();
+        let rpc = tokio::spawn(async move {
+            manager
+                .source_settings(
+                    &SourceTarget::User,
+                    Some((
+                        source.user.revision,
+                        SourceMutation::Config {
+                            mutation: ConfigMutation::AppServer {
+                                authored: Some(
+                                    crate::local_runtime::app_server_policy::AppServerPolicy {
+                                        max_connections: 19,
+                                        ..Default::default()
+                                    },
+                                ),
+                            },
+                        },
+                    )),
+                )
+                .await
+        });
+        waiting.await.unwrap(); // Persistence and transfer happened; RPC has not returned.
+        rpc.abort();
+        assert!(rpc.await.unwrap_err().is_cancelled());
+        let applied = source_settled(&f, &SourceTarget::User).await;
+        assert_eq!(
+            applied.units[&ApplyUnit::ProcessBindings],
+            UnitApplication::Applied
+        );
+        assert_eq!(f.manager.process_policy().max_connections, 19);
+        assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
+        release.send(()).unwrap();
+        assert_eq!(
+            f.manager
+                .source_settings(&SourceTarget::User, None)
+                .await
+                .unwrap()
+                .user
+                .authored
+                .unwrap()
+                .app_server
+                .unwrap()
+                .max_connections,
+            19
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn c01_c02_c03_zero_session_source_authority_is_inert_and_isolated() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        for target in [
+            SourceTarget::User,
+            SourceTarget::Workspace {
+                directory: f.workspaces[0].clone(),
+            },
+        ] {
+            let source = f.manager.source_settings(&target, None).await.unwrap();
+            assert_eq!(source.workspace.is_some(), target.workspace().is_some());
+            assert_eq!(
+                source.workspace_resource_root.is_some(),
+                target.workspace().is_some()
+            );
+            let revision = match target {
+                SourceTarget::User => source.user.revision,
+                SourceTarget::Workspace { .. } => source.workspace.unwrap().revision,
+            };
+            f.manager
+                .source_settings(
+                    &target,
+                    Some((
+                        revision,
+                        SourceMutation::Config {
+                            mutation: ConfigMutation::NativeTools {
+                                authored: Some(vec![]),
+                            },
+                        },
+                    )),
+                )
+                .await
+                .unwrap();
+            source_settled(&f, &target).await;
+        }
+        assert!(
+            f.manager
+                .sessions
+                .list_sessions(None, 0, 32)
+                .await
+                .unwrap()
+                .sessions
+                .is_empty()
+        );
+        assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
+        assert!(
+            f.manager
+                .sessions
+                .configuration_bindings
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(f.provider.request_bodies().is_empty());
+        assert!(
+            f.manager
+                .applications
+                .lock()
+                .views()
+                .iter()
+                .all(|a| a.scope.starts_with("source:") && a.units.len() == 1)
+        );
+        let user = f
+            .manager
+            .source_settings(&SourceTarget::User, None)
+            .await
+            .unwrap();
+        assert!(
+            !serde_json::to_string(&user)
+                .unwrap()
+                .contains(f.workspaces[0].to_str().unwrap())
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn c06_zero_session_process_hot_restart_reopen_and_revert() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let target = SourceTarget::User;
+        let actual = f.manager.process_policy();
+        for restart in [false, true, false] {
+            let source = f.manager.source_settings(&target, None).await.unwrap();
+            let mut desired = actual.clone();
+            desired.max_connections = 17;
+            if restart {
+                desired.shutdown_deadline_ms += 1;
+            }
+            f.manager
+                .source_settings(
+                    &target,
+                    Some((
+                        source.user.revision,
+                        SourceMutation::Config {
+                            mutation: ConfigMutation::AppServer {
+                                authored: Some(desired),
+                            },
+                        },
+                    )),
+                )
+                .await
+                .unwrap();
+            let application = source_settled(&f, &target).await;
+            assert_eq!(
+                application.units[&ApplyUnit::ProcessBindings],
+                if restart {
+                    UnitApplication::ProcessRestart
+                } else {
+                    UnitApplication::Applied
+                }
+            );
+            let reopened = f.manager.source_settings(&target, None).await.unwrap();
+            assert_eq!(reopened.application.unwrap(), application);
+            let process = reopened.process_bindings.unwrap();
+            assert_eq!(process.max_connections, 17);
+            assert_eq!(process.shutdown_deadline_ms, actual.shutdown_deadline_ms);
+            assert_eq!(
+                reopened
+                    .user
+                    .authored
+                    .unwrap()
+                    .app_server
+                    .unwrap()
+                    .shutdown_deadline_ms,
+                actual.shutdown_deadline_ms + u64::from(restart)
+            );
+        }
+        assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
+        assert!(
+            f.manager
+                .sessions
+                .list_sessions(None, 0, 32)
+                .await
+                .unwrap()
+                .sessions
+                .is_empty()
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn c05_broken_source_retains_revision_inventory_and_explicit_validated_repair() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let target = SourceTarget::User;
+        let initial = f.manager.source_settings(&target, None).await.unwrap();
+        let bytes = std::fs::read_to_string(&initial.user.path).unwrap();
+        std::fs::write(&initial.user.path, "broken = [").unwrap();
+        let broken = f.manager.source_settings(&target, None).await.unwrap();
+        assert_ne!(broken.user.revision, initial.user.revision);
+        assert!(broken.user.authored.is_none());
+        assert!(broken.user.diagnostic.is_some());
+        assert!(broken.prospective_resources.is_some());
+        assert!(
+            f.manager
+                .source_settings(
+                    &target,
+                    Some((
+                        broken.user.revision.clone(),
+                        SourceMutation::RepairConfig {
+                            document: "still = [".into()
+                        }
+                    ))
+                )
+                .await
+                .is_err()
+        );
+        let repaired = f
+            .manager
+            .source_settings(
+                &target,
+                Some((
+                    broken.user.revision,
+                    SourceMutation::RepairConfig { document: bytes },
+                )),
+            )
+            .await
+            .unwrap();
+        assert!(repaired.user.authored.is_some());
+        assert!(repaired.user.diagnostic.is_none());
+        // Syntactically valid but unresolved sources retain the entire editor and
+        // independently valid inventory; a default model is not read admission.
+        let mut document: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&repaired.user.path).unwrap()).unwrap();
+        document["agent"].as_table_mut().unwrap().remove("model");
+        std::fs::write(&repaired.user.path, toml::to_string(&document).unwrap()).unwrap();
+        let missing = f.manager.source_settings(&target, None).await.unwrap();
+        assert!(missing.user.authored.is_some());
+        assert!(missing.prospective_diagnostic.is_some());
+        assert!(missing.prospective_resources.is_some());
+        document["agent"].as_table_mut().unwrap().insert(
+            "model".into(),
+            toml::Value::try_from(serde_json::json!({"model":"local/missing"})).unwrap(),
+        );
+        std::fs::write(&repaired.user.path, toml::to_string(&document).unwrap()).unwrap();
+        let unresolved = f.manager.source_settings(&target, None).await.unwrap();
+        assert!(unresolved.user.authored.is_some());
+        assert!(unresolved.prospective_diagnostic.is_some());
+        assert!(unresolved.prospective_resources.is_some());
+        assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
+        assert!(f.provider.request_bodies().is_empty());
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn c04_workspace_override_empty_and_removal_keep_distinct_source_intent() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let target = SourceTarget::Workspace {
+            directory: f.workspaces[0].clone(),
+        };
+        let original = f.manager.source_settings(&target, None).await.unwrap();
+        for authored in [Some(vec!["read".into()]), Some(vec![]), None] {
+            let before = f.manager.source_settings(&target, None).await.unwrap();
+            let after = f
+                .manager
+                .source_settings(
+                    &target,
+                    Some((
+                        before.workspace.unwrap().revision,
+                        SourceMutation::Config {
+                            mutation: ConfigMutation::NativeTools {
+                                authored: authored.clone(),
+                            },
+                        },
+                    )),
+                )
+                .await
+                .unwrap();
+            assert_eq!(after.user, original.user);
+            assert_eq!(
+                after
+                    .workspace
+                    .unwrap()
+                    .authored
+                    .unwrap()
+                    .agent
+                    .and_then(|a| a.tools)
+                    .and_then(|t| t.builtin),
+                authored
+            );
+            let resolved = after
+                .resolved
+                .unwrap()
+                .agent
+                .unwrap()
+                .tools
+                .unwrap()
+                .builtin;
+            assert_eq!(
+                resolved,
+                authored.or_else(|| original
+                    .user
+                    .authored
+                    .as_ref()
+                    .unwrap()
+                    .agent
+                    .as_ref()
+                    .unwrap()
+                    .tools
+                    .as_ref()
+                    .unwrap()
+                    .builtin
+                    .clone())
+            );
+        }
+        assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn c11_c12_model_selection_and_source_authoring_have_disjoint_durable_owners() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    bounded(async {
+        let f = Fixture::new().await;
+        f.manager.load(&f.sessions[0].id, None).await.unwrap();
+        f.manager.load(&f.sessions[1].id, None).await.unwrap();
+        let target = SourceTarget::Workspace {
+            directory: f.workspaces[0].clone(),
+        };
+        let sources = f.manager.source_settings(&target, None).await.unwrap();
+        let other = f
+            .manager
+            .sessions
+            .read_settings(&f.sessions[1].id)
+            .await
+            .unwrap();
+        let selection = crate::model::session::SessionModelConfig::of(
+            crate::model::catalog::ModelRef::parse("local/b").unwrap(),
+        );
+        f.manager
+            .set_model(&f.sessions[0].id, selection.clone())
+            .await
+            .unwrap();
+        let selected = f
+            .manager
+            .sessions
+            .read_settings(&f.sessions[0].id)
+            .await
+            .unwrap();
+        assert_eq!(selected.1.model, Some(selection));
+        assert_eq!(
+            f.manager
+                .sessions
+                .read_settings(&f.sessions[1].id)
+                .await
+                .unwrap(),
+            other
+        );
+        let after = f.manager.source_settings(&target, None).await.unwrap();
+        assert_eq!(after.user, sources.user);
+        assert_eq!(after.workspace, sources.workspace);
+        f.manager
+            .source_settings(
+                &target,
+                Some((
+                    after.workspace.unwrap().revision,
+                    SourceMutation::Config {
+                        mutation: ConfigMutation::Instructions {
+                            authored: Some("new source guidance".into()),
+                        },
+                    },
+                )),
+            )
+            .await
+            .unwrap();
+        settled(&f, 0).await;
+        assert_eq!(
+            f.manager
+                .sessions
+                .read_settings(&f.sessions[0].id)
+                .await
+                .unwrap(),
+            selected
+        );
+        assert_eq!(
+            f.manager
+                .sessions
+                .read_settings(&f.sessions[1].id)
+                .await
+                .unwrap(),
+            other
+        );
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    })
+    .await;
+}
 
 pub(super) async fn settled(fixture: &Fixture, index: usize) -> ConfigurationApplication {
     let mut changed = fixture.manager.configuration_changes();
@@ -24,20 +472,20 @@ pub(super) async fn settled(fixture: &Fixture, index: usize) -> ConfigurationApp
     }
 }
 
-async fn write(fixture: &Fixture, index: usize, mutation: ConfigMutation) {
-    let id = &fixture.sessions[index].id;
-    let (source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
+async fn write(fixture: &Fixture, _index: usize, mutation: ConfigMutation) {
+    let source = fixture
+        .manager
+        .source_settings(
+            &crate::local_runtime::configuration::settings::SourceTarget::User,
+            None,
+        )
+        .await
+        .unwrap();
     fixture
         .manager
         .source_settings(
-            id,
-            Some((
-                source.user.revision,
-                SourceMutation::Config {
-                    scope: SourceScope::User,
-                    mutation,
-                },
-            )),
+            &crate::local_runtime::configuration::settings::SourceTarget::User,
+            Some((source.user.revision, SourceMutation::Config { mutation })),
         )
         .await
         .unwrap();
@@ -219,7 +667,11 @@ async fn t04_session_relative_prefix_and_t09_policy_noop() {
     let revision = runtimes[1].runtime_resources().revision();
     fixture
         .manager
-        .reconcile_configuration(&fixture.sessions[1].id)
+        .reconcile_configuration(
+            &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                directory: fixture.workspaces[1].clone(),
+            },
+        )
         .await
         .unwrap();
     let healthy = settled(&fixture, 1).await;
@@ -247,7 +699,15 @@ async fn t11_concrete_candidate_conflict_and_t09_healthy_rescan_preserves_candid
         .manager
         .probe(&fixture.sessions[0].active_conversation_id);
     let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
-    fixture.manager.reconcile_configuration(id).await.unwrap();
+    fixture
+        .manager
+        .reconcile_configuration(
+            &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                directory: fixture.workspaces[0].clone(),
+            },
+        )
+        .await
+        .unwrap();
     assert_eq!(settled(&fixture, 0).await, inspected);
     assert_eq!(
         probe.configuration_preparations.load(Ordering::SeqCst),
@@ -462,7 +922,15 @@ async fn t06_offside_preparation_allows_admission_and_t07_new_failure_supersedes
             "[agent]\nworkflows=['missing']\n",
         )
         .unwrap();
-        fixture.manager.reconcile_configuration(id).await.unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: fixture.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
         probe.before_configuration_prepare.release();
         let latest = settled(&fixture, 0).await;
         assert_ne!(latest.desired, old);
@@ -536,10 +1004,26 @@ async fn t11_admission_gate_orders_busy_adoption_without_cancelling_attempt() {
                 .admitted_attempt
                 .is_some()
         );
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .eligibility,
+            crate::local_runtime::configuration::application::AdoptionEligibility::Busy
+        );
         let settlement = runtime.settlement_signal();
         fixture.gates[0].release();
         settlement.notified().await;
         runtime.wait_for_configuration_admissions().await;
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .eligibility,
+            crate::local_runtime::configuration::application::AdoptionEligibility::Eligible
+        );
         fixture
             .manager
             .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
@@ -559,12 +1043,239 @@ async fn t11_admission_gate_orders_busy_adoption_without_cancelling_attempt() {
     .await;
 }
 
+/// A background executor that signals its start, parks until released, and
+/// then completes successfully; cancellation still wins while parked.
+struct GatedBackgroundExecutor {
+    started: tokio::sync::watch::Sender<bool>,
+    release: tokio::sync::watch::Sender<bool>,
+}
+
+impl GatedBackgroundExecutor {
+    fn new() -> (
+        Self,
+        tokio::sync::watch::Receiver<bool>,
+        tokio::sync::watch::Sender<bool>,
+    ) {
+        let (started, started_rx) = tokio::sync::watch::channel(false);
+        let (release, _release_rx) = tokio::sync::watch::channel(false);
+        (
+            Self {
+                started,
+                release: release.clone(),
+            },
+            started_rx,
+            release,
+        )
+    }
+}
+
+impl crate::tools::executor::ToolExecutor for GatedBackgroundExecutor {
+    fn start<'a>(
+        &'a self,
+        _invocation: crate::tools::types::ToolInvocation,
+        context: crate::tools::executor::ToolExecutionContext<'a>,
+    ) -> crate::tools::executor::ToolExecutionHandle<'a> {
+        let started = self.started.clone();
+        let mut release = self.release.subscribe();
+        crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                started.send_replace(true);
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("release channel stays open");
+                crate::tools::types::ToolExecutionResult {
+                    status: crate::tools::types::ToolExecutionStatus::Success,
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    workflow: None,
+                    managed_output: None,
+                }
+            }),
+            context.cancellation.clone(),
+        )
+    }
+
+    fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+        crate::tools::deadline::ToolProgressCapability::None
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t11_background_execution_busy_settles_into_eligible_adoption() {
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("adopt after background settles".into()),
+            },
+        )
+        .await;
+        let candidate = settled(&fixture, 0).await.candidate.unwrap();
+        let probe = fixture
+            .manager
+            .probe(&fixture.sessions[0].active_conversation_id);
+        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .eligibility,
+            crate::local_runtime::configuration::application::AdoptionEligibility::Eligible
+        );
+        let (executor, mut started, release) = GatedBackgroundExecutor::new();
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
+        let invocation = crate::tools::types::ToolInvocation {
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: crate::runtime::identity::ToolCallId::new("call-background-gate"),
+            },
+            tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: crate::tools::types::ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let prepared = runtime
+            .tool_runtime()
+            .background()
+            .prepare_dispatch(
+                &invocation,
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .unwrap();
+        let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+            runtime
+                .tool_runtime()
+                .background()
+                .commit_dispatch(
+                    prepared,
+                    &crate::runtime::cancellation::CancellationSignal::new(),
+                )
+                .unwrap()
+        else {
+            panic!("accepted");
+        };
+        started.wait_for(|entered| *entered).await.unwrap();
+        // Attribution: no foreground attempt and no subagent owns work; the
+        // background registry alone owns the Busy lifecycle.
+        assert!(runtime.subagents().is_none_or(|s| !s.configuration_busy()));
+        assert!(runtime.tool_runtime().background().configuration_busy());
+        assert_eq!(
+            runtime.idle_epoch(),
+            Err(crate::runtime::conversation_runtime::IdleBusyReason::Background)
+        );
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .eligibility,
+            crate::local_runtime::configuration::application::AdoptionEligibility::Busy
+        );
+        assert_eq!(
+            fixture.manager.adopt_configuration(
+                &id,
+                &candidate.identity,
+                candidate.expected_binding
+            ),
+            Err(AdoptionError::Busy)
+        );
+        release.send_replace(true);
+        let terminal = runtime
+            .tool_runtime()
+            .background()
+            .wait_until_terminal(&execution_id)
+            .await
+            .unwrap();
+        assert!(matches!(
+            terminal.state,
+            crate::tools::background::BackgroundLifecycle::Succeeded
+        ));
+        // The execution's own terminal notification is consumed by one
+        // continuation attempt; it, not the eligibility transition, is the
+        // only model traffic settlement causes.
+        fixture.gates[0].wait_entered().await;
+        let requests = fixture.provider.request_bodies();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        assert!(
+            requests[0].contains("Background execution"),
+            "the single request is the background terminal continuation: {}",
+            requests[0]
+        );
+        fixture.gates[0].release();
+        // No notification fires for busy -> idle: eligibility is computed at
+        // read time, so poll the manager read inside the liveness guard.
+        loop {
+            let view = fixture.manager.configuration_application(&id).unwrap();
+            if view.eligibility
+                == crate::local_runtime::configuration::application::AdoptionEligibility::Eligible
+            {
+                let pending = view.candidate.as_ref().unwrap();
+                assert_eq!(pending.identity, candidate.identity);
+                assert_eq!(pending.expected_binding, candidate.expected_binding);
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            preparations,
+            "settlement prepared nothing"
+        );
+        assert_eq!(
+            fixture.provider.request_bodies().len(),
+            1,
+            "no model traffic beyond the terminal continuation"
+        );
+        assert_eq!(
+            fixture.manager.adopt_configuration(
+                &id,
+                &candidate.identity,
+                candidate.expected_binding + 1
+            ),
+            Err(AdoptionError::Conflict)
+        );
+        let applied = fixture
+            .manager
+            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        assert_eq!(
+            applied.units[&ApplyUnit::Instructions],
+            UnitApplication::Applied
+        );
+        assert!(applied.candidate.is_none());
+        assert_eq!(
+            fixture.provider.request_bodies().len(),
+            1,
+            "adoption invoked no model"
+        );
+        fixture.close().await;
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn t03_mixed_application_and_true_process_binding_restart() {
     let fixture = Fixture::new().await;
     let id = &fixture.sessions[0].id;
     fixture.manager.load(id, None).await.unwrap();
-    let (source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
+    let source = fixture
+        .manager
+        .source_settings(
+            &crate::local_runtime::configuration::settings::SourceTarget::User,
+            None,
+        )
+        .await
+        .unwrap();
     let mut document: toml::Value =
         toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
     document["agent"]
@@ -585,7 +1296,15 @@ async fn t03_mixed_application_and_true_process_binding_restart() {
         .unwrap()
         .insert("app_server".into(), toml::Value::try_from(desired).unwrap());
     std::fs::write(&source.user.path, toml::to_string(&document).unwrap()).unwrap();
-    fixture.manager.reconcile_configuration(id).await.unwrap();
+    fixture
+        .manager
+        .reconcile_configuration(
+            &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                directory: fixture.workspaces[0].clone(),
+            },
+        )
+        .await
+        .unwrap();
     let application = settled(&fixture, 0).await;
     assert_eq!(
         application.units[&ApplyUnit::ExecutionPolicy],
@@ -755,11 +1474,27 @@ async fn t12_lost_source_write_response_does_not_cancel_native_application() {
         let probe = fixture
             .manager
             .probe(&fixture.sessions[0].active_conversation_id);
-        probe.after_configuration_persistence.arm();
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        let (release, resume) = std::sync::mpsc::channel();
+        fixture
+            .manager
+            .configuration
+            .test_hooks
+            .insert("after_coordination_transfer", move || {
+                entered.send(()).unwrap();
+                resume.recv().unwrap();
+            });
         probe.before_configuration_prepare.arm();
-        let (source, _, _) = fixture.manager.source_settings(&id, None).await.unwrap();
+        let source = fixture
+            .manager
+            .source_settings(
+                &crate::local_runtime::configuration::settings::SourceTarget::User,
+                None,
+            )
+            .await
+            .unwrap();
         let manager = fixture.manager.clone();
-        let target = id.clone();
+        let target = crate::local_runtime::configuration::settings::SourceTarget::User;
         let rpc = tokio::spawn(async move {
             manager
                 .source_settings(
@@ -767,7 +1502,6 @@ async fn t12_lost_source_write_response_does_not_cancel_native_application() {
                     Some((
                         source.user.revision,
                         SourceMutation::Config {
-                            scope: SourceScope::User,
                             mutation: ConfigMutation::Instructions {
                                 authored: Some("survives disconnect".into()),
                             },
@@ -778,7 +1512,7 @@ async fn t12_lost_source_write_response_does_not_cancel_native_application() {
         });
         // The source commit and ownership transfer have happened; the caller
         // cannot yet receive a response. Drop exactly that caller's future.
-        probe.after_configuration_persistence.entered().await;
+        waiting.await.unwrap();
         rpc.abort();
         assert!(rpc.await.unwrap_err().is_cancelled());
         probe.before_configuration_prepare.entered().await;
@@ -795,9 +1529,24 @@ async fn t12_lost_source_write_response_does_not_cancel_native_application() {
         assert_eq!(ready.desired, preparing.desired);
         assert!(ready.version > preparing.version);
         // Reconnect rereads authority. It does not repeat the source mutation.
-        let (reread, _, _) = fixture.manager.source_settings(&id, None).await.unwrap();
-        assert_eq!(reread.application, Some(ready));
-        probe.after_configuration_persistence.release();
+        let reread = fixture
+            .manager
+            .source_settings(
+                &crate::local_runtime::configuration::settings::SourceTarget::User,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(reread.application.unwrap().scope, "source:user");
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .desired,
+            ready.desired
+        );
+        release.send(()).unwrap();
         fixture.close().await;
     })
     .await;
@@ -865,14 +1614,29 @@ async fn t09_unselected_model_and_default_edits_are_noop_for_existing_session_t1
     fixture.manager.load(id, None).await.unwrap();
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     let old = runtime.runtime_resources();
-    let (source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
+    let source = fixture
+        .manager
+        .source_settings(
+            &crate::local_runtime::configuration::settings::SourceTarget::User,
+            None,
+        )
+        .await
+        .unwrap();
     let path = source.user.path;
     let mut document: toml::Value =
         toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     document["models"]["local/b"]["id"] = "b-redefined".into();
     document["agent"]["model"]["model"] = "local/b".into();
     std::fs::write(path, toml::to_string(&document).unwrap()).unwrap();
-    fixture.manager.reconcile_configuration(id).await.unwrap();
+    fixture
+        .manager
+        .reconcile_configuration(
+            &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                directory: fixture.workspaces[0].clone(),
+            },
+        )
+        .await
+        .unwrap();
     let applied = settled(&fixture, 0).await;
     assert!(applied.candidate.is_none(), "{applied:?}");
     assert!(
@@ -928,7 +1692,15 @@ async fn t13_failed_preparation_retries_same_input_and_t14_latest_pending_is_bou
             failed.units[&ApplyUnit::Instructions],
             UnitApplication::Failed { .. }
         ));
-        fixture.manager.reconcile_configuration(id).await.unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: fixture.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
         let retried = settled(&fixture, 0).await;
         assert_eq!(
             retried.desired.input_revision,
@@ -1065,7 +1837,7 @@ async fn t03_t05_mixed_instructions_publication_rejects_rebound_project_path() {
         let probe = fixture.manager.probe(&fixture.sessions[0].active_conversation_id);
         probe.fail_configuration_once.store(true, Ordering::SeqCst);
         probe.before_configuration_publish.arm();
-        fixture.manager.reconcile_configuration(id).await.unwrap();
+        fixture.manager.reconcile_configuration(&crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: fixture.workspaces[0].clone() }).await.unwrap();
         // This gate is after C2 construction/failure and independent I2
         // preparation, but before make_available's physical-authority fence.
         probe.before_configuration_publish.entered().await;
@@ -1132,7 +1904,14 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         "---\nname: retained\ndescription: Retained guidance\n---\nC1 skill guidance\n",
     )
     .unwrap();
-    let (initial_source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
+    let initial_source = fixture
+        .manager
+        .source_settings(
+            &crate::local_runtime::configuration::settings::SourceTarget::User,
+            None,
+        )
+        .await
+        .unwrap();
     let mut initial: toml::Value =
         toml::from_str(&std::fs::read_to_string(&initial_source.user.path).unwrap()).unwrap();
     initial["agent"]
@@ -1157,7 +1936,14 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
     fixture.manager.load(id, None).await.unwrap();
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     let before = runtime.runtime_resources();
-    let (source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
+    let source = fixture
+        .manager
+        .source_settings(
+            &crate::local_runtime::configuration::settings::SourceTarget::User,
+            None,
+        )
+        .await
+        .unwrap();
     let mut document: toml::Value =
         toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
     let project_file = fixture.workspaces[0].join("new.md");
@@ -1397,7 +2183,15 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         c1i2.component_revisions
     );
     // Retry the same authored C2; S1/S2 retain their explicit compositions.
-    fixture.manager.reconcile_configuration(id).await.unwrap();
+    fixture
+        .manager
+        .reconcile_configuration(
+            &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                directory: fixture.workspaces[0].clone(),
+            },
+        )
+        .await
+        .unwrap();
     settled(&fixture, 0).await;
     let third = create().await.unwrap().session.id;
     let c2i2 = retained(&third);
@@ -1456,7 +2250,14 @@ async fn t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_r
             .manager
             .probe(&fixture.sessions[0].active_conversation_id);
         probe.before_configuration_prepare.arm();
-        let (source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
+        let source = fixture
+            .manager
+            .source_settings(
+                &crate::local_runtime::configuration::settings::SourceTarget::User,
+                None,
+            )
+            .await
+            .unwrap();
         let mut document: toml::Value =
             toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
         document["agent"]["model"]["model"] = "local/b".into();
@@ -1508,7 +2309,15 @@ async fn t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_r
             retained(&during).session_model()
         );
         assert!(retained(&after_failure).same_capabilities(&retained(&during)));
-        fixture.manager.reconcile_configuration(id).await.unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: fixture.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
         let success = settled(&fixture, 0).await;
         assert_eq!(
             success.desired.input_revision,
@@ -1578,9 +2387,12 @@ async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget
         );
     }
     // Persist the small process limit so source reconciliation keeps it.
-    let (source, _, _) = fixture
+    let source = fixture
         .manager
-        .source_settings(&ids[0], None)
+        .source_settings(
+            &crate::local_runtime::configuration::settings::SourceTarget::User,
+            None,
+        )
         .await
         .unwrap();
     let mut document: toml::Value =
@@ -1594,18 +2406,19 @@ async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget
     fixture
         .manager
         .source_settings(
-            &ids[0],
+            &crate::local_runtime::configuration::settings::SourceTarget::User,
             Some((
                 fixture
                     .manager
-                    .source_settings(&ids[0], None)
+                    .source_settings(
+                        &crate::local_runtime::configuration::settings::SourceTarget::User,
+                        None,
+                    )
                     .await
                     .unwrap()
-                    .0
                     .user
                     .revision,
                 SourceMutation::Config {
-                    scope: SourceScope::User,
                     mutation: ConfigMutation::Instructions {
                         authored: Some("cold desired context".into()),
                     },
@@ -1849,7 +2662,14 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
     fixture.manager.load(id, None).await.unwrap();
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     let old = runtime.runtime_resources();
-    let (source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
+    let source = fixture
+        .manager
+        .source_settings(
+            &crate::local_runtime::configuration::settings::SourceTarget::User,
+            None,
+        )
+        .await
+        .unwrap();
     let mut document: toml::Value =
         toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
     document["agent"]["model"]["model"] = "local/b".into();
@@ -1861,7 +2681,15 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
         toml::toml! { read = { approval = "always" } }.into(),
     );
     std::fs::write(&source.user.path, toml::to_string(&document).unwrap()).unwrap();
-    fixture.manager.reconcile_configuration(id).await.unwrap();
+    fixture
+        .manager
+        .reconcile_configuration(
+            &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                directory: fixture.workspaces[0].clone(),
+            },
+        )
+        .await
+        .unwrap();
     let pending = settled(&fixture, 0).await;
     assert!(
         matches!(
@@ -1936,7 +2764,7 @@ async fn workflow_only_agent_change(model_change: bool) {
         let probe = fixture.manager.probe(&fixture.sessions[0].active_conversation_id);
         let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
         std::fs::write(agent.parent().unwrap().join("unused.toml"), profile("unrelated", "b")).unwrap();
-        fixture.manager.reconcile_configuration(id).await.unwrap();
+        fixture.manager.reconcile_configuration(&crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: fixture.workspaces[0].clone() }).await.unwrap();
         settled(&fixture, 0).await;
         assert_eq!(probe.configuration_preparations.load(Ordering::SeqCst), preparations);
         assert!(Arc::ptr_eq(&before, &live.runtime_resources()));
@@ -1944,12 +2772,11 @@ async fn workflow_only_agent_change(model_change: bool) {
         fixture.gates[0].wait_entered().await;
         let probe = fixture.manager.probe(&fixture.sessions[0].active_conversation_id);
         let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
-        let (source, _, _) = fixture.manager.source_settings(id, None).await.unwrap();
+        let source = fixture.manager.source_settings(&crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: workspace.clone() }, None).await.unwrap();
         let authored = if model_change { profile("reviewer A", "b") } else { profile("reviewer B", "a") };
-        fixture.manager.source_settings(id, Some((
+        fixture.manager.source_settings(&crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: workspace.clone() }, Some((
             source.agents.iter().find(|entry| entry.source.path == agent).unwrap().source.revision.clone(),
             SourceMutation::Agent {
-                scope: SourceScope::Workspace,
                 name: crate::runtime::subagent::SubagentName::parse("reviewer").unwrap(),
                 authored: Some(crate::local_runtime::agent_resources::parse(&authored).unwrap()),
             },
@@ -2256,4 +3083,862 @@ async fn t06_t09_t16_process_restart_alone_does_not_defer_new_session() {
         0
     );
     fixture.close().await;
+}
+
+async fn session_settled(
+    fixture: &Fixture,
+    id: &crate::local_runtime::session::SessionId,
+) -> ConfigurationApplication {
+    let mut changed = fixture.manager.configuration_changes();
+    loop {
+        if let Some(view) = fixture.manager.configuration_application(id)
+            && view
+                .units
+                .values()
+                .all(|unit| !matches!(unit, UnitApplication::Preparing))
+        {
+            return view;
+        }
+        changed.changed().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue385_user_commit_refreshes_desired_source_of_sessionless_workspace() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::local_runtime::session::deletion::SessionDeleteResult;
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 0).await;
+        let workspace = std::fs::canonicalize(&fixture.workspaces[0]).unwrap();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("available A".into()),
+            },
+        )
+        .await;
+        source_settled(&fixture, &SourceTarget::User).await;
+        // Establish last-good A for the Workspace through a real Session.
+        let first = fixture
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap()
+            .session;
+        fixture.manager.load(&first.id, None).await.unwrap();
+        {
+            let applications = fixture.manager.applications.lock();
+            assert_eq!(
+                applications
+                    .test_available(&workspace)
+                    .unwrap()
+                    .config
+                    .agent
+                    .instructions,
+                "available A"
+            );
+        }
+        let SessionDeleteResult::Preview { preview } =
+            fixture.manager.sessions.delete_preview(&first.id).await
+        else {
+            panic!("preview")
+        };
+        let deleted = fixture
+            .manager
+            .delete_session(&first.id, &preview.target_revision)
+            .await
+            .unwrap();
+        assert!(matches!(deleted, SessionDeleteResult::Deleted { .. }));
+        assert!(
+            fixture
+                .manager
+                .sessions
+                .list_sessions(None, 0, 32)
+                .await
+                .unwrap()
+                .sessions
+                .is_empty()
+        );
+        assert!(fixture.manager.diagnostics().sessions.is_empty());
+        assert!(
+            fixture
+                .manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        {
+            let applications = fixture.manager.applications.lock();
+            assert_eq!(
+                applications
+                    .test_available(&workspace)
+                    .unwrap()
+                    .config
+                    .agent
+                    .instructions,
+                "available A"
+            );
+            assert!(applications.test_desired_source(&workspace).is_none());
+        }
+        // A User commit with zero Sessions in the known Workspace refreshes
+        // only the retained desired source; it creates nothing.
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("desired B".into()),
+            },
+        )
+        .await;
+        source_settled(&fixture, &SourceTarget::User).await;
+        assert!(
+            fixture
+                .manager
+                .sessions
+                .list_sessions(None, 0, 32)
+                .await
+                .unwrap()
+                .sessions
+                .is_empty()
+        );
+        assert!(
+            fixture
+                .manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        let desired_revision = {
+            let applications = fixture.manager.applications.lock();
+            assert_eq!(
+                applications
+                    .test_available(&workspace)
+                    .unwrap()
+                    .config
+                    .agent
+                    .instructions,
+                "available A"
+            );
+            let desired = applications
+                .test_desired_source(&workspace)
+                .expect("User commit refreshes a sessionless Workspace")
+                .as_ref()
+                .expect("desired capture");
+            assert_eq!(
+                desired.context.as_ref().unwrap().config.agent.instructions,
+                "desired B"
+            );
+            desired.revision.clone()
+        };
+        // A new Session binds last-good A while the newer desired B defers to
+        // natural residency; creation itself drives no preparation.
+        let second = fixture
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap()
+            .session;
+        assert_eq!(
+            fixture
+                .manager
+                .sessions
+                .configuration_bindings
+                .lock()
+                .unwrap()[&second.id]
+                .config
+                .agent
+                .instructions,
+            "available A"
+        );
+        assert!(fixture.manager.configuration_runtime(&second.id).is_none());
+        assert!(fixture.manager.applications.is_deferred(second.id.as_str()));
+        let pending = fixture
+            .manager
+            .configuration_application(&second.id)
+            .unwrap();
+        assert!(pending.candidate.is_none());
+        assert_eq!(
+            pending.desired.input_revision.as_deref(),
+            Some(desired_revision.as_str())
+        );
+        assert!(
+            pending
+                .units
+                .values()
+                .all(|unit| matches!(unit, UnitApplication::Preparing))
+        );
+        fixture.manager.load(&second.id, None).await.unwrap();
+        let ready = session_settled(&fixture, &second.id).await;
+        let candidate = ready
+            .candidate
+            .expect("cache-impacting instructions candidate");
+        assert_eq!(candidate.identity, ready.desired);
+        assert!(matches!(
+            ready.units[&ApplyUnit::Instructions],
+            UnitApplication::Ready { .. }
+        ));
+        let adopted = fixture
+            .manager
+            .adopt_configuration(&second.id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        assert_eq!(
+            adopted.units[&ApplyUnit::Instructions],
+            UnitApplication::Applied
+        );
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_runtime(&second.id)
+                .unwrap()
+                .runtime_resources()
+                .configuration()
+                .unwrap()
+                .config
+                .agent
+                .instructions,
+            "desired B"
+        );
+        {
+            let applications = fixture.manager.applications.lock();
+            assert_eq!(
+                applications
+                    .test_available(&workspace)
+                    .unwrap()
+                    .config
+                    .agent
+                    .instructions,
+                "desired B"
+            );
+        }
+        fixture.close().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue385_failed_preparation_after_user_commit_keeps_last_good_available() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::local_runtime::session::deletion::SessionDeleteResult;
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 0).await;
+        let workspace = std::fs::canonicalize(&fixture.workspaces[0]).unwrap();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("available A".into()),
+            },
+        )
+        .await;
+        source_settled(&fixture, &SourceTarget::User).await;
+        let first = fixture
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap()
+            .session;
+        fixture.manager.load(&first.id, None).await.unwrap();
+        let SessionDeleteResult::Preview { preview } =
+            fixture.manager.sessions.delete_preview(&first.id).await
+        else {
+            panic!("preview")
+        };
+        fixture
+            .manager
+            .delete_session(&first.id, &preview.target_revision)
+            .await
+            .unwrap();
+        assert!(
+            fixture
+                .manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("desired B".into()),
+            },
+        )
+        .await;
+        source_settled(&fixture, &SourceTarget::User).await;
+        assert!(
+            fixture
+                .manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        // The new Session binds last-good A; the desired B waits for natural
+        // residency, where its preparation fails.
+        let second = fixture
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap()
+            .session;
+        assert_eq!(
+            fixture
+                .manager
+                .sessions
+                .configuration_bindings
+                .lock()
+                .unwrap()[&second.id]
+                .config
+                .agent
+                .instructions,
+            "available A"
+        );
+        assert!(fixture.manager.applications.is_deferred(second.id.as_str()));
+        let probe = fixture.manager.probe(&second.active_conversation_id);
+        probe.fail_configuration_once.store(true, Ordering::SeqCst);
+        fixture.manager.load(&second.id, None).await.unwrap();
+        let failed = session_settled(&fixture, &second.id).await;
+        assert!(matches!(
+            failed.units[&ApplyUnit::Instructions],
+            UnitApplication::Failed { .. }
+        ));
+        assert!(failed.candidate.is_none());
+        // A remains the only available configuration; failed B is retained as
+        // desired source, never silently dropped or published.
+        {
+            let applications = fixture.manager.applications.lock();
+            assert_eq!(
+                applications
+                    .test_available(&workspace)
+                    .unwrap()
+                    .config
+                    .agent
+                    .instructions,
+                "available A"
+            );
+            let desired = applications
+                .test_desired_source(&workspace)
+                .unwrap()
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                desired.context.as_ref().unwrap().config.agent.instructions,
+                "desired B"
+            );
+        }
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_runtime(&second.id)
+                .unwrap()
+                .runtime_resources()
+                .configuration()
+                .unwrap()
+                .config
+                .agent
+                .instructions,
+            "available A"
+        );
+        // A Session created after the failure still binds A, never invalid B.
+        let third = fixture
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap()
+            .session;
+        assert_eq!(
+            fixture
+                .manager
+                .sessions
+                .configuration_bindings
+                .lock()
+                .unwrap()[&third.id]
+                .config
+                .agent
+                .instructions,
+            "available A"
+        );
+        {
+            let applications = fixture.manager.applications.lock();
+            assert_eq!(
+                applications
+                    .test_available(&workspace)
+                    .unwrap()
+                    .config
+                    .agent
+                    .instructions,
+                "available A"
+            );
+        }
+        fixture.close().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue385_future_default_source_generation_publishes_without_session_mutation() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::local_runtime::session::deletion::SessionDeleteResult;
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 0).await;
+        let workspace = std::fs::canonicalize(&fixture.workspaces[0]).unwrap();
+        let model_a = crate::model::catalog::ModelRef::parse("local/a").unwrap();
+        let model_b = crate::model::catalog::ModelRef::parse("local/b").unwrap();
+        let selected = |model: &crate::model::catalog::ModelRef| {
+            Some(crate::model::session::SessionModelConfig::of(model.clone()))
+        };
+        // Establish last-good A (default model local/a) through a real Session.
+        let first = fixture
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap()
+            .session;
+        fixture.manager.load(&first.id, None).await.unwrap();
+        {
+            let applications = fixture.manager.applications.lock();
+            assert_eq!(
+                applications
+                    .test_available(&workspace)
+                    .unwrap()
+                    .config
+                    .initial_model()
+                    .model,
+                model_a
+            );
+        }
+        let SessionDeleteResult::Preview { preview } =
+            fixture.manager.sessions.delete_preview(&first.id).await
+        else {
+            panic!("preview")
+        };
+        let deleted = fixture
+            .manager
+            .delete_session(&first.id, &preview.target_revision)
+            .await
+            .unwrap();
+        assert!(matches!(deleted, SessionDeleteResult::Deleted { .. }));
+        assert!(
+            fixture
+                .manager
+                .sessions
+                .list_sessions(None, 0, 32)
+                .await
+                .unwrap()
+                .sessions
+                .is_empty()
+        );
+        assert!(fixture.manager.diagnostics().sessions.is_empty());
+        assert!(
+            fixture
+                .manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        // A zero-Session User commit that changes only a future-Session default
+        // (local/a -> local/b) refreshes the retained desired source; it
+        // creates nothing and republishes nothing by itself.
+        write(
+            &fixture,
+            0,
+            ConfigMutation::RootModel {
+                authored: Some(crate::local_runtime::authoring::ModelLayer {
+                    model: Some(model_b.clone()),
+                    ..Default::default()
+                }),
+            },
+        )
+        .await;
+        source_settled(&fixture, &SourceTarget::User).await;
+        assert!(
+            fixture
+                .manager
+                .sessions
+                .list_sessions(None, 0, 32)
+                .await
+                .unwrap()
+                .sessions
+                .is_empty()
+        );
+        assert!(
+            fixture
+                .manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        let desired_revisions = {
+            let applications = fixture.manager.applications.lock();
+            let available = applications.test_available(&workspace).unwrap();
+            assert_eq!(
+                available.config.initial_model().model,
+                model_a,
+                "generation B waits for native publication"
+            );
+            let desired = applications
+                .test_desired_source(&workspace)
+                .expect("User commit refreshes a sessionless Workspace")
+                .as_ref()
+                .expect("desired capture");
+            let context = desired.context.as_ref().expect("desired context");
+            assert_eq!(context.config.initial_model().model, model_b);
+            context.source_revisions.clone()
+        };
+        // A new Session binds last-good A with its own selection local/a. The
+        // unpublished generation defers to natural residency; creation drives
+        // no runtime, no model request, and no adoption candidate.
+        let second = fixture
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap()
+            .session;
+        assert_eq!(
+            fixture
+                .manager
+                .sessions
+                .read_settings(&second.id)
+                .await
+                .unwrap()
+                .1
+                .model,
+            selected(&model_a)
+        );
+        assert!(fixture.manager.configuration_runtime(&second.id).is_none());
+        assert!(fixture.provider.request_bodies().is_empty());
+        let pending = fixture
+            .manager
+            .configuration_application(&second.id)
+            .expect("the unpublished source generation rides this Session scope");
+        assert!(pending.candidate.is_none());
+        assert!(
+            pending
+                .units
+                .values()
+                .all(|unit| matches!(unit, UnitApplication::Preparing)),
+            "{pending:?}"
+        );
+        assert!(fixture.manager.applications.is_deferred(second.id.as_str()));
+        fixture.manager.load(&second.id, None).await.unwrap();
+        let settled = session_settled(&fixture, &second.id).await;
+        // B is session-effectively identical to S2: publication applies every
+        // unit in place without a candidate and without any preparation.
+        assert!(settled.candidate.is_none(), "{settled:?}");
+        assert!(
+            settled
+                .units
+                .values()
+                .all(|unit| *unit == UnitApplication::Applied),
+            "{settled:?}"
+        );
+        assert_eq!(
+            fixture
+                .manager
+                .probe(&second.active_conversation_id)
+                .configuration_preparations
+                .load(Ordering::SeqCst),
+            0
+        );
+        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture
+                .manager
+                .sessions
+                .read_settings(&second.id)
+                .await
+                .unwrap()
+                .1
+                .model,
+            selected(&model_a),
+            "publication never mutates the resident Session's selection"
+        );
+        {
+            let applications = fixture.manager.applications.lock();
+            let available = applications.test_available(&workspace).unwrap();
+            assert_eq!(
+                available.source_revisions, desired_revisions,
+                "the joining Session publishes generation B"
+            );
+            assert_eq!(available.config.initial_model().model, model_b);
+        }
+        // Sessions created after publication bind the new default; the resident
+        // Session keeps its own selection and registers no new work.
+        let third = fixture
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap()
+            .session;
+        assert_eq!(
+            fixture
+                .manager
+                .sessions
+                .read_settings(&third.id)
+                .await
+                .unwrap()
+                .1
+                .model,
+            selected(&model_b)
+        );
+        assert!(!fixture.manager.applications.is_deferred(third.id.as_str()));
+        assert_eq!(
+            fixture
+                .manager
+                .sessions
+                .read_settings(&second.id)
+                .await
+                .unwrap()
+                .1
+                .model,
+            selected(&model_a)
+        );
+        fixture.close().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue385_failed_future_default_publication_keeps_last_good_available() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::local_runtime::session::deletion::SessionDeleteResult;
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 0).await;
+        let workspace = std::fs::canonicalize(&fixture.workspaces[0]).unwrap();
+        let model_a = crate::model::catalog::ModelRef::parse("local/a").unwrap();
+        let model_b = crate::model::catalog::ModelRef::parse("local/b").unwrap();
+        let selected = |model: &crate::model::catalog::ModelRef| {
+            Some(crate::model::session::SessionModelConfig::of(model.clone()))
+        };
+        let first = fixture
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap()
+            .session;
+        fixture.manager.load(&first.id, None).await.unwrap();
+        let SessionDeleteResult::Preview { preview } =
+            fixture.manager.sessions.delete_preview(&first.id).await
+        else {
+            panic!("preview")
+        };
+        fixture
+            .manager
+            .delete_session(&first.id, &preview.target_revision)
+            .await
+            .unwrap();
+        assert!(
+            fixture
+                .manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        write(
+            &fixture,
+            0,
+            ConfigMutation::RootModel {
+                authored: Some(crate::local_runtime::authoring::ModelLayer {
+                    model: Some(model_b.clone()),
+                    ..Default::default()
+                }),
+            },
+        )
+        .await;
+        source_settled(&fixture, &SourceTarget::User).await;
+        // The joining Session binds last-good A while the unpublished
+        // generation B defers to natural residency.
+        let second = fixture
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap()
+            .session;
+        assert_eq!(
+            fixture
+                .manager
+                .sessions
+                .read_settings(&second.id)
+                .await
+                .unwrap()
+                .1
+                .model,
+            selected(&model_a)
+        );
+        let pending = fixture
+            .manager
+            .configuration_application(&second.id)
+            .expect("the unpublished source generation rides this Session scope");
+        assert!(pending.candidate.is_none());
+        assert!(fixture.manager.applications.is_deferred(second.id.as_str()));
+        // The Workspace source breaks before publication; the deferred capture
+        // fails and last-good A remains the only available configuration.
+        std::fs::write(fixture.workspaces[0].join("rustx.toml"), "broken = [").unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(&SourceTarget::Workspace {
+                directory: fixture.workspaces[0].clone(),
+            })
+            .await
+            .unwrap();
+        let failed = session_settled(&fixture, &second.id).await;
+        assert!(
+            failed
+                .units
+                .values()
+                .any(|unit| matches!(unit, UnitApplication::Failed { .. })),
+            "{failed:?}"
+        );
+        assert!(failed.candidate.is_none());
+        {
+            let applications = fixture.manager.applications.lock();
+            assert_eq!(
+                applications
+                    .test_available(&workspace)
+                    .unwrap()
+                    .config
+                    .initial_model()
+                    .model,
+                model_a
+            );
+            assert!(
+                applications
+                    .test_desired_source(&workspace)
+                    .unwrap()
+                    .is_err(),
+                "the broken generation is retained as the failed desired source"
+            );
+        }
+        // A Session created before any retry still binds last-good A.
+        let third = fixture
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap()
+            .session;
+        assert_eq!(
+            fixture
+                .manager
+                .sessions
+                .read_settings(&third.id)
+                .await
+                .unwrap()
+                .1
+                .model,
+            selected(&model_a)
+        );
+        // Repairing the source retries through the existing reconcile path; the
+        // retained generation publishes without any Session residency.
+        std::fs::write(
+            fixture.workspaces[0].join("rustx.toml"),
+            "[environment]\nRESIDENCY_SESSION = \"A\"\n",
+        )
+        .unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(&SourceTarget::Workspace {
+                directory: fixture.workspaces[0].clone(),
+            })
+            .await
+            .unwrap();
+        let mut changes = fixture.manager.configuration_changes();
+        loop {
+            {
+                let applications = fixture.manager.applications.lock();
+                if applications
+                    .test_available(&workspace)
+                    .is_some_and(|available| available.config.initial_model().model == model_b)
+                {
+                    break;
+                }
+            }
+            changes.changed().await.unwrap();
+        }
+        let fourth = fixture
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap()
+            .session;
+        assert_eq!(
+            fixture
+                .manager
+                .sessions
+                .read_settings(&fourth.id)
+                .await
+                .unwrap()
+                .1
+                .model,
+            selected(&model_b)
+        );
+        assert_eq!(
+            fixture
+                .manager
+                .sessions
+                .read_settings(&second.id)
+                .await
+                .unwrap()
+                .1
+                .model,
+            selected(&model_a)
+        );
+        fixture.close().await;
+    }))
+    .await;
 }

@@ -16,7 +16,7 @@ it("CFG3 reconnect reconstructs published and admitted generations without repla
   const reconnect = replaceFromSnapshot(structuredClone(native), runtimeCursor(50));
   assert.deepEqual(reconnect, live);
   const rendered = renderSettings(reconnect);
-  for (const text of ["ses_5f9678b9-a001-7a5a-ba04-f2df4d59b899", "admitted-model", "Published generation: 8", "Save starts native application", "/configuration inspects application"])
+  for (const text of ["ses_5f9678b9-a001-7a5a-ba04-f2df4d59b899", "admitted-model", "Published generation: 8", "/settings edits User/Workspace sources", "/session settings inspects Session state"])
     assert.ok(rendered.includes(text), text);
   assert.deepEqual(reconnect.effectivePlugins, native.effective_plugins);
   assert.equal(reconnect.attempt?.executionSettings?.resource_revision, "7");

@@ -669,7 +669,7 @@ async fn child_source_admission_begins_python_preparation_using_the_frozen_packa
         &[],
     );
     let captured = crate::local_runtime::managed_python_resources::discover(
-        &fixture.workspace_root,
+        Some(&fixture.workspace_root),
         &fixture.workspace_root.join("absent-user-root"),
     )
     .unwrap();

@@ -51,7 +51,6 @@ impl AsyncGate {
 pub(super) struct Probe {
     pub(super) configuration_preparations: AtomicUsize,
     pub(super) fail_configuration_once: std::sync::atomic::AtomicBool,
-    pub(super) after_configuration_persistence: AsyncGate,
     pub(super) before_configuration_prepare: AsyncGate,
     pub(super) before_configuration_publish: AsyncGate,
     pub(super) idle_before_claim: Arc<crate::runtime::conversation_runtime::Gate>,
@@ -76,7 +75,6 @@ impl Default for Probe {
         Self {
             configuration_preparations: AtomicUsize::new(0),
             fail_configuration_once: std::sync::atomic::AtomicBool::new(false),
-            after_configuration_persistence: AsyncGate::default(),
             before_configuration_prepare: AsyncGate::default(),
             before_configuration_publish: AsyncGate::default(),
             idle_before_claim: Arc::default(),
@@ -112,7 +110,7 @@ struct Fixture {
     archive_root: std::path::PathBuf,
     manager: SessionRuntimeManager,
     host: crate::app_server::host::AppServerHost,
-    sessions: [SessionSnapshot; 2],
+    sessions: Vec<SessionSnapshot>,
     gates: [Arc<HeaderGate>; 2],
     provider: FixtureServer,
     workspaces: [std::path::PathBuf; 2],
@@ -123,6 +121,9 @@ impl Fixture {
     }
 
     async fn with_tool(tool: Option<&'static str>) -> Self {
+        Self::with_session_count(tool, 2).await
+    }
+    async fn with_session_count(tool: Option<&'static str>, count: usize) -> Self {
         let gates = [HeaderGate::new(), HeaderGate::new()];
         let server_gates = gates.clone();
         let provider = FixtureServer::start_with_body(move |_, _, body| {
@@ -219,7 +220,7 @@ impl Fixture {
             .unwrap();
         let controller = SessionController::open(&paths.runtime_root).unwrap();
         let mut sessions = Vec::new();
-        for workspace in &workspaces {
+        for workspace in workspaces.iter().take(count) {
             sessions.push(
                 controller
                     .create_session(SessionPersistentState::from_input(
@@ -261,7 +262,7 @@ impl Fixture {
                 crate::local_runtime::app_server_policy::AppServerPolicy::default(),
             ),
             manager,
-            sessions: sessions.try_into().unwrap(),
+            sessions,
             gates,
             provider,
             workspaces,
@@ -285,7 +286,7 @@ impl Fixture {
         tokio::spawn(async move { manager.load(&id, None).await })
     }
     async fn close(&self) {
-        for i in 0..2 {
+        for i in 0..self.sessions.len() {
             self.gates[i].release();
             if let Ok(access) = self
                 .manager

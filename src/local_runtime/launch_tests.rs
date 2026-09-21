@@ -461,7 +461,8 @@ fn cfg236_user_role_authority_resolves_alias_once_for_launch_and_diagnostics() {
     std::fs::remove_file(&alias).unwrap();
     std::os::unix::fs::symlink(&replacement, &alias).unwrap();
     let (catalog, _) =
-        super::agent_resources::load_authorized(&launch.workspace, &launch.agent_root).unwrap();
+        super::agent_resources::load_authorized(Some(&launch.workspace), &launch.agent_root)
+            .unwrap();
     assert_eq!(
         catalog.definitions().next().unwrap().instructions(),
         "User body"
@@ -475,7 +476,8 @@ fn cfg236_user_role_authority_resolves_alias_once_for_launch_and_diagnostics() {
     .unwrap();
     std::os::unix::fs::symlink(&replacement, &launch.agent_root).unwrap();
     let (catalog, _) =
-        super::agent_resources::load_authorized(&launch.workspace, &launch.agent_root).unwrap();
+        super::agent_resources::load_authorized(Some(&launch.workspace), &launch.agent_root)
+            .unwrap();
     assert!(catalog.definitions().next().is_none());
     assert!(
         catalog

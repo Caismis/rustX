@@ -135,7 +135,7 @@ test("settlement keeps the actual history overlay; resyncRequired invalidates it
 
 test("pasted leading command tokens dispatch as Agent input, including typed suffixes", async t => {
   const h = await appHarness(t);
-  for (const [pasted, typed] of [["/permissions", ""], ["/attach /tmp/a", ""], ["/attach ", "foo.txt"], ["ordinary pasted content", ""]] as const) {
+  for (const [pasted, typed] of [["/settings", ""], ["/attach /tmp/a", ""], ["/attach ", "foo.txt"], ["ordinary pasted content", ""]] as const) {
     h.input(`\x1b[200~${pasted}\x1b[201~`); if (typed) h.input(typed);
     const count = h.transport.transportCount("turn/start");
     h.input("\r");
@@ -165,13 +165,13 @@ test("typed attach token with pasted path arguments executes upload, including s
   assert.equal(h.transport.transportCount("turn/start"), 0);
 });
 
-test("typed permissions remains a command and clearing or replacing resets paste provenance", async t => {
+test("typed settings remains a command and clearing or replacing resets paste provenance", async t => {
   const h = await appHarness(t);
   for (const reset of ["none", "clear", "replace"]) {
     if (reset !== "none") h.input("\x1b[200~/attach /tmp/a\x1b[201~");
     if (reset === "clear") h.editor.setText("");
-    if (reset === "replace") h.editor.setText("/permissions");
-    else h.input("/permissions");
+    if (reset === "replace") h.editor.setText("/settings");
+    else h.input("/settings");
     const count = h.transport.transportCount("configuration/sourcesRead");
     h.input("\r");
     const request = await nextRequest(h, "configuration/sourcesRead", count);

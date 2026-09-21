@@ -239,7 +239,7 @@ fn mcp_destination_replacement_drops_lower_secrets_and_headers() {
         "[mcp_servers.docs]\nurl = 'https://upper.example/mcp'",
     )
     .unwrap();
-    let catalog = crate::local_runtime::mcp_resources::load(&user, &workspace);
+    let catalog = crate::local_runtime::mcp_resources::load(&user, Some(&workspace));
     let server = catalog.definitions[&crate::runtime::identity::McpServerId::new("docs")]
         .as_ref()
         .unwrap()

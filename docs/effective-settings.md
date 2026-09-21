@@ -6,7 +6,7 @@ A winning Workspace Provider, Model, Tool policy or Plugin object receives no
 fields from its shadowed User object. Defaulted members carry winning-object
 provenance. Empty arrays and omitted fields have different meanings.
 
-App Server `configuration/effective` returns the published generation, redacted
+App Server `session/effectiveConfiguration` returns the published generation, redacted
 effective document and origins, Source revisions, Root profile, resource inventory
 and readiness, explicit Session model, and admitted Attempt generation/model/resources.
 `configuration/sourcesRead` separately reads current authored documents and inert

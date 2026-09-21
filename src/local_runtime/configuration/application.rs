@@ -20,6 +20,17 @@ pub enum AdoptionError {
     Failed { diagnostic: String },
 }
 
+/// Advisory only; adoption always revalidates the native admission gate.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum AdoptionEligibility {
+    Eligible,
+    Busy,
+    Unavailable,
+}
+
 pub(crate) struct PreparedConfiguration {
     pub(crate) selection_only: bool,
     pub(crate) owner: Arc<()>,
@@ -84,6 +95,7 @@ pub struct ConfigurationApplication {
     pub desired: ApplicationIdentity,
     pub units: BTreeMap<ApplyUnit, UnitApplication>,
     pub candidate: Option<AvailableConfiguration>,
+    pub eligibility: AdoptionEligibility,
 }
 
 #[derive(
@@ -129,6 +141,8 @@ pub(crate) struct ApplicationState {
     scopes: BTreeMap<String, ConfigurationApplication>,
     pending: BTreeMap<String, ApplicationIdentity>,
     inputs: BTreeMap<String, Result<CapturedApplication, String>>,
+    source_inputs:
+        BTreeMap<String, Result<super::super::app_server_policy::AppServerPolicy, String>>,
     worker_running: bool,
     ready: BTreeMap<String, ReadyConfiguration>,
 }
@@ -271,6 +285,9 @@ impl ApplicationState {
             // Membership is unconditional; only unresolved Session-owned units
             // require an application. Failed capture remains unresolved, while
             // process restart alone never creates allocation work.
+            // Session-effective equality settles only this joining Session. A
+            // desired source generation that never published still owes this
+            // Workspace native publication, so that work rides this scope.
             if let Ok(captured) = &input
                 && let Ok(context) = &captured.context
                 && context.same_capabilities(adopted)
@@ -280,6 +297,10 @@ impl ApplicationState {
                 && captured.policy.model_timeout_policy == adopted.config.model_timeout_policy
                 && captured.policy.tool_deadline_policy == adopted.config.tool_deadline_policy
                 && captured.policy.subagents == adopted.config.subagents
+                && self
+                    .available
+                    .get(&source)
+                    .is_some_and(|available| available.source_revisions == context.source_revisions)
             {
                 return;
             }
@@ -384,6 +405,7 @@ impl ApplicationState {
                 version: self.version,
                 desired: identity.clone(),
                 candidate: None,
+                eligibility: AdoptionEligibility::Unavailable,
                 units: BTreeMap::from([
                     (ApplyUnit::ExecutionPolicy, UnitApplication::Preparing),
                     (ApplyUnit::Capabilities, UnitApplication::Preparing),
@@ -436,6 +458,38 @@ impl ApplicationState {
         identity
     }
 
+    pub(crate) fn capture_source(
+        &mut self,
+        scope: String,
+        revision: Option<String>,
+        process: Result<super::super::app_server_policy::AppServerPolicy, String>,
+    ) {
+        if self
+            .scopes
+            .get(&scope)
+            .is_some_and(|view| view.desired.input_revision == revision)
+            && self.source_inputs.get(&scope) == Some(&process)
+            && self.scopes.get(&scope).is_some_and(|view| {
+                !view
+                    .units
+                    .values()
+                    .any(|unit| matches!(unit, UnitApplication::Failed { .. }))
+            })
+        {
+            return;
+        }
+        self.desire(scope.clone(), revision);
+        self.scopes
+            .get_mut(&scope)
+            .expect("registered source")
+            .units
+            .retain(|unit, _| *unit == ApplyUnit::ProcessBindings);
+        if let Ok(policy) = &process {
+            self.desired_process = Some(policy.clone());
+        }
+        self.source_inputs.insert(scope, process);
+    }
+
     pub(crate) fn record_source(
         &mut self,
         source: &std::path::Path,
@@ -446,6 +500,34 @@ impl ApplicationState {
         if let Ok(input) = input {
             self.desired_process = Some(input.process.clone());
         }
+    }
+
+    /// Every directory with retained source authority, whether it published a
+    /// last-good configuration or only holds a captured desired source.
+    pub(crate) fn known_source_directories(&self) -> Vec<std::path::PathBuf> {
+        self.available
+            .keys()
+            .chain(self.desired_sources.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_available(
+        &self,
+        directory: &std::path::Path,
+    ) -> Option<&super::ProspectiveSessionConfig> {
+        self.available.get(directory)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_desired_source(
+        &self,
+        directory: &std::path::Path,
+    ) -> Option<&Result<CapturedApplication, String>> {
+        self.desired_sources.get(directory)
     }
 
     fn captured_input(&self, scope: &str) -> Result<CapturedApplication, String> {

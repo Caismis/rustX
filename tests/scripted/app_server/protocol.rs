@@ -604,7 +604,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":12,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 15, requested: 12 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 16, requested: 12 })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -2055,7 +2055,7 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
-    use crate::local_runtime::configuration::settings::{SourceMutation, SourceScope};
+    use crate::local_runtime::configuration::settings::SourceMutation;
     use crate::model::{catalog::ModelRef, session::SessionModelConfig};
     bounded(async {
         let f = Fixture::new().await;
@@ -2067,7 +2067,7 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
         .unwrap();
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
-        let id = f.sessions[0].id.clone();
+        let _id = f.sessions[0].id.clone();
         let MethodResult::SourceSettings {
             projection,
             ..
@@ -2075,7 +2075,7 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
             &connection,
             1,
             Method::SourcesRead {
-                session_id: id.clone(),
+                target: crate::local_runtime::configuration::settings::SourceTarget::User,
             },
         )
         .await
@@ -2083,7 +2083,7 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
             panic!()
         };
         assert!(projection.user.authored.is_some());
-        assert!(projection.workspace.authored.is_some());
+        assert!(projection.workspace.is_none());
         assert!(projection.user.authored.as_ref().unwrap().models.as_ref().unwrap().contains_key("local/b"));
         let expected = projection.user.revision.clone();
         let selection = Some(SessionModelConfig::of(ModelRef::parse("local/b").unwrap()));
@@ -2093,9 +2093,9 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
             &connection,
             2,
             Method::SourcesWrite {
-                session_id: id.clone(),
+                target: crate::local_runtime::configuration::settings::SourceTarget::User,
                 expected_revision: expected.clone(),
-                mutation: SourceMutation::Config { scope: SourceScope::User, mutation: crate::local_runtime::configuration::settings::ConfigMutation::RootModel {
+                mutation: SourceMutation::Config { mutation: crate::local_runtime::configuration::settings::ConfigMutation::RootModel {
                     authored: Some(
                         crate::local_runtime::authoring::ModelLayer {
                             model: Some(ModelRef::parse("local/b").unwrap()),
@@ -2118,14 +2118,13 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
             rejected(
                 &connection,
                 Method::SourcesWrite {
-                    session_id: id.clone(),
+                    target: crate::local_runtime::configuration::settings::SourceTarget::User,
                     expected_revision: expected,
-                    mutation: SourceMutation::Config { scope: SourceScope::User, mutation: crate::local_runtime::configuration::settings::ConfigMutation::RootModel { authored: None } }
+                    mutation: SourceMutation::Config { mutation: crate::local_runtime::configuration::settings::ConfigMutation::RootModel { authored: None } }
                 }
             )
             .await,
             ErrorData::SourceConflict {
-                scope: SourceScope::User,
                 ..
             }
         ));
@@ -2135,7 +2134,7 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
             &connection,
             3,
             Method::SourcesRead {
-                session_id: id.clone(),
+                target: crate::local_runtime::configuration::settings::SourceTarget::User,
             },
         )
         .await
@@ -2168,9 +2167,12 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
         let f = Fixture::new().await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
-        let (initial, _, _) = f
+        let initial = f
             .manager
-            .source_settings(&f.sessions[0].id, None)
+            .source_settings(
+                &crate::local_runtime::configuration::settings::SourceTarget::User,
+                None,
+            )
             .await
             .unwrap();
         let mut model = initial
@@ -2199,11 +2201,10 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
         });
         f.manager
             .source_settings(
-                &f.sessions[0].id,
+                &crate::local_runtime::configuration::settings::SourceTarget::User,
                 Some((
                     initial.user.revision,
                     SourceMutation::Config {
-                        scope: crate::local_runtime::configuration::settings::SourceScope::User,
                         mutation:
                             crate::local_runtime::configuration::settings::ConfigMutation::Model {
                                 id: "local/a".into(),
@@ -2215,8 +2216,11 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             .await
             .unwrap();
         let target = attach(&connection, &f, 0).await;
-        let initial_application = super::configuration::settled(&f, 0).await;
-        if let Some(candidate) = initial_application.candidate {
+        if let Some(candidate) = f
+            .manager
+            .configuration_application(&target.session_id)
+            .and_then(|application| application.candidate)
+        {
             f.manager
                 .adopt_configuration(
                     &target.session_id,
@@ -2243,7 +2247,7 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             &connection,
             102,
             Method::SourcesRead {
-                session_id: target.session_id.clone(),
+                target: crate::local_runtime::configuration::settings::SourceTarget::User,
             },
         )
         .await
@@ -2269,10 +2273,9 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             &connection,
             103,
             Method::SourcesWrite {
-                session_id: target.session_id.clone(),
+                target: crate::local_runtime::configuration::settings::SourceTarget::User,
                 expected_revision: projection.user.revision,
                 mutation: SourceMutation::Config {
-                    scope: crate::local_runtime::configuration::settings::SourceScope::User,
                     mutation:
                         crate::local_runtime::configuration::settings::ConfigMutation::Model {
                             id: "local/a".into(),
@@ -2370,16 +2373,40 @@ fn source_gate(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cfg3_source_document_wait_releases_catalog_and_rejects_mixed_session_revision() {
+async fn c12_source_read_is_independent_of_concurrent_session_revision() {
     bounded(async {
         let f = Fixture::new().await;
         let id = f.sessions[0].id.clone();
-        let (before, revision, _) = f.manager.source_settings(&id, None).await.unwrap();
-        let document_lock = crate::local_runtime::settings::lock_document(std::path::Path::new(&before.user.path)).unwrap();
+        let before = f
+            .manager
+            .source_settings(
+                &crate::local_runtime::configuration::settings::SourceTarget::User,
+                None,
+            )
+            .await
+            .unwrap();
+        let revision = f
+            .manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .settings_revision(&id)
+            .unwrap();
+        let document_lock =
+            crate::local_runtime::settings::lock_document(std::path::Path::new(&before.user.path))
+                .unwrap();
         let (entered, resume) = source_gate(&f, "before_documents");
         let manager = f.manager.clone();
-        let read_id = id.clone();
-        let read = tokio::spawn(async move { manager.source_settings(&read_id, None).await });
+        let _read_id = id.clone();
+        let read = tokio::spawn(async move {
+            manager
+                .source_settings(
+                    &crate::local_runtime::configuration::settings::SourceTarget::User,
+                    None,
+                )
+                .await
+        });
         entered.await.unwrap();
         resume.send(()).unwrap();
         // Source worker is about to wait on this held document lock.
@@ -2387,39 +2414,54 @@ async fn cfg3_source_document_wait_releases_catalog_and_rejects_mixed_session_re
         let mut catalog = f.manager.sessions.catalog.lock().await;
         catalog.settings_revision(&f.sessions[1].id).unwrap();
         let (_, mut settings) = catalog.lineage(&id, None).unwrap();
-        settings.model = Some(crate::model::session::SessionModelConfig::of(crate::model::catalog::ModelRef::parse("local/b").unwrap()));
+        settings.model = Some(crate::model::session::SessionModelConfig::of(
+            crate::model::catalog::ModelRef::parse("local/b").unwrap(),
+        ));
         let next = catalog.replace_settings(&id, revision, settings).unwrap();
         drop(catalog);
-        assert!(!read.is_finished(), "held document lock prevents source completion");
+        assert!(
+            !read.is_finished(),
+            "held document lock prevents source completion"
+        );
         drop(document_lock);
-        assert!(matches!(read.await.unwrap(), Err(super::super::SourceSettingsError::Session(crate::local_runtime::session::SessionError::StaleSettings { expected, actual })) if expected == revision && actual == next));
-        let (after, current, selected) = f.manager.source_settings(&id, None).await.unwrap();
+        assert!(read.await.unwrap().is_ok());
+        let after = f
+            .manager
+            .source_settings(
+                &crate::local_runtime::configuration::settings::SourceTarget::User,
+                None,
+            )
+            .await
+            .unwrap();
+        let (current, settings) = f.manager.sessions.read_settings(&id).await.unwrap();
+        let selected = settings.model;
         assert_eq!(current, next);
         assert_eq!(selected.unwrap().model.to_string(), "local/b");
         assert_eq!(after.user.revision, before.user.revision);
         f.close().await;
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cfg3_source_commit_with_changed_session_is_uncertain_and_never_replayed() {
-    use crate::local_runtime::configuration::settings::{SettingsError, SourceMutation};
+async fn c12_source_commit_is_independent_of_concurrent_session_revision() {
+    use crate::local_runtime::configuration::settings::SourceMutation;
     bounded(async {
         let f = Fixture::new().await;
         let id = f.sessions[0].id.clone();
-        let (before, revision, _) = f.manager.source_settings(&id, None).await.unwrap();
+        let before = f.manager.source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User, None).await.unwrap();
+        let revision = f.manager.sessions.catalog.lock().await.settings_revision(&id).unwrap();
         let (entered, resume) = source_gate(&f, "before_publication");
         let mut model = before.user.authored.as_ref().unwrap().models.as_ref().unwrap()["local/a"].clone();
         model.max_output_tokens = 2048;
         let manager = f.manager.clone();
-        let write_id = id.clone();
+        let _write_id = id.clone();
         let write = tokio::spawn(async move {
             manager
-                .source_settings(
-                    &write_id,
+                .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User,
                     Some((
                         before.user.revision,
-                        SourceMutation::Config { scope: crate::local_runtime::configuration::settings::SourceScope::User, mutation: crate::local_runtime::configuration::settings::ConfigMutation::Model { id: "local/a".into(), authored: Some(model) } },
+                        SourceMutation::Config { mutation: crate::local_runtime::configuration::settings::ConfigMutation::Model { id: "local/a".into(), authored: Some(model) } },
                     )),
                 )
                 .await
@@ -2430,13 +2472,8 @@ async fn cfg3_source_commit_with_changed_session_is_uncertain_and_never_replayed
         catalog.replace_settings(&id, revision, settings).unwrap();
         drop(catalog);
         resume.send(()).unwrap();
-        assert!(matches!(
-            write.await.unwrap(),
-            Err(super::super::SourceSettingsError::Source(
-                SettingsError::Committed
-            ))
-        ));
-        let (fresh, _, _) = f.manager.source_settings(&id, None).await.unwrap();
+        assert!(write.await.unwrap().is_ok());
+        let fresh = f.manager.source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User, None).await.unwrap();
         assert_eq!(
             fresh.user.authored.as_ref().unwrap().models.as_ref().unwrap()["local/a"].max_output_tokens,
             2048
@@ -2447,18 +2484,30 @@ async fn cfg3_source_commit_with_changed_session_is_uncertain_and_never_replayed
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cfg3_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary() {
-    use crate::local_runtime::configuration::settings::{
-        McpWrite, SettingsError, SourceMutation, SourceScope,
-    };
+async fn c12_mcp_source_commit_is_independent_of_session_revision() {
+    use crate::local_runtime::configuration::settings::{McpWrite, SourceMutation};
     bounded(async {
         let f = Fixture::new().await;
         let id = f.sessions[0].id.clone();
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
-        let (before, revision, _) = f.manager.source_settings(&id, None).await.unwrap();
+        let before = f
+            .manager
+            .source_settings(
+                &crate::local_runtime::configuration::settings::SourceTarget::User,
+                None,
+            )
+            .await
+            .unwrap();
+        let revision = f
+            .manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .settings_revision(&id)
+            .unwrap();
         let mutation = SourceMutation::Mcp {
-            scope: SourceScope::User,
             id: crate::runtime::identity::McpServerId::new("fixture"),
             authored: Some(McpWrite {
                 definition: serde_json::from_value(
@@ -2471,11 +2520,14 @@ async fn cfg3_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary()
         };
         let (entered, resume) = source_gate(&f, "before_publication");
         let manager = f.manager.clone();
-        let write_id = id.clone();
+        let _write_id = id.clone();
         let expected = before.user_mcp.revision.clone();
         let write = tokio::spawn(async move {
             manager
-                .source_settings(&write_id, Some((expected, mutation)))
+                .source_settings(
+                    &crate::local_runtime::configuration::settings::SourceTarget::User,
+                    Some((expected, mutation)),
+                )
                 .await
         });
         entered.await.unwrap();
@@ -2484,19 +2536,14 @@ async fn cfg3_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary()
         catalog.replace_settings(&id, revision, settings).unwrap();
         drop(catalog);
         resume.send(()).unwrap();
-        assert!(matches!(
-            write.await.unwrap(),
-            Err(super::super::SourceSettingsError::Source(
-                SettingsError::Committed
-            ))
-        ));
+        assert!(write.await.unwrap().is_ok());
         let MethodResult::SourceSettings {
             projection: fresh, ..
         } = call(
             &connection,
             1,
             Method::SourcesRead {
-                session_id: id.clone(),
+                target: crate::local_runtime::configuration::settings::SourceTarget::User,
             },
         )
         .await
@@ -2515,10 +2562,9 @@ async fn cfg3_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary()
             rejected(
                 &connection,
                 Method::SourcesWrite {
-                    session_id: id.clone(),
+                    target: crate::local_runtime::configuration::settings::SourceTarget::User,
                     expected_revision: before.user_mcp.revision,
                     mutation: SourceMutation::Mcp {
-                        scope: SourceScope::User,
                         id: crate::runtime::identity::McpServerId::new("fixture"),
                         authored: None
                     }
@@ -2534,10 +2580,9 @@ async fn cfg3_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary()
             &connection,
             2,
             Method::SourcesWrite {
-                session_id: id,
+                target: crate::local_runtime::configuration::settings::SourceTarget::User,
                 expected_revision: fresh.user_mcp.revision,
                 mutation: SourceMutation::Mcp {
-                    scope: SourceScope::User,
                     id: crate::runtime::identity::McpServerId::new("fixture"),
                     authored: None,
                 },
@@ -2556,16 +2601,23 @@ async fn cfg3_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_owners() {
-    use crate::local_runtime::configuration::settings::{
-        ConfigMutation, McpWrite, SourceMutation, SourceScope,
-    };
+    use crate::local_runtime::configuration::settings::{ConfigMutation, McpWrite, SourceMutation};
     use crate::runtime::identity::McpServerId;
     bounded(async {
         let f = Fixture::new().await;
-        let id = f.sessions[0].id.clone();
+        let _id = f.sessions[0].id.clone();
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
-        let (before, _, _) = f.manager.source_settings(&id, None).await.unwrap();
+        let before = f
+            .manager
+            .source_settings(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: f.workspaces[0].clone(),
+                },
+                None,
+            )
+            .await
+            .unwrap();
         let MethodResult::SourceSettings {
             projection: definition,
             ..
@@ -2573,10 +2625,11 @@ async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_o
             &connection,
             1,
             Method::SourcesWrite {
-                session_id: id.clone(),
-                expected_revision: before.workspace_mcp.revision,
+                target: crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: f.workspaces[0].clone(),
+                },
+                expected_revision: before.workspace_mcp.as_ref().unwrap().revision.clone(),
                 mutation: SourceMutation::Mcp {
-                    scope: SourceScope::Workspace,
                     id: McpServerId::new("service"),
                     authored: Some(McpWrite {
                         definition: serde_json::from_value(
@@ -2593,17 +2646,21 @@ async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_o
         else {
             panic!("source projection")
         };
-        assert_eq!(definition.workspace.revision, before.workspace.revision);
+        assert_eq!(
+            definition.workspace.as_ref().unwrap().revision,
+            before.workspace.as_ref().unwrap().revision
+        );
         let MethodResult::SourceSettings {
             projection: policy, ..
         } = call(
             &connection,
             2,
             Method::SourcesWrite {
-                session_id: id.clone(),
-                expected_revision: definition.workspace.revision,
+                target: crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: f.workspaces[0].clone(),
+                },
+                expected_revision: definition.workspace.as_ref().unwrap().revision.clone(),
                 mutation: SourceMutation::Config {
-                    scope: SourceScope::Workspace,
                     mutation: ConfigMutation::McpPolicy {
                         id: McpServerId::new("service"),
                         authored: Some(crate::local_runtime::config::InvocationPolicyDocument {
@@ -2619,10 +2676,13 @@ async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_o
             panic!("policy projection")
         };
         assert_eq!(
-            policy.workspace_mcp.revision,
-            definition.workspace_mcp.revision
+            policy.workspace_mcp.as_ref().unwrap().revision,
+            definition.workspace_mcp.as_ref().unwrap().revision
         );
-        assert_ne!(policy.workspace.revision, before.workspace.revision);
+        assert_ne!(
+            policy.workspace.as_ref().unwrap().revision,
+            before.workspace.as_ref().unwrap().revision
+        );
         assert_eq!(policy.user.revision, before.user.revision);
         let target = attach(&connection, &f, 0).await;
         let MethodResult::EffectiveConfiguration { projection } =

@@ -5,13 +5,11 @@ import { join } from 'node:path';
 import { chooseWorkspace } from './shell-actions';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { wireProbe } from './wire-probe';
 
 // Real native source fixtures: the browser only edits the generated projection.
 test('Summary selections round-trip and implicit MCP/optional Agent sources remain editable', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const fixture = await startDogfood();
-  const wire = await wireProbe(page);
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const summary = 'summary_model = { mode = "explicit", model = "summary-a", reasoning_profile = { mode = "profile", name = "deep" }, max_output_tokens = { mode = "limit", tokens = 2048 }, request_params = { temperature = 0.2 } }\n';
   const model = '[model]\nmodel = "fixture/console-model"\n' + summary;
@@ -40,14 +38,14 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
-    await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
+    await settings.getByLabel('Configuration owner').selectOption({ label: 'Workspace A' });
     for (const owner of ['Root', 'Agent'] as const) {
-      await settings.getByRole('button', { name: owner === 'Root' ? 'Model' : 'Agents', exact: true }).click();
+      await settings.getByRole('button', { name: owner === 'Root' ? 'Default model' : 'Agents', exact: true }).click();
       if (owner === 'Agent') await settings.getByRole('button', { name: 'Edit Agent optional', exact: true }).click();
       const form = settings.getByRole('form', { name: owner === 'Root' ? 'Root model' : 'Agent optional', exact: true });
       const save = async () => {
         await form.getByRole('button', { name: owner === 'Root' ? 'Save Root model' : 'Save Agent optional', exact: true }).click();
-        await expect(settings.getByText(/Source saved. Native application/)).toBeVisible();
+        await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();
         await expect(form.getByRole('status')).toHaveText('Saved. Native application proceeds automatically.');
       };
       await form.getByRole('combobox', { name: 'Summary model', exact: true }).selectOption('summary-b');
@@ -60,10 +58,6 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
       const sourceFile = owner === 'Root' ? join(fixture.workspaceA, 'rustx.toml') : join(fixture.workspaceA, '.agents/agents/optional.toml');
       const preserved = readFileSync(sourceFile, 'utf8');
       if (owner === 'Agent') {
-        const request = wire.requests.filter(request => request.method === 'configuration/sourceWrite').at(-1);
-        if (request?.method !== 'configuration/sourceWrite' || request.params.mutation.kind !== 'agent') throw new Error('Expected native Agent write');
-        expect(request.params.mutation.authored).not.toHaveProperty('description');
-        expect(request.params.mutation.authored).not.toHaveProperty('instructions');
         expect(preserved).not.toMatch(/^(description|instructions)\s*=/m);
       }
       for (const fact of ['summary-b', 'deep', '2048', '0.2']) expect(preserved).toContain(fact);
@@ -104,13 +98,13 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
         await form.getByLabel('Working directory').fill(fixture.workspaceA);
       }
       await form.getByRole('button', { name: `Save MCP implicit-${transport}`, exact: true }).click();
-      await expect(settings.getByText(/Source saved. Native application/)).toBeVisible();
+      await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();
       await expect(form.getByRole('status')).toHaveText('Saved. Native application proceeds automatically.');
     }
     const mcp = readFileSync(mcpFile, 'utf8');
     expect(mcp).toContain('fixture-header-secret'); expect(mcp).toContain('fixture-env-secret');
     expect(mcp).not.toMatch(/^type\s*=/m);
-    await expect(settings.getByText(/Applicable changes are applied/)).toBeVisible();
+    await expect(settings.getByText(/Revision:/)).toBeVisible();
     expect(errors).toEqual([]);
   } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
 });

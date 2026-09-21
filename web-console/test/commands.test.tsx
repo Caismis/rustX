@@ -9,7 +9,7 @@ import { CommandSession, NavigationEpoch, createSession } from '../src/app/comma
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v15';
+import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v16';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -74,9 +74,9 @@ function nativeFixture() {
   const committed: Extract<MethodResult, { type: 'session_transition' }>[] = [];
   let model = 'fixture/first';
   const modelView = () => ({ configured: { model }, effective: { model }, summary: { mode: 'session' } }) as Extract<MethodResult, { type: 'model' }>['model'];
-  server.handlers.set('settings/model', () => ({ type: 'model', model: modelView() }));
-  server.handlers.set('settings/models', () => ({ type: 'models', catalog: { models: [{ model: 'fixture/first' }, { model: 'fixture/second' }] } } as Extract<MethodResult, { type: 'models' }>));
-  server.handlers.set('settings/setModel', request => { if (request.method !== 'settings/setModel') throw new Error('wrong method'); model = request.params.config.model; return { type: 'model', model: modelView() }; });
+  server.handlers.set('session/model', () => ({ type: 'model', model: modelView() }));
+  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [{ model: 'fixture/first' }, { model: 'fixture/second' }] } } as Extract<MethodResult, { type: 'models' }>));
+  server.handlers.set('session/setModel', request => { if (request.method !== 'session/setModel') throw new Error('wrong method'); model = request.params.config.model; return { type: 'model', model: modelView() }; });
   server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: boundary.surface_revision, boundaries: [boundary] }));
   server.handlers.set('session/tree', () => ({ type: 'tree', nodes }));
   const transition = (request: Request): MethodResult => {
@@ -131,15 +131,15 @@ describe('successful command draft consumption', () => {
   });
   it('known model refusal preserves its fuzzy invocation', async () => {
     const input = await open('/mdl');
-    server.handlers.set('settings/setModel', () => { throw new RpcFailure({ code: -32602, message: 'Model refused' }); });
+    server.handlers.set('session/setModel', () => { throw new RpcFailure({ code: -32602, message: 'Model refused' }); });
     await act(async () => fireEvent.click(await screen.findByRole('option', { name: /fixture\/second/ })));
     expect(screen.getByRole('alert').textContent).toContain('Model refused');
     expect(input).toHaveProperty('value', '/mdl');
   });
   it('a draft edited while selection is pending survives successful completion', async () => {
-    const input = await open('/mdl'); server.held.add('settings/setModel');
+    const input = await open('/mdl'); server.held.add('session/setModel');
     fireEvent.click(await screen.findByRole('option', { name: /fixture\/second/ }));
-    const request = await server.waitFor('settings/setModel', 1);
+    const request = await server.waitFor('session/setModel', 1);
     fireEvent.change(input, { target: { value: 'new text' } });
     await act(async () => server.reply(request));
     expect(input).toHaveProperty('value', 'new text'); expect(screen.queryByRole('dialog')).toBeNull();
@@ -402,7 +402,7 @@ describe('typed native operations and continuation fencing', () => {
     expect((await scope.models()).catalog.models?.map(model => model.model)).toEqual(['fixture/first', 'fixture/second']);
     await scope.setModel('fixture/second');
     expect(fixture.model()).toBe('fixture/second');
-    expect(methods()).toContain('settings/models'); expect(methods()).toContain('settings/model');
+    expect(methods()).toContain('session/models'); expect(methods()).toContain('session/model');
     expect(methods().some(method => method.includes('command'))).toBe(false);
     expect(JSON.stringify(server.requests.map(item => item.request.params))).not.toContain('/model');
   });
@@ -423,7 +423,7 @@ describe('typed native operations and continuation fencing', () => {
     expect(await work).toBeUndefined(); expect(fixture.committed).toHaveLength(1);
     expect(methods().filter(method => method === 'session/attach')).toHaveLength(2);
   });
-  it.each(['settings/setModel'] as const)('late %s commits but cannot reread or affect the navigated UI', async method => {
+  it.each(['session/setModel'] as const)('late %s commits but cannot reread or affect the navigated UI', async method => {
     const { scope, navigation, fixture } = await subject(); server.held.add(method);
     const work = scope.setModel('fixture/second');
     const request = await server.waitFor(method, 1); const response = server.commit(request);
@@ -431,7 +431,7 @@ describe('typed native operations and continuation fencing', () => {
     server.socket.deliver(response); await work;
     expect(server.requests).toHaveLength(count);
     expect(server.client.getSnapshot().views.B.snapshot?.effective_approval_mode).toBe('policy');
-    if (method === 'settings/setModel') expect(fixture.model()).toBe('fixture/second');
+    if (method === 'session/setModel') expect(fixture.model()).toBe('fixture/second');
   });
   it.each(['fork', 'branch', 'retry'] as const)('%s commit/held response/navigation/release leaves the mutation valid without continuation', async action => {
     const { scope, selection, navigation, fixture } = await subject();
@@ -493,9 +493,9 @@ describe('typed native operations and continuation fencing', () => {
     expect(methods().filter(item => item === 'turn/start')).toHaveLength(method === 'turn/start' ? 1 : 0);
     expect(server.client.getSnapshot().uncertain.some(item => item.method === method)).toBe(true);
   });
-  it.each(['session/fork', 'session/branch', 'settings/setModel'] as const)('%s response loss is uncertain, never replayed, and reconnect repairs authority', async method => {
+  it.each(['session/fork', 'session/branch', 'session/setModel'] as const)('%s response loss is uncertain, never replayed, and reconnect repairs authority', async method => {
     const { scope, selection, fixture } = await subject(); server.held.add(method);
-    const work = method === 'settings/setModel' ? scope.setModel('fixture/second') : scope.transition(method === 'session/fork' ? 'fork' : 'branch', selection);
+    const work = method === 'session/setModel' ? scope.setModel('fixture/second') : scope.transition(method === 'session/fork' ? 'fork' : 'branch', selection);
     const rejection = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
     const request = await server.waitFor(method, 1); const response = server.commit(request), oldSocket = server.socket;
     server.client.disconnect(); await rejection;

@@ -95,7 +95,7 @@ ungrouped. Session deletion, detach and unload remain separate explicit operatio
 attachment entry point calls this injected policy for every new attachment,
 including saved-tab restoration/reconnect, sidebar Open/Fork, toolbar Attach,
 creation and Fork/branch/retry/tree continuations. No policy means refusal. Before
-attach, it reads `settings/read` from the native durable owner, classifies that
+attach, it reads `session/settings` from the native durable owner, classifies that
 current cwd through the Host for the current connection endpoint, and checks
 navigation/generation fences. Summary classifications only describe the list;
 they never authorize attachment. Saved localStorage openViews are hints, not admission.

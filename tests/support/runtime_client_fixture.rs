@@ -336,7 +336,7 @@ impl RuntimeClientFixtureBuilder {
         agent_activation.profile.extensions =
             crate::scripted_suites::common::plugin_document(&extensions);
         let python = rustx::local_runtime::managed_python_resources::discover(
-            &workspace_root,
+            Some(&workspace_root),
             &workspace.path().join("user/.agents"),
         )
         .expect("inert Python catalog");
@@ -472,7 +472,7 @@ fn fixture_workspace_root_canonicalizes_parent_alias() {
     assert_eq!(workspace, canonical.join("workspace"));
     std::fs::create_dir_all(workspace.join(".agents/tools/example")).unwrap();
     let catalog = rustx::local_runtime::managed_python_resources::discover(
-        &workspace,
+        Some(&workspace),
         &canonical.join("user/.agents"),
     )
     .unwrap();

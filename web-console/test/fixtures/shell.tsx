@@ -12,7 +12,7 @@ import '../../src/presentation/theme/shiki.css';
 import '../../src/presentation/theme/reset.css';
 import '../../src/app/console.css';
 const server = new Server();
-for (const method of ['configuration/sourcesRead', 'configuration/effective'] as const) server.handlers.set(method, () => { throw new RpcFailure({ code: -32000, message: 'Select Appearance to review the presentation fixture.' }); });
+for (const method of ['configuration/sourcesRead', 'session/effectiveConfiguration'] as const) server.handlers.set(method, () => { throw new RpcFailure({ code: -32000, message: 'Select Appearance to review the presentation fixture.' }); });
 server.snapshots.set('C', snapshot('C'));
 server.snapshots.get('A')!.attempt = { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1 };
 server.snapshots.get('B')!.pending_interactions = [interaction('approval', 'B')];

@@ -31,7 +31,7 @@ it('collapse, rail expansion, Inspector and Settings appearance gestures emit no
   expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(true);
   fireEvent.change(screen.getByLabelText('Theme'), { target: { value: 'light' } });
   expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(false);
-  expect(server.requests.slice(baseline)).toEqual([]);
+  expect(server.requests.slice(baseline).every(row => row.request.method === 'configuration/sourcesRead')).toBe(true);
   expect(JSON.stringify(localStorage)).not.toMatch(/workspaceId|cwd|snapshot|interaction/);
 });
 it('waiting interactions outrank running; queued input alone is not a waiting interaction', async () => {

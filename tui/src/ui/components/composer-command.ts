@@ -12,7 +12,7 @@ export class ComposerCommand implements PopupContent {
   get focused(): boolean { return this.input.focused; }
   set focused(value: boolean) { this.input.focused = value; }
   popupTitle(): string { return "Composer command"; }
-  popupFooter(): string[] { return ["/attach <path> · /permissions · /queue", "Enter open · Esc return to draft"]; }
+  popupFooter(): string[] { return ["/attach <path> · /queue", "Enter open · Esc return to draft"]; }
   setBodyHeight(_height: number): void {}
   invalidate(): void {}
   handleInput(data: string): void { this.input.handleInput(data); }

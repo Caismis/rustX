@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v15 envelope and method vocabulary.
+//! Rust authority for the App Server v16 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 15;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -124,11 +124,11 @@ pub enum Method {
         before: Option<crate::runtime_client::snapshot::RuntimeClientTranscriptCursor>,
         limit: usize,
     },
-    #[serde(rename = "settings/model")]
+    #[serde(rename = "session/model")]
     ModelGet { target: AttachmentTarget },
-    #[serde(rename = "settings/models")]
+    #[serde(rename = "session/models")]
     ModelCatalog { target: AttachmentTarget },
-    #[serde(rename = "settings/setModel")]
+    #[serde(rename = "session/setModel")]
     ModelSet {
         target: AttachmentTarget,
         config: Box<crate::model::session::SessionModelConfig>,
@@ -288,20 +288,26 @@ pub enum Method {
         target: AttachmentTarget,
         interaction: InteractionRef,
     },
-    #[serde(rename = "configuration/effective")]
+    #[serde(rename = "session/effectiveConfiguration")]
     ConfigurationGet { target: AttachmentTarget },
     #[serde(rename = "configuration/sourcesRead")]
-    SourcesRead { session_id: SessionId },
+    SourcesRead {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+    },
     #[serde(rename = "configuration/sourceWrite")]
     SourcesWrite {
-        session_id: SessionId,
+        target: crate::local_runtime::configuration::settings::SourceTarget,
         expected_revision: String,
         mutation: crate::local_runtime::configuration::settings::SourceMutation,
     },
-    #[serde(rename = "settings/read")]
+    #[serde(rename = "session/settings")]
     SettingsRead { session_id: SessionId },
     #[serde(rename = "configuration/reconcile")]
-    ConfigurationReconcile { session_id: SessionId },
+    ConfigurationReconcile {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+    },
+    #[serde(rename = "session/configuration")]
+    SessionConfiguration { session_id: SessionId },
     #[serde(rename = "session/adoptConfiguration")]
     AdoptConfiguration {
         session_id: SessionId,
@@ -526,8 +532,10 @@ pub enum MethodResult {
     },
     SourceSettings {
         projection: Box<crate::local_runtime::configuration::settings::SourceSettings>,
-        session_revision: u64,
-        session_selection: Option<crate::model::session::SessionModelConfig>,
+    },
+    SessionConfiguration {
+        application:
+            Option<crate::local_runtime::configuration::application::ConfigurationApplication>,
     },
     Settings {
         /// Exact durable Session-intent revision for subsequent CAS controls.

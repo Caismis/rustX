@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ProductHostWorkspaces } from '../src/workspaces/host.ts';
+import { AppServerRequestError, UncertainOutcomeError } from '../../tui/src/app-server/client.ts';
 /** Workspace authority only. The launcher carrier authenticates before this handler;
  * independently managed deployments supply their own browser authentication. */
 export function workspaceHandler(host?: ProductHostWorkspaces) {
@@ -21,6 +22,9 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
         case 'reorder': value = await host.reorderWorkspace(string('id'), body.before === undefined ? undefined : string('before')); break;
         case 'remove': value = await host.removeWorkspace(string('id')); break;
         case 'resolve': value = await host.resolveWorkspace(string('id'), string('endpoint')); break;
+        case 'configuration':
+          if (!host.configureWorkspace) throw new Error('Workspace configuration is unavailable on this Host');
+          value = await host.configureWorkspace(string('id'), string('endpoint'), body.operation); break;
         case 'classify': {
           if (!Array.isArray(body.cwds) || body.cwds.some((cwd: unknown) => typeof cwd !== 'string')) throw new Error('Expected bounded cwds');
           value = await host.classifyLocations(body.cwds, string('endpoint')); break;
@@ -28,6 +32,12 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
         default: throw new Error('Unknown Host operation');
       }
       response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(value ?? null));
-    } catch (error) { response.writeHead(400, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }).end(String(error)); }
+    } catch (error) {
+      response.writeHead(400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify({
+        message: String(error),
+        nativeError: error instanceof AppServerRequestError ? error.error : undefined,
+        uncertain: error instanceof UncertainOutcomeError,
+      }));
+    }
   };
 }

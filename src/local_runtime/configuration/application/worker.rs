@@ -36,6 +36,41 @@ impl ConfigurationApplications {
         scope: &str,
         identity: &ApplicationIdentity,
     ) {
+        if scope.starts_with("source:") {
+            let mut state = self.lock();
+            if !state.current(scope, identity) {
+                return;
+            }
+            let outcome = match state.source_inputs.get(scope).cloned() {
+                Some(Ok(captured)) => {
+                    // Process authority is global: an older Workspace scope must
+                    // never roll back a newer User publication.
+                    let process = state.desired_process.clone().unwrap_or(captured);
+                    if let Some((previous, outcome)) = &state.process
+                        && previous == &process
+                    {
+                        let outcome = outcome.clone();
+                        state.publish(scope, identity, ApplyUnit::ProcessBindings, || outcome);
+                        self.notify(&state);
+                        return;
+                    }
+                    let outcome = if manager.apply_process_limits(&process) {
+                        UnitApplication::ProcessRestart
+                    } else {
+                        UnitApplication::Applied
+                    };
+                    state.process = Some((process, outcome.clone()));
+                    outcome
+                }
+                Some(Err(diagnostic)) => UnitApplication::Failed { diagnostic },
+                None => UnitApplication::Failed {
+                    diagnostic: "Source inputs unavailable".into(),
+                },
+            };
+            state.publish(scope, identity, ApplyUnit::ProcessBindings, || outcome);
+            self.notify(&state);
+            return;
+        }
         let Ok(session) = SessionId::parse(scope) else {
             return;
         };
