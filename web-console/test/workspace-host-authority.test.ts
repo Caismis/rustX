@@ -77,11 +77,27 @@ it('mutation wins: an in-flight configuration mutation completes before removal 
   expect(readFileSync(config.metadataFile, 'utf8')).not.toContain(alpha.id);
 });
 
-it('revoke wins: a committed removal fences a later configuration mutation before any native request', async () => {
-  const { host, endpoint } = fixture();
+it('revoke wins: a removal in flight fences a concurrently submitted configuration mutation before any native request', async () => {
+  const { host, config, endpoint } = fixture();
   const [alpha] = (await host.listWorkspaces()).workspaces;
-  await host.removeWorkspace(alpha.id);
+  let removed = false;
+  const removal = host.removeWorkspace(alpha.id).then(() => { removed = true; });
+  // Lane bodies run on a microtask even for the first caller, so the mutation
+  // submitted here provably queues behind the in-flight, still-uncommitted removal.
+  const configuration = host.configureWorkspace(alpha.id, endpoint, write);
+  expect(removed).toBe(false);
+  expect(native.state.connects).toBe(0);
+  expect(readFileSync(config.metadataFile, 'utf8')).toContain(alpha.id);
+  await removal;
+  expect(removed).toBe(true);
+  expect((await host.listWorkspaces()).workspaces.map(row => row.id)).not.toContain(alpha.id);
+  expect(readFileSync(config.metadataFile, 'utf8')).not.toContain(alpha.id);
+  // Had the mutation entered the lane first it would have connected before the
+  // removal could commit; rejection with zero native requests proves it ran after.
+  await expect(configuration).rejects.toThrow('Unknown Workspace registration');
   await expect(host.configureWorkspace(alpha.id, endpoint, write)).rejects.toThrow('Unknown Workspace registration');
   expect(native.state.connects).toBe(0);
+  expect(native.state.requests.filter(request => request.method === 'configuration/sourceWrite')).toHaveLength(0);
+  expect(native.state.requests.filter(request => request.method === 'configuration/reconcile')).toHaveLength(0);
   expect(native.state.requests).toHaveLength(0);
 });

@@ -285,6 +285,9 @@ impl ApplicationState {
             // Membership is unconditional; only unresolved Session-owned units
             // require an application. Failed capture remains unresolved, while
             // process restart alone never creates allocation work.
+            // Session-effective equality settles only this joining Session. A
+            // desired source generation that never published still owes this
+            // Workspace native publication, so that work rides this scope.
             if let Ok(captured) = &input
                 && let Ok(context) = &captured.context
                 && context.same_capabilities(adopted)
@@ -294,6 +297,10 @@ impl ApplicationState {
                 && captured.policy.model_timeout_policy == adopted.config.model_timeout_policy
                 && captured.policy.tool_deadline_policy == adopted.config.tool_deadline_policy
                 && captured.policy.subagents == adopted.config.subagents
+                && self
+                    .available
+                    .get(&source)
+                    .is_some_and(|available| available.source_revisions == context.source_revisions)
             {
                 return;
             }
