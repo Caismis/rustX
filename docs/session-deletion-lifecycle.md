@@ -132,7 +132,7 @@ boundary. No queue, timer, distributed worker, or retention policy is introduced
 
 ## Bounded deletion control contract
 
-App Server v16 owns the public `session/deletePreview`, `session/delete`
+App Server v17 owns the public `session/deletePreview`, `session/delete`
 (`session_id` + `expected_target_revision` only), and `session/recoverDeletion` methods.
 The obsolete native Runtime Client delete/recover mutation requests were removed
 in native protocol 40; only its finite read-only preview remains.
@@ -175,7 +175,7 @@ pre-commit failures use a bounded protocol error without private storage paths.
 | `not_found` | No live Session or pending record, including completed deletion |
 
 The TUI consumes these deletion DTOs from the generated App Server
-`protocol/app-server/v16.ts` contract. There is no separate deletion SDK. Shared Rust/TypeScript
+`protocol/app-server/v17.ts` contract. There is no separate deletion SDK. Shared Rust/TypeScript
 fixtures validate the wire contract, not deletion persistence. Interactive deletion
 UX consumes these authoritative outcomes; retention policy remains independent.
 
@@ -205,7 +205,7 @@ native target revision, then reconciles paginated visibility from the native
 boundary. Cleanup retry uses `session/recoverDeletion`; no client storage or
 model-visible operation participates. See [TUI deletion help](../tui/README.md#delete-historical-sessions-inside-resume).
 
-## Product and client behavior (App Server v16)
+## Product and client behavior (App Server v17)
 
 `session/deletePreview` describes the finite target; `session/delete` confirms
 that exact revision. A confirmed delete owns retirement even for the focused

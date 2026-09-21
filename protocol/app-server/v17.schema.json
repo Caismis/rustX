@@ -18357,6 +18357,32 @@
             "method",
             "params"
           ]
+        },
+        {
+          "description": "This Session's durable display metadata changed on the server after the\nclient may already have read it; read `session/summary` again\n(Issue #386).\n\nIt is an *invalidation*, not a value: it carries no metadata, makes no\ndurability claim beyond the catalog commit that produced it, and is not\ncanonical history, an Agent event, an Attempt event, or a Conversation\nruntime cursor. It is addressed by Session identity alone — no\nattachment target — because Session metadata belongs to the Session and\nnot to whichever Conversation of it a client happens to display, and\nbecause observing metadata must never require holding a runtime\nattachment.\n\nThe concrete cause today is the asynchronous display-projection\npublication: the Session's first ordinary root-lineage user message is\ncommitted canonically first, and its derived `preview` is committed to\nthe catalog afterwards, so a client that read `session/summary` in\nbetween legitimately cached `preview: null`.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/summaryInvalidated"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
         }
       ]
     },

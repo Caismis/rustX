@@ -21,6 +21,25 @@ derives the line from the root conversation store and never manufactures a
 subject from a later message. Preview publication is a metadata-only commit:
 it never touches `updated_at`, and the catalog generation moves only when a
 real change commits (an already-present projection commits nothing).
+
+Canonical commitment and projection publication are two separate commit
+points. A `None` projection is therefore either a legitimately empty
+projection (no ordinary user message yet, or a first one with no renderable
+text) or an unrepaired publication gap; it is not necessarily a short-lived
+condition, and nothing may treat it as one. When publication does commit, the
+catalog records a post-commit summary invalidation — recorded only after the
+visibility point, including the visible-but-durability-uncertain outcome — so
+a live client has a defined convergence path (`session/summaryInvalidated`);
+a no-op repair writes nothing and announces nothing.
+
+Repair belongs to the **Session** and reads the Session's **root** lineage,
+whatever node is being composed: a Session reopened directly onto a branch
+repairs to the root's first ordinary user message, never the branch's. Only
+*arming the live publisher* is root-runtime-specific — it requires that the
+composed runtime is the root runtime and that the root lineage has no ordinary
+user boundary yet. At interactive startup the derived repair folds into the
+existing planned startup transaction, so a launch that fails to compose still
+writes nothing.
 `create_session`, `list_sessions`,
 `read_session`, `rename_session`, `tree`, `fork_session`, `read_settings`,
 `replace_settings`, `acquire_session`, and deletion all address explicit
@@ -124,7 +143,7 @@ record. Recovery never rediscovers a new deletion workset.
 Deletion preview, execution, and recovery on `SessionController` remain
 crate-private. `DeletionScope`, `DeletionRecord`, previews, blockers, and internal
 results are not public native DTOs: their frozen scopes are cleanup authority.
-App Server v16 exposes bounded public control-plane projections. Compile-fail API
+App Server v17 exposes bounded public control-plane projections. Compile-fail API
 regressions enforce this boundary.
 
 ## Schema
@@ -141,7 +160,7 @@ all Sessions without inventing client focus or runtime residency.
 
 See [Session-owned workspace uploads](session-uploads.md) for receipt admission, model paths, fork copies and durable cleanup.
 
-## Session lifecycle (App Server v16)
+## Session lifecycle (App Server v17)
 
 Create, open/resume, switch, fork/branch, and delete operate on durable Sessions.
 Opening implicitly reuses or composes a runtime. Close view releases an attachment

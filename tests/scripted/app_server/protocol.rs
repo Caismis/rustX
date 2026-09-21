@@ -604,7 +604,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":12,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 16, requested: 12 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 17, requested: 12 })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -912,9 +912,13 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
         );
         let mut seen = std::collections::BTreeSet::new();
         while seen.len() != 2 {
-            let NotificationMethod::Event { target, event, .. } =
-                connection.next_notification().await.notification
-            else {
+            let notification = connection.next_notification().await.notification;
+            // Session metadata invalidation is not a Conversation event: it
+            // carries no cursor and no attachment target (Issue #386).
+            if matches!(notification, NotificationMethod::SummaryInvalidated { .. }) {
+                continue;
+            }
+            let NotificationMethod::Event { target, event, .. } = notification else {
                 panic!("event")
             };
             assert!(target == a || target == b);
@@ -1255,11 +1259,18 @@ async fn attach_snapshot_and_subscription_share_the_publication_cut() {
         let mut occurrences = 0;
         f.gates[0].release();
         loop {
+            let notification = connection.next_notification().await.notification;
+            // Session metadata invalidation is not a Conversation event: it
+            // carries no cursor, so it never participates in this cursor
+            // monotonicity check (Issue #386).
+            if matches!(notification, NotificationMethod::SummaryInvalidated { .. }) {
+                continue;
+            }
             let NotificationMethod::Event {
                 target: routed,
                 cursor,
                 event,
-            } = connection.next_notification().await.notification
+            } = notification
             else {
                 panic!("event")
             };
@@ -2949,12 +2960,11 @@ async fn await_attempt_settled(
     session_id: &crate::local_runtime::session::SessionId,
 ) {
     loop {
-        let NotificationMethod::Event { target, event, .. } =
+        // Session metadata invalidation is a legitimate part of the vocabulary
+        // and is simply not the signal this helper waits for (Issue #386).
+        if let NotificationMethod::Event { target, event, .. } =
             connection.next_notification().await.notification
-        else {
-            panic!("event")
-        };
-        if target.session_id == *session_id
+            && target.session_id == *session_id
             && matches!(*event, RuntimeClientEvent::AttemptSettled { .. })
         {
             break;
@@ -3501,6 +3511,274 @@ async fn an_upload_only_first_turn_settles_the_projection_absent_and_never_repai
             panic!("summary")
         };
         assert_eq!(summary.preview, None);
+        f.close().await;
+    })
+    .await;
+}
+
+/// Issue #386 regression A (native half): the real window between the
+/// canonical commit and the display-projection commit.
+///
+/// The one-shot publisher is parked *after* it renders its line and *before*
+/// it takes the catalog mutex, so an ordinary `session/summary` read really is
+/// served — and really does answer `preview: null` — while publication is
+/// still outstanding. Releasing publication then produces the Session-scoped
+/// metadata invalidation a live client needs, with no further user turn and no
+/// client-initiated retry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_parked_publication_serves_a_null_summary_then_invalidates_it() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let gate = crate::local_runtime::session_display_projection::publication_test_support::arm(
+            &target.session_id,
+        );
+        let mut probe = crate::local_runtime::session_display_projection::display_projection_probe(
+            &target.session_id,
+        )
+        .expect("root composition armed the display-projection publisher");
+        let reply = call(
+            &connection,
+            80,
+            Method::TurnStart {
+                target: target.clone(),
+                content: wire_text("live convergence subject"),
+            },
+        )
+        .await;
+        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        // The provider request proves the canonical user boundary committed.
+        f.gates[0].wait_entered().await;
+        // The publisher has derived its line and is parked before the catalog
+        // mutex. It therefore cannot be blocking the read below.
+        gate.parked(1).await;
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            81,
+            Method::SessionSummary {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("summary")
+        };
+        assert_eq!(
+            summary.preview, None,
+            "canonical history exists and the projection is still unpublished"
+        );
+
+        gate.release();
+        probe
+            .wait_for(|probe| probe.finished)
+            .await
+            .expect("the publisher outlives its runtime");
+        assert!(probe.borrow().published);
+        // The native metadata owner announces the change by Session identity.
+        let invalidated = loop {
+            if let NotificationMethod::SummaryInvalidated { session_id } =
+                connection.next_notification().await.notification
+            {
+                break session_id;
+            }
+        };
+        assert_eq!(
+            invalidated, target.session_id,
+            "the invalidation is routed by Session identity, not by attachment target"
+        );
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            82,
+            Method::SessionSummary {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("summary")
+        };
+        assert_eq!(
+            summary.preview.as_deref(),
+            Some("live convergence subject"),
+            "the authoritative reread carries the committed projection"
+        );
+        f.gates[0].release();
+        await_attempt_settled(&connection, &target.session_id).await;
+        f.close().await;
+    })
+    .await;
+}
+
+/// Issue #386 regression (App Server plane): a Session cold-loaded straight
+/// onto a branch repairs its **root** subject, arms no publisher on the branch,
+/// and writes nothing the second time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cold_loading_a_branch_repairs_the_projection_from_the_session_root() {
+    bounded(async {
+        use crate::durable::ConversationStore as _;
+        let f = Fixture::new().await;
+        let sessions = &f.manager.sessions;
+        let session = f.sessions[0].clone();
+        let root_node = session.active_node.clone();
+        let text = |id: &str, text: &str| {
+            crate::message::types::MessageBlock::User(crate::message::types::UserMessageBlock {
+                id: crate::runtime::identity::MessageId::new(id),
+                content: input(text),
+                source: crate::message::types::UserSource::Human,
+                kind: crate::message::types::InboundKind::Message,
+                timestamp: None,
+            })
+        };
+        let store = |access: &crate::local_runtime::session_controller::SessionAccess| {
+            crate::durable::SqliteConversationStore::open(
+                access.node.conversation_id.clone(),
+                &access.database_path,
+            )
+            .unwrap()
+        };
+        let boundary = crate::runtime::identity::MessageId::new("root-subject-a");
+        let revision = {
+            let access = sessions
+                .acquire_session(&session.id, Some(&root_node))
+                .await
+                .unwrap();
+            let root = store(&access);
+            root.append_canonical(&text("root-subject-a", "root subject A"))
+                .unwrap();
+            root.load_head().unwrap().revision
+        };
+        // Cut before the root's only boundary: the branch retains no root
+        // message and can disagree with the root about its first message.
+        let branch = sessions
+            .branch_session_node(&session.id, &root_node, revision, &boundary)
+            .await
+            .unwrap()
+            .session;
+        let branch_node = branch.active_node.clone();
+        let branch_canonical = {
+            let access = sessions
+                .acquire_session(&session.id, Some(&branch_node))
+                .await
+                .unwrap();
+            let branch = store(&access);
+            branch
+                .append_canonical(&text("branch-subject-z", "branch subject Z"))
+                .unwrap();
+            branch.load_canonical().unwrap()
+        };
+        assert_eq!(
+            sessions
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .preview,
+            None,
+            "the Session starts with a missing projection"
+        );
+
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let MethodResult::Attached { target, .. } = call(
+            &connection,
+            90,
+            Method::SessionAttach {
+                session_id: session.id.clone(),
+                node_id: Some(branch_node.clone()),
+            },
+        )
+        .await
+        else {
+            panic!("attached")
+        };
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            91,
+            Method::SessionSummary {
+                session_id: session.id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("summary")
+        };
+        assert_eq!(
+            summary.preview.as_deref(),
+            Some("root subject A"),
+            "the repair derives the Session's root subject, never the composed branch's"
+        );
+        assert!(
+            crate::local_runtime::session_display_projection::display_projection_probe(&session.id)
+                .is_none(),
+            "a branch runtime is never the projection subject, so no publisher is armed"
+        );
+        // The branch's canonical history is untouched by Session metadata repair.
+        assert_eq!(
+            store(
+                &sessions
+                    .acquire_session(&session.id, Some(&branch_node))
+                    .await
+                    .unwrap()
+            )
+            .load_canonical()
+            .unwrap(),
+            branch_canonical
+        );
+
+        // Write-level idempotence across a real detach/reattach cycle.
+        let generation = f
+            .manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .document_generation();
+        let invalidations = sessions.summary_invalidations();
+        let recorded = invalidations.recorded();
+        let before = sessions.read_session(&session.id).await.unwrap();
+        let revision_before = sessions.read_settings(&session.id).await.unwrap().0;
+        assert!(matches!(
+            call(&connection, 92, Method::SessionDetach { target }).await,
+            MethodResult::Detached {}
+        ));
+        let MethodResult::Attached { target, .. } = call(
+            &connection,
+            93,
+            Method::SessionAttach {
+                session_id: session.id.clone(),
+                node_id: Some(branch_node.clone()),
+            },
+        )
+        .await
+        else {
+            panic!("attached")
+        };
+        assert_eq!(
+            f.manager
+                .sessions
+                .catalog
+                .lock()
+                .await
+                .document_generation(),
+            generation,
+            "an already-correct projection is a write-level no-op"
+        );
+        assert_eq!(
+            invalidations.recorded(),
+            recorded,
+            "a no-op repair announces nothing"
+        );
+        let after = sessions.read_session(&session.id).await.unwrap();
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(
+            sessions.read_settings(&session.id).await.unwrap().0,
+            revision_before
+        );
+        assert!(matches!(
+            call(&connection, 94, Method::SessionDetach { target }).await,
+            MethodResult::Detached {}
+        ));
         f.close().await;
     })
     .await;

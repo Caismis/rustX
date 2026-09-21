@@ -137,6 +137,17 @@ pub struct AppServerConnection {
     reader: Arc<tokio::sync::Mutex<()>>,
     next_route: Arc<std::sync::atomic::AtomicUsize>,
     configuration_versions: Arc<Mutex<std::collections::BTreeMap<String, u64>>>,
+    /// The native Session-metadata invalidation log (Issue #386) and this
+    /// connection's cursor into it.
+    ///
+    /// The cursor is taken at **construction**, before this connection can
+    /// serve any request, so the bootstrap ordering is closed by construction:
+    /// a publication older than the connection is already reflected in every
+    /// read the connection can make, and a publication newer than it is
+    /// delivered live. The log is level-triggered, so nothing is lost if the
+    /// notification reader starts late, pauses, or never runs.
+    summary_invalidations: Arc<crate::local_runtime::session::SessionSummaryInvalidations>,
+    summary_invalidations_delivered: Arc<Mutex<u64>>,
 }
 
 impl AppServerConnection {
@@ -167,8 +178,13 @@ impl AppServerConnection {
 
     #[must_use]
     pub fn new(host: AppServerHost) -> Self {
+        let sessions = host.manager().session_controller();
+        let summary_invalidations = sessions.summary_invalidations();
+        let delivered = summary_invalidations.frontier();
         Self {
-            sessions: host.manager().session_controller(),
+            summary_invalidations,
+            summary_invalidations_delivered: Arc::new(Mutex::new(delivered)),
+            sessions,
             host,
             initialized: Arc::new(Mutex::new(None)),
             routes: Arc::new(Mutex::new(RouteTable::default())),
@@ -708,40 +724,75 @@ impl AppServerConnection {
         Ok(route)
     }
 
+    /// The next configuration application this connection has not delivered yet.
+    ///
+    /// Level-triggered against the manager's current applications and this
+    /// connection's per-scope version cursor.
+    fn next_configuration_change(&self) -> Option<NotificationMethod> {
+        for application in self
+            .host
+            .manager()
+            .configuration_applications()
+            .into_iter()
+            .map(|application| {
+                // Session advisory eligibility is a live native fact. Enrich a
+                // notification only from an already resident runtime; parsing a
+                // scope or reading a notification never loads a cold Session.
+                crate::runtime::identity::SessionId::parse(&application.scope)
+                    .ok()
+                    .and_then(|session| self.host.manager().configuration_application(&session))
+                    .unwrap_or(application)
+            })
+        {
+            let mut versions = self
+                .configuration_versions
+                .lock()
+                .expect("configuration notification versions");
+            let version = versions.entry(application.scope.clone()).or_default();
+            if application.version > *version {
+                *version = application.version;
+                return Some(NotificationMethod::ConfigurationChanged { application });
+            }
+        }
+        None
+    }
+
+    /// The next Session-metadata invalidation this connection has not delivered
+    /// yet (Issue #386).
+    ///
+    /// Scanned level-triggered from the native log, exactly like configuration
+    /// applications: no per-connection queue, no durable replay, no scheduler.
+    /// One Session is announced per call, in publication order, and the cursor
+    /// advances only for a notification actually returned.
+    fn next_summary_invalidation(&self) -> Option<NotificationMethod> {
+        let mut delivered = self
+            .summary_invalidations_delivered
+            .lock()
+            .expect("summary invalidation cursor");
+        let (sequence, session_id) = self.summary_invalidations.next_after(*delivered)?;
+        *delivered = sequence;
+        Some(NotificationMethod::SummaryInvalidated { session_id })
+    }
+
     /// Wait for one routed notification. No per-Session event queues or pump tasks.
     /// # Panics
     /// Panics if a connection routing mutex is poisoned.
     pub async fn next_notification(&self) -> Notification {
         let _reader = self.reader.lock().await;
         let mut configuration_changes = self.host.manager().configuration_changes();
+        let mut summary_invalidations = self.summary_invalidations.changes();
         loop {
-            for application in self
-                .host
-                .manager()
-                .configuration_applications()
-                .into_iter()
-                .map(|application| {
-                    // Session advisory eligibility is a live native fact. Enrich a
-                    // notification only from an already resident runtime; parsing a
-                    // scope or reading a notification never loads a cold Session.
-                    crate::runtime::identity::SessionId::parse(&application.scope)
-                        .ok()
-                        .and_then(|session| self.host.manager().configuration_application(&session))
-                        .unwrap_or(application)
-                })
-            {
-                let mut versions = self
-                    .configuration_versions
-                    .lock()
-                    .expect("configuration notification versions");
-                let version = versions.entry(application.scope.clone()).or_default();
-                if application.version > *version {
-                    *version = application.version;
-                    return Notification {
-                        jsonrpc: JsonRpcVersion::V2,
-                        notification: NotificationMethod::ConfigurationChanged { application },
-                    };
-                }
+            if let Some(notification) = self.next_summary_invalidation() {
+                return Notification {
+                    jsonrpc: JsonRpcVersion::V2,
+                    notification,
+                };
+            }
+            if let Some(notification) = self.next_configuration_change() {
+                return Notification {
+                    jsonrpc: JsonRpcVersion::V2,
+                    notification,
+                };
             }
             let changed = self.changed.notified();
             tokio::pin!(changed);
@@ -755,7 +806,11 @@ impl AppServerConnection {
                 .cloned()
                 .collect();
             if routes.is_empty() {
-                tokio::select! { () = &mut changed => {}, _ = configuration_changes.changed() => {} }
+                tokio::select! {
+                    () = &mut changed => {},
+                    _ = configuration_changes.changed() => {},
+                    _ = summary_invalidations.changed() => {},
+                }
                 continue;
             }
             // A continuously ready Session cannot starve other attachments.
@@ -783,6 +838,7 @@ impl AppServerConnection {
             let (route, delivery, observed) = tokio::select! {
                 () = &mut changed => continue,
                 _ = configuration_changes.changed() => continue,
+                _ = summary_invalidations.changed() => continue,
                 result = futures_util::future::select_all(pending) => result.0,
             };
             let target = route.target.clone();

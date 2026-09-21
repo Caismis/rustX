@@ -7384,6 +7384,44 @@ or through the explicit repair seam at reopen/compose/recovery. The rendering
 contract is exact: text blocks only, whitespace-normalized to a single line,
 bounded at 120 *characters* including the ellipsis, counted in characters,
 never bytes.
+
+- **Canonical commitment and display-projection publication are separate
+  commit points**, in that order. Observing a canonical User message is not
+  proof that publication completed, so no client may infer projection
+  settlement from canonical history. `preview: None` is either a legitimately
+  empty projection (no ordinary user message yet, or a first one with no
+  renderable text) or an unrepaired publication gap that can persist
+  indefinitely; it is never presumed short-lived.
+- **A successful publication has a defined live-client convergence path.**
+  The Session metadata owner records a post-commit invalidation *after* the
+  Catalog visibility point — including the visible-but-durability-uncertain
+  outcome, which is a real visible change — and never before it. The App
+  Server translates that into `session/summaryInvalidated { session_id }`,
+  addressed by Session identity rather than by attachment target, so a branch
+  view and an unattached listed row both converge without a new runtime
+  attachment, another User turn, a manual refresh, a rename, or a reconnect.
+  The invalidation requests authoritative rereading; it is not a value, not a
+  cross-store atomicity claim, and not stronger durability than the commit
+  established. Recording it never blocks on a client and never holds the
+  Catalog mutex for delivery.
+- **Display-projection repair is Session-owned and root-lineage-based**,
+  independent of which graph node is being composed: both App Server runtime
+  composition and interactive startup repair a missing projection from the
+  Session's root lineage even when the selected node is a branch. Only
+  *arming the live one-shot publisher* is root-runtime-specific, and it
+  additionally requires that the root lineage has no ordinary user boundary
+  yet, with the observation subscription installed before activation. A null
+  field alone never authorizes selecting a later message or arming a publisher
+  on a branch. Interactive startup folds a derived repair into the existing
+  planned startup transaction, so failed preparation or composition leaves no
+  metadata write.
+- **No-op repairs neither write nor notify.** An already-correct projection
+  performs no Catalog commit, moves no generation, changes no `updated_at` or
+  `settings_revision`, and produces no invalidation, so reopening a Session
+  repeatedly cannot create a notification storm. Racing publications converge
+  on exactly one commit and exactly one invalidation; a publication whose
+  Session was deleted before its visibility point resurrects nothing and
+  announces nothing.
 Offsets and `next_offset` count matching rows, with no global active marker. The optional
 case-insensitive query matches a visible row's
 identity, its name, and the persisted first-message line an unnamed row shows,

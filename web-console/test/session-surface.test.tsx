@@ -7,7 +7,7 @@ import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v16';
+import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v17';
 
 let server: Server;
 beforeEach(() => {
@@ -570,4 +570,114 @@ it('unknown delete enables recovery only after committed reconnect observation',
   expect(methods().filter(m => m === 'session/delete')).toHaveLength(1);
   expect(server.client.getSnapshot().views.A).toBeUndefined();
   expect(screen.queryByRole('button', { name: 'Retry deletion recovery' })).toBeNull();
+});
+
+// Issue #386 regression A (client half): the native projection is published
+// after the client legitimately cached `preview: null`. Convergence must not
+// need another user turn, a manual refresh, navigation, a rename, a reconnect,
+// or a retry loop.
+it('converges on a projection published after a null summary read', async () => {
+  server.summaries.set('A', { name: null, preview: null });
+  await mount(['A']);
+  const reads = () => methods().filter(method => method === 'session/summary').length;
+  const baseline = reads();
+  // Canonical user history exists; the projection is still unpublished.
+  await act(async () => server.update('A', canonicalUser('Do not summarize this browser text')));
+  expect(reads()).toBe(baseline + 1);
+  expect(screen.getByLabelText('Session title').textContent).toBe('New session');
+  // An unpublished projection is not a polling trigger.
+  for (let i = 0; i < 3; i++) await act(async () => server.update('A', canonicalUser('Later text')));
+  expect(reads()).toBe(baseline + 1);
+  // The native owner commits the projection and announces it.
+  server.summaries.set('A', { name: null, preview: 'Published after the null read' });
+  await act(async () => server.invalidateSummary('A'));
+  expect(reads()).toBe(baseline + 2);
+  expect(screen.getByLabelText('Session title').textContent).toBe('Published after the null read');
+  expect(row('A').getAttribute('aria-label')).toBe('Open Published after the null read');
+  // The invalidation itself settles: it is not a retry loop.
+  for (let i = 0; i < 3; i++) await act(async () => server.client.refresh('A'));
+  expect(reads()).toBe(baseline + 2);
+  expect(methods()).not.toContain('turn/start');
+  expect(methods()).not.toContain('session/name');
+});
+
+// Issue #386 regression B: an invalidation delivered while a summary read is
+// already in flight. The in-flight read represents the old null projection, so
+// it can neither satisfy nor clear the newer invalidation.
+it('an invalidation during a summary read forces a causally later read', async () => {
+  server.summaries.set('A', { name: null, preview: null });
+  await mount(['A']);
+  server.held.add('session/summary');
+  let refresh!: Promise<void>;
+  await act(async () => {
+    server.snapshots.set('A', canonicalUser('Canonical user message')); server.cursor++;
+    refresh = server.client.refresh('A');
+  });
+  const stale = await server.waitFor('session/summary', 2);
+  // Freeze the stale response while it is still the null projection.
+  server.commit(stale);
+  server.summaries.set('A', { name: null, preview: 'Published during the read' });
+  await act(async () => server.invalidateSummary('A'));
+  const fresh = await server.waitFor('session/summary', 3);
+  await act(async () => { server.reply(stale); server.reply(fresh); await refresh; });
+  expect(server.client.getSnapshot().views.A.summary?.preview).toBe('Published during the read');
+  expect(screen.getByLabelText('Session title').textContent).toBe('Published during the read');
+  // The obsolete null response cannot restore itself over the newer observation.
+  await act(async () => { server.socket.deliver(server.commit(stale)); });
+  expect(server.client.getSnapshot().views.A.summary?.preview).toBe('Published during the read');
+});
+
+// Issue #386 regression C: a legitimate absence stays settled without polling,
+// and an explicit name wins for display without deleting the projection.
+it('keeps a legitimate absent projection settled and lets a name win over it', async () => {
+  server.summaries.set('A', { name: null, preview: null });
+  await mount(['A']);
+  const reads = () => methods().filter(method => method === 'session/summary').length;
+  const baseline = reads();
+  // An upload-only first ordinary message renders no line: a settled null.
+  await act(async () => server.update('A', canonicalUser(null)));
+  expect(reads()).toBe(baseline + 1);
+  for (let i = 0; i < 3; i++) await act(async () => server.update('A', canonicalUser('Later text after the upload')));
+  expect(reads()).toBe(baseline + 1);
+  expect(screen.getByLabelText('Session title').textContent).toBe('New session');
+  expect(server.client.getSnapshot().views.A.summary?.preview).toBeNull();
+  // Explicit name precedence, with the underlying projection retained.
+  server.summaries.set('A', { name: 'Explicit name', preview: 'Native projection' });
+  await act(async () => server.invalidateSummary('A'));
+  expect(screen.getByLabelText('Session title').textContent).toBe('Explicit name');
+  expect(server.client.getSnapshot().views.A.summary?.preview).toBe('Native projection');
+});
+
+// Issue #386 regression D: Session identity is the only routing, no attachment
+// is required to observe metadata, and retired work cannot mutate a
+// replacement view.
+it('routes metadata invalidation by Session identity alone', async () => {
+  server.summaries.set('A', { name: null, preview: null });
+  server.summaries.set('B', { name: null, preview: null });
+  server.snapshots.set('C', snapshot('C'));
+  await mount(['A', 'B']);
+  const reads = (id: string) => server.requests.filter(({ request }) =>
+    request.method === 'session/summary' && 'session_id' in request.params && request.params.session_id === id).length;
+  const [a, b, c] = [reads('A'), reads('B'), reads('C')];
+  server.summaries.set('B', { name: null, preview: 'B native projection' });
+  await act(async () => server.invalidateSummary('B'));
+  expect(reads('A')).toBe(a);
+  expect(reads('B')).toBe(b + 1);
+  expect(server.client.getSnapshot().views.A.summary?.preview).toBeNull();
+  expect(server.client.getSnapshot().views.B.summary?.preview).toBe('B native projection');
+  // A listed Session with no attachment still converges: observing metadata
+  // never requires holding a runtime.
+  expect(server.client.getSnapshot().views.C).toBeUndefined();
+  server.summaries.set('C', { name: null, preview: 'C native projection' });
+  await act(async () => server.invalidateSummary('C'));
+  expect(reads('C')).toBe(c + 1);
+  expect(server.client.getSnapshot().sessions.find(row => row.id === 'C')?.preview).toBe('C native projection');
+  // Obsolete work from a retired connection cannot mutate the replacement.
+  const retired = server.socket;
+  let reconnect!: Promise<void>;
+  await act(async () => { reconnect = server.connect(); await reconnect; });
+  server.summaries.set('B', { name: null, preview: 'Stale connection projection' });
+  const after = reads('B');
+  await act(async () => server.invalidateSummary('B', retired));
+  expect(reads('B')).toBe(after);
 });

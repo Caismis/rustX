@@ -97,6 +97,11 @@ pub(crate) fn arm_display_projection(
                 finish(&probe, false, false);
                 return;
             };
+            // The one test-only interleaving seam: the subject is derived and
+            // the projection is still known absent, and no Catalog lock is
+            // held. See `publication_test_support`.
+            #[cfg(test)]
+            publication_test_support::park(&session_id).await;
             let Some(catalog) = catalog.upgrade() else {
                 // The Session's native ownership is already gone: the runtime
                 // is being torn down with this commit still in flight. The
@@ -224,4 +229,87 @@ fn finish(
         attempted,
         published,
     });
+}
+
+/// The one test-only interleaving seam of display-projection publication.
+///
+/// Both publication paths — the one-shot publisher armed on a root runtime and
+/// the explicit repair seam — park here at exactly the same phase: **after**
+/// the subject has been derived (the store read is done, the projection is
+/// known absent) and **before** the Catalog mutex is acquired for the
+/// once-only write. That is the only window in which a competing rename,
+/// settings commit, deletion, or second repair can reach the Catalog first, so
+/// it is the only window a race regression needs.
+///
+/// Parking here deliberately holds no Catalog lock: a gate that held it would
+/// block the very reads whose staleness the regression is about.
+///
+/// Gates are keyed by Session identity and held by weak reference, so two
+/// fixtures running in parallel cannot park each other's Sessions and a gate
+/// whose test finished stops parking anything.
+#[cfg(test)]
+pub(crate) mod publication_test_support {
+    use std::sync::{Arc, Mutex, Weak};
+
+    use tokio::sync::watch;
+
+    use super::SessionId;
+
+    /// One parking place. `arrivals` counts publications parked *right now*,
+    /// so a test can require that N racers all observed absence before any of
+    /// them is allowed to write.
+    #[derive(Debug)]
+    pub(crate) struct PublicationGate {
+        arrivals: watch::Sender<usize>,
+        release: watch::Sender<bool>,
+    }
+
+    static GATES: Mutex<Vec<(SessionId, Weak<PublicationGate>)>> = Mutex::new(Vec::new());
+
+    /// Arms the gate for one Session. The returned handle owns the gate:
+    /// dropping it disarms the seam for that Session.
+    pub(crate) fn arm(session_id: &SessionId) -> Arc<PublicationGate> {
+        let gate = Arc::new(PublicationGate {
+            arrivals: watch::channel(0).0,
+            release: watch::channel(false).0,
+        });
+        let mut gates = GATES.lock().expect("display publication gate registry");
+        gates.retain(|(id, weak)| id != session_id && weak.strong_count() > 0);
+        gates.push((session_id.clone(), Arc::downgrade(&gate)));
+        gate
+    }
+
+    impl PublicationGate {
+        /// Resolves once `count` publications are parked at the seam together.
+        pub(crate) async fn parked(&self, count: usize) {
+            self.arrivals
+                .subscribe()
+                .wait_for(|arrivals| *arrivals >= count)
+                .await
+                .expect("the gate outlives its parked publications");
+        }
+
+        /// Releases every parked publication, and every later one.
+        pub(crate) fn release(&self) {
+            self.release.send_replace(true);
+        }
+    }
+
+    /// The production-side seam. Compiled only in test builds; an unarmed
+    /// Session never parks.
+    pub(crate) async fn park(session_id: &SessionId) {
+        let gate = GATES
+            .lock()
+            .expect("display publication gate registry")
+            .iter()
+            .find_map(|(id, weak)| (id == session_id).then(|| weak.upgrade()).flatten());
+        let Some(gate) = gate else { return };
+        let mut release = gate.release.subscribe();
+        gate.arrivals.send_modify(|arrivals| *arrivals += 1);
+        release
+            .wait_for(|released| *released)
+            .await
+            .expect("the gate outlives its parked publications");
+        gate.arrivals.send_modify(|arrivals| *arrivals -= 1);
+    }
 }

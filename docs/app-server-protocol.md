@@ -1,11 +1,19 @@
-# App Server protocol v16
+# App Server protocol v17
 
-App Server v16 adds producer identity to Trace context additions and typed
-accepted contributions to request detail. These are historical RequestSnapshot
-facts, not live Todo/Goal authority. See [native contribution lifecycle](native-context-contributions.md)
+App Server v17 adds `session/summaryInvalidated`: the Session-scoped
+post-commit metadata invalidation that lets a live client reread authoritative
+Catalog metadata after an asynchronous display-projection publication
+(Issue #386). It is a new notification method in a strict vocabulary, so v16
+and every earlier version are rejected; there is no dual handling and no
+compatibility shim. Generated v16 artifacts are removed.
+
+App Server v17 also carries v16's producer identity on Trace context additions
+and typed accepted contributions on request detail. These are historical
+RequestSnapshot facts, not live Todo/Goal authority. See
+[native contribution lifecycle](native-context-contributions.md)
 for atomic startup and same-step reuse. Generated v14 artifacts are removed.
 
-App Server v16 identifies one complete mandatory vocabulary, including exact
+App Server v17 identifies one complete mandatory vocabulary, including exact
 `session/summary`, bounded historical Trace detail, and read-only Subagent
 transcripts. v12 and all earlier initialization and WebSocket admission versions
 are rejected; there is no downgrade or compatibility path.
@@ -113,13 +121,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v16",
+  "rustx.app-server.v17",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v16` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v17` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -136,7 +144,7 @@ The [local Web launcher](../web-console/CONNECTION.md) implements delivery throu
 a separate browser launch-token exchange and a process-ephemeral browser proof in
 origin-scoped sessionStorage (not a Cookie). A dedicated header authenticates
 same-origin carrier APIs. Its bootstrap returns the exact native
-endpoint/token; the browser then connects directly using the v16 subprotocols above.
+endpoint/token; the browser then connects directly using the v17 subprotocols above.
 The browser launch credential is never a valid substitute for the native credential.
 Remote Web attachment is explicit Settings configuration. Neither browser login
 nor remote attachment grants Product Host Workspace filesystem authority.
@@ -233,7 +241,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v16; pipeline individual requests instead. This limitation is
+supported in v17; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -322,7 +330,7 @@ fenced. Attachment cleanup does not grant durable deletion authority.
 
 ## Attachment and observation lifetime
 
-Protocol v16 admits at most one writable external controller per resident
+Protocol v17 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -349,6 +357,43 @@ the replay ring is bounded and lag is reported as `session/resyncRequired`.
 Clients obtain a fresh snapshot and subscribe after its cursor to repair.
 Invalid re-subscription leaves the prior registration intact. Transcript cursors
 are a separate durable paging domain, not event cursors.
+
+### `session/summaryInvalidated`
+
+`session/summaryInvalidated { session_id }` says exactly one thing: this
+Session's durable display metadata changed on the server after the client may
+already have read it, so read `session/summary` again. It carries no metadata,
+claims no durability beyond the catalog commit that produced it, and is not
+canonical history, an Agent event, an Attempt event, or a Conversation runtime
+cursor. Session display responsibilities never enter the Agent Loop or the
+Conversation runtime.
+
+It is addressed by **Session identity alone** — deliberately not by
+`AttachmentTarget`. Durable Session metadata belongs to the Session, not to
+whichever Conversation of it a client happens to display, so a branch view
+receives it, and a client that merely lists a Session receives it without
+attaching a runtime.
+
+Ordering is closed by construction: a connection captures its cursor into the
+native invalidation log when the connection is created, before it can serve any
+request. A publication older than the connection is already reflected in every
+read that connection can make; a newer one is delivered live. Nothing can fall
+between the initial metadata observation and live observation.
+
+The log is level-triggered and coalescing, exactly like `configuration/changed`
+above: per-Session state plus one connection cursor, with no durable replay, no
+background queue and no independent scheduler. Publication is once-only per
+Session, so a no-op repair and an already-correct projection produce neither a
+catalog write nor a notification. Lag and disconnect reuse the existing resync
+discipline: a reconnecting client re-establishes authoritative metadata through
+its ordinary bootstrap reads.
+
+The native owner publishes the invalidation only **after** the Catalog
+visibility point, including the post-visibility outcome that reports uncertain
+durability — that mutation is visible, and losing it would strand a client on
+stale metadata. A pre-visibility failure announces nothing. Recording an
+invalidation never waits on a client, a socket, or an acknowledgement, and
+never happens while the Catalog mutex is held for client delivery.
 
 Approval and Questionnaire publication availability follows the bound runtime,
 not controller presence. A loaded runtime may publish and retain a pending
@@ -401,8 +446,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v16.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v16.ts`: TypeScript generated from that schema using pinned
+- `v17.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v17.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -667,7 +712,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v16; no compatibility path is provided.
+This remains mandatory protocol v17; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -697,7 +742,7 @@ The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 43 carries this vocabulary;
 version 38 clients are rejected by strict negotiation. This remains mandatory
-App Server protocol v16, with no compatibility field and no activation mode.
+App Server protocol v17, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
 `Paused` and `Blocked` offer Resume, and there is no separate Play/arm control
@@ -712,7 +757,7 @@ boundary.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v16 includes `inbound/edit { target, expected, text }` and
+Protocol v17 includes `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and controller attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -797,11 +842,21 @@ native summary projection, projected from persisted catalog metadata only: neith
 message — published after the first canonical root user commit, derived from
 the frozen seed at clone/fork publication, or backfilled by the explicit
 idempotent repair seam at reopen/compose/recovery. Display precedence is
-explicit name → preview → identity fallback. `preview: null` is transient only
-inside the commit→publication window (the canonical commit is durable before
-the one-shot publisher commits the projection) and permanent when no ordinary
-user message exists yet or the first message has no renderable text; neither
-case is repaired at list or read time.
+explicit name → preview → identity fallback.
+
+Canonical commitment and projection publication are **two separate commit
+points**, in that order, and a client can legally read `session/summary`
+between them. `preview: null` therefore means one of three things, and the
+protocol does not distinguish them: no ordinary user message exists yet; the
+first one has no renderable text (a permanently empty projection); or a
+publication gap — the projection has not been published, and may stay
+unpublished indefinitely if the publishing process died or its commit failed,
+until an explicit repair seam runs. None of the three is repaired at list or
+read time, and `null` is never evidence that publication is imminent.
+
+Publication has a defined live-client convergence path:
+[`session/summaryInvalidated`](#sessionsummaryinvalidated). A client never polls, retries, or
+infers settlement from canonical history.
 `session/list` remains bounded searchable/paginated browsing: its query matches ID,
 name or preview substrings and must never be used as exact identity resolution.
 Web `view.summary` is a replaceable exact observation, not durable/catalog authority.
@@ -821,7 +876,7 @@ Session, and unregistering a Workspace is not Session deletion.
 [Configuration](configuration.md) defines the native source model and
 [Web Settings](web-settings.md) documents its projection. User and Workspace
 read/write operations return exact revisions and redacted structured documents.
-Protocol v16 uses one `SourceTarget`: `{kind:"user"}` or
+Protocol v17 uses one `SourceTarget`: `{kind:"user"}` or
 `{kind:"workspace",directory:"/canonical/native/context"}`. Source read, write and
 reconcile have no Session parameter; mutations carry no second scope authority.
 Product Host translates an authorized registered Workspace ID into this native
@@ -910,9 +965,9 @@ the authored unit in that scope. Clients never write whole config documents.
 
 ## Current Session lifecycle contract
 
-Initialization requires exactly v16 and WebSocket requires `rustx.app-server.v16`.
+Initialization requires exactly v17 and WebSocket requires `rustx.app-server.v17`.
 v13 and all earlier versions are rejected without fallback. Rust DTOs generate
-`v16.ts`, `v16.schema.json`, and the serialized fixtures; only the current version is kept.
+`v17.ts`, `v17.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -941,7 +996,7 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
-explicit recovery action. These recovery semantics remain in App Server v16;
+explicit recovery action. These recovery semantics remain in App Server v17;
 native Runtime Client is v44.
 
 ## Rich historical Trace inspection (#364)
@@ -963,7 +1018,7 @@ request Context that exact request introduced, in frozen snapshot order).
 `TraceRecord` gains `originating_tool_call_id`, the exact outer `ToolCall` of a
 Background, Subagent or Workflow record. All three are resolved by native
 authority before they reach a client; no client infers them. `TraceLifecycle`
-is unchanged and never repeats them. This v16 vocabulary includes v12's
+is unchanged and never repeats them. This v17 vocabulary includes v12's
 read-only native `subagent/transcript` contract and these Trace DTO changes.
 Version 12 and earlier clients are rejected without a compatibility decoder or a
 dual Trace DTO path.
@@ -983,7 +1038,7 @@ Unknown Session/capacity use their existing failures. No raw storage/provider
 error is projected. See [Session archive safety and errors](session-archive.md).
 
 
-## Read-only native Subagent conversations (v16)
+## Read-only native Subagent conversations (v17)
 
 `subagent/transcript { target, subagent_id, before, limit }` returns the existing
 `transcript { page }` result. `target` is the **parent** AttachmentTarget (Session,

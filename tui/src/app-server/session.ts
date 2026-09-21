@@ -237,6 +237,14 @@ export class AppServerSession {
       this.#installConfiguration(application);
       return true;
     }
+    if (notification.method === "session/summaryInvalidated") {
+      // Durable Session display metadata changed (Issue #386). The TUI holds
+      // no cached Session summary: `/resume` reads the catalog afresh every
+      // time it opens, so there is nothing here to repair. The notification is
+      // accepted and declined — never folded into the conversation projection,
+      // and never treated as invalid protocol input.
+      return false;
+    }
     if (this.#released || this.#serverClosed || !sameTarget(notification.params.target, this.#target)) {
       return false;
     }

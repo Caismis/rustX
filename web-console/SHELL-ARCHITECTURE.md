@@ -38,12 +38,15 @@ entries; missing catalog rows cannot make the finite capacity unmanageable.
 `sessionDisplayTitle` uses explicit name > native SessionSummary.preview > New session.
 The preview is a server-owned persisted display projection, computed from the
 canonical root user message after its commit and stored in the session catalog;
-null means no projection has been published, not a client-side derivation gap.
+null means no projection has been published — a legitimately empty projection or an
+unrepaired publication gap — not a client-side derivation gap.
 No UUID fallback or automatic LLM naming exists. After canonical user-message
 observation, an exact `session/summary(SessionId)` read refreshes unnamed labels;
-only success (including no preview) completes the check. Failed reads remain retryable
-at authoritative refresh/reconnect, with concurrent reads coalesced, and convergence
-holds because publication follows the canonical commit. No draft or
+a read completes the check only when it is also causally after every
+`session/summaryInvalidated` observed for that Session. Failed reads remain retryable
+at authoritative refresh/reconnect, with concurrent reads coalesced per generation and
+invalidation epoch; convergence after publication comes from the native invalidation,
+never from inferring settlement out of canonical history. No draft or
 admission can generate a title. `session/list` owns fuzzy paginated browsing, never
 identity lookup. `view.summary` is a replaceable exact observation across pages,
 not a second catalog. It may retain its last value across transport loss for stable

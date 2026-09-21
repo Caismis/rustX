@@ -2526,6 +2526,12 @@ export type Notification1 =
       params: {
         target: AttachmentTarget;
       };
+    }
+  | {
+      method: 'session/summaryInvalidated';
+      params: {
+        session_id: SessionId;
+      };
     };
 /**
  * One externally visible Runtime Client observation.

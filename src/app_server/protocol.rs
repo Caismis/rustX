@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v16 envelope and method vocabulary.
+//! Rust authority for the App Server v17 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 16;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 17;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -594,6 +594,26 @@ pub enum NotificationMethod {
     },
     #[serde(rename = "session/closed")]
     Closed { target: AttachmentTarget },
+    /// This Session's durable display metadata changed on the server after the
+    /// client may already have read it; read `session/summary` again
+    /// (Issue #386).
+    ///
+    /// It is an *invalidation*, not a value: it carries no metadata, makes no
+    /// durability claim beyond the catalog commit that produced it, and is not
+    /// canonical history, an Agent event, an Attempt event, or a Conversation
+    /// runtime cursor. It is addressed by Session identity alone — no
+    /// attachment target — because Session metadata belongs to the Session and
+    /// not to whichever Conversation of it a client happens to display, and
+    /// because observing metadata must never require holding a runtime
+    /// attachment.
+    ///
+    /// The concrete cause today is the asynchronous display-projection
+    /// publication: the Session's first ordinary root-lineage user message is
+    /// committed canonically first, and its derived `preview` is committed to
+    /// the catalog afterwards, so a client that read `session/summary` in
+    /// between legitimately cached `preview: null`.
+    #[serde(rename = "session/summaryInvalidated")]
+    SummaryInvalidated { session_id: SessionId },
 }
 
 /// Complete public wire surface used by schema and client generation.

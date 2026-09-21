@@ -69,7 +69,7 @@ an independently managed runtime/Host. The [Host contract](WORKSPACES.md) descri
 that operator-owned integration. Use the launcher for complete local composition.
 
 Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v16` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v17` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -109,7 +109,7 @@ requests provider/MCP configuration.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v16.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v17.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -151,17 +151,22 @@ Every ordinary Session label uses `sessionDisplayTitle`: explicit native name >
 native `SessionSummary.preview` > **New session**. Session IDs stay in Inspector.
 The server owns a persisted display projection: `preview` is computed from the
 canonical root user message after its commit and stored in the session catalog,
-never derived by the client or at list time. `preview: null` means no projection
-has been published — either the commit-to-publication window is still open or the
-session has no ordinary user message with renderable text. Manual naming remains
-`session/name`; no LLM call, generated title, truncation or first-message
-summarizer exists in React. After authoritative canonical user-message
-observation, a previously unnamed view reads exact native `session/summary` metadata.
-Only success marks the first-message check complete, including a `preview: null`.
-Failures remain retryable on authoritative refresh/reconnect; concurrent reads coalesce.
-Because publication follows the canonical commit, a later successful read converges
-without any client-side repair. Drafts, accepted inbound and optimistic submission
-never supply preview text.
+never derived by the client or at list time. Canonical commitment and projection
+publication are two separate server commit points, so `preview: null` may be a
+legitimately empty projection (no ordinary user message, or no renderable text in
+the first one) **or** an unrepaired publication gap that persists indefinitely.
+The client never guesses which. Manual naming remains `session/name`; no LLM call,
+generated title, truncation or first-message summarizer exists in React. After
+authoritative canonical user-message observation, a previously unnamed view reads
+exact native `session/summary` metadata. Canonical history alone never settles the
+first-message check: a read settles it only when it was also causally after every
+`session/summaryInvalidated` observed for that Session. Failures remain retryable on
+authoritative refresh/reconnect; concurrent reads coalesce within one generation and
+one invalidation epoch. A `session/summaryInvalidated` notification overrides any
+earlier cached-null check and forces a causally later read — one begun before it can
+neither satisfy nor clear it — so a healthy live client converges with no further user
+turn, manual refresh, navigation, rename or reconnect, and a legitimate null never
+polls. Drafts, accepted inbound and optimistic submission never supply preview text.
 `session/list` is fuzzy, bounded catalog browsing, never exact identity resolution.
 `view.summary` retains replaceable exact metadata for off-page/restored views without
 changing the Sidebar page or owning catalog membership. Read-order/generation fences

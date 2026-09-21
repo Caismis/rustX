@@ -4,7 +4,7 @@ import type {
   ConfigurationApplication, RuntimeClientSessionDeletionResult, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v16';
+} from '../../../protocol/app-server/v17';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from './uploads';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, type TranscriptCache } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
@@ -150,9 +150,15 @@ export class AppServerClient {
   private attachmentChanges = new Map<string, { kind: 'attach' | 'detach' | 'switch'; work: Promise<void> }>();
   private attachmentChangeCount = 0;
   private attachmentEpochs = new Map<string, number>();
-  private previewChecked = new Set<string>();
+  // Native metadata invalidation (Issue #386). `summaryInvalidations` counts
+  // the `session/summaryInvalidated` notifications observed for a Session;
+  // `summarySettled` records that a *causally later* read completed, so it is
+  // evidence about a read, never a permanent conclusion drawn from canonical
+  // history. A newer invalidation always outranks an older settlement.
+  private summaryInvalidations = new Map<string, number>();
+  private summarySettled = new Set<string>();
   private summaryObservedEpoch = new Map<string, number>();
-  private summaryInFlight = new Map<string, { generation: number; work: Promise<void> }>();
+  private summaryInFlight = new Map<string, { generation: number; invalidations: number; work: Promise<void> }>();
   private summaryReadSequence = 0;
   // Minimum acceptable metadata sequence: last observation or a committed rename read floor.
   private summaryReads = new Map<string, number>();
@@ -213,7 +219,7 @@ export class AppServerClient {
       // model/cancellation continuations only update already-reserved Session rows.
       const detached = [...(this.state.detached ?? [])];
       if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, operations: this.state.uncertain, sessions });
-      this.attachmentEpochs.clear(); this.previewChecked.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear();
+      this.attachmentEpochs.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear();
       this.listEpoch++; this.listOffset = 0; this.listQuery = '';
       this.log.clear();
       this.publish({ views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
@@ -223,7 +229,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v16', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v17', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -241,12 +247,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 16, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 17, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 16 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v16 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (hello.protocol_version !== 17 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v17 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
@@ -417,6 +423,15 @@ export class AppServerClient {
       }
       return;
     }
+    if (value.method === 'session/summaryInvalidated') {
+      // Addressed by Session identity alone: no attachment target, so a branch
+      // view — or a row this client only lists — converges without attaching a
+      // runtime, and Session A can never update Session B.
+      const sessionId = value.params?.session_id;
+      if (typeof sessionId !== 'string') { this.lose(generation); return; }
+      this.invalidateSummary(sessionId, generation);
+      return;
+    }
     if (!['session/event', 'session/resyncRequired', 'session/closed'].includes(value.method) || !value.params?.target) {
       this.lose(generation); return;
     }
@@ -461,7 +476,9 @@ export class AppServerClient {
     }
   }
   /** Cached values remain renderable across transport loss. Each attachment
-   * establishes fresh exact metadata independently of its first-message check. */
+   * establishes fresh exact metadata independently of its first-message check.
+   * A legitimate null projection settles here and is never polled; the native
+   * `session/summaryInvalidated` notification is what reopens it. */
   private async refreshDisplaySummary(id: string) {
     const generation = this.state.generation, epoch = this.attachmentEpochs.get(id);
     const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch
@@ -474,18 +491,25 @@ export class AppServerClient {
     }
     const summary = this.state.sessions.find(row => row.id === id) ?? this.state.views[id]?.summary;
     if (this.summaryObservedEpoch.get(id) === epoch && summary
-      && (summary.name || summary.preview || this.previewChecked.has(id) || !this.hasCanonicalUser(id))) return;
+      && (summary.name || summary.preview || this.summarySettled.has(id) || !this.hasCanonicalUser(id))) return;
     await this.readSessionSummary(id).catch(() => {});
   }
   private hasCanonicalUser(id: string) {
     return !!this.state.views[id]?.snapshot?.transcript.entries?.some(entry => entry.item.type === 'message' && entry.item.message.role === 'user');
   }
   /** Exact native metadata observation, never a catalog search or membership change.
-   * Coalesce within a connection; only successful reads begun after canonical
-   * user history can complete the first-message check (including preview=None). */
+   * Coalesce within a connection and within one invalidation epoch. Canonical
+   * user history is not by itself proof that the native display projection has
+   * been published: publication is a separate, later catalog commit, so a read
+   * settles the first-message check only when it was also causally after every
+   * invalidation observed for this Session. */
   readSessionSummary(id: string): Promise<void> {
+    const invalidations = this.summaryInvalidations.get(id) ?? 0;
     const existing = this.summaryInFlight.get(id);
-    if (existing?.generation === this.state.generation) return existing.work;
+    // Coalesce only reads that are causally equivalent. A read begun before an
+    // invalidation can neither satisfy nor clear that newer invalidation, so it
+    // never stands in for the causally later read it requires.
+    if (existing?.generation === this.state.generation && existing.invalidations === invalidations) return existing.work;
     const generation = this.state.generation, summaryRead = ++this.summaryReadSequence;
     const epoch = this.attachmentEpochs.get(id), canonicalUser = this.hasCanonicalUser(id);
     const work = (async () => {
@@ -498,14 +522,28 @@ export class AppServerClient {
           views: this.state.views[id] ? { ...this.state.views, [id]: { ...this.state.views[id], summary } } : this.state.views });
         if (epoch !== undefined && this.state.views[id]?.attachmentIntent === 'wanted') {
           this.summaryObservedEpoch.set(id, epoch);
-          if (canonicalUser) this.previewChecked.add(id);
+          // Settle only when this read was causally after every invalidation
+          // observed so far. One that arrived mid-flight keeps the Session
+          // dirty and is answered by the read `invalidateSummary` started.
+          if (canonicalUser && (this.summaryInvalidations.get(id) ?? 0) === invalidations) this.summarySettled.add(id);
         }
       }
     })();
-    const read = { generation, work };
+    const read = { generation, invalidations, work };
     this.summaryInFlight.set(id, read);
     void work.finally(() => { if (this.summaryInFlight.get(id) === read) this.summaryInFlight.delete(id); }).catch(() => {});
     return work;
+  }
+  /** Native post-commit Session metadata invalidation (Issue #386).
+   * Authoritative rereading, not a value: it overrides any earlier cached-null
+   * check, and a read already in flight cannot answer it. Only Sessions this
+   * client actually caches are reread, so an invalidation is never a poll. */
+  private invalidateSummary(id: string, generation: number) {
+    if (!this.current(generation)) return;
+    this.summaryInvalidations.set(id, (this.summaryInvalidations.get(id) ?? 0) + 1);
+    this.summarySettled.delete(id);
+    if (!this.state.views[id] && !this.state.sessions.some(row => row.id === id)) return;
+    void this.readSessionSummary(id).catch(() => {});
   }
   /** A committed rename requires a read started after its acknowledgement.
    * Ordinary observers still coalesce; the old read cannot publish past this floor. */
@@ -594,7 +632,7 @@ export class AppServerClient {
       this.setSession(id, { attachment: 'attaching', error: undefined });
       const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
       this.attachmentEpochs.set(id, epoch);
-      this.previewChecked.delete(id);
+      this.summarySettled.delete(id);
       await this.performAttach(id, generation, epoch, navigationCurrent);
     });
   }
@@ -913,7 +951,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v16').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v17').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
@@ -1002,7 +1040,7 @@ export class AppServerClient {
     });
   }
   private retireAttachmentWork(id: string) {
-    this.previewChecked.delete(id);
+    this.summarySettled.delete(id);
     this.summaryObservedEpoch.delete(id);
     this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);
     this.setSession(id, { history: undefined, submissions: undefined });

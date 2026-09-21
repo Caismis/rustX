@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v16';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v17';
 import css from './GoalActivity.module.css';
 
 /** Historical execution evidence only. The Goal dock owns current state. */

@@ -247,6 +247,102 @@ pub(crate) enum DisplayPreviewSubject {
     Unrenderable,
 }
 
+/// The Session-owned post-commit summary invalidation seam (Issue #386).
+///
+/// A display-projection publication is a Session metadata change that no
+/// client can predict from canonical history: the publisher derives the line
+/// on its own task *after* the canonical commit, so a live client can legally
+/// read `session/summary` between the canonical commit and the projection
+/// commit and cache the pre-publication `None`. This log is how the native
+/// metadata owner tells observers to read the Catalog again.
+///
+/// It is an invalidation, not a value and not a durability claim: it says
+/// "this Session's authoritative summary changed, read it again", and it is
+/// recorded only after the Catalog **visibility** commit point — including
+/// the post-visibility outcome that reports uncertain durability, because
+/// that mutation *is* visible and losing it would strand the client on stale
+/// metadata.
+///
+/// The log is level-triggered rather than a queue: each Session carries the
+/// sequence of its latest publication, and an observer carries the sequence
+/// it last delivered. Nothing is replayed durably, nothing is scheduled, and
+/// an observer that stops reading costs one map entry per published Session —
+/// the same order as the resident catalog document itself. Because
+/// publication is once-only per Session, that map gains at most one entry per
+/// Session for the life of the process.
+#[derive(Debug, Default)]
+pub(crate) struct SessionSummaryInvalidations {
+    state: std::sync::Mutex<SummaryInvalidationState>,
+}
+
+#[derive(Debug, Default)]
+struct SummaryInvalidationState {
+    /// Monotonic across Sessions, so one observer cursor orders every
+    /// publication this process made.
+    sequence: u64,
+    /// The sequence of each Session's latest recorded publication.
+    published: BTreeMap<SessionId, u64>,
+    /// Woken on every record. A `watch` is a level-triggered wake-up, not a
+    /// delivery channel: observers always reread the map above, so a coalesced
+    /// wake-up can never drop an invalidation.
+    changed: Option<tokio::sync::watch::Sender<u64>>,
+}
+
+impl SessionSummaryInvalidations {
+    /// Records a published display projection, after its Catalog visibility
+    /// point. Never blocks on a client, a socket, or an acknowledgement: it
+    /// takes one uncontended `std::sync::Mutex` and wakes parked observers.
+    pub(crate) fn record(&self, session_id: &SessionId) {
+        let mut state = self.state.lock().expect("summary invalidation log lock");
+        state.sequence += 1;
+        let sequence = state.sequence;
+        state.published.insert(session_id.clone(), sequence);
+        if let Some(changed) = &state.changed {
+            changed.send_replace(sequence);
+        }
+    }
+
+    /// The current frontier. A new observer starts here, so publications that
+    /// predate it are not re-announced: any read that observer makes already
+    /// reflects them.
+    pub(crate) fn frontier(&self) -> u64 {
+        self.state
+            .lock()
+            .expect("summary invalidation log lock")
+            .sequence
+    }
+
+    /// The next invalidation after `delivered`, in publication order, or
+    /// `None` when the observer is current.
+    pub(crate) fn next_after(&self, delivered: u64) -> Option<(u64, SessionId)> {
+        let state = self.state.lock().expect("summary invalidation log lock");
+        state
+            .published
+            .iter()
+            .filter(|(_, sequence)| **sequence > delivered)
+            .min_by_key(|(_, sequence)| **sequence)
+            .map(|(session_id, sequence)| (*sequence, session_id.clone()))
+    }
+
+    /// A wake-up source for a parked observer. The value carried is the
+    /// frontier; observers use it only as a change signal.
+    pub(crate) fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        let mut state = self.state.lock().expect("summary invalidation log lock");
+        let sequence = state.sequence;
+        state
+            .changed
+            .get_or_insert_with(|| tokio::sync::watch::channel(sequence).0)
+            .subscribe()
+    }
+
+    /// How many invalidations this log has recorded. Tests assert exact
+    /// counts; production only ever compares cursors.
+    #[cfg(test)]
+    pub(crate) fn recorded(&self) -> u64 {
+        self.frontier()
+    }
+}
+
 /// Native display metadata, shared by exact identity reads and catalog rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionSummary {
@@ -451,6 +547,11 @@ pub(crate) struct PlannedCatalog {
     /// Whether the plan differs from the catalog it was planned against.
     /// An unchanged plan commits nothing.
     changed: bool,
+    /// The Session whose display projection this plan folds in, when it folds
+    /// one. Committing the plan is that projection's visibility point, so the
+    /// commit announces the same post-commit summary invalidation the
+    /// standalone publication seam does.
+    display_preview_published: Option<SessionId>,
 }
 
 impl PlannedCatalog {
@@ -504,14 +605,15 @@ impl PlannedCatalog {
     /// `updated_at` or `settings_revision`.
     pub(crate) fn with_display_preview(mut self, preview: &str) -> Result<Self, SessionError> {
         let active = self.target.clone();
-        let session = self
-            .document
-            .sessions
-            .get_mut(&active)
-            .ok_or(SessionError::UnknownSession { session_id: active })?;
+        let session = self.document.sessions.get_mut(&active).ok_or_else(|| {
+            SessionError::UnknownSession {
+                session_id: active.clone(),
+            }
+        })?;
         if session.display_preview.is_none() {
             session.display_preview = Some(preview.to_owned());
             self.changed = true;
+            self.display_preview_published = Some(active);
         }
         Ok(self)
     }
@@ -569,6 +671,10 @@ pub struct SessionCatalog {
     /// replay the exact adoption interleaving against the classifier.
     #[cfg(test)]
     classification_gate: Option<Arc<crate::runtime::conversation_runtime::Gate>>,
+    /// The post-commit summary invalidation log every display-projection
+    /// publication records into, shared by every clone of this catalog (read
+    /// snapshots included) so there is exactly one log per product root.
+    summary_invalidations: Arc<SessionSummaryInvalidations>,
 }
 
 impl SessionCatalog {
@@ -605,6 +711,7 @@ impl SessionCatalog {
             preparation_cleanup_fault: Arc::default(),
             #[cfg(test)]
             classification_gate: None,
+            summary_invalidations: Arc::default(),
         };
         catalog.commit(catalog.document.clone())?;
         Ok(catalog)
@@ -817,6 +924,7 @@ impl SessionCatalog {
             preparation_cleanup_fault: Arc::default(),
             #[cfg(test)]
             classification_gate: None,
+            summary_invalidations: Arc::default(),
         }))
     }
 
@@ -983,6 +1091,7 @@ impl SessionCatalog {
             preparation_cleanup_fault: Arc::default(),
             #[cfg(test)]
             classification_gate: None,
+            summary_invalidations: Arc::default(),
         })
     }
 
@@ -1391,9 +1500,25 @@ impl SessionCatalog {
         }
         session.display_preview = Some(preview.to_owned());
         crate::runtime::process_death::reach("before:publish_display_preview");
-        self.commit(next)?;
+        // The invalidation follows the *visibility* point, never precedes it:
+        // a pre-visibility failure announces nothing, while the distinct
+        // post-visibility durability-uncertain outcome is a visible metadata
+        // change and is announced before its error is propagated.
+        let committed = self.commit(next);
+        if committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed) {
+            self.summary_invalidations.record(session_id);
+        }
+        committed?;
         crate::runtime::process_death::reach("after:publish_display_preview");
         Ok(true)
+    }
+
+    /// The post-commit summary invalidation log of this product root.
+    ///
+    /// Shared by every clone of the catalog, so the observer an App Server
+    /// connection holds sees publications made through any handle.
+    pub(crate) fn summary_invalidations(&self) -> Arc<SessionSummaryInvalidations> {
+        self.summary_invalidations.clone()
     }
 
     /// Reads the display-preview subject of a Session's root lineage from its
@@ -1880,6 +2005,7 @@ impl SessionCatalog {
             target_node: self.document.sessions[target].active_node.clone(),
             document: self.document.clone(),
             changed: !self.published,
+            display_preview_published: None,
         }
     }
 
@@ -1896,6 +2022,7 @@ impl SessionCatalog {
             target_node: node.id,
             document: self.document.clone(),
             changed: false,
+            display_preview_published: None,
         })
     }
 
@@ -1911,6 +2038,7 @@ impl SessionCatalog {
             target_node: prepared.node_id.clone(),
             document: self.build_session_document(prepared, origin)?,
             changed: true,
+            display_preview_published: None,
         })
     }
 
@@ -1922,7 +2050,17 @@ impl SessionCatalog {
         if !planned.changed {
             return Ok(());
         }
-        self.commit(planned.document)
+        // A startup plan that folded a repaired display projection is the same
+        // Session metadata change the standalone publication seam makes, so it
+        // announces itself the same way — after visibility, never before.
+        let published = planned.display_preview_published.clone();
+        let committed = self.commit(planned.document);
+        if let Some(session_id) = published
+            && (committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed))
+        {
+            self.summary_invalidations.record(&session_id);
+        }
+        committed
     }
 
     fn build_current_node_document(
@@ -4911,6 +5049,50 @@ model = "provider/model"
                 .as_deref(),
             Some("visible but uncertain"),
             "the file crossed the visibility commit point even though durability was uncertain"
+        );
+    }
+
+    // Issue #386: the post-commit summary invalidation follows the Catalog
+    // *visibility* point, not the durability barrier. A pre-visibility failure
+    // announces nothing; a visible-but-durability-uncertain publication is a
+    // real metadata change and must not be lost merely because the API
+    // returned `Err`.
+    #[test]
+    fn projection_invalidation_follows_visibility_not_the_durability_barrier() {
+        let (_directory, mut catalog, _config) = open_catalog();
+        let id = first_session(&catalog);
+        let invalidations = catalog.summary_invalidations();
+        let recorded = invalidations.recorded();
+
+        catalog.arm_write_fault_before_rename();
+        assert!(
+            catalog
+                .publish_display_preview(&id, "never became visible")
+                .is_err()
+        );
+        assert_eq!(
+            invalidations.recorded(),
+            recorded,
+            "a pre-visibility failure announces no metadata change"
+        );
+        assert_eq!(catalog.summary(&id).expect("summary").preview, None);
+
+        catalog.arm_write_fault_after_rename();
+        let error = catalog
+            .publish_display_preview(&id, "visible but uncertain")
+            .expect_err("the deterministic post-rename fault must fail");
+        assert!(
+            error.committed(),
+            "the projection crossed the visibility commit point"
+        );
+        assert_eq!(
+            catalog.summary(&id).expect("summary").preview.as_deref(),
+            Some("visible but uncertain")
+        );
+        assert_eq!(
+            invalidations.recorded(),
+            recorded + 1,
+            "a visible metadata change is announced even when durability is uncertain"
         );
     }
 

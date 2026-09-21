@@ -2085,21 +2085,29 @@ impl LocalSessionClient {
         let (session_id, node, session_state) = planned
             .destination_lineage()
             .map_err(LocalRuntimeError::SessionCatalog)?;
-        // The startup display projection (Issue #386). A root destination
-        // whose persisted projection is still absent is repaired here, once:
-        // a derived line folds into the plan and rides the one startup
-        // catalog transaction below; a root with no ordinary user boundary
-        // at all instead arms the one-shot publisher on the freshly composed
-        // runtime. A branch destination is never the projection subject and
-        // skips this entirely.
+        // The startup display projection (Issue #386). Two different
+        // conditions live here and must not be confused:
+        //
+        // *Repair* is Session-owned metadata, derived from the Session's
+        // **root** lineage whatever node this launch selected. A launch that
+        // resumes straight onto a branch still repairs the Session's missing
+        // projection from the root's first ordinary user message — the branch's
+        // own first message is never the subject. The derived line folds into
+        // the plan and rides the one startup catalog transaction below, so a
+        // launch that fails to compose still writes nothing.
+        //
+        // *Arming the live publisher* is root-runtime-specific: only a root
+        // destination whose root lineage has no ordinary user boundary yet arms
+        // the one-shot publisher on the freshly composed runtime.
         let mut arm_display_projection = false;
-        let planned = if node.parent.is_none() && planned.display_preview().is_none() {
+        let planned = if planned.display_preview().is_none() {
             match &dependencies.startup_session {
                 // A freshly prepared root (or the unpublished first Session)
-                // has no ordinary user boundary by construction, so arming
-                // needs no store read.
+                // has no ordinary user boundary by construction, and its row is
+                // not in the catalog on disk at all: its planned/seed state is
+                // the authority, so arming needs no store read and no lookup.
                 StartupSession::Empty => {
-                    arm_display_projection = true;
+                    arm_display_projection = node.parent.is_none();
                     planned
                 }
                 StartupSession::Select { .. } => {
@@ -2108,7 +2116,7 @@ impl LocalSessionClient {
                             .with_display_preview(&preview)
                             .map_err(LocalRuntimeError::SessionCatalog)?,
                         Ok(DisplayPreviewSubject::NoBoundary) => {
-                            arm_display_projection = true;
+                            arm_display_projection = node.parent.is_none();
                             planned
                         }
                         // The first boundary has no renderable text: the

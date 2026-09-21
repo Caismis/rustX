@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { SourceSettings, SourceMutation, SourceScope } from '../../../../protocol/app-server/v16';
+import type { SourceSettings, SourceMutation, SourceScope } from '../../../../protocol/app-server/v17';
 import { RpcFailure, isOutcomeUncertain, type AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { ResourceInventory } from './ResourceInventory';

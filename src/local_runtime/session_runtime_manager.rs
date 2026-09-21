@@ -1590,38 +1590,47 @@ impl SessionRuntimeManager {
             core.runtime().install_activation_gate(gate);
         }
         let composition = core.into_bound_with_control(None).map_err(error)?;
-        // The App Server display-projection seam (Issue #386): only a
-        // root-node runtime is the Session's projection subject. A missing
-        // projection is repaired through the same idempotent algorithm every
-        // reopen/recovery seam runs; when the root lineage has no ordinary
-        // user boundary yet, the one-shot publisher armed on this inert
-        // runtime publishes after its first canonical commit. Repair and
-        // arming are best-effort: canonical history is unaffected, and the
-        // row falls back to identity until a later seam succeeds.
-        if access.node.parent.is_none() {
-            let session_id = access.session.id.clone();
-            match self
-                .sessions
-                .repair_display_preview_report(&session_id)
-                .await
-            {
-                Ok(report) => {
-                    if report.repair == DisplayPreviewRepair::EmptySubject
-                        && report.subject == Some(DisplayPreviewSubject::NoBoundary)
-                    {
-                        super::session_display_projection::arm_display_projection(
-                            self.sessions.downgrade_catalog(),
-                            session_id,
-                            composition.runtime(),
-                        );
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        "Session display-preview repair failed during runtime composition"
+        // The App Server display-projection seam (Issue #386). Two different
+        // conditions live here and must not be confused:
+        //
+        // *Repair* is Session-owned metadata. It runs for **any** composed
+        // node, because the subject it derives is the Session's root lineage,
+        // not the node being composed: a Session reopened straight onto a
+        // branch would otherwise keep a missing projection forever even though
+        // its root already holds the authoritative first message. Repair is
+        // idempotent and write-free when the projection is already correct, so
+        // ordinary routing still writes nothing.
+        //
+        // *Arming the live publisher* is root-runtime-specific. Only the root
+        // runtime can observe the Session's first ordinary user boundary, so
+        // only a root composition whose root lineage has no boundary yet arms
+        // the one-shot publisher on this still-inert runtime.
+        //
+        // Both are best-effort: canonical history is unaffected, and the row
+        // falls back to identity until a later seam succeeds.
+        let session_id = access.session.id.clone();
+        match self
+            .sessions
+            .repair_display_preview_report(&session_id)
+            .await
+        {
+            Ok(report) => {
+                if access.node.parent.is_none()
+                    && report.repair == DisplayPreviewRepair::EmptySubject
+                    && report.subject == Some(DisplayPreviewSubject::NoBoundary)
+                {
+                    super::session_display_projection::arm_display_projection(
+                        self.sessions.downgrade_catalog(),
+                        session_id,
+                        composition.runtime(),
                     );
                 }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "Session display-preview repair failed during runtime composition"
+                );
             }
         }
         let incarnation = RuntimeIncarnationId(

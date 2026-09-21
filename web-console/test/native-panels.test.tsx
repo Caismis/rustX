@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ArtifactPreview } from '../src/presentation/right-panel/ArtifactPreview';
 import { readTheme, applyTheme } from '../src/app/appearance';
 import { goalActivityLabel } from '../src/app/agent/GoalActivity';
-import type { ForegroundToolExecution } from '../../protocol/app-server/v16';
+import type { ForegroundToolExecution } from '../../protocol/app-server/v17';
 afterEach(() => { cleanup(); localStorage.clear(); document.body.removeAttribute('data-ds-dark-theme'); });
 it('keeps preview content inert, wrapping local, and error retries explicit', () => {
  const retry = vi.fn();

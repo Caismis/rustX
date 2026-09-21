@@ -101,6 +101,9 @@ pub struct SessionController {
     pub(crate) copy_publication_gate:
         Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
     pub(crate) catalog: Arc<tokio::sync::Mutex<SessionCatalog>>,
+    /// The catalog's post-commit summary invalidation log, held directly so
+    /// observers can subscribe without taking the catalog mutex.
+    summary_invalidations: Arc<super::session::SessionSummaryInvalidations>,
     /// Process-local adopted descriptors belong to Session identity, not residency.
     pub(crate) configuration_bindings: Arc<
         std::sync::Mutex<
@@ -231,7 +234,9 @@ impl SessionController {
         Ok(Self::new(catalog))
     }
     pub(crate) fn new(catalog: SessionCatalog) -> Self {
+        let summary_invalidations = catalog.summary_invalidations();
         Self {
+            summary_invalidations,
             #[cfg(test)]
             upload_commit_gate: Arc::default(),
             #[cfg(test)]
@@ -318,6 +323,12 @@ impl SessionController {
     pub(crate) fn downgrade_catalog(&self) -> std::sync::Weak<tokio::sync::Mutex<SessionCatalog>> {
         std::sync::Arc::downgrade(&self.catalog)
     }
+    /// The post-commit summary invalidation log of this product root
+    /// (Issue #386), for observers that translate native metadata
+    /// invalidation onto a client transport.
+    pub(crate) fn summary_invalidations(&self) -> Arc<super::session::SessionSummaryInvalidations> {
+        self.summary_invalidations.clone()
+    }
     /// The one explicit, idempotent display-preview repair algorithm, run by
     /// the reopen/compose/recovery seams — never by listing or summary
     /// projection.
@@ -374,6 +385,12 @@ impl SessionController {
         let DisplayPreviewSubject::Derived(preview) = &subject else {
             return Ok(report(DisplayPreviewRepair::EmptySubject, Some(subject)));
         };
+        // The one test-only interleaving seam, shared with the one-shot
+        // publisher: the subject is derived and the projection is still known
+        // absent, and no catalog mutex is held. See
+        // `session_display_projection::publication_test_support`.
+        #[cfg(test)]
+        super::session_display_projection::publication_test_support::park(id).await;
         match self.publish_display_preview(id, preview).await {
             Ok(true) => Ok(report(DisplayPreviewRepair::Published, Some(subject))),
             // A racing publisher/repair committed first; the projection is
@@ -1568,9 +1585,17 @@ mod tests {
         );
     }
 
-    // P13
+    // P13: the first projection write versus an independent rename and a
+    // settings commit, at the exact interleaving.
+    //
+    // The publication is parked *after* the root subject is derived and
+    // *before* the catalog mutex is acquired, which is the only window in which
+    // a competing metadata mutation can reach the catalog first. The gate holds
+    // no catalog lock, so the competing writes are genuinely concurrent with a
+    // repair that has already decided to publish.
     #[tokio::test]
-    async fn concurrent_projection_name_and_settings_writes_converge() {
+    #[allow(clippy::too_many_lines)] // One exact interleaving, asserted end to end.
+    async fn a_parked_first_publication_still_performs_the_first_projection_write() {
         let root = tempfile::tempdir().unwrap();
         let controller = SessionController::open(root.path()).unwrap();
         let session = controller
@@ -1578,71 +1603,107 @@ mod tests {
             .await
             .unwrap()
             .session;
-        let before = controller.read_session(&session.id).await.unwrap();
-        assert!(
-            controller
-                .publish_display_preview(&session.id, "race line")
-                .await
-                .unwrap()
-        );
+        append_root_history(&controller, &session.id, user("race line")).await;
         assert_eq!(
             controller
-                .read_session(&session.id)
+                .read_session_summary(&session.id)
                 .await
                 .unwrap()
-                .updated_at,
-            before.updated_at,
-            "the projection write never touches updated_at"
+                .preview,
+            None,
+            "the projection is genuinely absent when the racer starts"
+        );
+        let invalidations = controller.summary_invalidations();
+        let recorded = invalidations.recorded();
+        let gate =
+            super::super::session_display_projection::publication_test_support::arm(&session.id);
+        let repairing = tokio::spawn({
+            let controller = controller.clone();
+            let id = session.id.clone();
+            async move { controller.repair_display_preview(&id).await }
+        });
+        gate.parked(1).await;
+
+        // The parked publication holds no catalog mutex: the competing writes
+        // below acquire it while the repair is still parked.
+        let generation = controller.catalog.lock().await.document_generation();
+        let before = controller.read_session(&session.id).await.unwrap();
+        let (revision, _) = controller.read_settings(&session.id).await.unwrap();
+        controller
+            .rename_session(&session.id, "race name")
+            .await
+            .unwrap();
+        assert_eq!(
+            controller.catalog.lock().await.document_generation(),
+            generation + 1,
+            "the rename is one isolated catalog commit"
+        );
+        let mut replacement = settings(root.path());
+        replacement.cwd = root.path().join("elsewhere");
+        assert_ne!(replacement, settings(root.path()));
+        assert_eq!(
+            controller
+                .replace_settings(&session.id, revision, replacement.clone())
+                .await
+                .unwrap(),
+            revision + 1,
+            "the settings commit uses its real expected revision"
+        );
+        assert_eq!(
+            controller.catalog.lock().await.document_generation(),
+            generation + 2,
+            "the settings commit is one isolated catalog commit"
+        );
+        let independent = controller.read_session(&session.id).await.unwrap();
+        assert!(
+            independent.updated_at > before.updated_at,
+            "the independent metadata mutations moved updated_at"
+        );
+        assert_eq!(
+            invalidations.recorded(),
+            recorded,
+            "rename and settings are not display-projection publications"
         );
 
-        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
-        let mut racers = tokio::task::JoinSet::new();
-        for operation in [
-            Box::pin({
-                let controller = controller.clone();
-                let id = session.id.clone();
-                let barrier = barrier.clone();
-                async move {
-                    barrier.wait().await;
-                    controller
-                        .rename_session(&id, "race name")
-                        .await
-                        .map(|_| ())
-                }
-            })
-                as std::pin::Pin<
-                    Box<dyn std::future::Future<Output = Result<(), SessionError>> + Send>,
-                >,
-            Box::pin({
-                let controller = controller.clone();
-                let id = session.id.clone();
-                let barrier = barrier.clone();
-                let input = settings(root.path());
-                async move {
-                    barrier.wait().await;
-                    controller.replace_settings(&id, 0, input).await.map(|_| ())
-                }
-            }),
-            Box::pin({
-                let controller = controller.clone();
-                let id = session.id.clone();
-                let barrier = barrier.clone();
-                async move {
-                    barrier.wait().await;
-                    controller
-                        .publish_display_preview(&id, "a losing later line")
-                        .await
-                        .map(|_| ())
-                }
-            }),
-        ] {
-            racers.spawn(operation);
-        }
-        while let Some(result) = racers.join_next().await {
-            result.expect("no racer panicked").expect("no racer failed");
-        }
+        gate.release();
+        assert_eq!(
+            repairing.await.unwrap().unwrap(),
+            DisplayPreviewRepair::Published,
+            "the parked repair performs the first projection write"
+        );
+        assert_eq!(
+            controller.catalog.lock().await.document_generation(),
+            generation + 3,
+            "the projection is exactly one further catalog commit"
+        );
+        assert_eq!(
+            invalidations.recorded(),
+            recorded + 1,
+            "exactly one post-commit invalidation for the one projection commit"
+        );
+
         let after = controller.read_session(&session.id).await.unwrap();
-        assert_eq!(after.name.as_deref(), Some("race name"));
+        assert_eq!(after.id, session.id, "identity survives");
+        assert_eq!(
+            after.name.as_deref(),
+            Some("race name"),
+            "the name survives"
+        );
+        assert_eq!(
+            after.node_count, before.node_count,
+            "the graph survives untouched"
+        );
+        assert_eq!(
+            after.active_node, before.active_node,
+            "the graph survives untouched"
+        );
+        assert_eq!(
+            after.updated_at, independent.updated_at,
+            "projection publication never moves the updated_at the independent mutation established"
+        );
+        let (settings_revision, state) = controller.read_settings(&session.id).await.unwrap();
+        assert_eq!(settings_revision, revision + 1);
+        assert_eq!(state, replacement, "the committed settings survive");
         assert_eq!(
             controller
                 .read_session_summary(&session.id)
@@ -1651,14 +1712,12 @@ mod tests {
                 .preview
                 .as_deref(),
             Some("race line"),
-            "the first projection is never overwritten, even by a racer"
         );
-        let (settings_revision, state) = controller.read_settings(&session.id).await.unwrap();
-        assert_eq!(settings_revision, 1);
-        assert_eq!(state, settings(root.path()));
     }
 
-    // P13 (racing-repair half)
+    // P13 (racing-repair half): both repairs are forced to observe absence and
+    // derive the subject before either may publish. `tokio::join!` alone cannot
+    // establish that; the shared publication gate can.
     #[tokio::test]
     async fn racing_repairs_commit_the_projection_exactly_once() {
         let root = tempfile::tempdir().unwrap();
@@ -1669,12 +1728,33 @@ mod tests {
             .unwrap()
             .session;
         append_root_history(&controller, &session.id, user("raced repair line")).await;
-        let generation = controller.catalog.lock().await.document_generation();
-        let (first, second) = tokio::join!(
-            controller.repair_display_preview(&session.id),
-            controller.repair_display_preview(&session.id),
+        assert_eq!(
+            controller
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .preview,
+            None
         );
-        let mut outcomes = [first.unwrap(), second.unwrap()];
+        let invalidations = controller.summary_invalidations();
+        let recorded = invalidations.recorded();
+        let generation = controller.catalog.lock().await.document_generation();
+        let gate =
+            super::super::session_display_projection::publication_test_support::arm(&session.id);
+        let mut racers = tokio::task::JoinSet::new();
+        for _ in 0..2 {
+            let controller = controller.clone();
+            let id = session.id.clone();
+            racers.spawn(async move { controller.repair_display_preview(&id).await });
+        }
+        // Neither racer can publish until both have read absence and derived
+        // the same subject.
+        gate.parked(2).await;
+        gate.release();
+        let mut outcomes = Vec::new();
+        while let Some(result) = racers.join_next().await {
+            outcomes.push(result.expect("no racer panicked").expect("no racer failed"));
+        }
         outcomes.sort_by_key(|repair| match repair {
             DisplayPreviewRepair::AlreadyPresent => 0,
             DisplayPreviewRepair::Published => 1,
@@ -1686,12 +1766,17 @@ mod tests {
                 DisplayPreviewRepair::AlreadyPresent,
                 DisplayPreviewRepair::Published
             ],
-            "exactly one racer commits; the other converges"
+            "exactly one racer commits; the other converges as AlreadyPresent"
         );
         assert_eq!(
             controller.catalog.lock().await.document_generation(),
             generation + 1,
-            "racing repairs bump the generation exactly once"
+            "racing repairs advance the catalog generation exactly once"
+        );
+        assert_eq!(
+            invalidations.recorded(),
+            recorded + 1,
+            "one projection commit means one invalidation, not two"
         );
         assert_eq!(
             controller
@@ -1701,6 +1786,60 @@ mod tests {
                 .preview
                 .as_deref(),
             Some("raced repair line")
+        );
+    }
+
+    // P13 (deletion half): deletion wins at its real visibility point while a
+    // repair is parked past its read. The resumed publication must not
+    // resurrect the Session and must not announce a metadata change.
+    #[tokio::test]
+    async fn a_repair_parked_past_deletion_neither_resurrects_nor_announces() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let session = controller
+            .create_session(settings(root.path()))
+            .await
+            .unwrap()
+            .session;
+        append_root_history(&controller, &session.id, user("deleted before publication")).await;
+        let invalidations = controller.summary_invalidations();
+        let recorded = invalidations.recorded();
+        let gate =
+            super::super::session_display_projection::publication_test_support::arm(&session.id);
+        let repairing = tokio::spawn({
+            let controller = controller.clone();
+            let id = session.id.clone();
+            async move { controller.repair_display_preview(&id).await }
+        });
+        gate.parked(1).await;
+        let SessionDeleteResult::Preview { preview } = controller.delete_preview(&session.id).await
+        else {
+            panic!("an unloaded Session is deletable")
+        };
+        assert!(
+            matches!(
+                controller
+                    .delete_session(&session.id, &preview.target_revision)
+                    .await,
+                Ok(SessionDeleteResult::Deleted { .. }
+                    | SessionDeleteResult::CommittedCleanupPending { .. })
+            ),
+            "deletion wins at its own visibility point"
+        );
+        gate.release();
+        assert_eq!(
+            repairing.await.unwrap().unwrap(),
+            DisplayPreviewRepair::SessionGone,
+            "a Session that vanished mid-repair is not an error and not a publication"
+        );
+        assert!(matches!(
+            controller.read_session_summary(&session.id).await,
+            Err(SessionError::UnknownSession { .. } | SessionError::DeletingSession { .. })
+        ));
+        assert_eq!(
+            invalidations.recorded(),
+            recorded,
+            "a publication that never became visible announces nothing"
         );
     }
 }
