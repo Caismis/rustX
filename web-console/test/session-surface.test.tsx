@@ -681,3 +681,101 @@ it('routes metadata invalidation by Session identity alone', async () => {
   await act(async () => server.invalidateSummary('B', retired));
   expect(reads('B')).toBe(after);
 });
+
+// Issue #386 regression A: accepting a list row never discharges a metadata
+// invalidation observed after that list request's causal start cut, including
+// for a Session the row itself introduces into the client cache.
+const previews = () => Object.fromEntries(server.client.getSnapshot().sessions.map(row => [row.id, row.preview ?? null]));
+const reads = (id?: string) => server.requests.filter(({ request }) => request.method === 'session/summary'
+  && (!id || ('session_id' in request.params && request.params.session_id === id))).length;
+/** Freeze a held response against native state now, so releasing it later
+ * cannot recompute a newer one. */
+function freeze(request: import('../../protocol/app-server/v17').Request) { server.commit(request); return request; }
+/** Let every automatic follow-up the client decided to issue run to completion. */
+async function settle() { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); }); }
+
+it('A1 an invalidation observed before an initial list introduces its row still converges', async () => {
+  server.summaries.set('A', { name: null, preview: null });
+  server.held.add('session/list');
+  let connecting!: Promise<void>;
+  await act(async () => { connecting = server.connect(); });
+  freeze(await server.waitFor('session/list', 1));
+  // Native publishes the committed projection while the list response is delayed.
+  server.summaries.set('A', { name: null, preview: 'Committed native preview' });
+  await act(async () => { server.invalidateSummary('A'); });
+  expect(reads('A')).toBe(0); // Not cached yet: no exact read can have been issued.
+  await act(async () => { server.reply(server.requests[1].request); await connecting; });
+  await settle();
+  expect(reads('A')).toBe(1);
+  expect(previews()).toEqual({ A: 'Committed native preview', B: null });
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
+  expect(row('A').getAttribute('aria-label')).toBe('Open Committed native preview');
+  expect(methods().filter(method => ['session/attach', 'turn/start', 'session/name'].includes(method))).toEqual([]);
+});
+
+it('A2 a Session first introduced by a later page converges without changing page membership', async () => {
+  server.summaries.set('A', { name: null, preview: null });
+  const pages = () => ({ type: 'sessions' as const, sessions: [server.summary('B')], next_offset: 1 });
+  server.handlers.set('session/list', request => request.method === 'session/list' && request.params.offset === 0 ? pages()
+    : { type: 'sessions', sessions: [server.summary('A')], next_offset: null });
+  await server.connect();
+  expect(previews()).toEqual({ B: null });
+  server.held.add('session/list');
+  let paging!: Promise<void>;
+  await act(async () => { paging = server.client.listSessions(1); });
+  freeze(await server.waitFor('session/list', 2));
+  server.summaries.set('A', { name: null, preview: 'Second page preview' });
+  await act(async () => { server.invalidateSummary('A'); });
+  await act(async () => { server.reply(server.requests.filter(({ request }) => request.method === 'session/list')[1].request); await paging; });
+  await settle();
+  expect(previews()).toEqual({ A: 'Second page preview' });
+  expect(server.client.getSnapshot().nextOffset).toBeNull();
+});
+
+it('A3 a newer exact summary is never restored to stale metadata by an older outstanding response', async () => {
+  server.summaries.set('A', { name: null, preview: 'Old preview' });
+  await server.connect();
+  server.held.add('session/list');
+  let listing!: Promise<void>;
+  await act(async () => { listing = server.client.listSessions(); });
+  freeze(await server.waitFor('session/list', 2));
+  server.summaries.set('A', { name: null, preview: 'Newer exact preview' });
+  server.held.add('session/summary');
+  await act(async () => { server.invalidateSummary('A'); });
+  const exact = freeze(await server.waitFor('session/summary', reads('A')));
+  // A second invalidation during the exact read cannot be answered by that read.
+  server.summaries.set('A', { name: null, preview: 'Newest exact preview' });
+  await act(async () => { server.invalidateSummary('A'); });
+  await act(async () => { server.reply(exact); });
+  expect(previews().A).toBe('Newer exact preview');
+  const newest = await server.waitFor('session/summary', reads('A'));
+  await act(async () => { server.reply(newest); });
+  expect(previews().A).toBe('Newest exact preview');
+  await act(async () => { server.reply(server.requests.filter(({ request }) => request.method === 'session/list')[1].request); await listing; });
+  expect(previews().A).toBe('Newest exact preview');
+});
+
+it('A4 repair is bounded, isolated, and never applied after supersession or replacement', async () => {
+  server.summaries.set('A', { name: null, preview: null });
+  server.summaries.set('B', { name: null, preview: null });
+  await server.connect();
+  const settled = reads();
+  // A legitimate null projection settles; nothing polls for text to appear.
+  for (let i = 0; i < 3; i++) await act(async () => { await server.client.listSessions(); });
+  expect(reads()).toBe(settled);
+  expect(previews()).toEqual({ A: null, B: null });
+  // An obsolete page completion publishes no row and schedules no repair.
+  server.held.add('session/list');
+  let superseded!: Promise<void>;
+  await act(async () => { superseded = server.client.listSessions(); });
+  const stale = freeze(server.requests[server.requests.length - 1].request);
+  server.summaries.set('A', { name: null, preview: 'Published while superseded' });
+  await act(async () => { server.invalidateSummary('A'); });
+  server.held.delete('session/list');
+  await act(async () => { await server.client.listSessions(); });
+  const beforeStale = reads();
+  await act(async () => { server.reply(stale); await superseded; });
+  expect(reads()).toBe(beforeStale);
+  expect(previews().B).toBeNull();
+  expect(methods().filter(method => ['session/attach', 'session/unload', 'turn/start'].includes(method))).toEqual([]);
+});

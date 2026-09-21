@@ -150,9 +150,13 @@ export class AppServerClient {
   private attachmentChanges = new Map<string, { kind: 'attach' | 'detach' | 'switch'; work: Promise<void> }>();
   private attachmentChangeCount = 0;
   private attachmentEpochs = new Map<string, number>();
-  // Native metadata invalidation (Issue #386). `summaryInvalidations` counts
-  // the `session/summaryInvalidated` notifications observed for a Session;
-  // `summarySettled` records that a *causally later* read completed, so it is
+  // Native metadata invalidation (Issue #386). One monotonic clock orders every
+  // metadata observation this client makes: `summaryReadSequence` is ticked at
+  // the *start* of each catalog list and each exact summary read — its causal
+  // start cut — and again for each `session/summaryInvalidated` notification.
+  // `summaryInvalidations` holds the ticket of the latest invalidation observed
+  // for a Session, so an observation discharges it only when it started later.
+  // `summarySettled` records that a causally later read completed, so it is
   // evidence about a read, never a permanent conclusion drawn from canonical
   // history. A newer invalidation always outranks an older settlement.
   private summaryInvalidations = new Map<string, number>();
@@ -160,6 +164,8 @@ export class AppServerClient {
   private summaryObservedEpoch = new Map<string, number>();
   private summaryInFlight = new Map<string, { generation: number; invalidations: number; work: Promise<void> }>();
   private summaryReadSequence = 0;
+  // Start cuts of the metadata observations still outstanding on this connection.
+  private summaryObservations = new Set<number>();
   // Minimum acceptable metadata sequence: last observation or a committed rename read floor.
   private summaryReads = new Map<string, number>();
   private state: ClientView = {
@@ -219,7 +225,7 @@ export class AppServerClient {
       // model/cancellation continuations only update already-reserved Session rows.
       const detached = [...(this.state.detached ?? [])];
       if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, operations: this.state.uncertain, sessions });
-      this.attachmentEpochs.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear();
+      this.attachmentEpochs.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear(); this.summaryObservations.clear();
       this.listEpoch++; this.listOffset = 0; this.listQuery = '';
       this.log.clear();
       this.publish({ views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
@@ -457,22 +463,50 @@ export class AppServerClient {
   private listQuery = '';
   async listSessions(offset = this.listOffset, query = this.listQuery, current: () => boolean = () => true) {
     const epoch = ++this.listEpoch;
+    // The causal start cut of this page: the server captured its rows no earlier.
     const summaryRead = ++this.summaryReadSequence;
+    this.summaryObservations.add(summaryRead);
     this.listOffset = offset; this.listQuery = query;
     const generation = this.state.generation;
-    const result = await this.request({ method: 'session/list', params: { offset, limit: 32, query } }, 'sessions');
-    if (this.current(generation) && epoch === this.listEpoch && current()) {
-      const views = { ...this.state.views };
-      const sessions = result.sessions.map(row => {
-        const cached = views[row.id]?.summary ?? this.state.sessions.find(item => item.id === row.id);
-        const summary = (this.summaryReads.get(row.id) ?? 0) > summaryRead && cached ? cached : row;
-        if (summary === row) this.summaryReads.set(row.id, summaryRead);
-        if (views[row.id]) views[row.id] = { ...views[row.id], summary };
-        return summary;
-      });
-      // Retain ordering fences only for metadata actually cached by this client.
-      for (const id of this.summaryReads.keys()) if (!views[id] && !sessions.some(row => row.id === id)) this.summaryReads.delete(id);
-      this.publish({ sessions, nextOffset: result.next_offset, views });
+    try {
+      const result = await this.request({ method: 'session/list', params: { offset, limit: 32, query } }, 'sessions');
+      if (this.current(generation) && epoch === this.listEpoch && current()) {
+        const views = { ...this.state.views };
+        const stale = new Set<string>();
+        const sessions = result.sessions.map(row => {
+          const fence = this.summaryReads.get(row.id) ?? 0;
+          const cached = views[row.id]?.summary ?? this.state.sessions.find(item => item.id === row.id);
+          const summary = fence > summaryRead && cached ? cached : row;
+          // Accepting a row never discharges an invalidation observed after this
+          // request's start cut — including for a Session this page introduces,
+          // which no exact read could have been issued for while it was uncached.
+          if (summary === row) {
+            if (fence > summaryRead) stale.add(row.id); else this.summaryReads.set(row.id, summaryRead);
+          }
+          if ((this.summaryInvalidations.get(row.id) ?? 0) > (this.summaryReads.get(row.id) ?? 0)) stale.add(row.id);
+          if (views[row.id]) views[row.id] = { ...views[row.id], summary };
+          return summary;
+        });
+        // Retain ordering fences only for metadata actually cached by this client.
+        for (const id of this.summaryReads.keys()) if (!views[id] && !sessions.some(row => row.id === id)) this.summaryReads.delete(id);
+        this.publish({ sessions, nextOffset: result.next_offset, views });
+        // Exact metadata repair only: never page membership, ordering, or query.
+        for (const id of stale) void this.readSessionSummary(id).catch(() => {});
+      }
+    } finally {
+      this.summaryObservations.delete(summaryRead);
+      this.retireInvalidations();
+    }
+  }
+  /** Invalidation evidence stays bounded by cached state and by the observations
+   * that could still reintroduce stale metadata. It is retired for a Session
+   * this client does not cache once no older observation remains outstanding. */
+  private retireInvalidations() {
+    let oldest = Number.POSITIVE_INFINITY;
+    for (const start of this.summaryObservations) oldest = Math.min(oldest, start);
+    for (const [id, at] of this.summaryInvalidations) {
+      if (at >= oldest || this.summaryInFlight.has(id)) continue;
+      if (!this.state.views[id] && !this.state.sessions.some(row => row.id === id)) this.summaryInvalidations.delete(id);
     }
   }
   /** Cached values remain renderable across transport loss. Each attachment
@@ -511,6 +545,7 @@ export class AppServerClient {
     // never stands in for the causally later read it requires.
     if (existing?.generation === this.state.generation && existing.invalidations === invalidations) return existing.work;
     const generation = this.state.generation, summaryRead = ++this.summaryReadSequence;
+    this.summaryObservations.add(summaryRead);
     const epoch = this.attachmentEpochs.get(id), canonicalUser = this.hasCanonicalUser(id);
     const work = (async () => {
       const { summary } = await this.request({ method: 'session/summary', params: { session_id: id } }, 'session_summary');
@@ -531,18 +566,26 @@ export class AppServerClient {
     })();
     const read = { generation, invalidations, work };
     this.summaryInFlight.set(id, read);
-    void work.finally(() => { if (this.summaryInFlight.get(id) === read) this.summaryInFlight.delete(id); }).catch(() => {});
+    void work.finally(() => {
+      if (this.summaryInFlight.get(id) === read) this.summaryInFlight.delete(id);
+      this.summaryObservations.delete(summaryRead);
+      this.retireInvalidations();
+    }).catch(() => {});
     return work;
   }
   /** Native post-commit Session metadata invalidation (Issue #386).
    * Authoritative rereading, not a value: it overrides any earlier cached-null
-   * check, and a read already in flight cannot answer it. Only Sessions this
-   * client actually caches are reread, so an invalidation is never a poll. */
+   * check, and a read already in flight cannot answer it. A cached Session is
+   * reread now; an uncached one is reread only if a list request older than this
+   * invalidation later introduces its row, so an invalidation is never a poll. */
   private invalidateSummary(id: string, generation: number) {
     if (!this.current(generation)) return;
-    this.summaryInvalidations.set(id, (this.summaryInvalidations.get(id) ?? 0) + 1);
+    this.summaryInvalidations.set(id, ++this.summaryReadSequence);
     this.summarySettled.delete(id);
-    if (!this.state.views[id] && !this.state.sessions.some(row => row.id === id)) return;
+    // Evidence is retained even for a Session this client does not cache: an
+    // older list request still in flight can introduce that row, and accepting
+    // it must not lose this invalidation.
+    if (!this.state.views[id] && !this.state.sessions.some(row => row.id === id)) { this.retireInvalidations(); return; }
     void this.readSessionSummary(id).catch(() => {});
   }
   /** A committed rename requires a read started after its acknowledgement.

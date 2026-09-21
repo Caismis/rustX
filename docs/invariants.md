@@ -7421,7 +7421,24 @@ never bytes.
   repeatedly cannot create a notification storm. Racing publications converge
   on exactly one commit and exactly one invalidation; a publication whose
   Session was deleted before its visibility point resurrects nothing and
-  announces nothing.
+  announces nothing. Proving that requires a second **cold composition**, not a
+  detach/reattach: detaching releases an external claim while the runtime stays
+  resident, so the reopen must unload the runtime through its owner and observe
+  `ResidencyState::Unloaded` before recomposing.
+- **Accepting a catalog list row never discharges a metadata invalidation
+  observed after that list request's causal start cut.** A client's catalog
+  reads and its invalidation observations share one monotonic ordering: a list
+  request and an exact summary read each take a ticket when they start, and an
+  invalidation takes one when it is observed. A row is authoritative only for
+  invalidations older than the ticket of the observation that produced it, so an
+  invalidation for a Session the client does not cache yet is still evidence: an
+  older list request in flight can introduce that row, and accepting it must
+  schedule the authoritative reread rather than lose the invalidation. The
+  reread is exact metadata only — it never invents page membership, reorders a
+  page, or admits a Session the selected query or page excluded — and the
+  evidence is retired once the Session is uncached and no older observation
+  remains outstanding, so the bookkeeping stays bounded by cached state and
+  in-flight work. A legitimate `None` is still never polled.
 Offsets and `next_offset` count matching rows, with no global active marker. The optional
 case-insensitive query matches a visible row's
 identity, its name, and the persisted first-message line an unnamed row shows,

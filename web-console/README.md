@@ -166,7 +166,16 @@ one invalidation epoch. A `session/summaryInvalidated` notification overrides an
 earlier cached-null check and forces a causally later read — one begun before it can
 neither satisfy nor clear it — so a healthy live client converges with no further user
 turn, manual refresh, navigation, rename or reconnect, and a legitimate null never
-polls. Drafts, accepted inbound and optimistic submission never supply preview text.
+polls. Catalog list acceptance participates in the same ordering: `session/list`
+and `session/summary` each take a ticket from one monotonic observation clock when
+they start, and so does every observed invalidation, so accepting a list row never
+discharges an invalidation newer than that request's start cut — including for a
+Session the row itself introduces, which no exact read could have been issued for
+while it was uncached. Such a row is published and then repaired by one exact
+`session/summary` reread; the reread changes metadata only and never page
+membership, ordering or query selection. Invalidation evidence for an uncached
+Session is retired once no older observation is still outstanding.
+Drafts, accepted inbound and optimistic submission never supply preview text.
 `session/list` is fuzzy, bounded catalog browsing, never exact identity resolution.
 `view.summary` retains replaceable exact metadata for off-page/restored views without
 changing the Sidebar page or owning catalog membership. Read-order/generation fences
