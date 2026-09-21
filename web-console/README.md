@@ -149,12 +149,19 @@ server-owned work continues exactly as for closing one view.
 
 Every ordinary Session label uses `sessionDisplayTitle`: explicit native name >
 native `SessionSummary.preview` > **New session**. Session IDs stay in Inspector.
-Manual naming remains `session/name`; no LLM call, generated title, truncation or
-first-message summarizer exists in React. After authoritative canonical user-message
+The server owns a persisted display projection: `preview` is computed from the
+canonical root user message after its commit and stored in the session catalog,
+never derived by the client or at list time. `preview: null` means no projection
+has been published — either the commit-to-publication window is still open or the
+session has no ordinary user message with renderable text. Manual naming remains
+`session/name`; no LLM call, generated title, truncation or first-message
+summarizer exists in React. After authoritative canonical user-message
 observation, a previously unnamed view reads exact native `session/summary` metadata.
-Only success marks the first-message check complete, including a file-only `preview: null`.
+Only success marks the first-message check complete, including a `preview: null`.
 Failures remain retryable on authoritative refresh/reconnect; concurrent reads coalesce.
-Drafts, accepted inbound and optimistic submission never supply preview text.
+Because publication follows the canonical commit, a later successful read converges
+without any client-side repair. Drafts, accepted inbound and optimistic submission
+never supply preview text.
 `session/list` is fuzzy, bounded catalog browsing, never exact identity resolution.
 `view.summary` retains replaceable exact metadata for off-page/restored views without
 changing the Sidebar page or owning catalog membership. Read-order/generation fences

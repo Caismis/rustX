@@ -2433,6 +2433,116 @@ fn message_ids(messages: &[MessageBlock]) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
+// 7b. Display projection publication (Issue #386)
+// ---------------------------------------------------------------------------
+
+// P10 (a): the canonical first boundary is committed, but the child is frozen
+// inside the adoption transition — still holding the store connection mutex —
+// so the one-shot publisher cannot have observed the commit. The projection
+// is provably absent, the adopted turn recovers exactly like the plain
+// `after:adopt_pending_batch` row, and the explicit repair seam derives and
+// publishes exactly the first line.
+#[tokio::test]
+async fn death_before_projection_observation_leaves_none_and_repairs_exactly() {
+    let lab = Lab::new();
+    let mut process = lab.spawn(child::SESSION_PROJECTION, Some("after:adopt_pending_batch"));
+    process.wait_reached("after:adopt_pending_batch");
+    process.sigkill();
+
+    let (session, conversation) = lab.source_lineage();
+    let durable = lab.lineage(&session, &conversation);
+    assert!(durable.store().load_pending().expect("pending").is_empty());
+    assert_eq!(shapes(&durable.canonical()), vec!["user"]);
+    let report = durable.recover();
+    assert_eq!(report.attempt_class(), &AttemptRecoveryClass::NotStarted);
+    assert_eq!(
+        report.resume(),
+        ResumeDisposition::ContinueAdoptedTurn { goal: None }
+    );
+    assert_eq!(lab.catalog().summary(&session).unwrap().preview, None);
+
+    let controller = crate::local_runtime::session_controller::SessionController::open(
+        &lab.root().join("private"),
+    )
+    .expect("reopen the dead child's Session authority");
+    assert_eq!(
+        controller.repair_display_preview(&session).await.unwrap(),
+        crate::local_runtime::session_controller::DisplayPreviewRepair::Published
+    );
+    assert_eq!(
+        controller
+            .read_session_summary(&session)
+            .await
+            .unwrap()
+            .preview
+            .as_deref(),
+        Some("the projection subject")
+    );
+    assert_eq!(
+        durable
+            .canonical()
+            .iter()
+            .filter(|message| matches!(
+                message,
+                MessageBlock::User(user) if user.kind == InboundKind::Message
+            ))
+            .count(),
+        1,
+        "repair derived the projection from the one committed boundary"
+    );
+}
+
+// P10 (b): the publisher itself is frozen inside its own catalog commit —
+// the `before:publish_display_preview` boundary brackets the atomic rename —
+// so the catalog plane is provably untouched while the canonical boundary is
+// durable. The publisher freeze pins only the catalog plane, so attempt-plane
+// facts are deliberately not asserted here. Repair publishes the same line.
+#[tokio::test]
+async fn death_inside_the_projection_commit_is_atomic_and_repairs_exactly() {
+    let lab = Lab::new();
+    let mut process = lab.spawn(
+        child::SESSION_PROJECTION,
+        Some("before:publish_display_preview"),
+    );
+    process.wait_reached("before:publish_display_preview");
+    process.sigkill();
+
+    let (session, conversation) = lab.source_lineage();
+    let durable = lab.lineage(&session, &conversation);
+    // ParkUntilCancelled: no assistant block can exist, and the publisher only
+    // runs after the user boundary committed.
+    assert_eq!(shapes(&durable.canonical()), vec!["user"]);
+    assert_eq!(
+        lab.catalog().summary(&session).unwrap().preview,
+        None,
+        "the catalog commit is atomic: frozen before it means it never happened"
+    );
+
+    let controller = crate::local_runtime::session_controller::SessionController::open(
+        &lab.root().join("private"),
+    )
+    .expect("reopen the dead child's Session authority");
+    assert_eq!(
+        controller.repair_display_preview(&session).await.unwrap(),
+        crate::local_runtime::session_controller::DisplayPreviewRepair::Published
+    );
+    assert_eq!(
+        controller
+            .read_session_summary(&session)
+            .await
+            .unwrap()
+            .preview
+            .as_deref(),
+        Some("the projection subject")
+    );
+    assert_eq!(
+        controller.repair_display_preview(&session).await.unwrap(),
+        crate::local_runtime::session_controller::DisplayPreviewRepair::AlreadyPresent,
+        "repair after repair is a no-op"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 8. Background / subagent recovery
 // ---------------------------------------------------------------------------
 

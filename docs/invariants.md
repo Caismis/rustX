@@ -7357,13 +7357,36 @@ it. No migration is offered, because a version-3 destination's real provenance
 was discarded when it was seeded and cannot be reconstructed from what it
 kept.
 
+The same gate discipline applies to `SESSION_CATALOG_SCHEMA_VERSION` 13, the
+first catalog that persists the derived display projection (`display_preview`)
+on each Session. A version-12 catalog decodes cleanly and carries every other
+field; it simply has no projection, and the projection must be provably
+derived from canonical history rather than reinterpreted out of absence, so
+the older catalog is refused. There is no migration and no automatic deletion:
+the manual reset procedure for a development runtime root is to delete the
+runtime root (or `sessions/catalog.json`) and recreate the Sessions, always
+by explicit operator action.
+
 ### Bounded native projections
 
 The native owner, not TypeScript rendering, enforces the projection bounds.
 `session_list` pages and searches all durable Sessions, including unused ones.
+Each row's display projection is persisted catalog metadata, not a list-time
+derivation: the bounded line flows from the committed canonical root-lineage
+user history, through the one-shot publication of the bounded derived display
+projection, into the Session Catalog, and out to list, pagination, and
+search. Listing, pagination, and search therefore open zero conversation
+stores; the catalog is the only file read. A Session without a projection —
+no ordinary user message yet, or a first message with no renderable text —
+reads as `preview: None`, and listing never repairs the absence: derivation
+happens only at the first canonical commit, at clone/fork seed publication,
+or through the explicit repair seam at reopen/compose/recovery. The rendering
+contract is exact: text blocks only, whitespace-normalized to a single line,
+bounded at 120 *characters* including the ellipsis, counted in characters,
+never bytes.
 Offsets and `next_offset` count matching rows, with no global active marker. The optional
 case-insensitive query matches a visible row's
-identity, its name, and the derived first-message line an unnamed row shows,
+identity, its name, and the persisted first-message line an unnamed row shows,
 plus a bounded `limit` and offset continuation. Rows are ordered by ascending
 Session id. `session_tree_get` returns bounded
 node and historical user-message pages, each with its own continuation offset;

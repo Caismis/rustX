@@ -790,7 +790,18 @@ its same-origin Host contract are documented in [Web Workspaces](../web-console/
 by exact durable identity. Unknown IDs return native `unknown_session`; deleting IDs
 retain the native deletion error. This controller read does not attach, load, change
 residency, resolve configuration or admit execution. List and exact read share one
-native summary projection, including root-lineage first-user-message preview.
+native summary projection, projected from persisted catalog metadata only: neither
+`session/list` nor `session/summary` ever opens a conversation store. The row's
+`preview` is the persisted display projection — the whitespace-normalized,
+120-character-bounded first line of the root lineage's first ordinary user
+message — published after the first canonical root user commit, derived from
+the frozen seed at clone/fork publication, or backfilled by the explicit
+idempotent repair seam at reopen/compose/recovery. Display precedence is
+explicit name → preview → identity fallback. `preview: null` is transient only
+inside the commit→publication window (the canonical commit is durable before
+the one-shot publisher commits the projection) and permanent when no ordinary
+user message exists yet or the first message has no renderable text; neither
+case is repaired at list or read time.
 `session/list` remains bounded searchable/paginated browsing: its query matches ID,
 name or preview substrings and must never be used as exact identity resolution.
 Web `view.summary` is a replaceable exact observation, not durable/catalog authority.

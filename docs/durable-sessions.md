@@ -9,7 +9,19 @@ Conversation identity, canonical history and retained Surface operations.
 The catalog owns identity, name, timestamps, graph, Session-local `active_node`
 (the default node inside that graph), explicit settings, settings revision,
 lineage origins, and pending deletion authority. This node pointer does not
-identify a globally open Session. `create_session`, `list_sessions`,
+identify a globally open Session. The catalog also owns the bounded derived
+display projection (`display_preview`). The projection is display metadata,
+not canonical history: canonical history is never reconstructed from it, and
+the catalog never re-derives it while listing. It reaches the catalog through
+exactly three seams — the one-shot publisher armed on the root runtime, which
+commits it after the first canonical root-lineage ordinary user commit; the
+frozen-seed derivation carried into a clone/fork visibility commit; and the
+explicit, idempotent repair seam run at reopen/compose/recovery, which
+derives the line from the root conversation store and never manufactures a
+subject from a later message. Preview publication is a metadata-only commit:
+it never touches `updated_at`, and the catalog generation moves only when a
+real change commits (an already-present projection commits nothing).
+`create_session`, `list_sessions`,
 `read_session`, `rename_session`, `tree`, `fork_session`, `read_settings`,
 `replace_settings`, `acquire_session`, and deletion all address explicit
 identities. Creation always allocates an independent Session. Lists include

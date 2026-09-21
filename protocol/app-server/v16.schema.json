@@ -12596,7 +12596,7 @@
           ]
         },
         "preview": {
-          "description": "The first user message of this Session's root lineage, bounded to one\nline. It is what an unnamed row is recognized by, and it is derived\nfor the observation rather than stored: the catalog keeps no copy of\nconversation content.",
+          "description": "The first ordinary user message of this Session's root lineage,\nbounded to one line. It is what an unnamed row is recognized by, and\nit is the client-facing projection of the persisted\n`display_preview`: the catalog stores the derived line so listing,\npagination, and search never open a conversation store. `None` is\nlegitimate — no ordinary user message exists yet, or the first one\nhas no renderable text — and yields the client-side identity\nfallback.",
           "type": [
             "string",
             "null"

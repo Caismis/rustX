@@ -54,6 +54,7 @@ pub mod schemas;
 pub mod serve;
 pub mod session;
 pub mod session_controller;
+pub(crate) mod session_display_projection;
 pub mod session_runtime_manager;
 pub mod settings;
 #[cfg(test)]

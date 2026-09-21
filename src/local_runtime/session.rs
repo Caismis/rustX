@@ -80,13 +80,24 @@ mod cfg3_identity_tests;
 /// the promise is refused rather than silently reinterpreted. Because a
 /// version-3 destination's real provenance was discarded at seed time, no
 /// migration can reconstruct it, and none is attempted.
+/// Version 13 persists the derived display projection (`display_preview`) on
+/// each Session, so listing, pagination, and search read catalog metadata
+/// only and never open a conversation store. The projection is published by
+/// the one-shot display-projection publisher after the first canonical
+/// root-lineage ordinary user commit, derived from the frozen seed at
+/// clone/fork publication, and backfilled by the explicit idempotent repair
+/// seam at reopen/compose/recovery. A version-12 catalog carries no such
+/// field and is refused: there is no migration, because the projection must
+/// be provably derived from canonical history, not reinterpreted. Manual
+/// reset of a development runtime root means deleting the runtime root (or
+/// `sessions/catalog.json`) and recreating the Sessions.
 /// Version 9 owns workspace upload allocations and frozen private-copy claims.
 /// Version 8 removes global focus and persists only explicit Session inputs, with
 /// per-Session settings revisions. Schema 7 materialized model defaults cannot be
 /// distinguished from user choices; older development schemas are refused.
 /// Version 7 co-locates live Sessions and pending-only frozen cleanup authority,
 /// with generation-checked publication. Older development schemas are rejected.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 12;
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 13;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;
@@ -189,7 +200,8 @@ pub struct SessionSnapshot {
 /// A bounded page of resume-visible Session summaries.
 ///
 /// The page includes every durable Session, including untouched ones. Usage and
-/// client focus do not determine catalog visibility.
+/// client focus do not determine catalog visibility. Every row is projected
+/// from catalog metadata alone; no conversation store is opened to build it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionListPage {
     /// Rows in explicit Session publication-ordinal order.
@@ -216,6 +228,25 @@ pub struct SessionUserMessageBoundaryPage {
     pub next_offset: Option<usize>,
 }
 
+/// What the root lineage's durable history offers as the Session's display
+/// projection subject, as read by the explicit repair seam.
+///
+/// The distinction between the two empty outcomes is load-bearing: a Session
+/// whose root lineage has **no** ordinary user boundary yet is a live
+/// publication candidate (its first commit is still ahead of it), while a
+/// Session whose first boundary exists but renders no text has a settled
+/// `None` projection that must never be rewritten or shifted to a later
+/// message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DisplayPreviewSubject {
+    /// The first ordinary user boundary rendered a bounded single line.
+    Derived(String),
+    /// The root lineage has no ordinary user boundary at all.
+    NoBoundary,
+    /// The first ordinary user boundary exists but has no renderable text.
+    Unrenderable,
+}
+
 /// Native display metadata, shared by exact identity reads and catalog rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionSummary {
@@ -225,10 +256,14 @@ pub struct SessionSummary {
     pub id: SessionId,
     /// The user-defined display name, when this Session has one.
     pub name: Option<String>,
-    /// The first user message of this Session's root lineage, bounded to one
-    /// line. It is what an unnamed row is recognized by, and it is derived
-    /// for the observation rather than stored: the catalog keeps no copy of
-    /// conversation content.
+    /// The first ordinary user message of this Session's root lineage,
+    /// bounded to one line. It is what an unnamed row is recognized by, and
+    /// it is the client-facing projection of the persisted
+    /// `display_preview`: the catalog stores the derived line so listing,
+    /// pagination, and search never open a conversation store. `None` is
+    /// legitimate — no ordinary user message exists yet, or the first one
+    /// has no renderable text — and yields the client-side identity
+    /// fallback.
     pub preview: Option<String>,
     /// Last metadata/active-node publication instant.
     pub updated_at: DateTime<Utc>,
@@ -309,6 +344,11 @@ pub(crate) struct PreparedLineage {
     pub(crate) node_id: SessionNodeId,
     pub(crate) conversation_id: ConversationId,
     pub(crate) state: SessionPersistentState,
+    /// The display projection derived from the frozen seed, published with
+    /// the Session at the visibility commit. Branch-node preparations carry
+    /// `None`; [`SessionCatalog::build_node_document`] never reads it,
+    /// because the projection is Session-level root-lineage metadata.
+    pub(crate) display_preview: Option<String>,
     pub(crate) database_path: PathBuf,
 }
 
@@ -367,6 +407,28 @@ struct PersistedSession {
     /// Absent until a user names this Session; see [`SessionSnapshot::name`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    /// Session-owned derived display metadata: the bounded first-ordinary-user-message
+    /// line [`SessionSummary::preview`] projects.
+    ///
+    /// Display precedence is: the explicit [`PersistedSession::name`] when one
+    /// exists, then this projection, then the client-side identity fallback.
+    /// It is *derived* display state, never canonical: nothing feeds it to the
+    /// model, resolves identity by it, or lets recovery depend on it, and the
+    /// root conversation's own durable store remains the only authority for
+    /// what was said.
+    ///
+    /// Publication has exactly three seams. Clone/fork destinations carry the
+    /// value derived from their frozen seed at publication. A fresh Session is
+    /// born with `None` and the one-shot display-projection publisher fills it
+    /// after the first canonical root-lineage ordinary user commit. The
+    /// explicit idempotent repair seam (reopen/compose/recovery) backfills a
+    /// missing value from the root store. `None` is therefore legitimate
+    /// state — no ordinary user message exists yet, or the first one has no
+    /// renderable text — and must never trigger rewrites or shift the subject
+    /// to a later message. Publishing bumps the catalog generation like any
+    /// commit but, like `commit_uploads`, never touches `updated_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display_preview: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     active_node: SessionNodeId,
@@ -421,6 +483,36 @@ impl PlannedCatalog {
         session.name = Some(name);
         session.updated_at = Utc::now();
         self.changed = true;
+        Ok(self)
+    }
+
+    /// The planned destination Session's current display projection, read
+    /// from the planned document rather than the catalog on disk.
+    pub(crate) fn display_preview(&self) -> Option<&str> {
+        self.document.sessions[&self.target]
+            .display_preview
+            .as_deref()
+    }
+
+    /// Folds a repaired display projection into this plan's explicit Session
+    /// destination, so the backfill rides the one startup catalog transaction
+    /// instead of becoming a second write.
+    ///
+    /// The field is set only when absent, and the plan is marked changed only
+    /// when it actually changed, so an unchanged plan still commits nothing.
+    /// Like [`SessionCatalog::publish_display_preview`], this never touches
+    /// `updated_at` or `settings_revision`.
+    pub(crate) fn with_display_preview(mut self, preview: &str) -> Result<Self, SessionError> {
+        let active = self.target.clone();
+        let session = self
+            .document
+            .sessions
+            .get_mut(&active)
+            .ok_or(SessionError::UnknownSession { session_id: active })?;
+        if session.display_preview.is_none() {
+            session.display_preview = Some(preview.to_owned());
+            self.changed = true;
+        }
         Ok(self)
     }
 }
@@ -858,6 +950,7 @@ impl SessionCatalog {
                 ordinal: 1,
                 id: session_id.clone(),
                 name: None,
+                display_preview: None,
                 created_at: now,
                 updated_at: now,
                 active_node: node_id,
@@ -912,6 +1005,13 @@ impl SessionCatalog {
             .expect("catalog write fault lock poisoned") = Some(CatalogWriteFault::AfterRename);
     }
 
+    /// The catalog generation counter, observed by write-level no-op proofs:
+    /// a declined mutation must leave it untouched.
+    #[cfg(test)]
+    pub(crate) fn document_generation(&self) -> u64 {
+        self.document.generation
+    }
+
     /// Returns one bounded, searchable page of all durable Sessions.
     /// Usage classification does not filter visibility or manufacture client focus.
     ///
@@ -920,10 +1020,16 @@ impl SessionCatalog {
     /// callers can reach older matching rows by requesting the returned
     /// offset. Only the requested page is materialized for the projection.
     ///
+    /// The projection reads catalog metadata only. Every row's `preview` is
+    /// the persisted `display_preview`; this function never opens a
+    /// conversation store, and a missing projection yields `preview: None`
+    /// rather than a repair — repair is an explicit seam, never a list-time
+    /// side effect.
+    ///
     /// # Errors
     ///
     /// Returns [`SessionError`] when the requested page size is outside the
-    /// native bound or a durable conversation cannot be read.
+    /// native bound.
     pub fn list_page(
         &self,
         query: Option<&str>,
@@ -942,7 +1048,7 @@ impl SessionCatalog {
             // its first user message, so matching only identity and name
             // would hide exactly the rows a user has to recognize by their
             // content.
-            let summary = self.project_summary(session)?;
+            let summary = project_summary(session);
             let matches = query.as_ref().is_none_or(|query| {
                 session.id.as_str().to_lowercase().contains(query)
                     || session
@@ -977,8 +1083,11 @@ impl SessionCatalog {
 
     /// Read display metadata by exact durable identity, without runtime composition.
     ///
+    /// The projection is metadata-only: `preview` is the persisted
+    /// `display_preview`, never a conversation-store read.
+    ///
     /// # Errors
-    /// Unknown/deleting identities and conversation storage failures are returned.
+    /// Unknown/deleting identities are returned.
     pub fn summary(&self, id: &SessionId) -> Result<SessionSummary, SessionError> {
         if self.document.deletions.contains_key(id) {
             return Err(SessionError::DeletingSession {
@@ -992,18 +1101,7 @@ impl SessionCatalog {
                 .ok_or_else(|| SessionError::UnknownSession {
                     session_id: id.clone(),
                 })?;
-        self.project_summary(session)
-    }
-
-    fn project_summary(&self, session: &PersistedSession) -> Result<SessionSummary, SessionError> {
-        Ok(SessionSummary {
-            cwd: session.state.cwd.clone(),
-            id: session.id.clone(),
-            name: session.name.clone(),
-            preview: self.preview(session)?,
-            updated_at: session.updated_at,
-            active_node: session.active_node.clone(),
-        })
+        Ok(project_summary(session))
     }
 
     /// All persisted identities in deterministic order, including unused Sessions.
@@ -1237,42 +1335,6 @@ impl SessionCatalog {
         conversation_database_path(&self.root, session_id, conversation_id)
     }
 
-    /// The bounded single-line label an unnamed Session is recognized by:
-    /// the first ordinary user message of its root lineage.
-    ///
-    /// It is derived per page and never stored. The catalog is product
-    /// metadata, so caching conversation text in it would create a second
-    /// copy of history that could disagree with the conversation itself; a
-    /// Session's own durable store is the only authority for what was said
-    /// in it. Reading one bounded boundary page per row keeps that honest at
-    /// the page limit's cost.
-    ///
-    /// The root node is the subject on purpose. Branch nodes are seeded
-    /// copies of a source lineage, so the row would otherwise change what it
-    /// says whenever the active node moves, while the Session it names is
-    /// still the same Session that started with the same message.
-    fn preview(&self, session: &PersistedSession) -> Result<Option<String>, SessionError> {
-        let root = session
-            .nodes
-            .values()
-            .find(|node| node.parent.is_none())
-            .ok_or_else(|| SessionError::Catalog {
-                detail: format!("Session {} has no root node", session.id),
-            })?;
-        let path = self.database_path(&session.id, &root.conversation_id);
-        let store = self
-            .inspect_store(root.conversation_id.clone(), &path)
-            .map_err(SessionError::Store)?;
-        let head = store.load_head().map_err(SessionError::Store)?;
-        let page = store
-            .load_user_message_boundaries_page(head.revision, 0, 1)
-            .map_err(SessionError::Store)?;
-        Ok(page
-            .boundaries
-            .first()
-            .and_then(|boundary| preview_of(&boundary.message)))
-    }
-
     /// Atomically names a Session. This touches metadata only.
     ///
     /// Naming never moves, rewrites, or re-identifies anything: the Session
@@ -1295,6 +1357,93 @@ impl SessionCatalog {
         session.updated_at = Utc::now();
         self.commit(next)?;
         self.snapshot(session_id)
+    }
+
+    /// Publishes the Session's derived display projection, once.
+    ///
+    /// The field is set only when currently absent: an already-present
+    /// projection returns `Ok(false)` and performs **no** commit — no
+    /// generation bump, no write — so racing publishers and repeated repairs
+    /// are idempotent by construction. Like `commit_uploads`, this touches
+    /// exactly one field: `updated_at`, `settings_revision`, and every other
+    /// fact stay as they were. An unknown (e.g. already deleted) Session
+    /// propagates [`SessionError::UnknownSession`]; publication never
+    /// resurrects one.
+    ///
+    /// The `publish_display_preview` process-death boundaries bracket the
+    /// same catalog visibility commit as [`Self::publish_session`]: either
+    /// the old document without the projection is authoritative, or the new
+    /// one with it is; there is no third state.
+    pub(crate) fn publish_display_preview(
+        &mut self,
+        session_id: &SessionId,
+        preview: &str,
+    ) -> Result<bool, SessionError> {
+        let mut next = self.document.clone();
+        let session =
+            next.sessions
+                .get_mut(session_id)
+                .ok_or_else(|| SessionError::UnknownSession {
+                    session_id: session_id.clone(),
+                })?;
+        if session.display_preview.is_some() {
+            return Ok(false);
+        }
+        session.display_preview = Some(preview.to_owned());
+        crate::runtime::process_death::reach("before:publish_display_preview");
+        self.commit(next)?;
+        crate::runtime::process_death::reach("after:publish_display_preview");
+        Ok(true)
+    }
+
+    /// Reads the display-preview subject of a Session's root lineage from its
+    /// durable conversation store.
+    ///
+    /// This is the one store-reading half of the explicit repair seam. It is
+    /// deliberately *not* called by listing or summary projection: only the
+    /// repair algorithm (reopen/compose/recovery) and startup planning use
+    /// it. The root node is the subject on purpose: branch nodes are seeded
+    /// copies of a source lineage, so the row would otherwise change what it
+    /// says whenever the active node moves, while the Session it names is
+    /// still the same Session that started with the same message.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] when the Session is unknown or its root
+    /// conversation store cannot be read.
+    pub(crate) fn display_preview_subject(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<DisplayPreviewSubject, SessionError> {
+        let session =
+            self.document
+                .sessions
+                .get(session_id)
+                .ok_or_else(|| SessionError::UnknownSession {
+                    session_id: session_id.clone(),
+                })?;
+        let root = session
+            .nodes
+            .values()
+            .find(|node| node.parent.is_none())
+            .ok_or_else(|| SessionError::Catalog {
+                detail: format!("Session {} has no root node", session.id),
+            })?;
+        let path = self.database_path(&session.id, &root.conversation_id);
+        let store = self
+            .inspect_store(root.conversation_id.clone(), &path)
+            .map_err(SessionError::Store)?;
+        let head = store.load_head().map_err(SessionError::Store)?;
+        let page = store
+            .load_user_message_boundaries_page(head.revision, 0, 1)
+            .map_err(SessionError::Store)?;
+        Ok(match page.boundaries.first() {
+            None => DisplayPreviewSubject::NoBoundary,
+            Some(boundary) => match preview_of(&boundary.message) {
+                Some(preview) => DisplayPreviewSubject::Derived(preview),
+                None => DisplayPreviewSubject::Unrenderable,
+            },
+        })
     }
 
     /// Persists the accepted live model configuration for the active
@@ -1517,6 +1666,9 @@ impl SessionCatalog {
                 node_id,
                 conversation_id,
                 state: template.clone(),
+                // A branch node never re-projects its Session's root-lineage
+                // display preview; `build_node_document` ignores this field.
+                display_preview: None,
                 database_path,
             },
             editor_content,
@@ -1546,6 +1698,7 @@ impl SessionCatalog {
             node_id,
             conversation_id,
             state: template.clone(),
+            display_preview: seed_preview(seed),
             database_path,
         })
     }
@@ -1849,6 +2002,11 @@ impl SessionCatalog {
                 // chose; it only displaces the first message, which is the
                 // one thing that says what the Session is about.
                 name: None,
+                // The projection of the frozen seed, persisted at the same
+                // visibility commit that publishes the lineage itself: a
+                // clone/fork destination is born listing its first retained
+                // user message without ever opening its store.
+                display_preview: prepared.display_preview.clone(),
                 created_at: now,
                 updated_at: now,
                 active_node: prepared.node_id.clone(),
@@ -2305,6 +2463,20 @@ fn remap_message(
     }
 }
 
+fn project_summary(session: &PersistedSession) -> SessionSummary {
+    SessionSummary {
+        cwd: session.state.cwd.clone(),
+        id: session.id.clone(),
+        name: session.name.clone(),
+        // The persisted derived projection. A missing value is legitimate
+        // (no ordinary user message yet, or none with renderable text) and
+        // is projected as `None`; repair is explicit, never list-time.
+        preview: session.display_preview.clone(),
+        updated_at: session.updated_at,
+        active_node: session.active_node.clone(),
+    }
+}
+
 fn snapshot_of(session: &PersistedSession) -> Result<SessionSnapshot, SessionError> {
     let active_node =
         session
@@ -2483,7 +2655,7 @@ fn normalize_name(name: &str) -> Result<String, SessionError> {
 /// row shows for an unnamed Session. Non-text content contributes nothing:
 /// a Session opened with only an image has no first line to show, and saying
 /// so with `None` is more honest than inventing one.
-fn preview_of(message: &UserMessageBlock) -> Option<String> {
+pub(crate) fn preview_of(message: &UserMessageBlock) -> Option<String> {
     let text = message
         .content
         .iter()
@@ -2500,6 +2672,35 @@ fn preview_of(message: &UserMessageBlock) -> Option<String> {
         return None;
     }
     Some(truncate(text, SESSION_PREVIEW_LIMIT))
+}
+
+/// Derives a prepared lineage's display projection from its **frozen seed**,
+/// never from the source Session's live state or persisted projection.
+///
+/// The semantics match `load_user_message_boundaries_page` exactly: the first
+/// Surface `Append` of an ordinary (`InboundKind::Message`) user message in
+/// the seed's retained operation history is the subject, rendered by
+/// [`preview_of`]. A seed that retains no such append — a fresh lineage, or
+/// a fork whose cut excludes every ordinary user message — yields `None`,
+/// and a first append with no renderable text yields `None` rather than
+/// shifting the subject to a later message.
+fn seed_preview(seed: &LineageSeed) -> Option<String> {
+    let ledger: BTreeMap<MessageId, &MessageBlock> = seed
+        .canonical()
+        .iter()
+        .map(|message| (message_id_of(message), message))
+        .collect();
+    for operation in seed.surface_history() {
+        let SurfaceOp::Append { message_id } = operation else {
+            continue;
+        };
+        if let Some(MessageBlock::User(user)) = ledger.get(message_id)
+            && user.kind == InboundKind::Message
+        {
+            return preview_of(user);
+        }
+    }
+    None
 }
 
 /// Collapses every run of whitespace — line breaks included — into one space
@@ -3653,8 +3854,18 @@ model = "provider/model"
                     timestamp: None,
                 })
             };
-            append_history(&catalog, &[message]);
+            append_history(&catalog, std::slice::from_ref(&message));
             let id = first_session(&catalog);
+            // Production persists the projection after the first canonical
+            // ordinary user commit; list/summary then read that stored line.
+            if let MessageBlock::User(user) = &message
+                && let Some(preview) = super::preview_of(user)
+            {
+                assert!(
+                    catalog.publish_display_preview(&id, &preview).unwrap(),
+                    "the first publication commits the projection"
+                );
+            }
             if let Some(name) = name {
                 catalog.rename(&id, name).unwrap();
             }
@@ -3707,6 +3918,18 @@ model = "provider/model"
                 user("second", "and then the session picker"),
             ],
         );
+        // Production persists the projection after the first canonical
+        // ordinary user commit; the row then reads that stored line.
+        let MessageBlock::User(first_message) = user("first", "  restore\n  the auth module  ")
+        else {
+            unreachable!("user helper builds a User block")
+        };
+        let preview = super::preview_of(&first_message).expect("text message renders");
+        assert!(
+            catalog
+                .publish_display_preview(&first_session(&catalog), &preview)
+                .unwrap()
+        );
         let used = row(&catalog);
         assert_eq!(
             used.preview.as_deref(),
@@ -3748,9 +3971,19 @@ model = "provider/model"
     /// no line to show rather than an invented one.
     #[test]
     fn a_derived_row_line_is_bounded_and_only_ever_text() {
-        let (_directory, catalog, _config) = open_catalog();
+        let (_directory, mut catalog, _config) = open_catalog();
         let long = "auth ".repeat(60);
         append_history(&catalog, &[user("long", long.as_str())]);
+        let MessageBlock::User(long_message) = user("long", long.as_str()) else {
+            unreachable!("user helper builds a User block")
+        };
+        let preview = super::preview_of(&long_message).expect("long text renders");
+        assert!(
+            catalog
+                .publish_display_preview(&first_session(&catalog), &preview)
+                .unwrap(),
+            "production persists the derived line after the first canonical commit"
+        );
         let preview = catalog
             .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
             .expect("session page")
@@ -3786,6 +4019,486 @@ model = "provider/model"
                 .preview,
             None
         );
+    }
+
+    /// P01–P03 fixture: `count` published Sessions, each with one ordinary
+    /// user message in its root store and the projection persisted exactly as
+    /// production publishes it after the first canonical commit. Even-indexed
+    /// Sessions are named so all three query kinds have real subjects. More
+    /// than one page of rows makes every continuation real.
+    fn catalog_with_projected_sessions(count: usize) -> (TempDir, SessionCatalog, Vec<SessionId>) {
+        let (directory, mut catalog, _config) = open_catalog();
+        let mut sessions = Vec::new();
+        for index in 0..count {
+            let session_id = if index == 0 {
+                first_session(&catalog)
+            } else {
+                let prepared = catalog
+                    .prepare_session(&state(), &[])
+                    .expect("prepare Session");
+                catalog
+                    .publish_session(&prepared, super::SessionNodeOrigin::New)
+                    .expect("publish Session")
+                    .id
+            };
+            let (node, _) = catalog.lineage(&session_id, None).expect("root lineage");
+            let store = store_for(&catalog, &session_id, &node.conversation_id);
+            let text = format!("topic row {index:02} unique-{index:02}");
+            store
+                .append_canonical(&user(&format!("user-{index:02}"), &text))
+                .expect("append first user message");
+            assert!(
+                catalog
+                    .publish_display_preview(&session_id, &text)
+                    .expect("publish projection"),
+                "the first publication commits the projection"
+            );
+            if index % 2 == 0 {
+                catalog
+                    .rename(&session_id, &format!("Project {index:02}"))
+                    .expect("name the Session");
+            }
+            sessions.push(session_id);
+        }
+        (directory, catalog, sessions)
+    }
+
+    /// The store opens — if any — of the native list/search path happen on the
+    /// calling thread, so the per-thread delta brackets a call exactly; the
+    /// process-wide counter would be contaminated by parallel tests.
+    fn opens_on_this_thread() -> u64 {
+        crate::durable::conversation_store_opens_on_this_thread()
+    }
+
+    // P01
+    #[test]
+    fn the_first_list_page_reads_persisted_projections_without_opening_a_store() {
+        let (_directory, catalog, sessions) = catalog_with_projected_sessions(70);
+        let opens = opens_on_this_thread();
+        let page = catalog
+            .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+            .expect("first page");
+        assert_eq!(
+            opens_on_this_thread() - opens,
+            0,
+            "listing one full page opens zero conversation stores"
+        );
+        assert_eq!(page.sessions.len(), super::SESSION_LIST_PAGE_LIMIT);
+        assert_eq!(page.next_offset, Some(32));
+        for (index, row) in page.sessions.iter().enumerate() {
+            assert_eq!(&row.id, &sessions[index], "rows are ordinal-ordered");
+            assert_eq!(
+                row.preview.as_deref(),
+                Some(format!("topic row {index:02} unique-{index:02}").as_str()),
+                "every row carries its persisted projection"
+            );
+        }
+    }
+
+    // P02
+    #[test]
+    fn every_continuation_page_reads_persisted_projections_without_opening_a_store() {
+        let (_directory, catalog, sessions) = catalog_with_projected_sessions(70);
+        let opens = opens_on_this_thread();
+        let page = catalog.list_page(None, 32, 32).expect("second page");
+        assert_eq!(opens_on_this_thread() - opens, 0);
+        assert_eq!(page.sessions.len(), 32);
+        assert_eq!(page.next_offset, Some(64));
+        for (index, row) in page.sessions.iter().enumerate() {
+            assert_eq!(&row.id, &sessions[32 + index]);
+        }
+        let opens = opens_on_this_thread();
+        let page = catalog.list_page(None, 64, 32).expect("last page");
+        assert_eq!(opens_on_this_thread() - opens, 0);
+        assert_eq!(page.sessions.len(), 6);
+        assert_eq!(page.next_offset, None);
+        for (index, row) in page.sessions.iter().enumerate() {
+            assert_eq!(&row.id, &sessions[64 + index]);
+        }
+        // A filtered continuation pages the matching set the same way.
+        let opens = opens_on_this_thread();
+        let page = catalog
+            .list_page(Some("topic row"), 32, 32)
+            .expect("filtered continuation");
+        assert_eq!(opens_on_this_thread() - opens, 0);
+        assert_eq!(page.sessions.len(), 32);
+        assert_eq!(page.next_offset, Some(64));
+        assert_eq!(&page.sessions[0].id, &sessions[32]);
+    }
+
+    // P03 (native half; the App Server half lives in the scripted protocol suite)
+    #[test]
+    fn searching_by_identity_name_and_projection_opens_no_store() {
+        let (_directory, catalog, sessions) = catalog_with_projected_sessions(70);
+        // By SessionId substring.
+        let needle: String = sessions[7].as_str().chars().take(20).collect();
+        let opens = opens_on_this_thread();
+        let page = catalog
+            .list_page(Some(&needle), 0, super::SESSION_LIST_PAGE_LIMIT)
+            .expect("identity search");
+        assert_eq!(opens_on_this_thread() - opens, 0);
+        assert!(
+            page.sessions.iter().any(|row| row.id == sessions[7]),
+            "the identity substring finds its Session"
+        );
+        assert!(
+            page.sessions
+                .iter()
+                .all(|row| row.id.as_str().to_lowercase().contains(&needle)),
+            "every identity hit matches the needle"
+        );
+        // By name (Session 42 is named "Project 42").
+        let opens = opens_on_this_thread();
+        let page = catalog
+            .list_page(Some("project 42"), 0, super::SESSION_LIST_PAGE_LIMIT)
+            .expect("name search");
+        assert_eq!(opens_on_this_thread() - opens, 0);
+        assert_eq!(page.sessions.len(), 1);
+        assert_eq!(page.sessions[0].id, sessions[42]);
+        assert_eq!(page.sessions[0].name.as_deref(), Some("Project 42"));
+        assert_eq!(
+            page.sessions[0].preview.as_deref(),
+            Some("topic row 42 unique-42")
+        );
+        // By projection substring (Session 69 is unnamed), case-insensitively.
+        let opens = opens_on_this_thread();
+        let page = catalog
+            .list_page(Some("UNIQUE-69"), 0, super::SESSION_LIST_PAGE_LIMIT)
+            .expect("projection search");
+        assert_eq!(opens_on_this_thread() - opens, 0);
+        assert_eq!(page.sessions.len(), 1);
+        assert_eq!(page.sessions[0].id, sessions[69]);
+    }
+
+    // P04
+    #[test]
+    fn an_empty_session_reads_as_the_identity_fallback_without_opening_a_store() {
+        let (_directory, catalog, _config) = open_catalog();
+        let empty = first_session(&catalog);
+        let opens = opens_on_this_thread();
+        let summary = catalog.summary(&empty).expect("empty Session summary");
+        assert_eq!(opens_on_this_thread() - opens, 0);
+        assert_eq!(
+            summary.preview, None,
+            "no ordinary user message exists yet: the row falls back to identity"
+        );
+        let opens = opens_on_this_thread();
+        let row = catalog
+            .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+            .expect("session page")
+            .sessions
+            .swap_remove(0);
+        assert_eq!(opens_on_this_thread() - opens, 0);
+        assert_eq!(row.id, empty);
+        assert_eq!(row.preview, None);
+    }
+
+    // P06 (write-level half; the runtime half lives in the scripted protocol suite)
+    #[test]
+    fn a_second_projection_publication_is_a_write_level_no_op() {
+        let (_directory, mut catalog, _config) = open_catalog();
+        let id = first_session(&catalog);
+        let before = catalog.snapshot(&id).expect("snapshot");
+        let generation = catalog.document.generation;
+        assert!(
+            catalog
+                .publish_display_preview(&id, "first line")
+                .expect("first publication")
+        );
+        assert_eq!(catalog.document.generation, generation + 1);
+        assert_eq!(
+            catalog.snapshot(&id).expect("snapshot").updated_at,
+            before.updated_at,
+            "the projection never moves updated_at"
+        );
+        let generation = catalog.document.generation;
+        assert!(
+            !catalog
+                .publish_display_preview(&id, "a later line")
+                .expect("duplicate publication"),
+            "a present projection declines the commit"
+        );
+        assert_eq!(
+            catalog.document.generation, generation,
+            "the declined publication performs no write"
+        );
+        assert_eq!(
+            catalog.summary(&id).expect("summary").preview.as_deref(),
+            Some("first line"),
+            "the first projection is never overwritten"
+        );
+    }
+
+    // P07 (catalog half; the rename-before-first-input half is scripted)
+    #[test]
+    fn a_projection_published_underneath_a_name_survives_renaming() {
+        let (_directory, mut catalog, _config) = open_catalog();
+        let id = first_session(&catalog);
+        catalog
+            .rename(&id, "auth rework")
+            .expect("name the Session");
+        assert!(
+            catalog
+                .publish_display_preview(&id, "restore the auth module")
+                .expect("publish projection")
+        );
+        let summary = catalog.summary(&id).expect("summary");
+        assert_eq!(summary.name.as_deref(), Some("auth rework"));
+        assert_eq!(
+            summary.preview.as_deref(),
+            Some("restore the auth module"),
+            "the projection publishes underneath the name"
+        );
+        let row = catalog
+            .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+            .expect("session page")
+            .sessions
+            .swap_remove(0);
+        assert_eq!(row, summary, "summary and list row are one projection");
+        catalog.rename(&id, "billing rework").expect("rename");
+        let renamed = catalog.summary(&id).expect("summary");
+        assert_eq!(renamed.name.as_deref(), Some("billing rework"));
+        assert_eq!(
+            renamed.preview.as_deref(),
+            Some("restore the auth module"),
+            "renaming displaces the line in the row, never in the Session"
+        );
+    }
+
+    // P08 (native half; the agent-sourced-input half is scripted)
+    #[test]
+    fn branching_and_switching_the_active_node_keeps_the_root_projection() {
+        let (_directory, mut catalog, _config) = open_catalog();
+        let history = source_history();
+        let (conversation, session, root_node) = append_history(&catalog, &history);
+        assert!(
+            catalog
+                .publish_display_preview(&session, "A")
+                .expect("publish root projection")
+        );
+        let store = store_for(&catalog, &session, &conversation);
+        let source = lineage_at(&store, &conversation, store.load_head().unwrap().revision);
+        let (branch, _) = catalog
+            .prepare_tree_node(
+                &session,
+                &state(),
+                &source,
+                &MessageId::new("source-user-c"),
+                super::LineageSide::Before,
+            )
+            .expect("prepare branch node");
+        assert_eq!(
+            branch.display_preview, None,
+            "a branch node is never the projection subject"
+        );
+        let branch_node = branch.node_id.clone();
+        catalog
+            .publish_node(&session, &branch, root_node, super::SessionNodeOrigin::New)
+            .expect("publish branch node");
+        catalog
+            .set_current_node(&session, Some(&branch_node))
+            .expect("switch the active node");
+        let summary = catalog.summary(&session).expect("summary");
+        assert_eq!(
+            summary.active_node, branch_node,
+            "the active selection moved to the branch"
+        );
+        assert_eq!(
+            summary.preview.as_deref(),
+            Some("A"),
+            "the row keeps the root lineage's projection"
+        );
+        catalog
+            .set_current_node(&session, None)
+            .expect("switch back to the root");
+        assert_eq!(
+            catalog
+                .summary(&session)
+                .expect("summary")
+                .preview
+                .as_deref(),
+            Some("A")
+        );
+    }
+
+    // P09
+    #[allow(clippy::too_many_lines)] // Clone, fork, and post-compaction-head clone in one seed audit.
+    #[test]
+    fn clone_and_fork_carry_the_seed_projection_into_the_visibility_commit() {
+        let (_directory, mut catalog, _config) = open_catalog();
+        let history = vec![user("u1", "seed alpha"), user("u2", "later beta")];
+        let (conversation, session, node) = append_history(&catalog, &history);
+        // Deliberately never persist the source projection: the clone must
+        // derive from the frozen seed, never copy the source row.
+        let store = store_for(&catalog, &session, &conversation);
+        let revision = store.load_head().expect("source head").revision;
+        let source = lineage_at(&store, &conversation, revision);
+        let clone = catalog
+            .prepare_clone_session(&state(), &source)
+            .expect("prepare clone");
+        assert_eq!(
+            clone.display_preview.as_deref(),
+            Some("seed alpha"),
+            "the clone's projection is derived from the frozen seed"
+        );
+        let clone_id = clone.session_id.clone();
+        catalog
+            .publish_session(
+                &clone,
+                super::SessionNodeOrigin::Clone {
+                    source_session: session.clone(),
+                    source_node: node.clone(),
+                    source_surface_revision: revision,
+                },
+            )
+            .expect("publish clone");
+        let opens = opens_on_this_thread();
+        let page = catalog
+            .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+            .expect("session page");
+        assert_eq!(
+            opens_on_this_thread() - opens,
+            0,
+            "the clone's row lists its born projection without a store open"
+        );
+        let row = page
+            .sessions
+            .iter()
+            .find(|row| row.id == clone_id)
+            .expect("clone row");
+        assert_eq!(row.preview.as_deref(), Some("seed alpha"));
+
+        // A fork cutting before the first user message retains no subject.
+        let (fork_empty, editor) = catalog
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("u1"),
+                super::LineageSide::Before,
+            )
+            .expect("prepare pre-input fork");
+        assert_eq!(editor, vec![text("seed alpha")]);
+        assert_eq!(fork_empty.display_preview, None);
+        let fork_empty_id = fork_empty.session_id.clone();
+        catalog
+            .publish_session(
+                &fork_empty,
+                super::SessionNodeOrigin::Fork {
+                    source_session: session.clone(),
+                    source_node: node.clone(),
+                    source_surface_revision: revision,
+                    source_message: MessageId::new("u1"),
+                    side: super::LineageSide::Before,
+                },
+            )
+            .expect("publish pre-input fork");
+        let page = catalog
+            .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+            .expect("session page");
+        assert_eq!(
+            page.sessions
+                .iter()
+                .find(|row| row.id == fork_empty_id)
+                .expect("fork row")
+                .preview,
+            None,
+            "a fork whose cut excludes every ordinary user message has no projection"
+        );
+
+        // A fork cutting before the second user message retains the first.
+        let (fork, _) = catalog
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("u2"),
+                super::LineageSide::Before,
+            )
+            .expect("prepare fork");
+        assert_eq!(fork.display_preview.as_deref(), Some("seed alpha"));
+
+        // A seed whose first chronological user boundary is not ordinary:
+        // the projection subject is the first *ordinary* user message in the
+        // retained seed, even when that is a later message.
+        let (_directory, catalog, _config) = open_catalog();
+        let history = vec![
+            status("boot", "Boot"),
+            user("first-ordinary", "later beta"),
+            user("last", "last"),
+        ];
+        let (conversation, session, _node) = append_history(&catalog, &history);
+        let store = store_for(&catalog, &session, &conversation);
+        let source = lineage_at(&store, &conversation, store.load_head().unwrap().revision);
+        let (fork, _) = catalog
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("last"),
+                super::LineageSide::Before,
+            )
+            .expect("prepare fork");
+        assert_eq!(
+            fork.display_preview.as_deref(),
+            Some("later beta"),
+            "an earlier non-ordinary boundary is never the subject"
+        );
+    }
+
+    // P14
+    #[test]
+    fn a_missing_projection_is_not_repaired_at_list_time() {
+        let (_directory, catalog, _config) = open_catalog();
+        append_history(&catalog, &[user("first", "crash window subject")]);
+        // The root store HAS a first user boundary but the projection was
+        // never persisted (the crash window): listing must not open the store
+        // to find out, and repair is an explicit seam, never a list-time one.
+        let id = first_session(&catalog);
+        let opens = opens_on_this_thread();
+        assert_eq!(
+            catalog.summary(&id).expect("summary").preview,
+            None,
+            "no fallback repair at summary time"
+        );
+        assert_eq!(opens_on_this_thread() - opens, 0);
+        let opens = opens_on_this_thread();
+        let row = catalog
+            .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+            .expect("session page")
+            .sessions
+            .swap_remove(0);
+        assert_eq!(opens_on_this_thread() - opens, 0);
+        assert_eq!(row.preview, None, "no fallback repair at list time");
+    }
+
+    // P15
+    #[test]
+    fn an_unsupported_catalog_schema_is_refused_without_touching_the_file() {
+        for version in [
+            12_u64,
+            u64::from(super::SESSION_CATALOG_SCHEMA_VERSION) + 100,
+        ] {
+            let (directory, catalog, _config) = open_catalog();
+            let path = catalog.path.clone();
+            let mut document: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).expect("catalog bytes"))
+                    .expect("catalog JSON");
+            document["schema_version"] = serde_json::json!(version);
+            let rewritten = serde_json::to_vec(&document).expect("rewritten catalog");
+            fs::write(&path, &rewritten).expect("write rewritten catalog");
+            let error = SessionCatalog::open_existing(directory.path())
+                .expect_err("an unsupported schema is refused");
+            let SessionError::Catalog { detail } = error else {
+                panic!("a version mismatch is a catalog error");
+            };
+            assert!(
+                detail.contains("unsupported session catalog schema"),
+                "the refusal names the schema: {detail}"
+            );
+            assert_eq!(
+                fs::read(&path).expect("catalog bytes"),
+                rewritten,
+                "a refused catalog is left byte-identical: no deletion, no rewrite"
+            );
+        }
     }
 
     /// `/resume` pages and searches the resume-visible set only. Hidden
@@ -4493,6 +5206,16 @@ model = "provider/model"
         assert_eq!(destination.id, destination_session);
         assert_eq!(destination.active_conversation_id, destination_conversation);
         assert_ne!(source_conversation, destination.active_conversation_id);
+        assert_eq!(
+            catalog
+                .summary(&destination_session)
+                .expect("clone summary")
+                .preview
+                .as_deref(),
+            Some("A"),
+            "the clone is born with the projection derived from its frozen seed, \
+             without opening its store"
+        );
     }
 
     #[test]
@@ -4697,6 +5420,11 @@ model = "provider/model"
         let prepared_clone = catalog
             .prepare_clone_session(&state(), &retained)
             .expect("clone retained revision");
+        assert_eq!(
+            prepared_clone.display_preview.as_deref(),
+            Some("A"),
+            "the retained pre-compaction seed still opens with the first user message"
+        );
         let clone_store = store_for(
             &catalog,
             &prepared_clone.session_id,
@@ -4717,6 +5445,11 @@ model = "provider/model"
             )
             .expect("fork retained revision");
         assert_eq!(editor_content, vec![text("C")]);
+        assert_eq!(
+            prepared_fork.display_preview.as_deref(),
+            Some("A"),
+            "the fork's retained prefix opens with the same first user message"
+        );
         let fork_store = store_for(
             &catalog,
             &prepared_fork.session_id,
@@ -4733,6 +5466,21 @@ model = "provider/model"
             fork_store.load_canonical().expect("fork history").len(),
             history.len() - 1,
             "fork stops immediately before the selected retained user boundary"
+        );
+
+        // Compaction projects the Surface but never rewrites its operation
+        // log: a seed taken from after the compaction still opens with the
+        // lineage's first ordinary user append, so the projection subject is
+        // stable across compaction.
+        let compacted_revision = source_store.load_head().expect("compacted head").revision;
+        let compacted = lineage_at(&source_store, &source_conversation, compacted_revision);
+        let post_compaction_clone = catalog
+            .prepare_clone_session(&state(), &compacted)
+            .expect("clone compacted head");
+        assert_eq!(
+            post_compaction_clone.display_preview.as_deref(),
+            Some("A"),
+            "the retained operation history still opens with the first user message"
         );
     }
 

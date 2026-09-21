@@ -82,6 +82,8 @@ pub use inbox::{
     TranscriptCursor, TranscriptEntry, TranscriptItem, TranscriptPage,
     interaction_audit_capability,
 };
-pub use sqlite::SqliteConversationStore;
+#[cfg(test)]
+pub(crate) use sqlite::conversation_store_opens_on_this_thread;
+pub use sqlite::{SqliteConversationStore, conversation_store_open_count};
 
 pub mod response;

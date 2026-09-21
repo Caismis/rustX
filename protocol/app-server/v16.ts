@@ -6928,10 +6928,14 @@ export interface SessionSummary {
    */
   name?: string | null;
   /**
-   * The first user message of this Session's root lineage, bounded to one
-   * line. It is what an unnamed row is recognized by, and it is derived
-   * for the observation rather than stored: the catalog keeps no copy of
-   * conversation content.
+   * The first ordinary user message of this Session's root lineage,
+   * bounded to one line. It is what an unnamed row is recognized by, and
+   * it is the client-facing projection of the persisted
+   * `display_preview`: the catalog stores the derived line so listing,
+   * pagination, and search never open a conversation store. `None` is
+   * legitimate — no ordinary user message exists yet, or the first one
+   * has no renderable text — and yields the client-side identity
+   * fallback.
    */
   preview?: string | null;
   /**

@@ -20,8 +20,10 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 #[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 
 use sha2::{Digest, Sha256};
 
@@ -60,6 +62,53 @@ use super::inbox::{
     SurfaceUserMessageBoundaryPage, TRANSCRIPT_PAGE_LIMIT_MAX, TranscriptCommitReceipt,
     TranscriptCursor, TranscriptEntry, TranscriptItem, TranscriptPage,
 };
+
+/// Process-wide count of `ConversationStore` open-path entries
+/// (Issue #386). Diagnostics-grade: the Session Catalog's display
+/// projection exists so listing/pagination/search open zero stores, and
+/// this counter is how tests and benchmarks prove it. Every constructor
+/// that opens a `SQLite` connection increments it exactly once, in
+/// production builds as in tests.
+static CONVERSATION_STORE_OPENS: AtomicU64 = AtomicU64::new(0);
+
+// Per-thread count of `ConversationStore` open-path entries (Issue #386).
+// The global `conversation_store_open_count` is useless inside the parallel
+// lib-test binary — unrelated tests open stores concurrently — so acceptance
+// tests measure the per-thread delta instead. This is faithful for the
+// native list/search path: `SessionCatalog::list_page`/`summary` and the App
+// Server `session/list` handler (which runs synchronously under the
+// connection task on a current-thread test runtime) execute their store
+// opens — if any — on the calling thread. Async tests must therefore use
+// the default current-thread `#[tokio::test]` flavor and must not
+// `spawn_blocking` between the two snapshots of the counter.
+#[cfg(test)]
+thread_local! {
+    static CONVERSATION_STORE_OPENS_ON_THREAD: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// The number of `SqliteConversationStore` opens this process has performed.
+#[must_use]
+pub fn conversation_store_open_count() -> u64 {
+    CONVERSATION_STORE_OPENS.load(Ordering::Relaxed)
+}
+
+/// The number of `SqliteConversationStore` opens performed on the calling
+/// thread. See [`CONVERSATION_STORE_OPENS_ON_THREAD`] for why the per-thread
+/// delta — not the global count — is the contamination-free measurement.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn conversation_store_opens_on_this_thread() -> u64 {
+    CONVERSATION_STORE_OPENS_ON_THREAD.with(std::cell::Cell::get)
+}
+
+/// Records one store open on both the process-wide and the per-thread
+/// diagnostics counters.
+fn count_conversation_store_open() {
+    CONVERSATION_STORE_OPENS.fetch_add(1, Ordering::Relaxed);
+    #[cfg(test)]
+    CONVERSATION_STORE_OPENS_ON_THREAD.with(|opens| opens.set(opens.get() + 1));
+}
 
 /// The only schema accepted by this pre-production store. Incompatible
 /// databases fail explicitly; there is no migration or legacy reader.
@@ -468,6 +517,7 @@ impl SqliteConversationStore {
         conversation_id: ConversationId,
         path: &Path,
     ) -> Result<Self, ConversationStoreError> {
+        count_conversation_store_open();
         #[cfg(test)]
         crate::local_runtime::static_effects::observe(
             crate::local_runtime::static_effects::Effect::State,
@@ -528,12 +578,13 @@ impl SqliteConversationStore {
         path: &Path,
         flags: rusqlite::OpenFlags,
     ) -> Result<Self, ConversationStoreError> {
+        use std::io::Read as _;
+        count_conversation_store_open();
         // READ_ONLY alone can create WAL sidecars, even while querying the
         // journal mode. Reject that format before entering SQLite at all.
         // SQLite's documented header offsets 18/19 are the write/read format
         // versions: both must be 1 for rollback journaling.
         // https://www.sqlite.org/fileformat.html#file_format_version_numbers
-        use std::io::Read as _;
         let mut header = [0; 20];
         std::fs::File::open(path)
             .and_then(|mut file| file.read_exact(&mut header))
@@ -577,6 +628,7 @@ impl SqliteConversationStore {
     /// Returns an error if the in-memory `SQLite` connection cannot be
     /// configured or initialized.
     pub fn in_memory(conversation_id: ConversationId) -> Result<Self, ConversationStoreError> {
+        count_conversation_store_open();
         let mut connection =
             Connection::open_in_memory().map_err(|error| storage(format!("in-memory: {error}")))?;
         configure_connection(&mut connection, true)?;

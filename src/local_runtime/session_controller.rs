@@ -1,7 +1,7 @@
 //! User-root durable Session controller. No runtime, resolver or client focus is owned here.
 use super::session::{
-    SessionCatalog, SessionError, SessionId, SessionListPage, SessionNode, SessionNodeId,
-    SessionPersistentState, SessionSnapshot, SessionSummary,
+    DisplayPreviewSubject, SessionCatalog, SessionError, SessionId, SessionListPage, SessionNode,
+    SessionNodeId, SessionPersistentState, SessionSnapshot, SessionSummary,
 };
 use crate::durable::ConversationStore;
 use crate::message::types::{MessageBlock, UserContentBlock};
@@ -29,6 +29,40 @@ pub struct SessionAccess {
     /// Identity-derived database path, valid while allocation access is retained.
     pub database_path: std::path::PathBuf,
     pub allocation: Arc<ConversationAccess>,
+}
+
+/// The outcome of the explicit display-preview repair seam (Issue #386).
+///
+/// Repair is idempotent by construction: it never rewrites a settled
+/// projection, never shifts the subject to a later message, and never
+/// resurrects a deleted Session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayPreviewRepair {
+    /// The persisted projection was already present (or a racing publisher
+    /// won); nothing was written.
+    AlreadyPresent,
+    /// The repair read derived a line and the once-only catalog mutation
+    /// committed it.
+    Published,
+    /// The root lineage legitimately has no projection: either it has no
+    /// ordinary user boundary yet, or its first boundary has no renderable
+    /// text. No write happened, and none may happen later for the second
+    /// case.
+    EmptySubject,
+    /// The Session vanished between the repair read and publication
+    /// (deletion race). This is not an error.
+    SessionGone,
+}
+
+/// The repair outcome plus the subject the repair read observed, so a caller
+/// arming the one-shot publisher can distinguish "no boundary yet" (arm) from
+/// "boundary without renderable text" (settled `None`, never arm).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DisplayPreviewRepairReport {
+    pub(crate) repair: DisplayPreviewRepair,
+    /// The subject read, when a repair read happened (`None` when the
+    /// projection was already present or the Session was already gone).
+    pub(crate) subject: Option<DisplayPreviewSubject>,
 }
 
 /// Durable native metadata/allocation access. Deletion execution and frozen
@@ -230,7 +264,7 @@ impl SessionController {
     }
     /// Exact durable display metadata; does not resolve configuration or compose a runtime.
     /// # Errors
-    /// Unknown/deleting identities and conversation storage failures are returned.
+    /// Unknown/deleting identities are returned.
     pub async fn read_session_summary(
         &self,
         id: &SessionId,
@@ -239,7 +273,7 @@ impl SessionController {
         snapshot.summary(id)
     }
     /// # Errors
-    /// Invalid pagination or storage errors are returned.
+    /// Invalid pagination is rejected; the projection opens no conversation store.
     pub async fn list_sessions(
         &self,
         query: Option<&str>,
@@ -257,6 +291,99 @@ impl SessionController {
         name: &str,
     ) -> Result<SessionSnapshot, SessionError> {
         self.catalog.lock().await.rename(id, name)
+    }
+    /// Publishes the Session's derived display projection through the once-only
+    /// catalog mutation. Returns `true` when this call committed the value,
+    /// `false` when a projection was already present (no commit, no
+    /// generation bump). `updated_at` is deliberately untouched, mirroring
+    /// the `commit_uploads` precedent: the projection is derived display
+    /// metadata, not a metadata publication.
+    /// # Errors
+    /// Unknown (e.g. deleted) identities and catalog commit failures are explicit.
+    pub async fn publish_display_preview(
+        &self,
+        id: &SessionId,
+        preview: &str,
+    ) -> Result<bool, SessionError> {
+        self.catalog
+            .lock()
+            .await
+            .publish_display_preview(id, preview)
+    }
+    /// The shared catalog, downgraded for the one-shot display-projection
+    /// publisher (Issue #386). The publisher's weak handle never extends
+    /// native product ownership past the Session's own lifetime: when the
+    /// product drops, the catalog is released immediately, and a publisher
+    /// still parked on its observation queue cannot keep the storage locked.
+    pub(crate) fn downgrade_catalog(&self) -> std::sync::Weak<tokio::sync::Mutex<SessionCatalog>> {
+        std::sync::Arc::downgrade(&self.catalog)
+    }
+    /// The one explicit, idempotent display-preview repair algorithm, run by
+    /// the reopen/compose/recovery seams — never by listing or summary
+    /// projection.
+    ///
+    /// Two phases keep the catalog mutex out of store I/O: under the lock the
+    /// repair only checks the persisted projection (present means
+    /// [`DisplayPreviewRepair::AlreadyPresent`]) and clones the catalog
+    /// handle; the root conversation store is then opened outside the lock,
+    /// and the once-only publish re-checks absence under the lock, so racing
+    /// repairs converge instead of double-writing.
+    ///
+    /// A legitimate `None` — no ordinary user boundary yet, or a first
+    /// boundary without renderable text — reports
+    /// [`DisplayPreviewRepair::EmptySubject`] and writes nothing: repair must
+    /// never manufacture rewrites or move the subject to a later message.
+    /// # Errors
+    /// Genuine store/catalog failures are explicit; a Session that vanished
+    /// mid-repair is [`DisplayPreviewRepair::SessionGone`], not an error.
+    pub async fn repair_display_preview(
+        &self,
+        id: &SessionId,
+    ) -> Result<DisplayPreviewRepair, SessionError> {
+        Ok(self.repair_display_preview_report(id).await?.repair)
+    }
+    /// The repair algorithm plus the subject its read observed; see
+    /// [`SessionController::repair_display_preview`].
+    pub(crate) async fn repair_display_preview_report(
+        &self,
+        id: &SessionId,
+    ) -> Result<DisplayPreviewRepairReport, SessionError> {
+        let report = |repair, subject| DisplayPreviewRepairReport { repair, subject };
+        let snapshot = {
+            let catalog = self.catalog.lock().await;
+            match catalog.summary(id) {
+                Ok(summary) if summary.preview.is_some() => {
+                    return Ok(report(DisplayPreviewRepair::AlreadyPresent, None));
+                }
+                Ok(_) => {}
+                Err(SessionError::UnknownSession { .. } | SessionError::DeletingSession { .. }) => {
+                    return Ok(report(DisplayPreviewRepair::SessionGone, None));
+                }
+                Err(error) => return Err(error),
+            }
+            catalog.clone()
+        };
+        // Outside the catalog mutex: the only store I/O of the repair.
+        let subject = match snapshot.display_preview_subject(id) {
+            Ok(subject) => subject,
+            Err(SessionError::UnknownSession { .. }) => {
+                return Ok(report(DisplayPreviewRepair::SessionGone, None));
+            }
+            Err(error) => return Err(error),
+        };
+        let DisplayPreviewSubject::Derived(preview) = &subject else {
+            return Ok(report(DisplayPreviewRepair::EmptySubject, Some(subject)));
+        };
+        match self.publish_display_preview(id, preview).await {
+            Ok(true) => Ok(report(DisplayPreviewRepair::Published, Some(subject))),
+            // A racing publisher/repair committed first; the projection is
+            // settled all the same.
+            Ok(false) => Ok(report(DisplayPreviewRepair::AlreadyPresent, Some(subject))),
+            Err(SessionError::UnknownSession { .. } | SessionError::DeletingSession { .. }) => {
+                Ok(report(DisplayPreviewRepair::SessionGone, Some(subject)))
+            }
+            Err(error) => Err(error),
+        }
     }
     /// Prepare valid private storage outside the metadata lock, then atomically
     /// publish. There is no reuse of another Session, even an unused one.
@@ -339,17 +466,23 @@ impl SessionController {
     }
     /// Explicit cold storage recovery for one Session's graph and owned children.
     /// Never performed by opening, listing or reading the catalog.
+    ///
+    /// Recovery ends with the same display-preview repair every other
+    /// reopen/compose seam runs: a Session whose durable history already
+    /// holds its first ordinary user message leaves recovery with its
+    /// projection backfilled, idempotently.
     /// # Errors
     /// Missing identity or allocation/deletion conflicts fail closed.
     pub async fn recover_session_storage(&self, id: &SessionId) -> Result<(), SessionError> {
         let snapshot = self.catalog.lock().await.clone();
         let controller = snapshot.controller()?;
-        let id = id.clone();
-        tokio::task::spawn_blocking(move || snapshot.recover_session_storage(&id, &controller))
+        let target = id.clone();
+        tokio::task::spawn_blocking(move || snapshot.recover_session_storage(&target, &controller))
             .await
             .map_err(|error| SessionError::Catalog {
                 detail: error.to_string(),
-            })?
+            })??;
+        self.repair_display_preview(id).await.map(|_| ())
     }
     /// Read a bounded graph page without loading a runtime.
     /// # Errors
@@ -1319,6 +1452,255 @@ mod tests {
         assert_eq!(
             controller.read_session(&copied.session.id).await.unwrap(),
             copied.session
+        );
+    }
+
+    /// Writes one message into the Session's root conversation store, the way
+    /// the crash-window state (boundary committed, projection never
+    /// published) is built.
+    async fn append_root_history(
+        controller: &SessionController,
+        id: &SessionId,
+        message: crate::message::types::MessageBlock,
+    ) {
+        let conversation = controller
+            .acquire_session(id, None)
+            .await
+            .unwrap()
+            .node
+            .conversation_id;
+        let path = controller
+            .catalog
+            .lock()
+            .await
+            .database_path(id, &conversation);
+        let store = crate::durable::SqliteConversationStore::open(conversation, &path).unwrap();
+        store.append_canonical(&message).unwrap();
+    }
+
+    fn image_only(id: &str) -> crate::message::types::MessageBlock {
+        crate::message::types::MessageBlock::User(crate::message::types::UserMessageBlock {
+            id: crate::runtime::identity::MessageId::new(id),
+            content: vec![crate::message::types::UserContentBlock::Image(
+                crate::message::content::ImageReference {
+                    artifact_id: crate::runtime::identity::ArtifactId::new("artifact-1"),
+                    alt: None,
+                },
+            )],
+            source: crate::message::types::UserSource::Human,
+            kind: crate::message::types::InboundKind::Message,
+            timestamp: None,
+        })
+    }
+
+    // P12
+    #[tokio::test]
+    async fn display_preview_repair_is_idempotent_and_never_manufactures_a_subject() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let session = controller
+            .create_session(settings(root.path()))
+            .await
+            .unwrap()
+            .session;
+        append_root_history(&controller, &session.id, user("repair subject")).await;
+        assert_eq!(
+            controller
+                .repair_display_preview(&session.id)
+                .await
+                .unwrap(),
+            DisplayPreviewRepair::Published
+        );
+        let generation = controller.catalog.lock().await.document_generation();
+        assert_eq!(
+            controller
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .preview
+                .as_deref(),
+            Some("repair subject")
+        );
+        assert_eq!(
+            controller
+                .repair_display_preview(&session.id)
+                .await
+                .unwrap(),
+            DisplayPreviewRepair::AlreadyPresent,
+            "a repeated repair converges without writing"
+        );
+        assert_eq!(
+            controller.catalog.lock().await.document_generation(),
+            generation,
+            "the repeated repair is a write-level no-op"
+        );
+
+        // An image-only first boundary is a settled `None`: every repair
+        // reports the empty subject and writes nothing, forever.
+        let image_session = controller
+            .create_session(settings(root.path()))
+            .await
+            .unwrap()
+            .session;
+        append_root_history(&controller, &image_session.id, image_only("image-only")).await;
+        let generation = controller.catalog.lock().await.document_generation();
+        for _ in 0..2 {
+            assert_eq!(
+                controller
+                    .repair_display_preview(&image_session.id)
+                    .await
+                    .unwrap(),
+                DisplayPreviewRepair::EmptySubject
+            );
+        }
+        assert_eq!(
+            controller.catalog.lock().await.document_generation(),
+            generation,
+            "repair never manufactures a rewrite for a settled None"
+        );
+        assert_eq!(
+            controller
+                .read_session_summary(&image_session.id)
+                .await
+                .unwrap()
+                .preview,
+            None
+        );
+    }
+
+    // P13
+    #[tokio::test]
+    async fn concurrent_projection_name_and_settings_writes_converge() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let session = controller
+            .create_session(settings(root.path()))
+            .await
+            .unwrap()
+            .session;
+        let before = controller.read_session(&session.id).await.unwrap();
+        assert!(
+            controller
+                .publish_display_preview(&session.id, "race line")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            controller
+                .read_session(&session.id)
+                .await
+                .unwrap()
+                .updated_at,
+            before.updated_at,
+            "the projection write never touches updated_at"
+        );
+
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+        let mut racers = tokio::task::JoinSet::new();
+        for operation in [
+            Box::pin({
+                let controller = controller.clone();
+                let id = session.id.clone();
+                let barrier = barrier.clone();
+                async move {
+                    barrier.wait().await;
+                    controller
+                        .rename_session(&id, "race name")
+                        .await
+                        .map(|_| ())
+                }
+            })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = Result<(), SessionError>> + Send>,
+                >,
+            Box::pin({
+                let controller = controller.clone();
+                let id = session.id.clone();
+                let barrier = barrier.clone();
+                let input = settings(root.path());
+                async move {
+                    barrier.wait().await;
+                    controller.replace_settings(&id, 0, input).await.map(|_| ())
+                }
+            }),
+            Box::pin({
+                let controller = controller.clone();
+                let id = session.id.clone();
+                let barrier = barrier.clone();
+                async move {
+                    barrier.wait().await;
+                    controller
+                        .publish_display_preview(&id, "a losing later line")
+                        .await
+                        .map(|_| ())
+                }
+            }),
+        ] {
+            racers.spawn(operation);
+        }
+        while let Some(result) = racers.join_next().await {
+            result.expect("no racer panicked").expect("no racer failed");
+        }
+        let after = controller.read_session(&session.id).await.unwrap();
+        assert_eq!(after.name.as_deref(), Some("race name"));
+        assert_eq!(
+            controller
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .preview
+                .as_deref(),
+            Some("race line"),
+            "the first projection is never overwritten, even by a racer"
+        );
+        let (settings_revision, state) = controller.read_settings(&session.id).await.unwrap();
+        assert_eq!(settings_revision, 1);
+        assert_eq!(state, settings(root.path()));
+    }
+
+    // P13 (racing-repair half)
+    #[tokio::test]
+    async fn racing_repairs_commit_the_projection_exactly_once() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let session = controller
+            .create_session(settings(root.path()))
+            .await
+            .unwrap()
+            .session;
+        append_root_history(&controller, &session.id, user("raced repair line")).await;
+        let generation = controller.catalog.lock().await.document_generation();
+        let (first, second) = tokio::join!(
+            controller.repair_display_preview(&session.id),
+            controller.repair_display_preview(&session.id),
+        );
+        let mut outcomes = [first.unwrap(), second.unwrap()];
+        outcomes.sort_by_key(|repair| match repair {
+            DisplayPreviewRepair::AlreadyPresent => 0,
+            DisplayPreviewRepair::Published => 1,
+            other => panic!("unexpected repair outcome: {other:?}"),
+        });
+        assert_eq!(
+            outcomes,
+            [
+                DisplayPreviewRepair::AlreadyPresent,
+                DisplayPreviewRepair::Published
+            ],
+            "exactly one racer commits; the other converges"
+        );
+        assert_eq!(
+            controller.catalog.lock().await.document_generation(),
+            generation + 1,
+            "racing repairs bump the generation exactly once"
+        );
+        assert_eq!(
+            controller
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .preview
+                .as_deref(),
+            Some("raced repair line")
         );
     }
 }

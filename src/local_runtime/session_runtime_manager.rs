@@ -17,8 +17,8 @@ use super::composition::{
     LocalConversationCore, LocalConversationRuntime, LocalRuntimeDependencies,
 };
 use super::configuration::UserConfigManager;
-use super::session::{SessionId, SessionNodeId};
-use super::session_controller::{SessionAccess, SessionController};
+use super::session::{DisplayPreviewSubject, SessionId, SessionNodeId};
+use super::session_controller::{DisplayPreviewRepair, SessionAccess, SessionController};
 use crate::credentials::CredentialSnapshot;
 use crate::runtime::conversation_runtime::ConversationRuntime;
 use crate::runtime::identity::ConversationId;
@@ -1590,6 +1590,40 @@ impl SessionRuntimeManager {
             core.runtime().install_activation_gate(gate);
         }
         let composition = core.into_bound_with_control(None).map_err(error)?;
+        // The App Server display-projection seam (Issue #386): only a
+        // root-node runtime is the Session's projection subject. A missing
+        // projection is repaired through the same idempotent algorithm every
+        // reopen/recovery seam runs; when the root lineage has no ordinary
+        // user boundary yet, the one-shot publisher armed on this inert
+        // runtime publishes after its first canonical commit. Repair and
+        // arming are best-effort: canonical history is unaffected, and the
+        // row falls back to identity until a later seam succeeds.
+        if access.node.parent.is_none() {
+            let session_id = access.session.id.clone();
+            match self
+                .sessions
+                .repair_display_preview_report(&session_id)
+                .await
+            {
+                Ok(report) => {
+                    if report.repair == DisplayPreviewRepair::EmptySubject
+                        && report.subject == Some(DisplayPreviewSubject::NoBoundary)
+                    {
+                        super::session_display_projection::arm_display_projection(
+                            self.sessions.downgrade_catalog(),
+                            session_id,
+                            composition.runtime(),
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "Session display-preview repair failed during runtime composition"
+                    );
+                }
+            }
+        }
         let incarnation = RuntimeIncarnationId(
             NEXT_INCARNATION
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {

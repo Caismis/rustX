@@ -36,10 +36,14 @@ observation and never releases, cancels or unloads work. Chat/Trajectory retain 
 Sidebar View options also offers explicit Close all views for unlisted/restored
 entries; missing catalog rows cannot make the finite capacity unmanageable.
 `sessionDisplayTitle` uses explicit name > native SessionSummary.preview > New session.
+The preview is a server-owned persisted display projection, computed from the
+canonical root user message after its commit and stored in the session catalog;
+null means no projection has been published, not a client-side derivation gap.
 No UUID fallback or automatic LLM naming exists. After canonical user-message
 observation, an exact `session/summary(SessionId)` read refreshes unnamed labels;
 only success (including no preview) completes the check. Failed reads remain retryable
-at authoritative refresh/reconnect, with concurrent reads coalesced. No draft or
+at authoritative refresh/reconnect, with concurrent reads coalesced, and convergence
+holds because publication follows the canonical commit. No draft or
 admission can generate a title. `session/list` owns fuzzy paginated browsing, never
 identity lookup. `view.summary` is a replaceable exact observation across pages,
 not a second catalog. It may retain its last value across transport loss for stable
