@@ -52,9 +52,120 @@ use crate::message::types::{
 use crate::model::session::SessionModelConfig;
 use crate::runtime::identity::{ConversationId, MessageId};
 
+/// Time one create-pipeline stage when the test-only profiler is enabled, and
+/// evaluate the body directly in every other build. The stage selector is only
+/// consumed by the test expansion, so no production path carries timing state.
+#[cfg(test)]
+macro_rules! profile_stage {
+    ($select:expr, $body:expr) => {
+        create_profile::timed($select, || $body)
+    };
+}
+#[cfg(not(test))]
+macro_rules! profile_stage {
+    ($select:expr, $body:expr) => {
+        $body
+    };
+}
+
 #[cfg(test)]
 #[path = "session/tests/cfg3_identity.rs"]
 mod cfg3_identity_tests;
+
+/// Test-only stage profiler for the real Session-create pipeline (Issue #387).
+///
+/// This is deliberately not a production observability framework: it exists
+/// only in this crate's test build, is enabled explicitly by one ignored test,
+/// and is compiled away everywhere else. It attributes wall time to the
+/// pipeline's real owners so the delivery report can separate exclusive stages
+/// from inclusive totals.
+#[cfg(test)]
+pub(crate) mod create_profile {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    /// Exclusive wall time per pipeline stage, in nanoseconds.
+    #[derive(Debug, Default, Clone, Copy)]
+    pub(crate) struct StageTimes {
+        pub(crate) reserve_ns: u64,
+        pub(crate) allocation_dir_ns: u64,
+        pub(crate) sqlite_open_ns: u64,
+        pub(crate) schema_and_seed_ns: u64,
+        pub(crate) catalog_serialize_ns: u64,
+        pub(crate) temp_write_ns: u64,
+        pub(crate) file_fsync_ns: u64,
+        pub(crate) rename_ns: u64,
+        pub(crate) dir_fsync_ns: u64,
+        pub(crate) creates: u64,
+    }
+
+    static ENABLED: AtomicBool = AtomicBool::new(false);
+    static TIMES: Mutex<StageTimes> = Mutex::new(StageTimes {
+        reserve_ns: 0,
+        allocation_dir_ns: 0,
+        sqlite_open_ns: 0,
+        schema_and_seed_ns: 0,
+        catalog_serialize_ns: 0,
+        temp_write_ns: 0,
+        file_fsync_ns: 0,
+        rename_ns: 0,
+        dir_fsync_ns: 0,
+        creates: 0,
+    });
+
+    pub(crate) fn enable() {
+        *TIMES.lock().expect("create profile lock") = StageTimes::default();
+        ENABLED.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn disable() {
+        ENABLED.store(false, Ordering::Relaxed);
+    }
+
+    pub(crate) fn enabled() -> bool {
+        ENABLED.load(Ordering::Relaxed)
+    }
+
+    fn nanos(duration: Duration) -> u64 {
+        u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+    }
+
+    fn record_field(select: impl FnOnce(&mut StageTimes) -> &mut u64, duration: Duration) {
+        if !enabled() {
+            return;
+        }
+        let mut times = TIMES.lock().expect("create profile lock");
+        let elapsed = nanos(duration);
+        let slot = select(&mut times);
+        *slot = slot.saturating_add(elapsed);
+    }
+
+    pub(crate) fn count_create() {
+        if !enabled() {
+            return;
+        }
+        let mut times = TIMES.lock().expect("create profile lock");
+        times.creates = times.creates.saturating_add(1);
+    }
+
+    pub(crate) fn timed<T>(
+        select: impl FnOnce(&mut StageTimes) -> &mut u64,
+        body: impl FnOnce() -> T,
+    ) -> T {
+        if !enabled() {
+            return body();
+        }
+        let started = Instant::now();
+        let value = body();
+        record_field(select, started.elapsed());
+        value
+    }
+
+    pub(crate) fn snapshot() -> StageTimes {
+        *TIMES.lock().expect("create profile lock")
+    }
+}
 
 /// The persisted native session-catalog schema.
 ///
@@ -88,9 +199,24 @@ mod cfg3_identity_tests;
 /// clone/fork publication, and backfilled by the explicit idempotent repair
 /// seam at reopen/compose/recovery. A version-12 catalog carries no such
 /// field and is refused: there is no migration, because the projection must
-/// be provably derived from canonical history, not reinterpreted. Manual
-/// reset of a development runtime root means deleting the runtime root (or
-/// `sessions/catalog.json`) and recreating the Sessions.
+/// be provably derived from canonical history, not reinterpreted.
+///
+/// Issue #387 adds a second, independent format boundary at the local root:
+/// the private `conversation-reservations/` namespace records consumed
+/// `ConversationId`s with exclusive create-new markers. A populated root that
+/// predates that namespace is refused at the storage owner because absence of
+/// a marker cannot prove an identity was never allocated under the older
+/// layout; the old Session-directory scan is not retained as a fallback. The
+/// Session Catalog schema is unchanged (still 13) because the catalog's
+/// record layout did not change.
+///
+/// Manual reset of a development runtime root therefore means deleting the
+/// **whole runtime root** (the `sessions/` tree *and* the
+/// `conversation-reservations/` namespace) and recreating the Sessions. Never
+/// delete only `sessions/catalog.json`, and never delete only the reservation
+/// namespace: either leaves consumed identities and allocations that the
+/// other side can no longer account for. Reset is always an explicit operator
+/// action; rustX never deletes or reinterprets old data.
 /// Version 9 owns workspace upload allocations and frozen private-copy claims.
 /// Version 8 removes global focus and persists only explicit Session inputs, with
 /// per-Session settings revisions. Schema 7 materialized model defaults cannot be
@@ -987,6 +1113,7 @@ impl SessionCatalog {
         )
     }
 
+    #[allow(clippy::too_many_lines)] // One first-Session reservation and seed transaction.
     fn create_unpublished_with_identities(
         runtime_root: &Path,
         state: &SessionPersistentState,
@@ -1030,6 +1157,16 @@ impl SessionCatalog {
             .map_err(|detail| SessionError::Catalog { detail })?;
         let conversation_id = ConversationId::from_uuid(identities.next_uuid())
             .map_err(|detail| SessionError::Catalog { detail })?;
+        // Reserve the identity before any Session or Conversation directory
+        // exists, so a consumed identity can never leave a half-prepared
+        // allocation behind. A collision is a hard refusal here: this is the
+        // first-Session path and the caller supplied the identity.
+        product
+            .reserve_conversation(&conversation_id)
+            .map_err(|error| SessionError::Io {
+                path: product.root().join("conversation-reservations"),
+                detail: error.to_string(),
+            })?;
         fs::create_dir(root.join(session_id.as_str())).map_err(|error| SessionError::Catalog {
             detail: format!("cannot reserve Session identity: {error}"),
         })?;
@@ -1774,8 +1911,23 @@ impl SessionCatalog {
                     .expect("conversation directory")
                     .exists()
             {
-                chosen = Some((node_id, conversation_id, database_path));
-                break;
+                let reservation = profile_stage!(
+                    |times: &mut create_profile::StageTimes| &mut times.reserve_ns,
+                    self.product.reserve_conversation(&conversation_id)
+                );
+                match reservation {
+                    Ok(_reservation) => {
+                        chosen = Some((node_id, conversation_id, database_path));
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => {
+                        return Err(SessionError::Io {
+                            path: self.product.root().join("conversation-reservations"),
+                            detail: error.to_string(),
+                        });
+                    }
+                }
             }
         }
         let (node_id, conversation_id, database_path) =
@@ -1918,42 +2070,22 @@ impl SessionCatalog {
         self
     }
 
-    /// Reserve a globally unique Conversation directory under its owning
-    /// Session. The directory is the reservation: no second identity index
-    /// or probabilistic uniqueness assumption is needed. Retired identities
-    /// remain governed by the catalog even after their files are deleted.
-    /// The single identity reservation algorithm, under an already-admitted
-    /// management mutation or runtime transition. Do not reacquire ownership.
-    pub(crate) fn reserve_conversation_directory_under(
+    /// Create the private Conversation allocation directory for an identity
+    /// that the storage owner has already reserved exclusively through
+    /// [`crate::runtime::local_storage::ProductRoot::reserve_conversation`].
+    ///
+    /// This is preparation, not identity allocation: the reservation marker is
+    /// the one linearization point and it was written before this call. The
+    /// directory itself is created with an exclusive filesystem operation, so a
+    /// stale directory left by an earlier failed preparation is never
+    /// overwritten and becomes visible as `AlreadyExists`. The caller under an
+    /// already-admitted ownership mutation must not reacquire ownership.
+    pub(crate) fn create_conversation_allocation(
         product: &crate::runtime::local_storage::ProductRoot,
-        _ownership: &crate::runtime::local_storage::OwnershipMutation,
         allocation: &Path,
-        conversation: &ConversationId,
     ) -> std::io::Result<()> {
         product.confined(allocation)?;
-        let _allocation = product.conversation_allocation()?;
         Self::check_allocation_live(product, allocation)?;
-        for entry in fs::read_dir(product.root().join("sessions"))? {
-            let entry = entry?;
-            if SessionId::parse(entry.file_name().to_string_lossy()).is_err() {
-                continue;
-            }
-            let path = entry
-                .path()
-                .join("conversations")
-                .join(conversation.as_str());
-            product.confined(&path)?;
-            match fs::symlink_metadata(&path) {
-                Ok(_) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::AlreadyExists,
-                        "Conversation identity is already reserved in this runtime root",
-                    ));
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
-        }
         fs::create_dir_all(
             allocation
                 .parent()
@@ -1984,7 +2116,25 @@ impl SessionCatalog {
                 && !self.document.upload_preparations.contains_key(&session_id)
                 && !self.root.join(session_id.as_str()).exists()
             {
-                return Ok((session_id, node_id, conversation_id));
+                // Identity consumption is owned by local product storage, not
+                // by this in-memory graph check. The exclusive reservation is
+                // the linearization point; a consumed identity simply selects
+                // the next candidate rather than overwriting the prior
+                // reservation.
+                let reservation = profile_stage!(
+                    |times: &mut create_profile::StageTimes| &mut times.reserve_ns,
+                    self.product.reserve_conversation(&conversation_id)
+                );
+                match reservation {
+                    Ok(_reservation) => return Ok((session_id, node_id, conversation_id)),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => {
+                        return Err(SessionError::Io {
+                            path: self.product.root().join("conversation-reservations"),
+                            detail: error.to_string(),
+                        });
+                    }
+                }
             }
         }
         Err(SessionError::Catalog {
@@ -2270,13 +2420,16 @@ impl SessionCatalog {
     }
 
     fn persist(&self, document: &CatalogDocument) -> Result<(), SessionError> {
-        let bytes =
-            serde_json::to_vec_pretty(document).map_err(|error| SessionError::CatalogCommit {
-                error: CatalogCommitError::NotCommitted {
-                    path: self.path.clone(),
-                    detail: format!("cannot encode catalog: {error}"),
-                },
-            })?;
+        let bytes = profile_stage!(
+            |times: &mut create_profile::StageTimes| &mut times.catalog_serialize_ns,
+            serde_json::to_vec_pretty(document)
+        )
+        .map_err(|error| SessionError::CatalogCommit {
+            error: CatalogCommitError::NotCommitted {
+                path: self.path.clone(),
+                detail: format!("cannot encode catalog: {error}"),
+            },
+        })?;
         #[cfg(test)]
         let result = atomic_write(&self.path, &bytes, &self.write_fault);
         #[cfg(not(test))]
@@ -2885,17 +3038,17 @@ fn initialize_database(
         path: path.to_path_buf(),
         detail: "conversation database has no parent".to_owned(),
     })?;
-    let ownership = product
+    let _ownership = product
         .ownership_mutation()
         .map_err(|error| SessionError::Io {
             path: parent.to_path_buf(),
             detail: error.to_string(),
         })?;
-    SessionCatalog::reserve_conversation_directory_under(
-        product,
-        &ownership,
-        parent,
-        conversation_id,
+    // The identity was already reserved by the allocation owner; this only
+    // materializes its private allocation directory.
+    profile_stage!(
+        |times: &mut create_profile::StageTimes| &mut times.allocation_dir_ns,
+        SessionCatalog::create_conversation_allocation(product, parent)
     )
     .map_err(|error| SessionError::Io {
         path: parent.to_path_buf(),
@@ -2906,16 +3059,22 @@ fn initialize_database(
             path: parent.to_path_buf(),
             detail: error.to_string(),
         })?;
-    let store = SqliteConversationStore::open(conversation_id.clone(), path)
-        .map_err(SessionError::Store)?;
+    let store = profile_stage!(
+        |times: &mut create_profile::StageTimes| &mut times.sqlite_open_ns,
+        SqliteConversationStore::open(conversation_id.clone(), path)
+    )
+    .map_err(SessionError::Store)?;
     // LineageSeed contains canonical meaning, Surface history and immutable response provenance.
     // Execution-recovery residue, including a pending unresolved-output
     // carryover source, belongs exclusively to the source conversation and is
     // initialized as NULL in this new destination store.
-    store
-        .with_lifecycle(std::sync::Arc::new(access))
-        .initialize_lineage(seed)
-        .map_err(SessionError::Store)
+    profile_stage!(
+        |times: &mut create_profile::StageTimes| &mut times.schema_and_seed_ns,
+        store
+            .with_lifecycle(std::sync::Arc::new(access))
+            .initialize_lineage(seed)
+    )
+    .map_err(SessionError::Store)
 }
 
 fn atomic_write(
@@ -2934,25 +3093,34 @@ fn atomic_write(
         detail: error.to_string(),
     })?;
     let temporary = path.with_extension("json.tmp");
-    let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&temporary)
-        .map_err(|error| CatalogCommitError::NotCommitted {
-            path: temporary.clone(),
-            detail: error.to_string(),
-        })?;
-    file.write_all(bytes)
-        .map_err(|error| CatalogCommitError::NotCommitted {
-            path: temporary.clone(),
-            detail: error.to_string(),
-        })?;
-    file.sync_all()
-        .map_err(|error| CatalogCommitError::NotCommitted {
-            path: temporary.clone(),
-            detail: error.to_string(),
-        })?;
+    let mut file = profile_stage!(
+        |times: &mut create_profile::StageTimes| &mut times.temp_write_ns,
+        OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&temporary)
+    )
+    .map_err(|error| CatalogCommitError::NotCommitted {
+        path: temporary.clone(),
+        detail: error.to_string(),
+    })?;
+    profile_stage!(
+        |times: &mut create_profile::StageTimes| &mut times.temp_write_ns,
+        file.write_all(bytes)
+    )
+    .map_err(|error| CatalogCommitError::NotCommitted {
+        path: temporary.clone(),
+        detail: error.to_string(),
+    })?;
+    profile_stage!(
+        |times: &mut create_profile::StageTimes| &mut times.file_fsync_ns,
+        file.sync_all()
+    )
+    .map_err(|error| CatalogCommitError::NotCommitted {
+        path: temporary.clone(),
+        detail: error.to_string(),
+    })?;
     #[cfg(test)]
     let write_fault = take_write_fault(write_fault);
     #[cfg(test)]
@@ -2962,7 +3130,11 @@ fn atomic_write(
             detail: "deterministic fault before catalog visibility rename".to_owned(),
         });
     }
-    fs::rename(&temporary, path).map_err(|error| CatalogCommitError::NotCommitted {
+    profile_stage!(
+        |times: &mut create_profile::StageTimes| &mut times.rename_ns,
+        fs::rename(&temporary, path)
+    )
+    .map_err(|error| CatalogCommitError::NotCommitted {
         path: path.to_path_buf(),
         detail: error.to_string(),
     })?;
@@ -2975,12 +3147,16 @@ fn atomic_write(
             detail: "deterministic fault after catalog visibility rename".to_owned(),
         });
     }
-    sync_directory_ancestry(parent).map_err(|error| {
-        CatalogCommitError::CommittedButDurabilityUncertain {
+    profile_stage!(
+        |times: &mut create_profile::StageTimes| &mut times.dir_fsync_ns,
+        sync_directory_ancestry(parent)
+    )
+    .map_err(
+        |error| CatalogCommitError::CommittedButDurabilityUncertain {
             path: parent.to_path_buf(),
             detail: error.to_string(),
-        }
-    })?;
+        },
+    )?;
     Ok(())
 }
 
@@ -3140,6 +3316,10 @@ impl SessionError {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[cfg(test)]
+    #[path = "cfg3_reservation.rs"]
+    mod reservation_tests;
+
     use std::collections::BTreeSet;
     use std::fs;
 

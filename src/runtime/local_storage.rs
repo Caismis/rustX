@@ -2,9 +2,74 @@
 use nix::fcntl::{Flock, FlockArg};
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// The private local-root namespace that records Conversation identity
+/// consumption (Issue #387).
+///
+/// A marker file named after one canonical `ConversationId` is created with
+/// exclusive create-new semantics. The marker's existence is the whole
+/// reservation: it is identity consumption, never Session ownership, never
+/// execution authority, and never canonical history. It is deliberately not
+/// enumerable by any domain caller.
+const CONVERSATION_RESERVATION_NAMESPACE: &str = "conversation-reservations";
+
+/// Process-wide count of successful Conversation identity reservations.
+/// Diagnostics-grade, mirroring `durable::conversation_store_open_count`:
+/// benchmarks and regressions read a delta, never a semantic decision.
+static CONVERSATION_RESERVATIONS: AtomicU64 = AtomicU64::new(0);
+
+/// Process-wide count of exclusive-create conflicts observed by the
+/// reservation primitive. A conflict means the identity was already consumed.
+static CONVERSATION_RESERVATION_CONFLICTS: AtomicU64 = AtomicU64::new(0);
+
+/// Process-wide count of legacy-layout probes performed by the storage owner
+/// (Issue #387). A reservation on a root whose reservation namespace already
+/// exists must perform zero of these; the counter exists so a regression can
+/// prove the storage owner never inspects an existing `sessions/` tree to
+/// establish identity uniqueness.
+static LEGACY_LAYOUT_PROBES: AtomicU64 = AtomicU64::new(0);
+
+/// The number of Conversation identities this process has reserved.
+#[must_use]
+pub fn conversation_reservation_count() -> u64 {
+    CONVERSATION_RESERVATIONS.load(Ordering::Relaxed)
+}
+
+/// The number of exclusive-create conflicts this process has observed while
+/// reserving a Conversation identity.
+#[must_use]
+pub fn conversation_reservation_conflict_count() -> u64 {
+    CONVERSATION_RESERVATION_CONFLICTS.load(Ordering::Relaxed)
+}
+
+/// The number of legacy-layout probes performed by the storage owner. See
+/// [`LEGACY_LAYOUT_PROBES`].
+#[must_use]
+pub fn conversation_legacy_layout_probe_count() -> u64 {
+    LEGACY_LAYOUT_PROBES.load(Ordering::Relaxed)
+}
+
+// Per-thread count of legacy-layout probes. The process-wide counter is
+// contaminated by unrelated parallel tests, so a regression that asserts the
+// reservation path inspects zero existing Session trees measures the calling
+// thread's delta. Reservation is synchronous on the caller's thread.
+#[cfg(test)]
+thread_local! {
+    static LEGACY_LAYOUT_PROBES_ON_THREAD: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// The number of legacy-layout probes performed on the calling thread.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn conversation_legacy_layout_probe_count_on_thread() -> u64 {
+    LEGACY_LAYOUT_PROBES_ON_THREAD.with(std::cell::Cell::get)
+}
 
 /// Canonical product identity; this is not a live storage-access guard.
 #[derive(Debug, Clone)]
@@ -12,20 +77,156 @@ pub struct ProductRoot {
     root: PathBuf,
 }
 impl ProductRoot {
-    /// Establish canonical identity at explicit startup, creating the product root.
+    /// Establish canonical identity at explicit startup, creating the product root
+    /// and initializing the reservation namespace of a genuinely fresh root.
     /// # Errors
     /// Returns filesystem errors without weakening private-path confinement.
     pub fn create(root: &Path) -> io::Result<Self> {
         std::fs::create_dir_all(root)?;
-        Self::existing(root)
+        let product = Self::existing(root)?;
+        product.ensure_reservation_namespace()?;
+        Ok(product)
     }
     /// Resolve existing native product state without creating anything.
+    ///
+    /// A populated root that predates the reservation namespace is refused:
+    /// absence of a marker cannot prove an identity was never allocated under
+    /// the older layout, so the root is not silently reinterpreted. A
+    /// genuinely fresh root (no reservations and no `sessions` tree) is
+    /// accepted unchanged; [`Self::create`] or the first reservation
+    /// initializes its namespace.
     /// # Errors
-    /// Missing roots and filesystem errors are returned.
+    /// Missing roots, unsafe layouts and filesystem errors are returned.
     pub fn existing(root: &Path) -> io::Result<Self> {
         let root = root.canonicalize()?;
         directory(&root)?;
-        Ok(Self { root })
+        let product = Self { root };
+        product.validate_or_fresh()?;
+        Ok(product)
+    }
+
+    /// The private reservation namespace path, never exposed to domain callers.
+    fn reservation_namespace(&self) -> PathBuf {
+        self.root.join(CONVERSATION_RESERVATION_NAMESPACE)
+    }
+
+    /// Validate the accepted local-root format without creating anything.
+    ///
+    /// The reservation namespace is the local-root format boundary. When it
+    /// exists the root is supported. When it is absent, a root with a
+    /// `sessions` tree is an unsupported older layout and is refused; a root
+    /// with neither is genuinely fresh and is accepted for initialization.
+    fn validate_or_fresh(&self) -> io::Result<()> {
+        match std::fs::symlink_metadata(self.reservation_namespace()) {
+            Ok(metadata) if metadata.is_dir() => return Ok(()),
+            Ok(_) => {
+                return Err(io::Error::other(
+                    "conversation reservation namespace is not a directory",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        if self.probe_legacy_sessions()? {
+            return Err(unsupported_layout_error());
+        }
+        Ok(())
+    }
+
+    /// Probe for the one legacy marker that matters: an existing `sessions`
+    /// tree. This is the only place the storage owner inspects the old
+    /// allocation root, it is reached only while the reservation namespace is
+    /// absent, and it increments [`LEGACY_LAYOUT_PROBES`] so the reservation
+    /// path's zero-inspection contract is measurable.
+    fn probe_legacy_sessions(&self) -> io::Result<bool> {
+        LEGACY_LAYOUT_PROBES.fetch_add(1, Ordering::Relaxed);
+        #[cfg(test)]
+        LEGACY_LAYOUT_PROBES_ON_THREAD.with(|probes| probes.set(probes.get() + 1));
+        match std::fs::symlink_metadata(self.root.join("sessions")) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Ensure the private reservation namespace exists and its directory entry
+    /// is durable, or refuse a legacy populated root. This never enumerates
+    /// Session or Conversation allocations.
+    fn ensure_reservation_namespace(&self) -> io::Result<PathBuf> {
+        let namespace = self.reservation_namespace();
+        match std::fs::symlink_metadata(&namespace) {
+            Ok(metadata) if metadata.is_dir() => return Ok(namespace),
+            Ok(_) => {
+                return Err(io::Error::other(
+                    "conversation reservation namespace is not a directory",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        if self.probe_legacy_sessions()? {
+            return Err(unsupported_layout_error());
+        }
+        match std::fs::create_dir(&namespace) {
+            Ok(()) => {}
+            // A concurrent initializer won the same exclusive directory creation.
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        // Persist the namespace entry in the product root before any marker
+        // inside it can be considered durable. A crash before this point may
+        // lose the empty namespace, which is safe: nothing was reserved yet,
+        // and a root with no `sessions` tree is legitimately fresh again.
+        File::open(&self.root)?.sync_all()?;
+        Ok(namespace)
+    }
+
+    /// Exclusively reserve one Conversation identity.
+    ///
+    /// The exclusive create-new of the marker is the one allocation
+    /// linearization point: exactly one caller can observe `Ok`, and every
+    /// later attempt for the same identity observes `AlreadyExists` without
+    /// overwriting the consumed marker. The operation performs no enumeration
+    /// of existing Session directories or Conversation allocations.
+    ///
+    /// Durability: the marker file data and its directory entry are synced
+    /// before success is reported. The filesystem's exclusive create alone is
+    /// not a power-loss guarantee; the file fsync plus the namespace-directory
+    /// fsync are.
+    ///
+    /// A reserved identity is consumed for the lifetime of the root. This
+    /// method never unlinks a marker, including after later preparation or
+    /// publication failure; ordinary deletion and orphan cleanup must not make
+    /// the identity reusable.
+    /// # Errors
+    /// Returns `AlreadyExists` when the identity is already consumed, and the
+    /// unsupported-layout error when the root predates the reservation
+    /// namespace.
+    pub(crate) fn reserve_conversation(
+        &self,
+        conversation: &crate::runtime::identity::ConversationId,
+    ) -> io::Result<ConversationReservation> {
+        let namespace = self.ensure_reservation_namespace()?;
+        let marker = self.confined(&namespace.join(conversation.as_str()))?;
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&marker)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                CONVERSATION_RESERVATION_CONFLICTS.fetch_add(1, Ordering::Relaxed);
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
+        file.write_all(conversation.as_str().as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        File::open(&namespace)?.sync_all()?;
+        CONVERSATION_RESERVATIONS.fetch_add(1, Ordering::Relaxed);
+        Ok(ConversationReservation)
     }
     #[must_use]
     pub fn root(&self) -> &Path {
@@ -68,16 +269,6 @@ impl ProductRoot {
         .map_err(io::Error::other)?
     }
 
-    /// Serialize Conversation identity reservations across every Session and
-    /// child allocator in this runtime root. This lock protects allocation,
-    /// not semantic execution order or ordinary Conversation activity.
-    pub(crate) fn conversation_allocation(&self) -> io::Result<ConversationAllocation> {
-        let sessions = self.confined(&self.root.join("sessions"))?;
-        std::fs::create_dir_all(&sessions)?;
-        Ok(ConversationAllocation {
-            _lock: lock(directory(&sessions)?, FlockArg::LockExclusive)?,
-        })
-    }
     /// Validates an identity-derived allocation, including missing leaves.
     /// No symlink below the canonical product root is a storage identity.
     ///
@@ -205,8 +396,23 @@ impl ConversationAccess {
 pub(crate) struct ConversationExclusion {
     _lock: Flock<File>,
 }
-pub(crate) struct ConversationAllocation {
-    _lock: Flock<File>,
+/// One exclusive, durable reservation of a Conversation identity.
+///
+/// The value is the storage owner's explicit success result. Callers depend on
+/// it rather than inspecting a marker path, `SQLite` filename, directory
+/// existence, or traversal algorithm. Dropping it does not release the
+/// reservation: the consumed identity is permanent for the life of the
+/// product root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ConversationReservation;
+
+fn unsupported_layout_error() -> io::Error {
+    io::Error::other(
+        "unsupported local runtime layout: this populated root predates the Conversation \
+         reservation namespace, so its allocated identities cannot be proven unused. Back up the \
+         runtime root, then start from a new empty root (or delete the old root outright after the \
+         backup). rustX never deletes or reinterprets the old data.",
+    )
 }
 impl ConversationExclusion {
     pub(crate) fn acquire(root: &ProductRoot, allocation: &Path) -> io::Result<Self> {
@@ -331,6 +537,72 @@ mod tests {
             assert!(ConversationAccess::existing(&root, &allocation).is_ok());
         }
     }
+    /// The child side of R05: reserve one identity, announce it, then park so
+    /// the owning test can SIGKILL a process that has provably completed the
+    /// reservation's durability barrier and nothing else.
+    #[test]
+    fn reservation_process_gate() {
+        let Some(root) = std::env::var_os("RUSTX_387_RESERVE_ROOT") else {
+            return;
+        };
+        let conversation = crate::runtime::identity::ConversationId::new(
+            std::env::var("RUSTX_387_RESERVE_ID").unwrap(),
+        );
+        let product = ProductRoot::create(Path::new(&root)).unwrap();
+        product.reserve_conversation(&conversation).unwrap();
+        println!("RESERVED");
+        std::io::stdout().flush().unwrap();
+        std::io::stdin().read_exact(&mut [0]).unwrap();
+    }
+
+    /// R05: SIGKILL a real process at the documented post-reservation boundary,
+    /// restart, and prove the consumed identity cannot be allocated again while
+    /// a fresh one still can. This is real process death, not a dropped object.
+    #[test]
+    fn r05_kill_after_reservation_never_reissues_consumed_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let consumed = crate::runtime::identity::ConversationId::new(
+            "conv_01900000-0000-7000-8000-000000000099",
+        );
+        let mut process = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "runtime::local_storage::tests::reservation_process_gate",
+                "--nocapture",
+            ])
+            .env("RUSTX_387_RESERVE_ROOT", directory.path())
+            .env("RUSTX_387_RESERVE_ID", consumed.as_str())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut output = BufReader::new(process.stdout.take().unwrap());
+        loop {
+            let mut line = String::new();
+            assert_ne!(
+                output.read_line(&mut line).unwrap(),
+                0,
+                "child exited before its reservation gate"
+            );
+            if line.trim() == "RESERVED" {
+                break;
+            }
+        }
+        process.kill().unwrap();
+        process.wait().unwrap();
+
+        let product = ProductRoot::existing(directory.path()).unwrap();
+        assert_eq!(
+            product.reserve_conversation(&consumed).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists,
+            "a consumed identity was reissued after process death"
+        );
+        let fresh = crate::runtime::identity::ConversationId::new(
+            "conv_01900000-0000-7000-8000-000000000098",
+        );
+        assert!(product.reserve_conversation(&fresh).is_ok());
+    }
+
     #[test]
     fn cross_process_controller_admission_is_independent_of_target_exclusion() {
         let directory = tempfile::tempdir().unwrap();

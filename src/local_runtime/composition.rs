@@ -2885,6 +2885,10 @@ chat_reasoning_replay = "omit"
         skills: Vec<crate::runtime::subagent::ResolvedSubagentSkill>,
         extensions: crate::extensions::NativeAgentExtensions,
     ) -> SubagentChildSpec {
+        // Initialize the supported local-root format (the private reservation
+        // namespace) before this fixture fabricates the child allocation tree,
+        // so the allocation path is exercised on an accepted root.
+        crate::runtime::local_storage::ProductRoot::create(root).unwrap();
         std::fs::create_dir_all(root.join("sessions/ses_01900000-0000-7000-8000-000000000001/conversations/conv_c89c766b-0004-76cb-8baf-0d5b1a677c1e/incarnation-test")).unwrap();
         SubagentChildSpec {
             session_id: crate::runtime::identity::SessionId::new(

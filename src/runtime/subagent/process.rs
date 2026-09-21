@@ -216,7 +216,7 @@ impl PhysicalChildRuntimeRoot {
     /// fresh incarnation directory beneath it.
     fn allocate(
         product: &crate::runtime::local_storage::ProductRoot,
-        ownership: &crate::runtime::local_storage::OwnershipMutation,
+        _ownership: &crate::runtime::local_storage::OwnershipMutation,
         session_id: &crate::runtime::identity::SessionId,
         conversation_id: &ConversationId,
     ) -> Result<Self, SpawnError> {
@@ -241,6 +241,24 @@ impl PhysicalChildRuntimeRoot {
             })?;
         let durable_store =
             super::child_conversation_store_path(parent, session_id, conversation_id);
+        // Identity consumption is the storage owner's exclusive reservation and
+        // precedes any child directory creation. A consumed child identity is
+        // reported as in-use so the caller retries with a fresh identity; the
+        // prior reservation is never overwritten.
+        product
+            .reserve_conversation(conversation_id)
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    SpawnError::ConversationIdentityInUse {
+                        conversation_id: conversation_id.clone(),
+                        path: semantic_root.clone(),
+                    }
+                } else {
+                    SpawnError::WorkspaceSetup {
+                        detail: error.to_string(),
+                    }
+                }
+            })?;
         for path in [
             durable_store.clone(),
             PathBuf::from(format!("{}-wal", durable_store.display())),
@@ -253,11 +271,9 @@ impl PhysicalChildRuntimeRoot {
                 });
             }
         }
-        crate::local_runtime::session::SessionCatalog::reserve_conversation_directory_under(
+        crate::local_runtime::session::SessionCatalog::create_conversation_allocation(
             product,
-            ownership,
             &semantic_root,
-            conversation_id,
         )
         .map_err(|error| {
             if error.kind() == std::io::ErrorKind::AlreadyExists {

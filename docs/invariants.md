@@ -7364,8 +7364,25 @@ field; it simply has no projection, and the projection must be provably
 derived from canonical history rather than reinterpreted out of absence, so
 the older catalog is refused. There is no migration and no automatic deletion:
 the manual reset procedure for a development runtime root is to delete the
-runtime root (or `sessions/catalog.json`) and recreate the Sessions, always
-by explicit operator action.
+**whole** runtime root and recreate the Sessions, always by explicit operator
+action. Deleting only `sessions/catalog.json` is never a reset: it leaves
+Session allocations and reserved identities behind that a fresh catalog would
+misread as absent.
+
+A second, independent local-root format boundary covers Conversation identity
+consumption (Issue #387). Every supported runtime root carries a private
+`conversation-reservations/` namespace whose exclusive-create markers record
+consumed `ConversationId`s. The Session Catalog schema is unchanged because
+the catalog's record layout did not change; the namespace is the boundary.
+A populated root whose `sessions/` tree exists without that namespace predates
+the contract and is refused at the storage owner before any allocation — even
+at child/subagent entry points that never load the catalog — because the
+absence of a marker cannot prove an identity was never allocated. There is no
+backfill, no dual allocation mode, no compatibility scan, and no automatic
+deletion. Deleting only the reservation namespace is likewise not a reset:
+consumed identities remain allocated in `sessions/`, and the namespace
+presence is what proves the root supported. Only deleting the whole root and
+recreating Sessions is a valid reset.
 
 ### Bounded native projections
 
