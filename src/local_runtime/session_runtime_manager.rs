@@ -1154,6 +1154,17 @@ impl SessionRuntimeManager {
             let input = super::configuration::SessionConfigInput::new(directory.clone());
             application.record_source(directory, &self.configuration.capture_application(&input));
         }
+        if matches!(target, SourceTarget::User) {
+            // A User commit also refreshes the desired capture of every
+            // Workspace identity with retained native authority, including
+            // those without any live Session. This never touches `available`;
+            // only successful fenced preparation publishes there.
+            for directory in application.known_source_directories() {
+                let input = super::configuration::SessionConfigInput::new(directory.clone());
+                application
+                    .record_source(&directory, &self.configuration.capture_application(&input));
+            }
+        }
         let inputs: Vec<_> = self
             .sessions
             .configuration_bindings

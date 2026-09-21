@@ -495,6 +495,34 @@ impl ApplicationState {
         }
     }
 
+    /// Every directory with retained source authority, whether it published a
+    /// last-good configuration or only holds a captured desired source.
+    pub(crate) fn known_source_directories(&self) -> Vec<std::path::PathBuf> {
+        self.available
+            .keys()
+            .chain(self.desired_sources.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_available(
+        &self,
+        directory: &std::path::Path,
+    ) -> Option<&super::ProspectiveSessionConfig> {
+        self.available.get(directory)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_desired_source(
+        &self,
+        directory: &std::path::Path,
+    ) -> Option<&Result<CapturedApplication, String>> {
+        self.desired_sources.get(directory)
+    }
+
     fn captured_input(&self, scope: &str) -> Result<CapturedApplication, String> {
         self.inputs
             .get(scope)
