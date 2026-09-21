@@ -63,6 +63,12 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
   // accepted projection has been read after yet; `converging` owns the single
   // convergence worker by the epoch that started it.
   const observation = useRef<SourceSettings | undefined>(undefined), converging = useRef<number | undefined>(undefined);
+  // `outstanding` counts authoritative reads whose response has not landed yet,
+  // so the owner can await the settlement of a read that superseded its own
+  // instead of racing it with a redundant read or releasing the obligation.
+  // `settle` is the resolver of that wait: a still-outstanding read wakes it
+  // when it lands, so the hand-off is event-driven, never a poll or timer.
+  const outstanding = useRef(0), settle = useRef<(() => void) | undefined>(undefined);
   const publications = useRef(transport.configuration), commits = useRef(0), observedCommits = useRef(0);
   publications.current = transport.configuration;
   const endpoint = transport.endpoint ?? '';
@@ -97,6 +103,7 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
    * already answered them. */
   const refresh = useCallback(async () => {
     const at = epoch.current, read = ++reads.current, settled = accepted.current, afterCommits = commits.current;
+    ++outstanding.current;
     try {
       const next = await request({ kind: 'read' });
       if (at !== epoch.current || read !== reads.current) return false;
@@ -105,6 +112,11 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
     } catch (cause) {
       if (at === epoch.current && read === reads.current && settled === accepted.current) { setError(String(cause)); setTargetValid(false); }
       throw cause;
+    } finally {
+      if (at === epoch.current) --outstanding.current;
+      // Wake an owner waiting on any read settlement, including a failed one:
+      // a superseded read is not evidence that the obligation was satisfied.
+      const resolve = settle.current; settle.current = undefined; resolve?.();
     }
   }, [accept, request]);
   /** The outstanding publication obligation: an application version published
@@ -124,20 +136,34 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
   /** The single convergence worker for the current lifetime. Each pass observes
    * one real outstanding obligation with one authoritative read, then
    * re-evaluates the level: a publication that arrived while the read was
-   * outstanding is still owed and drives exactly one more bounded read. A
-   * newer one-shot read (explicit refresh, save recovery) supersedes the
-   * worker's and ends its pass; the effects re-arm it if an obligation remains.
-   * No timers, no polling, no write replay. */
+   * outstanding is still owed and drives exactly one more bounded read. A newer
+   * one-shot read (explicit refresh, save recovery) may supersede the worker's
+   * read; because a superseded read is not a satisfied obligation, the owner
+   * keeps the work and waits for the superseding read to settle before
+   * re-evaluating, rather than exiting or racing it with a redundant read. It
+   * releases ownership only when no publication or acknowledgement obligation
+   * remains. No timers, no polling, no write replay. */
   const converge = useCallback(async () => {
     if (converging.current !== undefined) return;
     const owner = epoch.current;
     converging.current = owner;
     try {
       for (;;) {
+        // Wait out any authoritative read already in flight before evaluating:
+        // the owner must neither race a legitimate newer one-shot read with a
+        // redundant read of its own nor act on state that read is about to
+        // replace. Settlement (success or failure) wakes this wait; there is no
+        // polling, and an epoch change wakes it so a fenced owner can exit.
+        while (outstanding.current > 0 && epoch.current === owner) {
+          await new Promise<void>(resolve => { settle.current = resolve; });
+        }
         const at = epoch.current, required = obligation();
         if (required === undefined && commits.current === observedCommits.current) break;
         const adopted = await refresh();
-        if (at !== epoch.current || !adopted) break;
+        if (at !== epoch.current) break;
+        // A superseded read is not a satisfied obligation: re-evaluate the level
+        // under the same owner, waiting out the read that superseded it.
+        if (!adopted) continue;
         if (required === undefined) continue;
         const remaining = obligation();
         if (remaining === undefined || remaining > required) continue;
@@ -154,7 +180,10 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
     finally { if (converging.current === owner) converging.current = undefined; }
   }, [refresh, obligation]);
   useEffect(() => {
-    ++epoch.current; observation.current = undefined; converging.current = undefined;
+    ++epoch.current; observation.current = undefined; converging.current = undefined; outstanding.current = 0;
+    // Wake any worker still awaiting a read from the previous lifetime so it can
+    // observe the epoch change and release ownership.
+    const resolve = settle.current; settle.current = undefined; resolve?.();
     commits.current = 0; observedCommits.current = 0;
     setSource(undefined); setTargetValid(false); setBusy(false); setError(''); setMessage('');
     if (transport.connection === 'connected') void converge();

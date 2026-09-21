@@ -55,6 +55,8 @@ async function settleReads(s: Server, from = 1) {
 /** The authoritative native process-binding projection, not a status label. */
 const bindings = () => JSON.parse(screen.getByRole('heading', { name: 'Process bindings' }).nextElementSibling!.textContent!) as { max_connections: number };
 const diagnostics = () => fireEvent.click(screen.getByRole('button', { name: 'Server & source diagnostics' }));
+/** The whole accepted projection, exposed only by the Advanced diagnostics. */
+const acceptedProjection = () => JSON.parse(screen.getByText('Source and application diagnostics').parentElement!.querySelector('pre')!.textContent!) as SourceSettings;
 /** Save 19 with the acknowledgement held, freezing the projection the App Server
  * captured while application was still preparing, then complete application. */
 async function saveHeldWrite(s: Server, native: Native) {
@@ -329,4 +331,57 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
   await settleReads(s, reads);
   await screen.findByText(/Revision: ws-1/);
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
+});
+
+it('S11 a superseded convergence worker transfers a publication that arrived behind its newer read', async () => {
+  const native = new Native(); native.application = native.applied('1', 'applied');
+  const s = await open(native); // settles at application 1
+  // Freeze every authoritative read so the exact capture/release order is forced.
+  s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
+  // Step 1: native publishes application 2.
+  native.application = native.applied('2', 'preparing');
+  await publish(s, native.applied('2', 'preparing'));
+  // Step 2: the convergence owner starts read R1; freeze it with a response
+  // captured while application was still 2.
+  await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(2));
+  const r1 = sent(s, 'configuration/sourcesRead')[1];
+  s.commit(r1);
+  // Step 3: deliver the successful sourceWrite acknowledgement.
+  fireEvent.change(screen.getByLabelText('max_connections'), { target: { value: '19' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save App Server policy' }));
+  const [write] = sent(s, 'configuration/sourceWrite');
+  native.revision = 'user-2';
+  s.commit(write);
+  await deliver(s, write);
+  // Step 4: the save's post-commit authoritative read R2 starts; freeze it at v2 too.
+  await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(3));
+  const r2 = sent(s, 'configuration/sourcesRead')[2];
+  s.commit(r2);
+  // Step 5: application 3 arrives while both R1 and R2 are still outstanding.
+  native.connections = 19; native.application = native.applied('3', 'applied');
+  await publish(s, native.applied('3', 'applied'));
+  // The busy owner does not fan out one read per notification.
+  expect(sent(s, 'configuration/sourcesRead').length).toBe(3);
+  // Step 6: release R2 first. It advances accepted state to application 2, but
+  // the newer publication 3 remains an unowned obligation until R1/R3 settle.
+  await deliver(s, r2);
+  await screen.findByText(/Source saved\. Native coordination/);
+  diagnostics();
+  expect(acceptedProjection().application?.version).toBe('2');
+  expect(screen.queryByText('Saved process policy is active.')).toBeNull();
+  expect(sent(s, 'configuration/sourcesRead').length).toBe(3);
+  // Step 7: release R1 second; it is superseded and cannot discharge v3.
+  await deliver(s, r1);
+  // Step 8: with no further notification, save, refresh, navigation, reconnect or
+  // timer, the transferred obligation drives exactly one more authoritative read.
+  await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(4));
+  // Step 9: the authoritative read carries application 3 and its applied state.
+  await deliver(s, sent(s, 'configuration/sourcesRead')[3]);
+  await expectApplied();
+  expect(acceptedProjection().application?.version).toBe('3');
+  expect(bindings().max_connections).toBe(19);
+  expect(screen.getByText('Saved process policy is active.')).toBeTruthy();
+  // Exactly one write, no replay, one read per real obligation, nothing after.
+  expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
+  expect(sent(s, 'configuration/sourcesRead').length).toBe(4);
 });

@@ -106,7 +106,13 @@ bounded authoritative read owed by that commit. A published application version 
 a standing obligation, level-triggered rather than an edge: it survives an
 already-running convergence read, which re-evaluates the newest obligation when its
 read settles and performs exactly one more bounded read while still behind — never
-a timer, a poll, or one read per notification. `ConfigurationApplication.version`
+a timer, a poll, or one read per notification. That obligation is also owned: a
+publication or acknowledgement obligation observed while a convergence owner is
+running is never discarded, and a superseded read is never treated as a satisfied
+obligation. If a newer one-shot read preempts the owner's read, the owner keeps or
+deterministically transfers the outstanding obligation to another bounded pass
+before releasing ownership, so no publication can be left unowned.
+`ConfigurationApplication.version`
 orders application publications only; it never orders authored source revisions or
 whole projections, so an acknowledgement carrying an equal or older version can
 never overwrite a projection accepted from a causally later authoritative read.

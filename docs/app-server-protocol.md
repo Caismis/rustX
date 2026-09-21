@@ -904,7 +904,12 @@ authoritative read whose projection carries at least that version for that exact
 scope; an acknowledgement can neither discharge it nor cancel the read it
 requires. The obligation is level-triggered: a publication that arrives while a
 convergence read is already outstanding survives it, and the client re-reads when
-the outstanding read settles below the newest published version. Because an
+the outstanding read settles below the newest published version. The obligation is
+also owned: a publication or acknowledgement obligation observed while a single
+convergence owner is running is never discarded, and a superseded read is never
+treated as a satisfied obligation. If the owner's own read is preempted by a newer
+one-shot read, the owner keeps or deterministically transfers the outstanding
+obligation to another bounded pass before releasing ownership. Because an
 application version orders application publications only — never authored source
 revisions or whole `SourceSettings` snapshots — an acknowledgement is mutation
 evidence, not a candidate replacement for the read model: a client that adopted a
