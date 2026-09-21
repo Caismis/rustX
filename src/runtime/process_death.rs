@@ -36,10 +36,11 @@
 //! the fact it linearizes is not a SQLite transaction:
 //!
 //! ```text
-//! before/after:publish_session, before/after:publish_node
+//! before/after:publish_session, before/after:publish_node,
+//! before/after:publish_display_preview
 //!     the native Session catalog's visibility commit — the atomic rename that
-//!     makes a lineage the active one — under the supervisor state mutex the
-//!     whole publish operation holds
+//!     makes a lineage the active one or a display projection visible — under
+//!     the supervisor state mutex the whole publish operation holds
 //! ```
 //!
 //! In each case the parked thread owns the only path that can advance that

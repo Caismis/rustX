@@ -170,7 +170,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":16,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":17,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -198,7 +198,7 @@ async fn app_server_websocket_real_process_shared_conformance_and_listener_survi
         replacement.send(INITIALIZE.into()).await.unwrap();
         assert_eq!(
             json_response(&mut replacement).await["result"]["protocol_version"],
-            16
+            17
         );
         kill(
             Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
@@ -232,9 +232,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v9, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v16"),
+            Some("rustx.app-server.v17"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v16, rustx-token.wrong"),
+            Some("rustx.app-server.v17, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -874,9 +874,13 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         // before that cut must route to its original Session/Conversation.
         loop {
             use app_server_conformance::AppServerConformanceDriver;
-            let NotificationMethod::Event { target, event, .. } =
-                client.next_notification().await.notification
-            else {
+            let notification = client.next_notification().await.notification;
+            // Session metadata invalidation is not a Conversation event and is
+            // not routed by attachment target (Issue #386).
+            if matches!(notification, NotificationMethod::SummaryInvalidated { .. }) {
+                continue;
+            }
+            let NotificationMethod::Event { target, event, .. } = notification else {
                 panic!("unexpected invalidation")
             };
             assert!(target == a || target == b);

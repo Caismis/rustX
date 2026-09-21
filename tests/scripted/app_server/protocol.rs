@@ -604,7 +604,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":12,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 16, requested: 12 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 17, requested: 12 })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -817,6 +817,15 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let (a, b) = tokio::join!(attach(&connection, &f, 0), attach(&connection, &f, 1));
+        // Both root runtimes were composed with no ordinary user boundary,
+        // so each armed the one-shot display-projection publisher (Issue
+        // #386). Awaiting its probe is the deterministic replacement for
+        // observing the derived preview at list time.
+        let mut projection_probe =
+            crate::local_runtime::session_display_projection::display_projection_probe(
+                &a.session_id,
+            )
+            .expect("root composition armed the display-projection publisher");
         let (reply_a, reply_b) = tokio::join!(
             call(
                 &connection,
@@ -862,6 +871,18 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
         )
         .await;
         let residency_before = f.manager.diagnostics();
+        // The preview is published by the armed one-shot publisher after the
+        // canonical root-lineage commit, which provably precedes the parked
+        // provider request the gates observed above. Await the publisher
+        // deterministically — no sleeps.
+        projection_probe
+            .wait_for(|probe| probe.finished)
+            .await
+            .expect("the publisher outlives its runtime");
+        assert!(
+            projection_probe.borrow().published,
+            "the first canonical ordinary user commit published the projection"
+        );
         let MethodResult::SessionSummary { summary } = call(
             &connection,
             23,
@@ -891,9 +912,13 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
         );
         let mut seen = std::collections::BTreeSet::new();
         while seen.len() != 2 {
-            let NotificationMethod::Event { target, event, .. } =
-                connection.next_notification().await.notification
-            else {
+            let notification = connection.next_notification().await.notification;
+            // Session metadata invalidation is not a Conversation event: it
+            // carries no cursor and no attachment target (Issue #386).
+            if matches!(notification, NotificationMethod::SummaryInvalidated { .. }) {
+                continue;
+            }
+            let NotificationMethod::Event { target, event, .. } = notification else {
                 panic!("event")
             };
             assert!(target == a || target == b);
@@ -1234,11 +1259,18 @@ async fn attach_snapshot_and_subscription_share_the_publication_cut() {
         let mut occurrences = 0;
         f.gates[0].release();
         loop {
+            let notification = connection.next_notification().await.notification;
+            // Session metadata invalidation is not a Conversation event: it
+            // carries no cursor, so it never participates in this cursor
+            // monotonicity check (Issue #386).
+            if matches!(notification, NotificationMethod::SummaryInvalidated { .. }) {
+                continue;
+            }
             let NotificationMethod::Event {
                 target: routed,
                 cursor,
                 event,
-            } = connection.next_notification().await.notification
+            } = notification
             else {
                 panic!("event")
             };
@@ -2912,4 +2944,915 @@ async fn archive_preflight_failures_reach_the_protocol_without_private_diagnosti
         assert!(f.provider.request_bodies().is_empty());
         f.close().await;
     }).await;
+}
+
+fn wire_text(text: &str) -> Vec<UserInputBlock> {
+    vec![UserInputBlock::Text(crate::message::content::TextBlock {
+        text: text.into(),
+    })]
+}
+
+/// Drains events until the named Session's current attempt settles: the
+/// deterministic "turn completed" signal (a settled attempt provably follows
+/// the canonical commit of its user boundary).
+async fn await_attempt_settled(
+    connection: &AppServerConnection,
+    session_id: &crate::local_runtime::session::SessionId,
+) {
+    loop {
+        // Session metadata invalidation is a legitimate part of the vocabulary
+        // and is simply not the signal this helper waits for (Issue #386).
+        if let NotificationMethod::Event { target, event, .. } =
+            connection.next_notification().await.notification
+            && target.session_id == *session_id
+            && matches!(*event, RuntimeClientEvent::AttemptSettled { .. })
+        {
+            break;
+        }
+    }
+}
+
+// P03 (app-server plane): catalog searches by identity, name, and persisted
+// projection are served from the catalog alone — zero conversation-store
+// opens on the serving thread.
+#[tokio::test]
+async fn session_list_searches_by_identity_name_and_projection_open_no_store() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let session = &f.sessions[0];
+        f.manager
+            .sessions
+            .rename_session(&session.id, "projection search name")
+            .await
+            .unwrap();
+        assert!(
+            f.manager
+                .sessions
+                .publish_display_preview(&session.id, "projection search line")
+                .await
+                .unwrap()
+        );
+        for query in [
+            session.id.as_str().to_owned(),
+            "projection search name".to_owned(),
+            "projection search line".to_owned(),
+        ] {
+            let before = crate::durable::conversation_store_opens_on_this_thread();
+            let MethodResult::Sessions { sessions, .. } = call(
+                &connection,
+                40,
+                Method::SessionList {
+                    query: Some(query),
+                    offset: 0,
+                    limit: 32,
+                },
+            )
+            .await
+            else {
+                panic!("list")
+            };
+            let after = crate::durable::conversation_store_opens_on_this_thread();
+            assert_eq!(
+                after, before,
+                "a catalog search never opens a conversation store"
+            );
+            assert_eq!(sessions.len(), 1);
+            assert_eq!(sessions[0].id, session.id);
+            assert_eq!(sessions[0].name.as_deref(), Some("projection search name"));
+            assert_eq!(
+                sessions[0].preview.as_deref(),
+                Some("projection search line")
+            );
+        }
+        f.close().await;
+    })
+    .await;
+}
+
+// P05 + P06 (runtime plane): the first turn's canonical commit publishes the
+// normalized, 120-character-bounded projection while the turn is still
+// parked; a later turn never repaints it and never commits the catalog again.
+#[tokio::test]
+async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_repaint() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let mut probe = crate::local_runtime::session_display_projection::display_projection_probe(
+            &target.session_id,
+        )
+        .expect("root composition armed the display-projection publisher");
+        // Whitespace-heavy, multiline, multi-script, and long enough that the
+        // 119th character is a non-space (so the kept prefix is not trimmed).
+        let text = format!("  {}\n\n\t {}", "é".repeat(150), "汉".repeat(50));
+        assert!(!text.contains("request-B"));
+        let reply = call(
+            &connection,
+            50,
+            Method::TurnStart {
+                target: target.clone(),
+                content: wire_text(&text),
+            },
+        )
+        .await;
+        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        f.gates[0].wait_entered().await;
+        probe
+            .wait_for(|probe| probe.finished)
+            .await
+            .expect("the publisher outlives its runtime");
+        {
+            let probe = probe.borrow();
+            assert!(probe.attempted && probe.published);
+        }
+        // The companion rendering: the wire row must equal `preview_of` of
+        // the same boundary, normalized to one line and bounded at 120 chars.
+        let expected =
+            crate::local_runtime::session::preview_of(&crate::message::types::UserMessageBlock {
+                id: crate::runtime::identity::MessageId::new("p05-companion"),
+                content: input(&text),
+                source: crate::message::types::UserSource::Human,
+                kind: crate::message::types::InboundKind::Message,
+                timestamp: None,
+            })
+            .expect("text renders a line");
+        assert_eq!(expected.chars().count(), 120);
+        assert!(expected.ends_with('\u{2026}'));
+        let before = crate::durable::conversation_store_opens_on_this_thread();
+        let MethodResult::Sessions { sessions, .. } = call(
+            &connection,
+            51,
+            Method::SessionList {
+                query: None,
+                offset: 0,
+                limit: 32,
+            },
+        )
+        .await
+        else {
+            panic!("list")
+        };
+        let after = crate::durable::conversation_store_opens_on_this_thread();
+        assert_eq!(after, before, "listing reads the persisted projection");
+        let row = sessions
+            .iter()
+            .find(|row| row.id == target.session_id)
+            .unwrap();
+        assert_eq!(row.preview.as_deref(), Some(expected.as_str()));
+        let generation = f
+            .manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .document_generation();
+        f.gates[0].release();
+        await_attempt_settled(&connection, &target.session_id).await;
+        // P06 (runtime plane): a second turn is an ordinary new commit, but
+        // the one-shot publisher is spent — the settled first line survives
+        // byte-identically and no catalog commit happens.
+        let reply = call(
+            &connection,
+            52,
+            Method::TurnStart {
+                target: target.clone(),
+                content: wire_text("a follow-up repaints nothing"),
+            },
+        )
+        .await;
+        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        await_attempt_settled(&connection, &target.session_id).await;
+        {
+            let probe = probe.borrow();
+            assert!(probe.finished && probe.published);
+        }
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            53,
+            Method::SessionSummary {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("summary")
+        };
+        assert_eq!(summary.preview.as_deref(), Some(expected.as_str()));
+        assert_eq!(
+            f.manager
+                .sessions
+                .catalog
+                .lock()
+                .await
+                .document_generation(),
+            generation,
+            "a later turn never commits the catalog again"
+        );
+        f.close().await;
+    })
+    .await;
+}
+
+// P07 (runtime plane): a Session named before its first turn keeps the name
+// and gains the first turn's projection underneath it.
+#[tokio::test]
+async fn a_projection_published_underneath_a_name_survives_over_the_wire() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let MethodResult::Session { session } = call(
+            &connection,
+            60,
+            Method::SessionName {
+                session_id: f.sessions[0].id.clone(),
+                name: "kept through publication".into(),
+            },
+        )
+        .await
+        else {
+            panic!("name")
+        };
+        assert_eq!(session.name.as_deref(), Some("kept through publication"));
+        let target = attach(&connection, &f, 0).await;
+        let mut probe = crate::local_runtime::session_display_projection::display_projection_probe(
+            &target.session_id,
+        )
+        .expect("root composition armed the display-projection publisher");
+        let reply = call(
+            &connection,
+            61,
+            Method::TurnStart {
+                target: target.clone(),
+                content: wire_text("named session first subject"),
+            },
+        )
+        .await;
+        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        f.gates[0].wait_entered().await;
+        probe
+            .wait_for(|probe| probe.finished)
+            .await
+            .expect("the publisher outlives its runtime");
+        assert!(probe.borrow().published);
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            62,
+            Method::SessionSummary {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("summary")
+        };
+        assert_eq!(summary.name.as_deref(), Some("kept through publication"));
+        assert_eq!(
+            summary.preview.as_deref(),
+            Some("named session first subject")
+        );
+        f.gates[0].release();
+        await_attempt_settled(&connection, &target.session_id).await;
+        f.close().await;
+    })
+    .await;
+}
+
+// P08 (runtime plane): once the root projection is settled, an agent-sourced
+// boundary admitted to the same root runtime is just another commit — the
+// projection stays byte-identical and the catalog generation never moves.
+#[tokio::test]
+async fn an_agent_sourced_boundary_never_repaints_the_settled_projection() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let mut probe = crate::local_runtime::session_display_projection::display_projection_probe(
+            &target.session_id,
+        )
+        .expect("root composition armed the display-projection publisher");
+        let reply = call(
+            &connection,
+            63,
+            Method::TurnStart {
+                target: target.clone(),
+                content: wire_text("human root subject"),
+            },
+        )
+        .await;
+        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        f.gates[0].wait_entered().await;
+        probe
+            .wait_for(|probe| probe.finished)
+            .await
+            .expect("the publisher outlives its runtime");
+        assert!(probe.borrow().published);
+        f.gates[0].release();
+        await_attempt_settled(&connection, &target.session_id).await;
+        let generation = f
+            .manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .document_generation();
+        let live = f.manager.load(&target.session_id, None).await.unwrap();
+        let runtime = live.inspect_runtime().expect("the runtime stays resident");
+        runtime
+            .submit_sourced_inbound(
+                crate::message::types::UserSource::Agent {
+                    agent_id: crate::runtime::identity::AgentId::new("parent-agent"),
+                },
+                input("an agent-authored repaint attempt"),
+            )
+            .unwrap();
+        await_attempt_settled(&connection, &target.session_id).await;
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            64,
+            Method::SessionSummary {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("summary")
+        };
+        assert_eq!(summary.preview.as_deref(), Some("human root subject"));
+        assert_eq!(
+            f.manager
+                .sessions
+                .catalog
+                .lock()
+                .await
+                .document_generation(),
+            generation
+        );
+        f.close().await;
+    })
+    .await;
+}
+
+// P11: a failed projection commit (one-shot catalog write fault armed before
+// the first turn) leaves canonical history untouched, is observable on the
+// publisher probe, lists as `None`, and the explicit repair seam publishes
+// exactly the first line afterwards.
+#[tokio::test]
+async fn a_failed_projection_commit_preserves_history_and_repairs_exactly_once() {
+    bounded(async {
+        use crate::durable::ConversationStore as _;
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        // Arm before the attach so no catalog write can interleave between
+        // arming and the publisher's commit.
+        f.manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .arm_write_fault_before_rename();
+        let target = attach(&connection, &f, 0).await;
+        let mut probe = crate::local_runtime::session_display_projection::display_projection_probe(
+            &target.session_id,
+        )
+        .expect("root composition armed the display-projection publisher");
+        let reply = call(
+            &connection,
+            65,
+            Method::TurnStart {
+                target: target.clone(),
+                content: wire_text("recovered after the fault"),
+            },
+        )
+        .await;
+        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        f.gates[0].wait_entered().await;
+        probe
+            .wait_for(|probe| probe.finished)
+            .await
+            .expect("the publisher outlives its runtime");
+        {
+            let probe = probe.borrow();
+            assert!(probe.attempted, "the commit rendered a line");
+            assert!(!probe.published, "the armed fault failed the commit");
+        }
+        f.gates[0].release();
+        await_attempt_settled(&connection, &target.session_id).await;
+        // Canonical history is exactly the turn: one ordinary user boundary
+        // and one assistant response.
+        let path = f
+            .manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .database_path(&target.session_id, &target.conversation_id);
+        let store =
+            crate::durable::SqliteConversationStore::open(target.conversation_id.clone(), &path)
+                .unwrap();
+        let canonical = store.load_canonical().unwrap();
+        assert_eq!(
+            canonical
+                .iter()
+                .filter(|message| matches!(
+                    message,
+                    crate::message::types::MessageBlock::User(user)
+                        if user.kind == crate::message::types::InboundKind::Message
+                ))
+                .count(),
+            1
+        );
+        assert_eq!(
+            canonical
+                .iter()
+                .filter(|message| matches!(
+                    message,
+                    crate::message::types::MessageBlock::Assistant(_)
+                ))
+                .count(),
+            1
+        );
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            66,
+            Method::SessionSummary {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("summary")
+        };
+        assert_eq!(summary.preview, None);
+        // The fault was one-shot; the explicit repair seam derives and
+        // publishes exactly the first line.
+        assert_eq!(
+            f.manager
+                .sessions
+                .repair_display_preview(&target.session_id)
+                .await
+                .unwrap(),
+            crate::local_runtime::session_controller::DisplayPreviewRepair::Published
+        );
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            67,
+            Method::SessionSummary {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("summary")
+        };
+        assert_eq!(
+            summary.preview.as_deref(),
+            Some("recovered after the fault")
+        );
+        f.close().await;
+    })
+    .await;
+}
+
+// Image-only case (extra, app-server plane): a first boundary with no
+// renderable text — an upload-only turn — settles the projection as absent
+// through the publisher itself, and a later text turn never repaints it:
+// the one-shot publisher is spent, repair/report seams treat the settled
+// `None` as final.
+#[tokio::test]
+async fn an_upload_only_first_turn_settles_the_projection_absent_and_never_repaints() {
+    bounded(async {
+        use base64::Engine as _;
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let mut probe = crate::local_runtime::session_display_projection::display_projection_probe(
+            &target.session_id,
+        )
+        .expect("root composition armed the display-projection publisher");
+        let MethodResult::SessionUploaded { files } = call(
+            &connection,
+            70,
+            Method::SessionUpload {
+                target: target.clone(),
+                files: vec![UploadBytes {
+                    name: "pixel.png".into(),
+                    data: base64::engine::general_purpose::STANDARD
+                        .encode([137_u8, 80, 78, 71, 13, 10, 26, 10]),
+                }],
+            },
+        )
+        .await
+        else {
+            panic!("upload")
+        };
+        let reply = call(
+            &connection,
+            71,
+            Method::TurnStart {
+                target: target.clone(),
+                content: vec![UserInputBlock::Upload(files[0].receipt.clone())],
+            },
+        )
+        .await;
+        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        f.gates[0].wait_entered().await;
+        probe
+            .wait_for(|probe| probe.finished)
+            .await
+            .expect("the publisher outlives its runtime");
+        {
+            let probe = probe.borrow();
+            assert!(!probe.attempted, "no renderable text means no attempt");
+            assert!(!probe.published);
+        }
+        f.gates[0].release();
+        await_attempt_settled(&connection, &target.session_id).await;
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            72,
+            Method::SessionSummary {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("summary")
+        };
+        assert_eq!(summary.preview, None);
+        // The one-shot publisher is spent: a later text turn commits, but
+        // the settled `None` never gets repainted.
+        let reply = call(
+            &connection,
+            73,
+            Method::TurnStart {
+                target: target.clone(),
+                content: wire_text("text after the upload"),
+            },
+        )
+        .await;
+        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        await_attempt_settled(&connection, &target.session_id).await;
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            74,
+            Method::SessionSummary {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("summary")
+        };
+        assert_eq!(summary.preview, None);
+        f.close().await;
+    })
+    .await;
+}
+
+/// Issue #386 regression A (native half): the real window between the
+/// canonical commit and the display-projection commit.
+///
+/// The one-shot publisher is parked *after* it renders its line and *before*
+/// it takes the catalog mutex, so an ordinary `session/summary` read really is
+/// served — and really does answer `preview: null` — while publication is
+/// still outstanding. Releasing publication then produces the Session-scoped
+/// metadata invalidation a live client needs, with no further user turn and no
+/// client-initiated retry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_parked_publication_serves_a_null_summary_then_invalidates_it() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let gate = crate::local_runtime::session_display_projection::publication_test_support::arm(
+            &target.session_id,
+        );
+        let mut probe = crate::local_runtime::session_display_projection::display_projection_probe(
+            &target.session_id,
+        )
+        .expect("root composition armed the display-projection publisher");
+        let reply = call(
+            &connection,
+            80,
+            Method::TurnStart {
+                target: target.clone(),
+                content: wire_text("live convergence subject"),
+            },
+        )
+        .await;
+        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        // The provider request proves the canonical user boundary committed.
+        f.gates[0].wait_entered().await;
+        // The publisher has derived its line and is parked before the catalog
+        // mutex. It therefore cannot be blocking the read below.
+        gate.parked(1).await;
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            81,
+            Method::SessionSummary {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("summary")
+        };
+        assert_eq!(
+            summary.preview, None,
+            "canonical history exists and the projection is still unpublished"
+        );
+
+        gate.release();
+        probe
+            .wait_for(|probe| probe.finished)
+            .await
+            .expect("the publisher outlives its runtime");
+        assert!(probe.borrow().published);
+        // The native metadata owner announces the change by Session identity.
+        let invalidated = loop {
+            if let NotificationMethod::SummaryInvalidated { session_id } =
+                connection.next_notification().await.notification
+            {
+                break session_id;
+            }
+        };
+        assert_eq!(
+            invalidated, target.session_id,
+            "the invalidation is routed by Session identity, not by attachment target"
+        );
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            82,
+            Method::SessionSummary {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("summary")
+        };
+        assert_eq!(
+            summary.preview.as_deref(),
+            Some("live convergence subject"),
+            "the authoritative reread carries the committed projection"
+        );
+        f.gates[0].release();
+        await_attempt_settled(&connection, &target.session_id).await;
+        f.close().await;
+    })
+    .await;
+}
+
+/// Issue #386 regression (App Server plane): a Session cold-loaded straight
+/// onto a branch repairs its **root** subject, arms no publisher on the branch,
+/// and writes nothing the second time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cold_loading_a_branch_repairs_the_projection_from_the_session_root() {
+    bounded(async {
+        use crate::durable::ConversationStore as _;
+        let f = Fixture::new().await;
+        let sessions = &f.manager.sessions;
+        let session = f.sessions[0].clone();
+        let root_node = session.active_node.clone();
+        let text = |id: &str, text: &str| {
+            crate::message::types::MessageBlock::User(crate::message::types::UserMessageBlock {
+                id: crate::runtime::identity::MessageId::new(id),
+                content: input(text),
+                source: crate::message::types::UserSource::Human,
+                kind: crate::message::types::InboundKind::Message,
+                timestamp: None,
+            })
+        };
+        let store = |access: &crate::local_runtime::session_controller::SessionAccess| {
+            crate::durable::SqliteConversationStore::open(
+                access.node.conversation_id.clone(),
+                &access.database_path,
+            )
+            .unwrap()
+        };
+        let boundary = crate::runtime::identity::MessageId::new("root-subject-a");
+        let revision = {
+            let access = sessions
+                .acquire_session(&session.id, Some(&root_node))
+                .await
+                .unwrap();
+            let root = store(&access);
+            root.append_canonical(&text("root-subject-a", "root subject A"))
+                .unwrap();
+            root.load_head().unwrap().revision
+        };
+        // Cut before the root's only boundary: the branch retains no root
+        // message and can disagree with the root about its first message.
+        let branch = sessions
+            .branch_session_node(&session.id, &root_node, revision, &boundary)
+            .await
+            .unwrap()
+            .session;
+        let branch_node = branch.active_node.clone();
+        let branch_canonical = {
+            let access = sessions
+                .acquire_session(&session.id, Some(&branch_node))
+                .await
+                .unwrap();
+            let branch = store(&access);
+            branch
+                .append_canonical(&text("branch-subject-z", "branch subject Z"))
+                .unwrap();
+            branch.load_canonical().unwrap()
+        };
+        assert_eq!(
+            sessions
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .preview,
+            None,
+            "the Session starts with a missing projection"
+        );
+
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let MethodResult::Attached { target, .. } = call(
+            &connection,
+            90,
+            Method::SessionAttach {
+                session_id: session.id.clone(),
+                node_id: Some(branch_node.clone()),
+            },
+        )
+        .await
+        else {
+            panic!("attached")
+        };
+        let MethodResult::SessionSummary { summary } = call(
+            &connection,
+            91,
+            Method::SessionSummary {
+                session_id: session.id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("summary")
+        };
+        assert_eq!(
+            summary.preview.as_deref(),
+            Some("root subject A"),
+            "the repair derives the Session's root subject, never the composed branch's"
+        );
+        assert!(
+            crate::local_runtime::session_display_projection::display_projection_probe(&session.id)
+                .is_none(),
+            "a branch runtime is never the projection subject, so no publisher is armed"
+        );
+        // The branch's canonical history is untouched by Session metadata repair.
+        assert_eq!(
+            store(
+                &sessions
+                    .acquire_session(&session.id, Some(&branch_node))
+                    .await
+                    .unwrap()
+            )
+            .load_canonical()
+            .unwrap(),
+            branch_canonical
+        );
+
+        // Write-level idempotence across a *second cold composition*, not a
+        // detach/reattach cycle: detach only releases an external claim, so the
+        // branch runtime is unloaded through its real owner and its retirement
+        // is proven before the repair-capable composition runs again.
+        let generation = f
+            .manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .document_generation();
+        let invalidations = sessions.summary_invalidations();
+        let recorded = invalidations.recorded();
+        let before = sessions.read_session(&session.id).await.unwrap();
+        let revision_before = sessions.read_settings(&session.id).await.unwrap().0;
+        let preview_before = sessions
+            .read_session_summary(&session.id)
+            .await
+            .unwrap()
+            .preview;
+        let root_canonical_before = store(
+            &sessions
+                .acquire_session(&session.id, Some(&root_node))
+                .await
+                .unwrap(),
+        )
+        .load_canonical()
+        .unwrap();
+        let conversation = target.conversation_id.clone();
+        let incarnation = target.runtime_incarnation;
+        let probe = f.manager.probe(&conversation);
+        let compositions = probe.compositions.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(compositions, 1, "the branch composed exactly once so far");
+        assert!(matches!(
+            call(&connection, 92, Method::SessionDetach { target }).await,
+            MethodResult::Detached {}
+        ));
+        f.manager.unload(&conversation).await.unwrap();
+        assert_eq!(
+            f.manager.residency(&conversation),
+            crate::local_runtime::session_runtime_manager::ResidencyState::Unloaded,
+            "the branch runtime is retired, not merely detached"
+        );
+        let MethodResult::Attached { target, .. } = call(
+            &connection,
+            93,
+            Method::SessionAttach {
+                session_id: session.id.clone(),
+                node_id: Some(branch_node.clone()),
+            },
+        )
+        .await
+        else {
+            panic!("attached")
+        };
+        assert_ne!(
+            target.runtime_incarnation, incarnation,
+            "reopening the branch produced a new runtime incarnation"
+        );
+        assert_eq!(
+            probe.compositions.load(std::sync::atomic::Ordering::SeqCst),
+            compositions + 1,
+            "a second real composition ran the repair-capable startup path again"
+        );
+        assert_eq!(
+            f.manager
+                .sessions
+                .catalog
+                .lock()
+                .await
+                .document_generation(),
+            generation,
+            "an already-correct projection is a write-level no-op"
+        );
+        assert_eq!(
+            invalidations.recorded(),
+            recorded,
+            "a no-op repair announces nothing"
+        );
+        let after = sessions.read_session(&session.id).await.unwrap();
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(
+            sessions.read_settings(&session.id).await.unwrap().0,
+            revision_before
+        );
+        assert_eq!(
+            sessions
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .preview,
+            preview_before,
+            "the already-correct root preview survives the second composition"
+        );
+        assert_eq!(
+            store(
+                &sessions
+                    .acquire_session(&session.id, Some(&root_node))
+                    .await
+                    .unwrap()
+            )
+            .load_canonical()
+            .unwrap(),
+            root_canonical_before,
+            "the root's canonical history is unchanged by the second repair"
+        );
+        assert_eq!(
+            store(
+                &sessions
+                    .acquire_session(&session.id, Some(&branch_node))
+                    .await
+                    .unwrap()
+            )
+            .load_canonical()
+            .unwrap(),
+            branch_canonical
+        );
+        assert!(
+            crate::local_runtime::session_display_projection::display_projection_probe(&session.id)
+                .is_none(),
+            "the reopened branch still arms no live root-preview publisher"
+        );
+        assert!(matches!(
+            call(&connection, 94, Method::SessionDetach { target }).await,
+            MethodResult::Detached {}
+        ));
+        f.close().await;
+    })
+    .await;
 }

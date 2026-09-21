@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { ConfigurationApplication } from '../../../protocol/app-server/v16';
+import type { ConfigurationApplication } from '../../../protocol/app-server/v17';
 import { isOutcomeUncertain, type AppServerClient, type SessionView } from '../client/app-server';
 import { Button } from '../presentation/primitives/Button';
 

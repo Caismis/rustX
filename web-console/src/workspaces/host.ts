@@ -1,5 +1,5 @@
 import { carrierFetch } from '../carrier/http.ts';
-import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v16.ts';
+import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v17.ts';
 export type WorkspaceConfigurationOperation = { kind: 'read' | 'reconcile' } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
 /** Product Host contract. No rustX trust, configuration, or Session ownership. */
 export interface ProductHostWorkspace { id: string; displayName: string; location: string; displayPath: string }

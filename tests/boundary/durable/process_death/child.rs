@@ -130,6 +130,11 @@ pub(crate) const SESSION_BRANCH: &str = "session_branch";
 /// A catalog-owning child that reopens whatever lineage the catalog says is
 /// active and answers one turn on it.
 pub(crate) const SESSION_RESUME: &str = "session_resume";
+/// A catalog-owning child with the one-shot display-projection publisher
+/// (Issue #386) armed exactly the way production composition arms it, killed
+/// around the publisher's own catalog commit with its first boundary
+/// committed but its model turn parked forever.
+pub(crate) const SESSION_PROJECTION: &str = "session_projection";
 /// One turn that starts a detached background execution, then a **second**
 /// inbound turn whose Agent Status is composed while that execution is live.
 pub(crate) const BACKGROUND_STATUS: &str = "background_status";
@@ -295,6 +300,11 @@ fn lab_paths(root: &Path) -> LaunchFixture {
     }
 }
 
+/// One still-inert composed runtime hook — the seam the catalog-owning
+/// scenarios use to arm the display-projection publisher (Issue #386)
+/// exactly where production composition arms it.
+type BeforeActivation = Box<dyn FnOnce(&ConversationRuntime) + Send>;
+
 /// One composed child runtime.
 struct Child {
     headless: HeadlessConversationRuntime,
@@ -321,7 +331,7 @@ impl Child {
         approve: bool,
         client: bool,
     ) -> Result<Self, String> {
-        Self::compose_lineage(root, scripts, approve, client, None).await
+        Self::compose_lineage(root, scripts, approve, client, None, None).await
     }
 
     /// Composes over an explicit lineage instead of this lab's fixed one.
@@ -329,13 +339,16 @@ impl Child {
     /// `lineage` is `Some((conversation, artifacts_root))` for the
     /// catalog-owning scenarios, whose active conversation identity and
     /// private database directory are allocated by the Session catalog rather
-    /// than fixed by the harness.
+    /// than fixed by the harness. `before_activation` runs on the composed,
+    /// still-inert runtime — the one moment production arms the display
+    /// projection publisher (Issue #386).
     async fn compose_lineage(
         root: &Path,
         scripts: Vec<Vec<FakeStep>>,
         approve: bool,
         client: bool,
         lineage: Option<(ConversationId, PathBuf)>,
+        before_activation: Option<BeforeActivation>,
     ) -> Result<Self, String> {
         let paths = lab_paths(root);
         let launch = paths.try_resolve()?;
@@ -391,6 +404,9 @@ impl Child {
             core.runtime().set_interaction_provider_available(true);
             let runtime = core.runtime().clone();
             spawn_observer(&observations, Arc::clone(&log), runtime, approve);
+        }
+        if let Some(before_activation) = before_activation {
+            before_activation(core.runtime());
         }
         let headless = core.into_headless();
         Ok(Self {
@@ -522,6 +538,7 @@ async fn compose_session_child(
     root: &Path,
     session_ordinal: usize,
     scripts: Vec<Vec<FakeStep>>,
+    arm_projection: bool,
 ) -> (Child, Arc<LocalSessionAttachment>) {
     let paths = lab_paths(root);
     let config_bytes = std::fs::read(&paths.config).expect("read the lab runtime config");
@@ -550,18 +567,31 @@ async fn compose_session_child(
         .parent()
         .expect("the active conversation database has a parent")
         .to_path_buf();
+    let projection_session = arm_projection.then(|| session_id.clone());
     let supervisor = Arc::new(LocalSessionAttachment::new(
         catalog,
         session_id,
         session_state,
         0,
     ));
+    // Arm exactly the way production composition does (Issue #386): the
+    // catalog held weakly through the supervisor's controller, the
+    // subscription taken while the runtime is still inert.
+    let before_activation = projection_session.map(|session_id| {
+        let catalog = supervisor.controller().downgrade_catalog();
+        Box::new(move |runtime: &ConversationRuntime| {
+            crate::local_runtime::session_display_projection::arm_display_projection(
+                catalog, session_id, runtime,
+            );
+        }) as BeforeActivation
+    });
     let child = Child::compose_lineage(
         root,
         scripts,
         false,
         true,
         Some((node.conversation_id.clone(), artifacts_root)),
+        before_activation,
     )
     .await
     .unwrap_or_else(|error| panic!("the FND-06 session child could not compose: {error}"));
@@ -1338,6 +1368,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                     // owning turns take two model turns each, the subagent
                     // terminal notice and the final human turn one each.
                 ],
+                false,
             )
             .await;
 
@@ -1398,6 +1429,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                     text("resumed on the cut lineage"),
                     done(ModelFinishReason::Stop),
                 ]],
+                false,
             )
             .await;
             note(&format!(
@@ -1432,6 +1464,21 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 child.runtime().recovery().resume()
             ));
             park_owning(child).await;
+        }
+        SESSION_PROJECTION => {
+            // The model parks forever, so the only durable facts this child
+            // can ever commit are the canonical first boundary and — through
+            // the armed one-shot publisher — the Session's display
+            // projection. The parent chooses the kill window by arming the
+            // gate: `after:adopt_pending_batch` freezes the admission worker
+            // before the commit is observable (the projection is provably
+            // still absent), `before:publish_display_preview` freezes the
+            // publisher inside its own atomic catalog commit.
+            let (child, supervisor) =
+                compose_session_child(root, 0, vec![vec![FakeStep::ParkUntilCancelled]], true)
+                    .await;
+            child.submit("the projection subject");
+            park_owning((child, supervisor)).await;
         }
         other => panic!("unknown FND-06 scenario {other}"),
     }

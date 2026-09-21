@@ -3136,3 +3136,310 @@ async fn app286_session_wire_results_compare_the_installed_route_without_rebindi
     }
     runtime.shutdown().await.unwrap();
 }
+
+/// Issue #386: Session display-projection repair is Session-owned and reads the
+/// Session's **root** lineage, whatever node a launch selects. Arming the live
+/// publisher is the only root-runtime-specific half.
+///
+/// The Session below has a renderable root subject, a missing catalog
+/// projection, and a branch whose own first ordinary message is different. A
+/// launch that resumes straight onto that branch must repair the Session to the
+/// *root's* subject, must not arm a publisher, must not touch canonical
+/// history, and must write nothing at all the second time.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn startup_on_a_branch_repairs_the_projection_from_the_root_without_arming() {
+    use super::session::{SessionCatalog, SessionPersistentState};
+    use super::session_controller::SessionController;
+    use crate::durable::ConversationStore;
+    use crate::message::content::TextBlock;
+    use crate::message::types::{
+        InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    };
+    use crate::runtime::identity::MessageId;
+
+    fn text_user(id: &str, text: &str) -> MessageBlock {
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new(id),
+            content: vec![UserContentBlock::Text(TextBlock { text: text.into() })],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        })
+    }
+    fn store_of(
+        access: &super::session_controller::SessionAccess,
+    ) -> crate::durable::SqliteConversationStore {
+        crate::durable::SqliteConversationStore::open(
+            access.node.conversation_id.clone(),
+            &access.database_path,
+        )
+        .unwrap()
+    }
+
+    let f = Fixture::new();
+    let launch = f.resolve();
+    let controller = SessionController::open(&launch.runtime_root).unwrap();
+    let session = controller
+        .create_session(SessionPersistentState::from_input(&launch.input))
+        .await
+        .unwrap()
+        .session;
+    let root_node = session.active_node.clone();
+    let root_access = controller
+        .acquire_session(&session.id, Some(&root_node))
+        .await
+        .unwrap();
+    let root_store = store_of(&root_access);
+    let boundary = MessageId::new("root-subject-a");
+    root_store
+        .append_canonical(&text_user("root-subject-a", "root subject A"))
+        .unwrap();
+    let revision = root_store.load_head().unwrap().revision;
+    // The branch is cut *before* the root's first boundary, so it retains no
+    // root message at all and can be given a first message of its own.
+    let branch = controller
+        .branch_session_node(&session.id, &session.active_node, revision, &boundary)
+        .await
+        .unwrap()
+        .session;
+    let branch_node = branch.active_node.clone();
+    let branch_access = controller
+        .acquire_session(&session.id, Some(&branch_node))
+        .await
+        .unwrap();
+    let branch_conversation = branch_access.node.conversation_id.clone();
+    let branch_store = store_of(&branch_access);
+    branch_store
+        .append_canonical(&text_user("branch-subject-z", "branch subject Z"))
+        .unwrap();
+    assert_eq!(
+        controller
+            .read_session_summary(&session.id)
+            .await
+            .unwrap()
+            .preview,
+        None,
+        "the Session starts with a missing projection"
+    );
+    let root_canonical = root_store.load_canonical().unwrap();
+    let branch_canonical = branch_store.load_canonical().unwrap();
+    // The branch must genuinely disagree with the root, or the regression could
+    // pass by reading the wrong lineage.
+    assert_ne!(root_canonical, branch_canonical);
+    drop(branch_store);
+    drop(branch_access);
+    drop(root_store);
+    drop(root_access);
+    drop(controller);
+
+    let catalog_path = launch.runtime_root.join("sessions/catalog.json");
+    let product = LocalSessionClient::compose(
+        &launch,
+        &LocalRuntimeDependencies {
+            startup_session: super::StartupSession::Select {
+                session: session.id.clone(),
+                node: Some(branch_node.clone()),
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        product.runtime().conversation_id(),
+        &branch_conversation,
+        "the launch really composed the branch"
+    );
+    assert!(
+        super::session_display_projection::display_projection_probe(&session.id).is_none(),
+        "a branch runtime is never the projection subject, so no publisher is armed"
+    );
+    product.runtime().shutdown().await.unwrap();
+    drop(product);
+
+    let catalog = SessionCatalog::open_existing(&launch.runtime_root)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        catalog.summary(&session.id).unwrap().preview.as_deref(),
+        Some("root subject A"),
+        "repair derives the Session's root subject, never the composed branch's"
+    );
+    let repaired_generation = catalog.document_generation();
+    let repaired_snapshot = catalog.snapshot(&session.id).unwrap();
+    let repaired_revision = catalog.settings_revision(&session.id).unwrap();
+    let repaired_bytes = std::fs::read(&catalog_path).unwrap();
+    drop(catalog);
+
+    // Canonical history is untouched by display repair, on both lineages.
+    let controller = SessionController::open(&launch.runtime_root).unwrap();
+    let root_access = controller
+        .acquire_session(&session.id, Some(&root_node))
+        .await
+        .unwrap();
+    assert_eq!(
+        store_of(&root_access).load_canonical().unwrap(),
+        root_canonical
+    );
+    let branch_access = controller
+        .acquire_session(&session.id, Some(&branch_node))
+        .await
+        .unwrap();
+    assert_eq!(
+        store_of(&branch_access).load_canonical().unwrap(),
+        branch_canonical
+    );
+    drop(branch_access);
+    drop(root_access);
+    drop(controller);
+
+    // Write-level idempotence: reopening the same branch repairs nothing, so
+    // the catalog file, its generation, `updated_at` and `settings_revision`
+    // are all byte-for-byte what the first repair left.
+    let product = LocalSessionClient::compose(
+        &launch,
+        &LocalRuntimeDependencies {
+            startup_session: super::StartupSession::Select {
+                session: session.id.clone(),
+                node: Some(branch_node.clone()),
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    product.runtime().shutdown().await.unwrap();
+    drop(product);
+    assert_eq!(std::fs::read(&catalog_path).unwrap(), repaired_bytes);
+    let catalog = SessionCatalog::open_existing(&launch.runtime_root)
+        .unwrap()
+        .unwrap();
+    assert_eq!(catalog.document_generation(), repaired_generation);
+    assert_eq!(catalog.snapshot(&session.id).unwrap(), repaired_snapshot);
+    assert_eq!(
+        catalog.settings_revision(&session.id).unwrap(),
+        repaired_revision
+    );
+}
+
+/// Issue #386: an unrenderable first root message is a settled `None`. Neither
+/// the branch's own renderable text nor a later root message may manufacture a
+/// replacement projection, on any composition path.
+#[tokio::test]
+async fn startup_never_manufactures_a_projection_for_an_unrenderable_root_subject() {
+    use super::session::{SessionCatalog, SessionPersistentState};
+    use super::session_controller::SessionController;
+    use crate::durable::ConversationStore;
+    use crate::message::content::TextBlock;
+    use crate::message::types::{
+        InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    };
+    use crate::runtime::identity::MessageId;
+
+    fn user(id: &str, content: Vec<UserContentBlock>) -> MessageBlock {
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new(id),
+            content,
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        })
+    }
+
+    let f = Fixture::new();
+    let launch = f.resolve();
+    let controller = SessionController::open(&launch.runtime_root).unwrap();
+    let session = controller
+        .create_session(SessionPersistentState::from_input(&launch.input))
+        .await
+        .unwrap()
+        .session;
+    let access = controller.acquire_session(&session.id, None).await.unwrap();
+    let store = crate::durable::SqliteConversationStore::open(
+        session.active_conversation_id.clone(),
+        &access.database_path,
+    )
+    .unwrap();
+    store
+        .append_canonical(&user(
+            "unrenderable-first",
+            vec![UserContentBlock::Image(
+                crate::message::content::ImageReference {
+                    artifact_id: crate::runtime::identity::ArtifactId::new("artifact-1"),
+                    alt: None,
+                },
+            )],
+        ))
+        .unwrap();
+    // A later root message is renderable, and is still not the subject.
+    let boundary = MessageId::new("later-root-text");
+    store
+        .append_canonical(&user(
+            "later-root-text",
+            vec![UserContentBlock::Text(TextBlock {
+                text: "a later root message is not the subject".into(),
+            })],
+        ))
+        .unwrap();
+    let revision = store.load_head().unwrap().revision;
+    let branch = controller
+        .branch_session_node(&session.id, &session.active_node, revision, &boundary)
+        .await
+        .unwrap()
+        .session;
+    let branch_node = branch.active_node.clone();
+    let branch_access = controller
+        .acquire_session(&session.id, Some(&branch_node))
+        .await
+        .unwrap();
+    crate::durable::SqliteConversationStore::open(
+        branch_access.node.conversation_id.clone(),
+        &branch_access.database_path,
+    )
+    .unwrap()
+    .append_canonical(&user(
+        "branch-text",
+        vec![UserContentBlock::Text(TextBlock {
+            text: "branch text is not the subject".into(),
+        })],
+    ))
+    .unwrap();
+    let _ = &branch;
+    drop(branch_access);
+    drop(store);
+    drop(access);
+    drop(controller);
+
+    let catalog_path = launch.runtime_root.join("sessions/catalog.json");
+    let bytes = std::fs::read(&catalog_path).unwrap();
+    for node in [Some(branch_node.clone()), None] {
+        let product = LocalSessionClient::compose(
+            &launch,
+            &LocalRuntimeDependencies {
+                startup_session: super::StartupSession::Select {
+                    session: session.id.clone(),
+                    node,
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            super::session_display_projection::display_projection_probe(&session.id).is_none(),
+            "a settled None is never re-armed, on the root or on a branch"
+        );
+        product.runtime().shutdown().await.unwrap();
+        drop(product);
+        assert_eq!(
+            std::fs::read(&catalog_path).unwrap(),
+            bytes,
+            "an unrenderable subject writes nothing at all"
+        );
+    }
+    let catalog = SessionCatalog::open_existing(&launch.runtime_root)
+        .unwrap()
+        .unwrap();
+    assert_eq!(catalog.summary(&session.id).unwrap().preview, None);
+}

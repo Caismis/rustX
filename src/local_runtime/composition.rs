@@ -146,8 +146,8 @@ use super::config::{CurrentRuntimeConfig, CurrentRuntimeConfigError};
 use super::configuration::{AdmittedSessionConfig, SessionLocations};
 
 use super::session::{
-    SessionCatalog, SessionError, SessionId, SessionNodeId, SessionNodeOrigin,
-    SessionPersistentState,
+    DisplayPreviewSubject, SessionCatalog, SessionError, SessionId, SessionNodeId,
+    SessionNodeOrigin, SessionPersistentState,
 };
 use super::supervisor::{LocalSessionAttachment, SessionAttachmentError};
 
@@ -2085,6 +2085,57 @@ impl LocalSessionClient {
         let (session_id, node, session_state) = planned
             .destination_lineage()
             .map_err(LocalRuntimeError::SessionCatalog)?;
+        // The startup display projection (Issue #386). Two different
+        // conditions live here and must not be confused:
+        //
+        // *Repair* is Session-owned metadata, derived from the Session's
+        // **root** lineage whatever node this launch selected. A launch that
+        // resumes straight onto a branch still repairs the Session's missing
+        // projection from the root's first ordinary user message — the branch's
+        // own first message is never the subject. The derived line folds into
+        // the plan and rides the one startup catalog transaction below, so a
+        // launch that fails to compose still writes nothing.
+        //
+        // *Arming the live publisher* is root-runtime-specific: only a root
+        // destination whose root lineage has no ordinary user boundary yet arms
+        // the one-shot publisher on the freshly composed runtime.
+        let mut arm_display_projection = false;
+        let planned = if planned.display_preview().is_none() {
+            match &dependencies.startup_session {
+                // A freshly prepared root (or the unpublished first Session)
+                // has no ordinary user boundary by construction, and its row is
+                // not in the catalog on disk at all: its planned/seed state is
+                // the authority, so arming needs no store read and no lookup.
+                StartupSession::Empty => {
+                    arm_display_projection = node.parent.is_none();
+                    planned
+                }
+                StartupSession::Select { .. } => {
+                    match catalog.display_preview_subject(&session_id) {
+                        Ok(DisplayPreviewSubject::Derived(preview)) => planned
+                            .with_display_preview(&preview)
+                            .map_err(LocalRuntimeError::SessionCatalog)?,
+                        Ok(DisplayPreviewSubject::NoBoundary) => {
+                            arm_display_projection = node.parent.is_none();
+                            planned
+                        }
+                        // The first boundary has no renderable text: the
+                        // projection is a settled `None`, never re-armed.
+                        Ok(DisplayPreviewSubject::Unrenderable) => planned,
+                        Err(error) => {
+                            // Repair is best-effort at startup: the row falls
+                            // back to identity and the next explicit seam
+                            // retries.
+                            tracing::warn!(%error, "Session display-preview repair read failed");
+                            planned
+                        }
+                    }
+                }
+                StartupSession::InspectConversation { .. } => planned,
+            }
+        } else {
+            planned
+        };
         let database_path = catalog.database_path(&session_id, &node.conversation_id);
         let artifacts_root = database_path
             .parent()
@@ -2111,7 +2162,7 @@ impl LocalSessionClient {
         .await?;
         let supervisor = Arc::new(LocalSessionAttachment::new(
             catalog,
-            session_id,
+            session_id.clone(),
             new_session_settings,
             planned.settings_revision(),
         ));
@@ -2132,6 +2183,16 @@ impl LocalSessionClient {
             .install_runtime(runtime.runtime().clone())
             .await
             .map_err(LocalRuntimeError::SessionSupervisor)?;
+        // Arm while the runtime is still inert: the subscription linearizes
+        // before activation, so the first canonical ordinary user commit of
+        // this root runtime cannot slip past the one-shot publisher.
+        if arm_display_projection {
+            super::session_display_projection::arm_display_projection(
+                supervisor.controller().downgrade_catalog(),
+                session_id,
+                runtime.runtime(),
+            );
+        }
         runtime.activate();
         Ok(Self {
             runtime,

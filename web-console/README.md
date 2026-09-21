@@ -69,7 +69,7 @@ an independently managed runtime/Host. The [Host contract](WORKSPACES.md) descri
 that operator-owned integration. Use the launcher for complete local composition.
 
 Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v16` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v17` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -96,7 +96,29 @@ See [App Server transport/protocol](../docs/app-server-protocol.md) for supporte
 bind/authentication semantics and deployment boundaries. No browser UI can redact
 secrets a developer intentionally includes in a prompt/Tool result; the inspector
 shows that actual application traffic. It never records handshake credentials or
-requests provider/MCP configuration.
+requests provider/MCP configuration. A `configuration/sourceWrite` acknowledgement
+is authoring evidence, not application completion: Settings keeps target/lifetime
+fencing, read ordering and mutation acknowledgement as three separate facts. Only
+`configuration/sourcesRead` results are adopted as the whole `SourceSettings`
+projection; an acknowledgement confirms its one mutation and supplies the committed
+revision the save contract needs, then the projection reconverges through one
+bounded authoritative read owed by that commit. A published application version is
+a standing obligation, level-triggered rather than an edge: it survives an
+already-running convergence read, which re-evaluates the newest obligation when its
+read settles and performs exactly one more bounded read while still behind — never
+a timer, a poll, or one read per notification. That obligation is also owned: a
+publication or acknowledgement obligation observed while a convergence owner is
+running is never discarded, and a superseded read is never treated as a satisfied
+obligation. If a newer one-shot read preempts the owner's read, the owner keeps or
+deterministically transfers the outstanding obligation to another bounded pass
+before releasing ownership, so no publication can be left unowned.
+`ConfigurationApplication.version`
+orders application publications only; it never orders authored source revisions or
+whole projections, so an acknowledgement carrying an equal or older version can
+never overwrite a projection accepted from a causally later authoritative read.
+Drafts and their CAS bases remain user intent: native projection convergence
+consumes a saved draft only when the projection reaches its acknowledged revision
+and never rewrites an unsaved draft's base outside the explicit review workflow.
 
 ## Ownership and recovery
 
@@ -109,7 +131,7 @@ requests provider/MCP configuration.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v16.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v17.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -149,11 +171,32 @@ server-owned work continues exactly as for closing one view.
 
 Every ordinary Session label uses `sessionDisplayTitle`: explicit native name >
 native `SessionSummary.preview` > **New session**. Session IDs stay in Inspector.
-Manual naming remains `session/name`; no LLM call, generated title, truncation or
-first-message summarizer exists in React. After authoritative canonical user-message
-observation, a previously unnamed view reads exact native `session/summary` metadata.
-Only success marks the first-message check complete, including a file-only `preview: null`.
-Failures remain retryable on authoritative refresh/reconnect; concurrent reads coalesce.
+The server owns a persisted display projection: `preview` is computed from the
+canonical root user message after its commit and stored in the session catalog,
+never derived by the client or at list time. Canonical commitment and projection
+publication are two separate server commit points, so `preview: null` may be a
+legitimately empty projection (no ordinary user message, or no renderable text in
+the first one) **or** an unrepaired publication gap that persists indefinitely.
+The client never guesses which. Manual naming remains `session/name`; no LLM call,
+generated title, truncation or first-message summarizer exists in React. After
+authoritative canonical user-message observation, a previously unnamed view reads
+exact native `session/summary` metadata. Canonical history alone never settles the
+first-message check: a read settles it only when it was also causally after every
+`session/summaryInvalidated` observed for that Session. Failures remain retryable on
+authoritative refresh/reconnect; concurrent reads coalesce within one generation and
+one invalidation epoch. A `session/summaryInvalidated` notification overrides any
+earlier cached-null check and forces a causally later read — one begun before it can
+neither satisfy nor clear it — so a healthy live client converges with no further user
+turn, manual refresh, navigation, rename or reconnect, and a legitimate null never
+polls. Catalog list acceptance participates in the same ordering: `session/list`
+and `session/summary` each take a ticket from one monotonic observation clock when
+they start, and so does every observed invalidation, so accepting a list row never
+discharges an invalidation newer than that request's start cut — including for a
+Session the row itself introduces, which no exact read could have been issued for
+while it was uncached. Such a row is published and then repaired by one exact
+`session/summary` reread; the reread changes metadata only and never page
+membership, ordering or query selection. Invalidation evidence for an uncached
+Session is retired once no older observation is still outstanding.
 Drafts, accepted inbound and optimistic submission never supply preview text.
 `session/list` is fuzzy, bounded catalog browsing, never exact identity resolution.
 `view.summary` retains replaceable exact metadata for off-page/restored views without

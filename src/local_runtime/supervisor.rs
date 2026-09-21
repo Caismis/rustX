@@ -79,6 +79,11 @@ impl LocalSessionAttachment {
     ) -> Result<(), SessionError> {
         self.controller.catalog.lock().await.commit_planned(planned)
     }
+    /// The durable Session authority behind this attachment. Display-projection
+    /// arming publishes through it, never through the runtime.
+    pub(crate) fn controller(&self) -> &SessionController {
+        &self.controller
+    }
     #[cfg(test)]
     pub(crate) fn install_copy_publication_gate(
         &self,

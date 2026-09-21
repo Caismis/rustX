@@ -12596,7 +12596,7 @@
           ]
         },
         "preview": {
-          "description": "The first user message of this Session's root lineage, bounded to one\nline. It is what an unnamed row is recognized by, and it is derived\nfor the observation rather than stored: the catalog keeps no copy of\nconversation content.",
+          "description": "The first ordinary user message of this Session's root lineage,\nbounded to one line. It is what an unnamed row is recognized by, and\nit is the client-facing projection of the persisted\n`display_preview`: the catalog stores the derived line so listing,\npagination, and search never open a conversation store. `None` is\nlegitimate — no ordinary user message exists yet, or the first one\nhas no renderable text — and yields the client-side identity\nfallback.",
           "type": [
             "string",
             "null"
@@ -18350,6 +18350,32 @@
               "additionalProperties": false,
               "required": [
                 "target"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "This Session's durable display metadata changed on the server after the\nclient may already have read it; read `session/summary` again\n(Issue #386).\n\nIt is an *invalidation*, not a value: it carries no metadata, makes no\ndurability claim beyond the catalog commit that produced it, and is not\ncanonical history, an Agent event, an Attempt event, or a Conversation\nruntime cursor. It is addressed by Session identity alone — no\nattachment target — because Session metadata belongs to the Session and\nnot to whichever Conversation of it a client happens to display, and\nbecause observing metadata must never require holding a runtime\nattachment.\n\nThe concrete cause today is the asynchronous display-projection\npublication: the Session's first ordinary root-lineage user message is\ncommitted canonically first, and its derived `preview` is committed to\nthe catalog afterwards, so a client that read `session/summary` in\nbetween legitimately cached `preview: null`.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/summaryInvalidated"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id"
               ]
             }
           },

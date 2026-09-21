@@ -41,6 +41,7 @@ import {
   type SurfaceRevision,
   type MessageId,
   type UserInputBlock,
+  type Notification,
 } from "../protocol/app-server.ts";
 import { AppServerClient } from "./client.ts";
 import {
@@ -101,6 +102,26 @@ export interface AppServerHostComposition {
   terminationGraceMs?: number;
 }
 
+/**
+ * The Session a notification addresses.
+ *
+ * Every server notification names exactly one Session, but not all of them do
+ * it through an attachment target: configuration application is scoped by
+ * Session, and `session/summaryInvalidated` (Issue #386) is addressed by
+ * Session identity alone, because durable Session metadata belongs to the
+ * Session rather than to whichever Conversation of it a client displays.
+ */
+function sessionIdOf(notification: Notification): string {
+  switch (notification.method) {
+    case "configuration/changed":
+      return notification.params.application.scope;
+    case "session/summaryInvalidated":
+      return notification.params.session_id;
+    default:
+      return notification.params.target.session_id;
+  }
+}
+
 export class AppServerHost {
   readonly endpoint: string | undefined;
   readonly client: AppServerClient;
@@ -126,7 +147,7 @@ export class AppServerHost {
     // attachment target; each attachment decides whether that target is its
     // own, so a superseded incarnation cannot reach its replacement.
     client.onNotification((notification) => {
-      const session = this.#sessions.get(notification.method === "configuration/changed" ? notification.params.application.scope : notification.params.target.session_id);
+      const session = this.#sessions.get(sessionIdOf(notification));
       session?.applyNotification(notification);
     });
   }
