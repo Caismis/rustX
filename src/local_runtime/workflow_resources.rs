@@ -216,15 +216,14 @@ mod tests {
     #[test]
     fn user_discovery_does_not_read_workspace_overrides() {
         let dir = tempfile::tempdir().unwrap();
-        let user = dir.path().join("user");
+        // The workspace argument is canonical authority; model the production
+        // binding point instead of passing an aliased temporary root.
+        let root = dir.path().canonicalize().unwrap();
+        let user = root.join("user");
         std::fs::create_dir_all(user.join("workflows")).unwrap();
-        std::fs::create_dir_all(dir.path().join(".agents/workflows")).unwrap();
+        std::fs::create_dir_all(root.join(".agents/workflows")).unwrap();
         std::fs::write(user.join("workflows/literal.yaml"), PROGRAM).unwrap();
-        std::fs::write(
-            dir.path().join(".agents/workflows/literal.yaml"),
-            "invalid: [",
-        )
-        .unwrap();
+        std::fs::write(root.join(".agents/workflows/literal.yaml"), "invalid: [").unwrap();
         let (catalog, effects) =
             super::super::static_effects::measure(|| load(None, &user).unwrap());
         let id = crate::runtime::workflow::WorkflowId::parse("literal").unwrap();
@@ -232,7 +231,7 @@ mod tests {
         assert!(catalog.invalid().is_empty());
         assert_eq!(effects, [0; 12]);
         assert!(
-            load(Some(dir.path()), &user)
+            load(Some(&root), &user)
                 .unwrap()
                 .invalid()
                 .contains_key(&id)

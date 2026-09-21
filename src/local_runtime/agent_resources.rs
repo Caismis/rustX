@@ -281,13 +281,16 @@ mod tests {
     #[test]
     fn user_discovery_does_not_read_workspace_overrides() {
         let dir = tempfile::tempdir().unwrap();
-        let user = dir.path().join("user/agents");
+        // The workspace argument is canonical authority; model the production
+        // binding point instead of passing an aliased temporary root.
+        let root = dir.path().canonicalize().unwrap();
+        let user = root.join("user/agents");
         write(
             &user,
             "helper",
             "description = 'user'\ninstructions = 'user instructions'",
         );
-        write(&dir.path().join(".agents/agents"), "helper", "invalid = [");
+        write(&root.join(".agents/agents"), "helper", "invalid = [");
         let ((catalog, sources), effects) =
             super::super::static_effects::measure(|| load_authorized(None, &user).unwrap());
         let name = SubagentName::parse("helper").unwrap();
@@ -299,7 +302,7 @@ mod tests {
         assert!(sources[&name].overridden.is_none());
         assert!(catalog.discovery_diagnostics.is_empty());
         assert_eq!(effects, [0; 12]);
-        let (workspace, _) = load_authorized(Some(dir.path()), &user).unwrap();
+        let (workspace, _) = load_authorized(Some(&root), &user).unwrap();
         assert!(workspace.get(&name).is_none());
     }
 

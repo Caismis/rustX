@@ -111,9 +111,12 @@ mod tests {
     #[test]
     fn user_discovery_does_not_read_workspace_packages() {
         let dir = tempfile::tempdir().unwrap();
-        let user = dir.path().join("user");
+        // The workspace argument is canonical authority; model the production
+        // binding point instead of passing an aliased temporary root.
+        let root = dir.path().canonicalize().unwrap();
+        let user = root.join("user");
         std::fs::create_dir_all(user.join("tools/user-package")).unwrap();
-        std::fs::create_dir_all(dir.path().join(".agents/tools/workspace-package")).unwrap();
+        std::fs::create_dir_all(root.join(".agents/tools/workspace-package")).unwrap();
         crate::tools::python::PACKAGE_PARSE_COUNT.with(|count| count.set(0));
         let (catalog, effects) =
             super::super::static_effects::measure(|| discover(None, &user).unwrap());
@@ -134,10 +137,7 @@ mod tests {
         );
         crate::tools::python::PACKAGE_PARSE_COUNT.with(|count| assert_eq!(count.get(), 1));
         assert_eq!(effects, [0; 12]);
-        assert_eq!(
-            discover(Some(dir.path()), &user).unwrap().packages().len(),
-            2
-        );
+        assert_eq!(discover(Some(&root), &user).unwrap().packages().len(), 2);
     }
 
     #[test]

@@ -166,15 +166,18 @@ mod tests {
     #[test]
     fn user_discovery_does_not_read_workspace_overrides() {
         let dir = tempfile::tempdir().unwrap();
-        let user = dir.path().join("user");
+        // The workspace argument is canonical authority; model the production
+        // binding point instead of passing an aliased temporary root.
+        let root = dir.path().canonicalize().unwrap();
+        let user = root.join("user");
         std::fs::create_dir_all(&user).unwrap();
-        std::fs::create_dir_all(dir.path().join(".agents")).unwrap();
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
         std::fs::write(
             user.join("mcp.toml"),
             "[mcp_servers.docs]\nurl = 'https://user.example/mcp'",
         )
         .unwrap();
-        std::fs::write(dir.path().join(".agents/mcp.toml"), "invalid = [").unwrap();
+        std::fs::write(root.join(".agents/mcp.toml"), "invalid = [").unwrap();
         let (catalog, effects) = super::super::static_effects::measure(|| load(&user, None));
         let id = McpServerId::new("docs");
         assert!(catalog.definitions[&id].is_ok());
@@ -182,6 +185,6 @@ mod tests {
         assert_eq!(catalog.revisions.len(), 1);
         assert!(matches!(catalog.origins[&id], Origin::User { .. }));
         assert_eq!(effects, [0; 12]);
-        assert!(load(&user, Some(dir.path())).definitions[&id].is_err());
+        assert!(load(&user, Some(&root)).definitions[&id].is_err());
     }
 }
