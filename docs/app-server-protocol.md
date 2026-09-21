@@ -902,9 +902,16 @@ caused it arrive in either order. A client must therefore treat a published
 application version as a standing observation obligation, discharged only by an
 authoritative read whose projection carries at least that version for that exact
 scope; an acknowledgement can neither discharge it nor cancel the read it
-requires, and it must never replace a newer application observation already
-accepted. Status strings are never ranked: a later legitimate edit republishes as
-`preparing`, and `applied` is not a terminal conclusion.
+requires. The obligation is level-triggered: a publication that arrives while a
+convergence read is already outstanding survives it, and the client re-reads when
+the outstanding read settles below the newest published version. Because an
+application version orders application publications only — never authored source
+revisions or whole `SourceSettings` snapshots — an acknowledgement is mutation
+evidence, not a candidate replacement for the read model: a client that adopted a
+causally later authoritative read must not let an acknowledgement carrying an
+equal or older application version restore earlier authored state. Status strings
+are never ranked: a later legitimate edit republishes as `preparing`, and
+`applied` is not a terminal conclusion.
 
 `session/adoptConfiguration` requires the inspected candidate identity and expected
 binding revision. `session/configuration` reads the retained binding/candidate and

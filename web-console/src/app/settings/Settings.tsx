@@ -38,14 +38,6 @@ interface SettingsProps {
 function applicationScope(target: SourceTarget) {
   return target.kind === 'user' ? 'source:user' : `source:workspace:${target.directory}`;
 }
-/** Order two whole projections by the native application they observed. Status
- * is never ranked: a later legitimate edit republishes as `preparing`. Without
- * comparable application evidence the newer response is the better projection. */
-function supersedes(next: SourceSettings, current: SourceSettings | undefined) {
-  const observed = next.application, held = current?.application;
-  if (!current || !observed || !held || observed.scope !== held.scope) return true;
-  return BigInt(observed.version) >= BigInt(held.version);
-}
 function sourceRevision(source: SourceSettings, mutation: SourceMutation) {
   const scope = source.target.kind;
   if ((mutation.kind === 'config' || mutation.kind === 'repair_config')) return source[scope]!.revision;
@@ -61,11 +53,18 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
   const [source, setSource] = useState<SourceSettings>();
   const [error, setError] = useState(''), [message, setMessage] = useState(''), [busy, setBusy] = useState(false);
   const [targetValid, setTargetValid] = useState(false);
-  // Three separate facts, never one counter: `epoch` fences target, authority and
+  // Separate facts, never one counter: `epoch` fences target, authority and
   // connection lifetime; `reads` orders authoritative reads; `accepted` counts
   // adopted projections so a mutation acknowledgement never poses as read order.
   const epoch = useRef(0), reads = useRef(0), accepted = useRef(0), writing = useRef<number | undefined>(undefined);
-  const observation = useRef<SourceSettings | undefined>(undefined), converging = useRef(false);
+  // Level-triggered observation state. `observation` is the latest accepted whole
+  // projection; `publications` mirrors the client's per-scope application map;
+  // `commits` counts acknowledged source writes whose committed revision no
+  // accepted projection has been read after yet; `converging` owns the single
+  // convergence worker by the epoch that started it.
+  const observation = useRef<SourceSettings | undefined>(undefined), converging = useRef<number | undefined>(undefined);
+  const publications = useRef(transport.configuration), commits = useRef(0), observedCommits = useRef(0);
+  publications.current = transport.configuration;
   const endpoint = transport.endpoint ?? '';
   const identity = JSON.stringify([endpoint, transport.authorityRevision, workspaceId ?? null]);
   let stores = draftStores.get(client);
@@ -83,40 +82,84 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
     if (operation.kind === 'reconcile') await client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_application');
     return (await client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection;
   }, [client, endpoint, host, workspaceId]);
-  /** Adopt one whole authoritative projection. A source-write acknowledgement
-   * confirms authoring, not that its included application snapshot is the
-   * latest, so it can never replace a newer accepted application observation. */
+  /** Adopt one whole authoritative projection. Only `configuration/sourcesRead`
+   * results reach here, ordered by `reads`: a source-write acknowledgement
+   * confirms one authoring mutation and supplies its committed revision, but is
+   * not an application observation and never replaces the read model. */
   const accept = useCallback((next: SourceSettings) => {
-    if (!supersedes(next, observation.current)) return;
     observation.current = next; ++accepted.current;
     setSource(next); setTargetValid(true);
   }, []);
+  /** One authoritative read. Resolves true only when this read's own projection
+   * was adopted; a newer outstanding read wins instead. An adopted read was
+   * issued after every commit acknowledged before it started, so it observes
+   * them. Read failures are reported only when no projection accepted meanwhile
+   * already answered them. */
   const refresh = useCallback(async () => {
-    const at = epoch.current, read = ++reads.current, settled = accepted.current;
+    const at = epoch.current, read = ++reads.current, settled = accepted.current, afterCommits = commits.current;
     try {
       const next = await request({ kind: 'read' });
-      if (at === epoch.current && read === reads.current) accept(next);
+      if (at !== epoch.current || read !== reads.current) return false;
+      if (afterCommits > observedCommits.current) observedCommits.current = afterCommits;
+      accept(next); return true;
     } catch (cause) {
-      // A projection accepted while this read was outstanding already answers it.
       if (at === epoch.current && read === reads.current && settled === accepted.current) { setError(String(cause)); setTargetValid(false); }
       throw cause;
     }
   }, [accept, request]);
-  /** One automatic authoritative read at a time. A read already in flight was
-   * started after the publication that would start another, so it settles it;
-   * every remaining obligation restarts from the projection that read accepted. */
+  /** The outstanding publication obligation: an application version published
+   * for this target's scope that the accepted projection has not reached yet.
+   * Level, not edge — it survives reads, acknowledgements and worker restarts
+   * until an authoritative read carries at least that version for the scope.
+   * With no projection this lifetime, any start owes the first authoritative
+   * read (0n), which also retries a failed initial read on later triggers. */
+  const obligation = useCallback(() => {
+    const held = observation.current, published = publications.current ?? {};
+    if (!held) return 0n;
+    const scope = applicationScope(held.target), publication = published[scope];
+    if (!publication) return undefined;
+    const settled = held.application?.scope === scope ? held.application.version : undefined;
+    return settled === undefined || BigInt(settled) < BigInt(publication.version) ? BigInt(publication.version) : undefined;
+  }, []);
+  /** The single convergence worker for the current lifetime. Each pass observes
+   * one real outstanding obligation with one authoritative read, then
+   * re-evaluates the level: a publication that arrived while the read was
+   * outstanding is still owed and drives exactly one more bounded read. A
+   * newer one-shot read (explicit refresh, save recovery) supersedes the
+   * worker's and ends its pass; the effects re-arm it if an obligation remains.
+   * No timers, no polling, no write replay. */
   const converge = useCallback(async () => {
-    if (converging.current) return;
-    converging.current = true;
-    try { await refresh(); } catch { /* refresh already owns reporting this failure. */ }
-    finally { converging.current = false; }
-  }, [refresh]);
+    if (converging.current !== undefined) return;
+    const owner = epoch.current;
+    converging.current = owner;
+    try {
+      for (;;) {
+        const at = epoch.current, required = obligation();
+        if (required === undefined && commits.current === observedCommits.current) break;
+        const adopted = await refresh();
+        if (at !== epoch.current || !adopted) break;
+        if (required === undefined) continue;
+        const remaining = obligation();
+        if (remaining === undefined || remaining > required) continue;
+        // The read was issued after `required` was published, so settling below
+        // it is native evidence missing, not a reason to spin. Absent application
+        // data is not measurable; a measurably stale application is reported.
+        const scope = applicationScope(observation.current!.target);
+        const settled = observation.current?.application?.scope === scope ? observation.current.application.version : undefined;
+        if (settled === undefined) break;
+        setError(`Native ${scope} published application version ${required}, but the authoritative read issued after it settled at ${settled}.`);
+        break;
+      }
+    } catch { /* refresh already owns reporting this failure; a later publication, refresh or reconnect may retry. */ }
+    finally { if (converging.current === owner) converging.current = undefined; }
+  }, [refresh, obligation]);
   useEffect(() => {
-    ++epoch.current; observation.current = undefined; converging.current = false;
+    ++epoch.current; observation.current = undefined; converging.current = undefined;
+    commits.current = 0; observedCommits.current = 0;
     setSource(undefined); setTargetValid(false); setBusy(false); setError(''); setMessage('');
-    if (transport.connection === 'connected') void refresh().catch(() => {});
+    if (transport.connection === 'connected') void converge();
     return () => { ++epoch.current; };
-  }, [identity, transport.generation, transport.connection, refresh]);
+  }, [identity, transport.generation, transport.connection, converge]);
   useEffect(() => {
     let current = true;
     if (host) void host.listWorkspaces().then(value => { if (current) setCatalog(value); }).catch(() => { if (current) setCatalog(undefined); });
@@ -126,9 +169,9 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
   // not an edge: until this target's own projection carries at least the version
   // published for its scope, the observation obligation stands — an older
   // acknowledgement landing in between cannot discharge or cancel it.
-  const publications = Object.entries(transport.configuration ?? {}).filter(([scope]) => scope.startsWith('source:'));
-  const observed = publications.map(([scope, value]) => `${scope}=${value.version}`).join(' ');
-  const published = source && publications.find(([scope]) => scope === applicationScope(source.target))?.[1].version;
+  const publicationsList = Object.entries(transport.configuration ?? {}).filter(([scope]) => scope.startsWith('source:'));
+  const observed = publicationsList.map(([scope, value]) => `${scope}=${value.version}`).join(' ');
+  const published = source && publicationsList.find(([scope]) => scope === applicationScope(source.target))?.[1].version;
   const settled = source?.application?.version;
   const owed = published !== undefined && (settled === undefined || BigInt(settled) < BigInt(published));
   useEffect(() => { if (observed) void converge(); }, [observed, converge]);
@@ -140,8 +183,22 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
     try {
       const next = await request({ kind: 'write', expected_revision, mutation });
       if (at !== epoch.current) return undefined;
-      accept(next); setMessage('Source saved. Native coordination owns application.');
-      return sourceRevision(next, mutation);
+      // The acknowledgement confirms this one mutation and supplies its
+      // committed revision; it is not adopted as a projection. Success settles
+      // only after an authoritative read issued after this commit is adopted,
+      // so every draft's CAS base reads from a projection at least as current
+      // as the acknowledged write — never from the acknowledgement itself. A
+      // failed read does not undo the committed write: refresh already
+      // reported it and the outcome still stands.
+      const commit = ++commits.current;
+      const committed = sourceRevision(next, mutation);
+      while (at === epoch.current && observedCommits.current < commit) {
+        try { await refresh(); } catch { break; }
+      }
+      if (at !== epoch.current) return undefined;
+      setMessage('Source saved. Native coordination owns application.');
+      void converge();
+      return committed;
     } catch (cause) {
       if (at !== epoch.current) return undefined;
       const conflict = (cause instanceof RpcFailure && cause.error.data?.kind === 'source_conflict') || (cause instanceof WorkspaceHostError && cause.kind === 'source_conflict');

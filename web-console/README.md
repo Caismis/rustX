@@ -98,12 +98,21 @@ secrets a developer intentionally includes in a prompt/Tool result; the inspecto
 shows that actual application traffic. It never records handshake credentials or
 requests provider/MCP configuration. A `configuration/sourceWrite` acknowledgement
 is authoring evidence, not application completion: Settings keeps target/lifetime
-fencing, read ordering and mutation acknowledgement as three separate facts, accepts
-a whole projection only when its `ConfigurationApplication` version is not older
-than one already accepted for that scope, and keeps a published application version
-as a standing obligation until an authoritative read carries at least that version.
-Convergence reads are coalesced to one in flight and driven by the observed-versus-
-settled gap, never by a timer or a poll.
+fencing, read ordering and mutation acknowledgement as three separate facts. Only
+`configuration/sourcesRead` results are adopted as the whole `SourceSettings`
+projection; an acknowledgement confirms its one mutation and supplies the committed
+revision the save contract needs, then the projection reconverges through one
+bounded authoritative read owed by that commit. A published application version is
+a standing obligation, level-triggered rather than an edge: it survives an
+already-running convergence read, which re-evaluates the newest obligation when its
+read settles and performs exactly one more bounded read while still behind — never
+a timer, a poll, or one read per notification. `ConfigurationApplication.version`
+orders application publications only; it never orders authored source revisions or
+whole projections, so an acknowledgement carrying an equal or older version can
+never overwrite a projection accepted from a causally later authoritative read.
+Drafts and their CAS bases remain user intent: native projection convergence
+consumes a saved draft only when the projection reaches its acknowledged revision
+and never rewrites an unsaved draft's base outside the explicit review workflow.
 
 ## Ownership and recovery
 

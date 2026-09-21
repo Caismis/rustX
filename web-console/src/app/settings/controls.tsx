@@ -19,10 +19,16 @@ export function UnitForm<T>({ title, initial, revision, mutation, save, children
   const [value, change] = useState<T>(() => cached ? cached.value as T : initial), [base, setBase] = useState(cached?.base ?? revision);
   const [busy, setBusy] = useState(false), [saved, setSaved] = useState(false), [dirty, setDirty] = useState(cached?.dirty ?? false);
   const committed = useRef<string | undefined>(cached?.committed);
+  // The pre-save revision this form's last acknowledged save was based on. An
+  // acknowledgement advances `base` before the authoritative projection catches
+  // up; while the projection still carries exactly that pre-save revision the
+  // source is merely unobserved, not changed — no review prompt. Any other
+  // revision means the source really moved and keeps the explicit review.
+  const savedFrom = useRef<string | undefined>(undefined);
   useEffect(() => { if (dirty) drafts?.set(identity, { value, base, dirty, committed: committed.current }); else drafts?.delete(identity); }, [drafts, identity, value, base, dirty]);
   useEffect(() => {
     if (committed.current === revision || !dirty) {
-      committed.current = undefined;
+      committed.current = undefined; savedFrom.current = undefined;
       // Reconstruct from the native redacted projection after acknowledgement.
       // Literal credentials must not remain in a successful editor draft.
       change(initial); setBase(revision); setDirty(false);
@@ -34,20 +40,22 @@ export function UnitForm<T>({ title, initial, revision, mutation, save, children
   const commit = async (remove = false) => {
     // Save and Remove both freeze the revision, including an otherwise clean form.
     // A rejected removal must never adopt the reread revision implicitly.
+    const from = base;
     setDirty(true); setBusy(true); setSaved(false);
-    try { const next = await save(mutation(remove ? null : value), base); if (next) { drafts?.delete(identity); committed.current = next; setBase(next); setSaved(true); } }
+    try { const next = await save(mutation(remove ? null : value), base); if (next) { drafts?.delete(identity); committed.current = next; savedFrom.current = from; setBase(next); setSaved(true); } }
     finally { setBusy(false); }
   };
+  const reviewNeeded = base !== revision && revision !== savedFrom.current;
   return <form aria-label={title} className={css.unit} onSubmit={e => { e.preventDefault(); void commit(); }}>
     <fieldset disabled={busy}><legend>{title}</legend>
       {workspace && mutation(null).kind === 'config' && <><p>{own == null ? 'Inherited — no Workspace override' : 'Workspace override — empty selections remain explicit'}</p><details><summary>Native resolved preview (not Session adoption)</summary><pre>{JSON.stringify(authoredUnit(source?.resolved, mutation(null)), null, 2) ?? 'Unset'}</pre></details></>}
       {children(value, next => { committed.current = undefined; change(next); setDirty(true); setSaved(false); })}
       <details><summary>Source revision & replacement</summary><p className={css.hint}>Draft base revision: {base}<br />Current revision: {revision}</p><p>Save replaces this native semantic unit. Remove omits it from this scope. Empty selections remain explicit.</p></details>
-      {base !== revision && <div className={css.review}><p role="status">Source revision changed. Your draft and original revision are preserved. Review the current source before replacing it.</p><details><summary>Review current authored unit (redacted)</summary><pre>{JSON.stringify(initial, null, 2)}</pre></details></div>}
+      {reviewNeeded && <div className={css.review}><p role="status">Source revision changed. Your draft and original revision are preserved. Review the current source before replacing it.</p><details><summary>Review current authored unit (redacted)</summary><pre>{JSON.stringify(initial, null, 2)}</pre></details></div>}
       <div className={css.actions}><Button variant="primary" type="submit">Save {title}</Button>
         {removable && <Button type="button" title={workspace ? 'Reset to global default — remove this override' : 'Remove authored value'} onClick={() => void commit(true)}>Remove {title}</Button>}
         <Button type="button" onClick={() => { change(initial); setBase(revision); setDirty(false); setSaved(false); }}>Discard draft</Button>
-        {base !== revision && <Button type="button" onClick={() => setBase(revision)}>Use reviewed revision</Button>}
+        {reviewNeeded && <Button type="button" onClick={() => setBase(revision)}>Use reviewed revision</Button>}
       </div>{saved && <p role="status">Saved. Native application proceeds automatically.</p>}
     </fieldset>
   </form>;

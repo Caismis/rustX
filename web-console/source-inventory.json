@@ -454,7 +454,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "4c41dad99aaa1334f563f28c7bc94936bbb330aeaefbe3f5cea9a34fda160875"
+      "local_sha256": "ad1cd0c4735224860eb003dc833cb999dac7d9b944bb646a305bd371650e3e0f"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
