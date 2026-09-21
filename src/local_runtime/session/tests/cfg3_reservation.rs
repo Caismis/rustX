@@ -323,7 +323,7 @@ fn r08_all_allocation_paths_share_the_reservation_contract() {
             prepared.conversation_id
         );
     }
-    assert!(branched.session_id == session);
+    assert_eq!(branched.session_id, session);
     assert_ne!(cloned.session_id, session);
     assert_ne!(forked.session_id, session);
 }
