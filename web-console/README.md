@@ -96,7 +96,14 @@ See [App Server transport/protocol](../docs/app-server-protocol.md) for supporte
 bind/authentication semantics and deployment boundaries. No browser UI can redact
 secrets a developer intentionally includes in a prompt/Tool result; the inspector
 shows that actual application traffic. It never records handshake credentials or
-requests provider/MCP configuration.
+requests provider/MCP configuration. A `configuration/sourceWrite` acknowledgement
+is authoring evidence, not application completion: Settings keeps target/lifetime
+fencing, read ordering and mutation acknowledgement as three separate facts, accepts
+a whole projection only when its `ConfigurationApplication` version is not older
+than one already accepted for that scope, and keeps a published application version
+as a standing obligation until an authoritative read carries at least that version.
+Convergence reads are coalesced to one in flight and driven by the observed-versus-
+settled gap, never by a timer or a poll.
 
 ## Ownership and recovery
 

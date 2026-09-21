@@ -890,7 +890,21 @@ context-changing or unproven candidates await explicit Session adoption.
 application identity, per-unit results, current process bindings, complete ready
 candidate, and adopted Session binding. Applied, ready, failed and restart states
 can coexist. `configuration/changed` carries scope and monotonic version; clients
-reject older notifications. Reconnect rereads authority without mutation replay.
+reject older notifications. Versions are native `u64` counters, comparable only
+within one source scope, authority and connection lifetime, and never against a
+source revision. Reconnect rereads authority without mutation replay.
+
+A successful `configuration/sourceWrite` acknowledgement is proof of **authoring**
+— the committed source revision — and not proof that the application projection it
+carries is the latest. Native application publishes on its own schedule, so a
+`configuration/changed` notification and the acknowledgement of the write that
+caused it arrive in either order. A client must therefore treat a published
+application version as a standing observation obligation, discharged only by an
+authoritative read whose projection carries at least that version for that exact
+scope; an acknowledgement can neither discharge it nor cancel the read it
+requires, and it must never replace a newer application observation already
+accepted. Status strings are never ranked: a later legitimate edit republishes as
+`preparing`, and `applied` is not a terminal conclusion.
 
 `session/adoptConfiguration` requires the inspected candidate identity and expected
 binding revision. `session/configuration` reads the retained binding/candidate and
