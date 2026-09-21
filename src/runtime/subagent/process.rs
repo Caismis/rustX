@@ -2861,6 +2861,56 @@ mod tests {
         first_root.remove().expect("remove the first physical root");
     }
 
+    /// R08: the real child/subagent allocation path
+    /// (`allocate_child_runtime_root` -> `PhysicalChildRuntimeRoot::allocate`)
+    /// uses the same local-storage-owned exclusive Conversation reservation
+    /// as root Session allocation. The identity is consumed before the
+    /// allocation directory exists, the marker is the consumption proof, and
+    /// no secondary Session-directory uniqueness scan runs in this path.
+    #[tokio::test]
+    async fn r08_child_allocation_uses_the_shared_reservation_contract() {
+        let dir = tempfile::tempdir().expect("lab");
+        let plan = allocation_plan(dir.path().join("runtime"));
+        let conversation_id = ConversationId::generate();
+        let runtime_root = plan
+            .allocate_child_runtime_root(
+                &conversation_id,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
+            .expect("physical child incarnation");
+        // The storage owner's marker records the consumed identity.
+        let marker = plan
+            .product_root
+            .root()
+            .join("conversation-reservations")
+            .join(conversation_id.as_str());
+        assert!(
+            marker.is_file(),
+            "child allocation left no reservation marker"
+        );
+        assert_eq!(
+            plan.product_root
+                .reserve_conversation(&conversation_id)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::AlreadyExists,
+            "child allocation left the Conversation identity reusable"
+        );
+        // The semantic allocation directory is the child's durable store
+        // parent; the child process initializes `conversation.sqlite` there.
+        let durable = crate::runtime::subagent::child_conversation_store_path(
+            plan.product_root.root(),
+            &plan.session_id,
+            &conversation_id,
+        );
+        assert!(
+            durable.parent().expect("semantic allocation").is_dir(),
+            "child allocation did not materialize its semantic destination"
+        );
+        runtime_root.remove().expect("remove the fresh incarnation");
+    }
+
     /// A committed child keeps its stable conversation database when the
     /// physical execution incarnation is settled and removed. A later
     /// inspector can therefore reopen the child's durable authorities after

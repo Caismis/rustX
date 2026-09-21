@@ -7380,9 +7380,21 @@ at child/subagent entry points that never load the catalog — because the
 absence of a marker cannot prove an identity was never allocated. There is no
 backfill, no dual allocation mode, no compatibility scan, and no automatic
 deletion. Deleting only the reservation namespace is likewise not a reset:
-consumed identities remain allocated in `sessions/`, and the namespace
-presence is what proves the root supported. Only deleting the whole root and
+consumed identities remain allocated in `sessions/`, and the namespace is what
+distinguishes a supported new-format root. Only deleting the whole root and
 recreating Sessions is a valid reset.
+
+Namespace *visibility* is deliberately not initialization *durability*. A
+caller that observes an existing `conversation-reservations/` directory does
+not infer that the product-root parent-entry durability barrier already
+completed; it re-establishes that barrier (idempotently) before it can report
+a durable reservation. This is what makes an interrupted initializer, a failed
+barrier that left visible residue, and a concurrent initializer all safe. A
+fresh-root format decision is linearized on the namespace creation: because
+fresh initialization creates the namespace strictly before any `sessions`
+tree, an observer that sees a `sessions` tree re-checks the namespace and
+accepts a concurrently initialized new-format root instead of refusing it as a
+legacy layout.
 
 ### Bounded native projections
 

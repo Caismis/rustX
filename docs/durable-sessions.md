@@ -188,14 +188,32 @@ preparation, not identity allocation.
 
 ### Persistence before durable success (B)
 
-The exclusive create alone is not a power-loss guarantee. Before reporting
-durable reservation success the primitive fsyncs the marker file and the
-reservation-namespace directory, and namespace initialization fsyncs the root
-so the namespace entry survives. The supported crash model is therefore: a
-reservation observed as successful survives process death and an orderly
-restart of the same filesystem; a power loss between the exclusive create and
-its fsync may lose the marker, which is the ordinary durability limit of the
-supported local platform, not a claim of universal atomic durability.
+The exclusive create alone is not a power-loss guarantee. Namespace and marker
+**visibility** are separate from their **durability**: observing an existing
+`conversation-reservations/` directory does not prove that initialization
+durability already completed. Before local storage reports the reservation
+layout initialized, and before it reports durable reservation success, it
+establishes every required parent-directory barrier itself:
+
+```text
+exclusive ConversationId allocation (create-new marker)   linearization point
+marker file fsync                                         marker data durable
+reservation-namespace directory fsync                     marker entry durable
+product-root directory fsync                              namespace entry durable
+product-root ancestry fsync (ProductRoot::create)         root entry durable
+```
+
+A later caller re-establishes the product-root barrier whenever it observes the
+namespace, so an initializer that created the directory and then failed or
+died before the barrier, a failed barrier that left visible residue, and a
+retry all complete the obligation instead of inferring it. The supported crash
+model is: a reservation observed as successful survives process death and an
+orderly restart of the same filesystem, and the parent-entry barriers are the
+best-effort local expression of power-loss durability. A power loss between the
+exclusive create and its fsync may lose the marker; that is the ordinary
+durability limit of the supported local platform, not a claim of universal
+atomic durability, and process-death tests prove process-death semantics rather
+than every physical power-loss interleaving.
 
 ### Result and retained state on persistence failure (C)
 
@@ -218,10 +236,15 @@ this contract and is refused at the storage owner — including at child/subagen
 entry points that can bypass catalog loading — before any allocation. There is
 no backfill, migration, dual allocation mode, compatibility scan, or automatic
 deletion, and the old Session-directory scan is not retained as a fallback. A
-genuinely fresh root (no namespace and no `sessions/` tree) initializes normally;
-interrupted fresh-root initialization is safe because the namespace directory is
-the only new metadata and an absent namespace over an absent `sessions/` tree is
-still fresh. Deleting only `sessions/catalog.json` or only the reservation
+genuinely fresh root (no namespace and no `sessions/` tree) initializes normally.
+The format decision is linearized on the exclusive namespace creation: fresh
+initialization creates the namespace strictly before any `sessions/` tree, so an
+observer that reads the namespace absent and then sees a `sessions/` tree
+re-checks the namespace and accepts a concurrently initialized new-format root
+rather than refusing it as a legacy layout. Interrupted fresh-root
+initialization is safe because nothing was reserved yet; a surviving namespace
+is completed on the next call, and a lost namespace over an absent `sessions/`
+tree is still fresh. Deleting only `sessions/catalog.json` or only the reservation
 namespace is never a reset: manual reset deletes the whole runtime root and
 recreates the Sessions, and rustX never deletes or reinterprets old data.
 

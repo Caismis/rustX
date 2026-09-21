@@ -16,10 +16,7 @@ use super::*;
 use crate::durable::conversation_store_opens_on_this_thread;
 use crate::local_runtime::session::LineageSide;
 use crate::runtime::identity::UuidV7Generator;
-use crate::runtime::local_storage::{
-    ProductController, ProductRoot, conversation_legacy_layout_probe_count_on_thread,
-    conversation_reservation_count,
-};
+use crate::runtime::local_storage::{ProductController, ProductRoot};
 use std::collections::VecDeque;
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
@@ -70,30 +67,169 @@ fn marker(root: &Path, conversation: &ConversationId) -> PathBuf {
         .join(conversation.as_str())
 }
 
-/// R01: with 1 and 1000 existing Sessions, a new Conversation reservation
-/// inspects zero existing Session directories. The per-thread legacy-layout
-/// probe counter is the actual storage-owner inspection boundary; the fixture
-/// itself is built through the real `prepare_session` owner.
+/// Build `count` real published Sessions. Allocations are created by the real
+/// `prepare_session` owner (real Session directories, Conversation stores and
+/// reservation markers). The published catalog document is written by the
+/// catalog's real `commit` publication owner in one batch: `publish_session`
+/// would serialize the whole growing document once per Session, which is the
+/// O(n^2) cost the benchmark measures, and would dominate this correctness
+/// fixture without changing what is published. Fixture construction is
+/// deliberately outside the measured reservation operation.
+fn seed_published_sessions(catalog: &mut SessionCatalog, count: usize) {
+    use super::super::{PersistedSession, SessionNode};
+    let mut prepared = Vec::with_capacity(count);
+    for _ in 0..count {
+        let lineage = catalog.prepare_session(&template(), &[]).unwrap();
+        // The same destination-completeness check `build_session_document`
+        // performs before it publishes a Session.
+        assert!(lineage.database_path.is_file());
+        prepared.push(lineage);
+    }
+    let mut next = catalog.document.clone();
+    for lineage in prepared {
+        let now = chrono::Utc::now();
+        let node = SessionNode {
+            ordinal: next.next_node_ordinal,
+            id: lineage.node_id.clone(),
+            parent: None,
+            conversation_id: lineage.conversation_id.clone(),
+            origin: SessionNodeOrigin::New,
+        };
+        let mut nodes = std::collections::BTreeMap::new();
+        nodes.insert(lineage.node_id.clone(), node);
+        next.sessions.insert(
+            lineage.session_id.clone(),
+            PersistedSession {
+                uploads: lineage.uploads.clone(),
+                ordinal: next.next_session_ordinal,
+                id: lineage.session_id.clone(),
+                name: None,
+                display_preview: lineage.display_preview.clone(),
+                created_at: now,
+                updated_at: now,
+                active_node: lineage.node_id.clone(),
+                nodes,
+                state: lineage.state.clone(),
+                settings_revision: 0,
+            },
+        );
+        next.next_session_ordinal += 1;
+        next.next_node_ordinal += 1;
+    }
+    catalog.commit(next).unwrap();
+}
+
+fn set_directory_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// A real filesystem-inspection probe: watch the existing `sessions/`
+/// directory for directory access/opens. `readdir` on a directory emits
+/// `IN_ACCESS` on it, so any alternate enumeration path that walks the
+/// existing Session tree is observed at the kernel boundary. Linux-only;
+/// other platforms rely on the execute-only fixture below.
+#[cfg(target_os = "linux")]
+struct SessionsEnumerationProbe {
+    watch: nix::sys::inotify::Inotify,
+    descriptor: nix::sys::inotify::WatchDescriptor,
+    accesses: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl SessionsEnumerationProbe {
+    fn install(sessions: &Path) -> Self {
+        use nix::sys::inotify::{AddWatchFlags as F, InitFlags, Inotify};
+        let watch = Inotify::init(InitFlags::IN_NONBLOCK | InitFlags::IN_CLOEXEC).unwrap();
+        let descriptor = watch
+            .add_watch(sessions, F::IN_ACCESS | F::IN_OPEN)
+            .unwrap();
+        let mut probe = Self {
+            watch,
+            descriptor,
+            accesses: 0,
+        };
+        probe.drain();
+        probe
+    }
+
+    fn drain(&mut self) {
+        use nix::sys::inotify::AddWatchFlags as F;
+        loop {
+            match self.watch.read_events() {
+                Ok(events) => {
+                    for event in events {
+                        if event.wd == self.descriptor
+                            && event.mask.intersects(F::IN_ACCESS | F::IN_OPEN)
+                        {
+                            self.accesses += 1;
+                        }
+                    }
+                }
+                Err(nix::errno::Errno::EAGAIN) => return,
+                Err(error) => panic!("session enumeration probe read: {error}"),
+            }
+        }
+    }
+}
+
+/// R01: with 1 and 1000 existing **published** Sessions, a new Conversation
+/// reservation enumerates zero existing Session directories.
+///
+/// The fixture is real published Session state built through the production
+/// owners. The measured reservation runs against an OS-level fixture where
+/// direct known-path access still works but directory enumeration is
+/// observable (inotify `IN_ACCESS`/`IN_OPEN` on Linux) and denied
+/// (execute-only mode), so an alternate traversal path fails or is detected at
+/// the actual filesystem-inspection boundary rather than by counting a
+/// particular helper.
 #[test]
 fn r01_reservation_inspects_zero_existing_session_directories() {
     for sessions in [1_usize, 1000] {
         let directory = tempfile::tempdir().unwrap();
         let controller = ProductController::acquire(directory.path()).unwrap();
-        let catalog = SessionCatalog::empty(&controller).unwrap();
-        for _ in 0..sessions {
-            catalog.prepare_session(&template(), &[]).unwrap();
-        }
-        let before_probes = conversation_legacy_layout_probe_count_on_thread();
-        let before_reservations = conversation_reservation_count();
+        let mut catalog = SessionCatalog::empty(&controller).unwrap();
+        seed_published_sessions(&mut catalog, sessions);
+        drop(catalog);
+
+        let sessions_root = directory.path().join("sessions");
+        // `sessions/` holds the `catalog.json` plus one directory per Session.
+        assert_eq!(
+            std::fs::read_dir(&sessions_root).unwrap().count(),
+            sessions + 1,
+            "fixture did not publish {sessions} Sessions"
+        );
+        #[cfg(target_os = "linux")]
+        let mut probe = SessionsEnumerationProbe::install(&sessions_root);
+        // Deny directory enumeration while preserving direct known-path access.
+        set_directory_mode(&sessions_root, 0o111);
+        #[cfg(target_os = "linux")]
+        probe.drain();
+
+        // The operation result itself is the proof: exactly one reservation of
+        // this identity succeeds and returns `Ok`. No process-global counter is
+        // read, so unrelated parallel tests cannot affect the assertion.
         let fresh = ConversationId::generate();
         controller.reserve_conversation(&fresh).unwrap();
-        let probes = conversation_legacy_layout_probe_count_on_thread() - before_probes;
-        let reservations = conversation_reservation_count() - before_reservations;
-        assert_eq!(
-            probes, 0,
-            "reservation inspected existing Session directories with {sessions} present"
-        );
-        assert_eq!(reservations, 1);
+
+        #[cfg(target_os = "linux")]
+        {
+            probe.drain();
+            assert_eq!(
+                probe.accesses, 0,
+                "reservation accessed/enumerated the existing Session tree with {sessions} present"
+            );
+        }
+        // Positive control: for an ordinary user the fixture really does deny
+        // directory enumeration; root bypasses mode bits, so the inotify probe
+        // above remains the detection mechanism there.
+        if !nix::unistd::geteuid().is_root() {
+            assert!(
+                std::fs::read_dir(&sessions_root).is_err(),
+                "execute-only fixture did not deny enumeration"
+            );
+        }
+        set_directory_mode(&sessions_root, 0o755);
         assert!(marker(directory.path(), &fresh).is_file());
     }
 }
@@ -492,61 +628,62 @@ fn r07_kill_after_publication_leaves_complete_valid_conversation() {
     assert!(store.load_canonical().unwrap().is_empty());
 }
 
-/// Instrumented stage profile of one real prepare+publish create. This is a
+/// Instrumented exclusive stage profile of the **real**
+/// `SessionController::create_session` pipeline (Issue #387). This is a
 /// separate tracing run, not a timing-threshold test: it prints exclusive
-/// stage times so the delivery report can attribute cost to the real owners
-/// without making CI depend on a duration.
-#[test]
+/// leaf-stage times, the measured total, and the unattributed remainder so the
+/// delivery report can attribute cost to the real owners without making CI
+/// depend on a duration. Inclusive parent operations (`prepare_session`,
+/// `publish_session`) are never summed with their children.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "instrumented stage profile; run explicitly with --ignored --nocapture"]
-fn stage_profile_real_create_pipeline() {
+#[allow(clippy::too_many_lines)]
+async fn stage_profile_real_create_pipeline() {
     use crate::local_runtime::session::create_profile;
+    use crate::local_runtime::session_controller::SessionController;
     const CREATES: u64 = 50;
     let existing: usize = std::env::var("RUSTX_387_PROFILE_EXISTING")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(0);
     let directory = tempfile::tempdir().unwrap();
-    let controller = ProductController::acquire(directory.path()).unwrap();
-    let mut catalog = SessionCatalog::empty(&controller).unwrap();
+    let controller = SessionController::open(directory.path()).unwrap();
+    let template = template();
     for _ in 0..existing {
-        let prepared = catalog.prepare_session(&template(), &[]).unwrap();
-        catalog
-            .publish_session(&prepared, SessionNodeOrigin::New)
-            .unwrap();
+        controller.create_session(template.clone()).await.unwrap();
     }
     create_profile::enable();
-    let mut prepare_total = std::time::Duration::ZERO;
-    let mut publish_total = std::time::Duration::ZERO;
+    let mut measured_total = std::time::Duration::ZERO;
     for _ in 0..CREATES {
         let started = std::time::Instant::now();
-        let prepared = catalog.prepare_session(&template(), &[]).unwrap();
-        prepare_total += started.elapsed();
-        let started = std::time::Instant::now();
-        catalog
-            .publish_session(&prepared, SessionNodeOrigin::New)
-            .unwrap();
-        publish_total += started.elapsed();
+        controller.create_session(template.clone()).await.unwrap();
+        measured_total += started.elapsed();
         create_profile::count_create();
     }
     let times = create_profile::snapshot();
     create_profile::disable();
     let per_create = |value: u64| value / CREATES;
-    let inclusive =
-        |value: std::time::Duration| u64::try_from(value.as_nanos()).unwrap_or(u64::MAX) / CREATES;
+    let total_ns = u64::try_from(measured_total.as_nanos()).unwrap_or(u64::MAX) / CREATES;
+    let exclusive_ns = times.exclusive_total_ns() / CREATES;
     let report = serde_json::json!({
         "creates": CREATES,
         "existing_sessions": existing,
+        "path": "SessionController::create_session",
+        "catalog_snapshot_ns": per_create(times.catalog_snapshot_ns),
         "reserve_ns": per_create(times.reserve_ns),
         "allocation_dir_ns": per_create(times.allocation_dir_ns),
         "sqlite_open_ns": per_create(times.sqlite_open_ns),
         "schema_and_seed_ns": per_create(times.schema_and_seed_ns),
-        "prepare_total_ns": inclusive(prepare_total),
+        "catalog_document_clone_ns": per_create(times.catalog_document_clone_ns),
         "catalog_serialize_ns": per_create(times.catalog_serialize_ns),
         "temp_write_ns": per_create(times.temp_write_ns),
         "file_fsync_ns": per_create(times.file_fsync_ns),
         "rename_ns": per_create(times.rename_ns),
         "dir_fsync_ns": per_create(times.dir_fsync_ns),
-        "publish_total_ns": inclusive(publish_total),
+        "measured_total_ns": total_ns,
+        "exclusive_sum_ns": exclusive_ns,
+        "unattributed_ns": total_ns.saturating_sub(exclusive_ns),
+        "note": "exclusive leaf stages only; inclusive prepare/publish are not summed",
     });
     println!("STAGE_PROFILE {}", serde_json::to_string(&report).unwrap());
 }
@@ -569,4 +706,82 @@ fn r12_pre_visibility_fault_never_reports_success() {
         .unwrap()
         .unwrap();
     assert!(reopened.list_page(None, 0, 32).unwrap().sessions.is_empty());
+}
+
+/// R12: reservation succeeds, then Conversation initialization fails. No
+/// Session or node becomes visible, success is not reported, the reserved
+/// identity stays consumed, the residue is inert across reopen, and a retry
+/// selects a fresh identity rather than reusing the consumed one.
+#[test]
+fn r12_initialization_failure_after_reservation_is_inert() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = ProductController::acquire(directory.path()).unwrap();
+    let mut catalog = SessionCatalog::empty(&controller)
+        .unwrap()
+        .with_identity_generator(identities(&[70, 71, 72, 73, 74, 75]));
+    crate::local_runtime::session::fail_next_database_initializations(1);
+    let error = catalog.prepare_session(&template(), &[]).unwrap_err();
+    assert!(matches!(error, SessionError::Io { .. }), "{error:?}");
+    assert!(catalog.list_page(None, 0, 32).unwrap().sessions.is_empty());
+    // `allocate_ids` consumed session=70, node=71, conversation=72; the
+    // marker for 72 is the retained consumption proof.
+    let consumed = ConversationId::from_uuid(uuid(72)).unwrap();
+    assert_eq!(
+        controller
+            .reserve_conversation(&consumed)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+    let reopened = SessionCatalog::open_existing(directory.path())
+        .unwrap()
+        .unwrap();
+    assert!(reopened.list_page(None, 0, 32).unwrap().sessions.is_empty());
+    drop(reopened);
+    // Retry resumes from a fresh identity and publishes a complete Session.
+    let prepared = catalog.prepare_session(&template(), &[]).unwrap();
+    assert_ne!(prepared.conversation_id, consumed);
+    catalog
+        .publish_session(&prepared, SessionNodeOrigin::New)
+        .unwrap();
+    assert_eq!(catalog.list_page(None, 0, 32).unwrap().sessions.len(), 1);
+}
+
+/// R12: reservation and initialization both succeed, then destination
+/// validation fails at publication. The Session never becomes visible, the
+/// consumed identity stays consumed, the residue is inert, and a retry with a
+/// fresh identity succeeds.
+#[test]
+fn r12_destination_validation_failure_after_initialization_is_inert() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = ProductController::acquire(directory.path()).unwrap();
+    let mut catalog = SessionCatalog::empty(&controller).unwrap();
+    let prepared = catalog.prepare_session(&template(), &[]).unwrap();
+    assert!(prepared.database_path.is_file());
+    // The prepared destination is complete at preparation time; make the
+    // publication-time destination validation fail by removing the database.
+    std::fs::remove_file(&prepared.database_path).unwrap();
+    let error = catalog
+        .publish_session(&prepared, SessionNodeOrigin::New)
+        .unwrap_err();
+    assert!(!error.committed());
+    assert!(catalog.list_page(None, 0, 32).unwrap().sessions.is_empty());
+    assert_eq!(
+        controller
+            .reserve_conversation(&prepared.conversation_id)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+    let reopened = SessionCatalog::open_existing(directory.path())
+        .unwrap()
+        .unwrap();
+    assert!(reopened.list_page(None, 0, 32).unwrap().sessions.is_empty());
+    drop(reopened);
+    let next = catalog.prepare_session(&template(), &[]).unwrap();
+    assert_ne!(next.conversation_id, prepared.conversation_id);
+    catalog
+        .publish_session(&next, SessionNodeOrigin::New)
+        .unwrap();
+    assert_eq!(catalog.list_page(None, 0, 32).unwrap().sessions.len(), 1);
 }

@@ -88,10 +88,12 @@ pub(crate) mod create_profile {
     /// Exclusive wall time per pipeline stage, in nanoseconds.
     #[derive(Debug, Default, Clone, Copy)]
     pub(crate) struct StageTimes {
+        pub(crate) catalog_snapshot_ns: u64,
         pub(crate) reserve_ns: u64,
         pub(crate) allocation_dir_ns: u64,
         pub(crate) sqlite_open_ns: u64,
         pub(crate) schema_and_seed_ns: u64,
+        pub(crate) catalog_document_clone_ns: u64,
         pub(crate) catalog_serialize_ns: u64,
         pub(crate) temp_write_ns: u64,
         pub(crate) file_fsync_ns: u64,
@@ -100,12 +102,34 @@ pub(crate) mod create_profile {
         pub(crate) creates: u64,
     }
 
+    /// The sum of every exclusive leaf stage. Inclusive parent totals are
+    /// deliberately not part of this sum; callers measure the real operation
+    /// boundary and treat the difference as the unattributed remainder.
+    impl StageTimes {
+        #[must_use]
+        pub(crate) fn exclusive_total_ns(&self) -> u64 {
+            self.catalog_snapshot_ns
+                .saturating_add(self.reserve_ns)
+                .saturating_add(self.allocation_dir_ns)
+                .saturating_add(self.sqlite_open_ns)
+                .saturating_add(self.schema_and_seed_ns)
+                .saturating_add(self.catalog_document_clone_ns)
+                .saturating_add(self.catalog_serialize_ns)
+                .saturating_add(self.temp_write_ns)
+                .saturating_add(self.file_fsync_ns)
+                .saturating_add(self.rename_ns)
+                .saturating_add(self.dir_fsync_ns)
+        }
+    }
+
     static ENABLED: AtomicBool = AtomicBool::new(false);
     static TIMES: Mutex<StageTimes> = Mutex::new(StageTimes {
+        catalog_snapshot_ns: 0,
         reserve_ns: 0,
         allocation_dir_ns: 0,
         sqlite_open_ns: 0,
         schema_and_seed_ns: 0,
+        catalog_document_clone_ns: 0,
         catalog_serialize_ns: 0,
         temp_write_ns: 0,
         file_fsync_ns: 0,
@@ -2086,11 +2110,13 @@ impl SessionCatalog {
     ) -> std::io::Result<()> {
         product.confined(allocation)?;
         Self::check_allocation_live(product, allocation)?;
+        crate::runtime::local_storage::fs_operations::record_mkdir();
         fs::create_dir_all(
             allocation
                 .parent()
                 .ok_or_else(|| std::io::Error::other("Conversation directory has no parent"))?,
         )?;
+        crate::runtime::local_storage::fs_operations::record_mkdir();
         fs::create_dir(allocation)
     }
     fn allocate_ids(&self) -> Result<(SessionId, SessionNodeId, ConversationId), SessionError> {
@@ -2278,7 +2304,10 @@ impl SessionCatalog {
         };
         let mut nodes = BTreeMap::new();
         nodes.insert(prepared.node_id.clone(), node);
-        let mut next = self.document.clone();
+        let mut next = profile_stage!(
+            |times: &mut create_profile::StageTimes| &mut times.catalog_document_clone_ns,
+            self.document.clone()
+        );
         next.sessions.insert(
             prepared.session_id.clone(),
             PersistedSession {
@@ -3024,6 +3053,35 @@ fn conversation_database_path(
         .join("conversation.sqlite")
 }
 
+// One narrow test-only seam: fail the next `count` Conversation
+// initialization attempts after the identity reservation and allocation
+// directory exist, so R12 can prove an initialization failure leaves no
+// visible Session and retains the consumed identity. This is not a generic
+// fault framework.
+#[cfg(test)]
+thread_local! {
+    static INITIALIZE_DATABASE_FAILURES: std::cell::Cell<u32> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn fail_next_database_initializations(count: u32) {
+    INITIALIZE_DATABASE_FAILURES.with(|failures| failures.set(count));
+}
+
+#[cfg(test)]
+fn take_database_initialization_fault() -> bool {
+    INITIALIZE_DATABASE_FAILURES.with(|failures| {
+        let remaining = failures.get();
+        if remaining == 0 {
+            false
+        } else {
+            failures.set(remaining - 1);
+            true
+        }
+    })
+}
+
 fn initialize_database(
     product: &crate::runtime::local_storage::ProductRoot,
     path: &Path,
@@ -3054,11 +3112,19 @@ fn initialize_database(
         path: parent.to_path_buf(),
         detail: error.to_string(),
     })?;
+    #[cfg(test)]
+    if take_database_initialization_fault() {
+        return Err(SessionError::Io {
+            path: path.to_path_buf(),
+            detail: "deterministic Conversation initialization fault".to_owned(),
+        });
+    }
     let access = crate::runtime::local_storage::ConversationAccess::existing(product, parent)
         .map_err(|error| SessionError::Io {
             path: parent.to_path_buf(),
             detail: error.to_string(),
         })?;
+    crate::runtime::local_storage::fs_operations::record_create_open();
     let store = profile_stage!(
         |times: &mut create_profile::StageTimes| &mut times.sqlite_open_ns,
         SqliteConversationStore::open(conversation_id.clone(), path)
@@ -3093,6 +3159,7 @@ fn atomic_write(
         detail: error.to_string(),
     })?;
     let temporary = path.with_extension("json.tmp");
+    crate::runtime::local_storage::fs_operations::record_create_open();
     let mut file = profile_stage!(
         |times: &mut create_profile::StageTimes| &mut times.temp_write_ns,
         OpenOptions::new()
@@ -3105,14 +3172,19 @@ fn atomic_write(
         path: temporary.clone(),
         detail: error.to_string(),
     })?;
-    profile_stage!(
+    // Count the actual logical payload supplied to the catalog write, not a
+    // file length sampled before the write. `write_all` either writes every
+    // byte or errors, so the supplied payload is the full length.
+    let write_result = profile_stage!(
         |times: &mut create_profile::StageTimes| &mut times.temp_write_ns,
         file.write_all(bytes)
-    )
-    .map_err(|error| CatalogCommitError::NotCommitted {
+    );
+    write_result.map_err(|error| CatalogCommitError::NotCommitted {
         path: temporary.clone(),
         detail: error.to_string(),
     })?;
+    crate::runtime::local_storage::fs_operations::record_catalog_write(bytes.len());
+    crate::runtime::local_storage::fs_operations::record_fsync();
     profile_stage!(
         |times: &mut create_profile::StageTimes| &mut times.file_fsync_ns,
         file.sync_all()
@@ -3130,6 +3202,7 @@ fn atomic_write(
             detail: "deterministic fault before catalog visibility rename".to_owned(),
         });
     }
+    crate::runtime::local_storage::fs_operations::record_rename();
     profile_stage!(
         |times: &mut create_profile::StageTimes| &mut times.rename_ns,
         fs::rename(&temporary, path)
@@ -3165,6 +3238,7 @@ fn atomic_write(
 // catalog's immediate parent would not prove that a newly created parent survives.
 fn sync_directory_ancestry(path: &Path) -> std::io::Result<()> {
     for directory in path.ancestors() {
+        crate::runtime::local_storage::fs_operations::record_dir_fsync();
         File::open(directory)?.sync_all()?;
     }
     Ok(())

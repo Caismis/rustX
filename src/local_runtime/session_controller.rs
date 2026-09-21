@@ -421,7 +421,25 @@ impl SessionController {
         // Blocking preparation outlives a cancelled async caller. Transfer the
         // allocator guard into that work and retain it through publication.
         let preparation = self.preparation.clone().lock_owned().await;
-        let snapshot = self.catalog.lock().await.clone();
+        // The real controller snapshots (clones) the whole Catalog document
+        // before preparation. Instrument that clone so the stage profile does
+        // not bypass it and later claim catalog cloning was measured.
+        let snapshot = {
+            let catalog = self.catalog.lock().await;
+            #[cfg(test)]
+            {
+                crate::local_runtime::session::create_profile::timed(
+                    |times: &mut crate::local_runtime::session::create_profile::StageTimes| {
+                        &mut times.catalog_snapshot_ns
+                    },
+                    || (*catalog).clone(),
+                )
+            }
+            #[cfg(not(test))]
+            {
+                (*catalog).clone()
+            }
+        };
         #[cfg(test)]
         let gate = self
             .create_gate
@@ -1289,6 +1307,123 @@ mod tests {
             (1, candidate)
         );
         assert_eq!(controller.read_session(&b.id).await.unwrap(), b);
+    }
+    /// R04: two distinct Session create requests genuinely overlap. The
+    /// controller's preparation owner serializes preparation by design, so the
+    /// regression parks the first request *inside* preparation (holding the
+    /// preparation reservation) and proves the second request is already in
+    /// flight and blocked on it; releasing the gate lets both publish. Both
+    /// Sessions, identities and destinations survive, so a stale
+    /// whole-document Catalog replacement would be detected.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn r04_concurrent_distinct_session_creates_preserve_both_publications() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        *controller.create_gate.lock().unwrap() = Some(gate.clone());
+
+        let first = {
+            let controller = controller.clone();
+            let path = root.path().to_path_buf();
+            tokio::spawn(async move { controller.create_session(settings(&path)).await })
+        };
+        // Park the first request inside preparation and prove it holds the
+        // preparation reservation while the second request is in flight.
+        let entered = gate.clone();
+        tokio::task::spawn_blocking(move || entered.wait_entered())
+            .await
+            .unwrap();
+        assert!(
+            controller.preparation.try_lock().is_err(),
+            "the first create did not hold the preparation owner"
+        );
+        let second = {
+            let controller = controller.clone();
+            let path = root.path().to_path_buf();
+            tokio::spawn(async move { controller.create_session(settings(&path)).await })
+        };
+        drop(release);
+        let a = first.await.unwrap().unwrap().session;
+        let b = second.await.unwrap().unwrap().session;
+        *controller.create_gate.lock().unwrap() = None;
+
+        assert_ne!(a.id, b.id, "distinct create requests reused an identity");
+        let listed = controller
+            .list_sessions(None, 0, 32)
+            .await
+            .unwrap()
+            .sessions;
+        assert_eq!(listed.len(), 2, "a Catalog publication was lost");
+        assert!(listed.iter().any(|row| row.id == a.id));
+        assert!(listed.iter().any(|row| row.id == b.id));
+        // Both destinations are complete and valid, not just visible.
+        for session in [&a, &b] {
+            let access = controller.acquire_session(&session.id, None).await.unwrap();
+            assert!(access.database_path.is_file());
+            let store = crate::durable::SqliteConversationStore::open_existing(
+                access.node.conversation_id.clone(),
+                &access.database_path,
+            )
+            .unwrap();
+            assert!(store.load_canonical().unwrap().is_empty());
+        }
+    }
+    /// R04 companion: two creates prepare from snapshots taken before either
+    /// competing publication, then both publish. Publishing must build from
+    /// the current Catalog document rather than a stale pre-publication whole
+    /// document, so neither publication is lost.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn r04_pre_publication_snapshots_preserve_both_publications() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let catalog = controller.catalog.clone();
+        let snapshot_a = catalog.lock().await.clone();
+        let snapshot_b = catalog.lock().await.clone();
+        let settings_a = settings(root.path());
+        let settings_b = settings(root.path());
+        let prepared_a =
+            tokio::task::spawn_blocking(move || snapshot_a.prepare_session(&settings_a, &[]))
+                .await
+                .unwrap()
+                .unwrap();
+        let prepared_b =
+            tokio::task::spawn_blocking(move || snapshot_b.prepare_session(&settings_b, &[]))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_ne!(prepared_a.session_id, prepared_b.session_id);
+        assert_ne!(prepared_a.conversation_id, prepared_b.conversation_id);
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let publish_a = {
+            let catalog = catalog.clone();
+            let barrier = barrier.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                let mut guard = catalog.lock().await;
+                guard.publish_session(&prepared_a, super::super::session::SessionNodeOrigin::New)
+            })
+        };
+        let publish_b = {
+            let catalog = catalog.clone();
+            let barrier = barrier.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                let mut guard = catalog.lock().await;
+                guard.publish_session(&prepared_b, super::super::session::SessionNodeOrigin::New)
+            })
+        };
+        let a = publish_a.await.unwrap().unwrap();
+        let b = publish_b.await.unwrap().unwrap();
+        assert_ne!(a.id, b.id);
+        let listed = controller
+            .list_sessions(None, 0, 32)
+            .await
+            .unwrap()
+            .sessions;
+        assert_eq!(listed.len(), 2, "a stale publication replaced a sibling");
+        assert!(listed.iter().any(|row| row.id == a.id));
+        assert!(listed.iter().any(|row| row.id == b.id));
     }
     #[tokio::test]
     async fn create_and_rename_visibility_follow_catalog_rename_not_durability_barrier() {

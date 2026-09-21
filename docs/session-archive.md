@@ -341,7 +341,7 @@ while admission is waiting and prove rejection/rollback without publication.
 
 `archive_wins_before_production_child_reservation` additionally crosses the real
 `prepare -> allocate_child_runtime_root -> PhysicalChildRuntimeRoot::allocate ->
-reserve_conversation_directory_under` path. The archive is parked after ownership
+ProductRoot::reserve_conversation` path. The archive is parked after ownership
 inspection; prepare reaches allocation and stays pending until capture releases
 its snapshot. Only then does a controlled process peer substitute for child
 staging. No directory, SQLite history or ownership event is fabricated by the
