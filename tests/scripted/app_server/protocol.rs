@@ -3726,7 +3726,10 @@ async fn cold_loading_a_branch_repairs_the_projection_from_the_session_root() {
             branch_canonical
         );
 
-        // Write-level idempotence across a real detach/reattach cycle.
+        // Write-level idempotence across a *second cold composition*, not a
+        // detach/reattach cycle: detach only releases an external claim, so the
+        // branch runtime is unloaded through its real owner and its retirement
+        // is proven before the repair-capable composition runs again.
         let generation = f
             .manager
             .sessions
@@ -3738,10 +3741,34 @@ async fn cold_loading_a_branch_repairs_the_projection_from_the_session_root() {
         let recorded = invalidations.recorded();
         let before = sessions.read_session(&session.id).await.unwrap();
         let revision_before = sessions.read_settings(&session.id).await.unwrap().0;
+        let preview_before = sessions
+            .read_session_summary(&session.id)
+            .await
+            .unwrap()
+            .preview;
+        let root_canonical_before = store(
+            &sessions
+                .acquire_session(&session.id, Some(&root_node))
+                .await
+                .unwrap(),
+        )
+        .load_canonical()
+        .unwrap();
+        let conversation = target.conversation_id.clone();
+        let incarnation = target.runtime_incarnation;
+        let probe = f.manager.probe(&conversation);
+        let compositions = probe.compositions.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(compositions, 1, "the branch composed exactly once so far");
         assert!(matches!(
             call(&connection, 92, Method::SessionDetach { target }).await,
             MethodResult::Detached {}
         ));
+        f.manager.unload(&conversation).await.unwrap();
+        assert_eq!(
+            f.manager.residency(&conversation),
+            crate::local_runtime::session_runtime_manager::ResidencyState::Unloaded,
+            "the branch runtime is retired, not merely detached"
+        );
         let MethodResult::Attached { target, .. } = call(
             &connection,
             93,
@@ -3754,6 +3781,15 @@ async fn cold_loading_a_branch_repairs_the_projection_from_the_session_root() {
         else {
             panic!("attached")
         };
+        assert_ne!(
+            target.runtime_incarnation, incarnation,
+            "reopening the branch produced a new runtime incarnation"
+        );
+        assert_eq!(
+            probe.compositions.load(std::sync::atomic::Ordering::SeqCst),
+            compositions + 1,
+            "a second real composition ran the repair-capable startup path again"
+        );
         assert_eq!(
             f.manager
                 .sessions
@@ -3774,6 +3810,43 @@ async fn cold_loading_a_branch_repairs_the_projection_from_the_session_root() {
         assert_eq!(
             sessions.read_settings(&session.id).await.unwrap().0,
             revision_before
+        );
+        assert_eq!(
+            sessions
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .preview,
+            preview_before,
+            "the already-correct root preview survives the second composition"
+        );
+        assert_eq!(
+            store(
+                &sessions
+                    .acquire_session(&session.id, Some(&root_node))
+                    .await
+                    .unwrap()
+            )
+            .load_canonical()
+            .unwrap(),
+            root_canonical_before,
+            "the root's canonical history is unchanged by the second repair"
+        );
+        assert_eq!(
+            store(
+                &sessions
+                    .acquire_session(&session.id, Some(&branch_node))
+                    .await
+                    .unwrap()
+            )
+            .load_canonical()
+            .unwrap(),
+            branch_canonical
+        );
+        assert!(
+            crate::local_runtime::session_display_projection::display_projection_probe(&session.id)
+                .is_none(),
+            "the reopened branch still arms no live root-preview publisher"
         );
         assert!(matches!(
             call(&connection, 94, Method::SessionDetach { target }).await,
