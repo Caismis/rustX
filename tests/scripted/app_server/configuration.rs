@@ -1043,6 +1043,226 @@ async fn t11_admission_gate_orders_busy_adoption_without_cancelling_attempt() {
     .await;
 }
 
+/// A background executor that signals its start, parks until released, and
+/// then completes successfully; cancellation still wins while parked.
+struct GatedBackgroundExecutor {
+    started: tokio::sync::watch::Sender<bool>,
+    release: tokio::sync::watch::Sender<bool>,
+}
+
+impl GatedBackgroundExecutor {
+    fn new() -> (
+        Self,
+        tokio::sync::watch::Receiver<bool>,
+        tokio::sync::watch::Sender<bool>,
+    ) {
+        let (started, started_rx) = tokio::sync::watch::channel(false);
+        let (release, _release_rx) = tokio::sync::watch::channel(false);
+        (
+            Self {
+                started,
+                release: release.clone(),
+            },
+            started_rx,
+            release,
+        )
+    }
+}
+
+impl crate::tools::executor::ToolExecutor for GatedBackgroundExecutor {
+    fn start<'a>(
+        &'a self,
+        _invocation: crate::tools::types::ToolInvocation,
+        context: crate::tools::executor::ToolExecutionContext<'a>,
+    ) -> crate::tools::executor::ToolExecutionHandle<'a> {
+        let started = self.started.clone();
+        let mut release = self.release.subscribe();
+        crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                started.send_replace(true);
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("release channel stays open");
+                crate::tools::types::ToolExecutionResult {
+                    status: crate::tools::types::ToolExecutionStatus::Success,
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    workflow: None,
+                    managed_output: None,
+                }
+            }),
+            context.cancellation.clone(),
+        )
+    }
+
+    fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+        crate::tools::deadline::ToolProgressCapability::None
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t11_background_execution_busy_settles_into_eligible_adoption() {
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("adopt after background settles".into()),
+            },
+        )
+        .await;
+        let candidate = settled(&fixture, 0).await.candidate.unwrap();
+        let probe = fixture
+            .manager
+            .probe(&fixture.sessions[0].active_conversation_id);
+        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .eligibility,
+            crate::local_runtime::configuration::application::AdoptionEligibility::Eligible
+        );
+        let (executor, mut started, release) = GatedBackgroundExecutor::new();
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
+        let invocation = crate::tools::types::ToolInvocation {
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: crate::runtime::identity::ToolCallId::new("call-background-gate"),
+            },
+            tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: crate::tools::types::ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let prepared = runtime
+            .tool_runtime()
+            .background()
+            .prepare_dispatch(
+                &invocation,
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .unwrap();
+        let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+            runtime
+                .tool_runtime()
+                .background()
+                .commit_dispatch(
+                    prepared,
+                    &crate::runtime::cancellation::CancellationSignal::new(),
+                )
+                .unwrap()
+        else {
+            panic!("accepted");
+        };
+        started.wait_for(|entered| *entered).await.unwrap();
+        // Attribution: no foreground attempt and no subagent owns work; the
+        // background registry alone owns the Busy lifecycle.
+        assert!(runtime.subagents().is_none_or(|s| !s.configuration_busy()));
+        assert!(runtime.tool_runtime().background().configuration_busy());
+        assert_eq!(
+            runtime.idle_epoch(),
+            Err(crate::runtime::conversation_runtime::IdleBusyReason::Background)
+        );
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .eligibility,
+            crate::local_runtime::configuration::application::AdoptionEligibility::Busy
+        );
+        assert_eq!(
+            fixture.manager.adopt_configuration(
+                &id,
+                &candidate.identity,
+                candidate.expected_binding
+            ),
+            Err(AdoptionError::Busy)
+        );
+        release.send_replace(true);
+        let terminal = runtime
+            .tool_runtime()
+            .background()
+            .wait_until_terminal(&execution_id)
+            .await
+            .unwrap();
+        assert!(matches!(
+            terminal.state,
+            crate::tools::background::BackgroundLifecycle::Succeeded
+        ));
+        // The execution's own terminal notification is consumed by one
+        // continuation attempt; it, not the eligibility transition, is the
+        // only model traffic settlement causes.
+        fixture.gates[0].wait_entered().await;
+        let requests = fixture.provider.request_bodies();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        assert!(
+            requests[0].contains("Background execution"),
+            "the single request is the background terminal continuation: {}",
+            requests[0]
+        );
+        fixture.gates[0].release();
+        // No notification fires for busy -> idle: eligibility is computed at
+        // read time, so poll the manager read inside the liveness guard.
+        loop {
+            let view = fixture.manager.configuration_application(&id).unwrap();
+            if view.eligibility
+                == crate::local_runtime::configuration::application::AdoptionEligibility::Eligible
+            {
+                let pending = view.candidate.as_ref().unwrap();
+                assert_eq!(pending.identity, candidate.identity);
+                assert_eq!(pending.expected_binding, candidate.expected_binding);
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            preparations,
+            "settlement prepared nothing"
+        );
+        assert_eq!(
+            fixture.provider.request_bodies().len(),
+            1,
+            "no model traffic beyond the terminal continuation"
+        );
+        assert_eq!(
+            fixture.manager.adopt_configuration(
+                &id,
+                &candidate.identity,
+                candidate.expected_binding + 1
+            ),
+            Err(AdoptionError::Conflict)
+        );
+        let applied = fixture
+            .manager
+            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        assert_eq!(
+            applied.units[&ApplyUnit::Instructions],
+            UnitApplication::Applied
+        );
+        assert!(applied.candidate.is_none());
+        assert_eq!(
+            fixture.provider.request_bodies().len(),
+            1,
+            "adoption invoked no model"
+        );
+        fixture.close().await;
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn t03_mixed_application_and_true_process_binding_restart() {
     let fixture = Fixture::new().await;
