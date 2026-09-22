@@ -108,10 +108,12 @@ consequences: it demotes the previous observation to stale presentation data
 and re-enters `attached`, so the standing "no current projection" obligation
 performs exactly one fresh authoritative read through the single read owner —
 coalesced with any publication or commit obligation already outstanding. A
-reattachment that lands while a Workspace write is in flight rejoins
-`awaitingWrite` instead of starting a competing read: that write reserved the
-read order at its initiation, and its own reread is the new attachment's fresh
-authoritative observation.
+reattachment whose Workspace write still holds its reread reservation
+(`rereadReservation`) rejoins `awaitingWrite` instead of starting a competing
+read, and that write's own reread is the new attachment's fresh authoritative
+observation. A write that is merely still pending (`submission`) is not enough:
+if a newer read or a connection generation replacement revoked its reservation,
+the reattachment reads for itself.
 
 ### The per-unit transaction machine
 
@@ -434,11 +436,23 @@ that state, and the Host's reread is then silently superseded however late it
 arrives — in both outcomes, so a superseded reread failure is not published as
 this presentation's read failure either. The commit's own observation obligation
 never ejects `awaitingWrite`: that obligation is precisely what the reread is
-about to answer — and neither does a reattachment's validation read: the
-reservation, like the mutation and its settlement, survives the presentation
-bounce, so `ATTACH` while a Workspace write is in flight rejoins
-`awaitingWrite` and the write's own reread becomes the fresh authoritative
-observation of the new attachment.
+about to answer — and neither does a reattachment's validation read: an
+unrevoked reservation survives the presentation bounce, so `ATTACH` while it
+stands rejoins `awaitingWrite` and the write's own reread becomes the fresh
+authoritative observation of the new attachment.
+
+The reservation is therefore explicit context, `rereadReservation`, named by the
+token of the submission that took it, and it is a different fact from that
+submission. The write transaction may outlive its connection generation and any
+number of attachments, and still settles exactly once. The reservation is
+publication authority and is revoked — never restored — by the first of: entry
+to `reading` (a newer read owns the order), a connection generation replacement
+(whether or not a presentation is attached), or the write ending. `DETACH` alone
+neither takes nor revokes it, and only a new submission ever takes one. The
+write's reread is published, in either outcome, only while its own submission
+still holds the reservation; otherwise it publishes neither a projection nor a
+read failure, and the commit is classified by `COMMIT.PENDING` against whatever
+read the current generation owns.
 
 Convergence is level-triggered and has no loop, worker, timer or poll:
 `idle` takes an eventless transition to `reading` whenever an obligation is

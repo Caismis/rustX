@@ -56,6 +56,21 @@ export interface SettingsTargetContext {
    * it, its non-sensitive revision selector and the exact CAS revision it is
    * fenced on. Deliberately never the authored payload. */
   submission?: { identity: string; token: number; selector: RevisionSelector; expected: string };
+  /** The read order a Workspace write reserved for its own authoritative
+   * reread, named by the token of the submission that reserved it.
+   *
+   * This is observation publication authority, and it is a different fact from
+   * `submission`, the write transaction that will eventually deliver the
+   * reread. The transaction may outlive its connection generation and any
+   * number of presentation attachments, and still settles. The reservation may
+   * not: it is taken only when the `authority` region enters `awaitingWrite`
+   * for that submission, and it is revoked by the first of a newer
+   * authoritative read starting, its connection generation being replaced, or
+   * the write ending. Revocation is permanent — nothing but a new submission
+   * ever takes a reservation — so no later `ATTACH` can restore publication
+   * authority that a replacement or a newer read took away. `DETACH` alone
+   * neither takes nor revokes it. */
+  rereadReservation?: { token: number };
   /** One live transaction actor per native semantic unit touched in this
    * lifetime. Owned here, not by the editors that render them. */
   units: Record<string, UnitTransactionRef>;
@@ -148,19 +163,23 @@ function unitRevision(projection: SourceSettings, selector: RevisionSelector): s
  *   observation belongs to the generation that acquired it: once a newer
  *   generation is current, no read, read failure, Workspace-owned reread or
  *   convergence comparison from the older one can become authoritative, because
- *   the state that owned them has been left and their actor stopped.
+ *   the state that owned them has been left, their actor stopped and the
+ *   write-owned reread reservation revoked — attached or not, and for good.
  * - *transaction* — the per-unit actors in `units` live for the whole authority
  *   lifetime, *across* generation changes, so a definitive acknowledgement
  *   settles the exact transaction that submitted it even after its editor, the
  *   whole Settings dialog, or the connection it was submitted on is gone. What
  *   such a late acknowledgement may never do is publish its generation's
- *   observation into the new one.
+ *   observation into the new one: the pending write (`submission`) and the
+ *   authority of its reread to publish (`rereadReservation`) are separate
+ *   facts, and only the first outlives the generation.
  * - *presentation* — `ATTACH` / `DETACH`. A detached presentation reads
  *   nothing; a mutation already in flight still settles. `DETACH` retains
  *   editing transactions; `ATTACH` revalidates authoritative observation: the
  *   previous observation is demoted to stale presentation data, so every new
- *   presentation attachment must establish a fresh authoritative read before
- *   any observation is current again. */
+ *   presentation attachment must establish a fresh authoritative read — its
+ *   own, or a still-reserved write-owned reread — before any observation is
+ *   current again. */
 export const settingsTargetMachine = setup({
   types: {
     context: {} as SettingsTargetContext,
@@ -216,15 +235,15 @@ export const settingsTargetMachine = setup({
       const held = context.observation;
       return !held || held.application?.scope !== applicationScope(held.target);
     },
-    rereadObserved: ({ event }) => (event as unknown as { output?: WriteOutcome }).output?.reread?.status === 'observed',
-    rereadFailed: ({ event }) => (event as unknown as { output?: WriteOutcome }).output?.reread?.status === 'failed',
+    /** The write performed its own authoritative reread. Whether that reread
+     * may publish is decided by the reservation, not by its presence. */
+    carriesOwnedReread: ({ event }) => (event as unknown as { output?: WriteOutcome }).output?.reread !== undefined,
     /** A Workspace write performs its own authoritative reread, so that write
      * reserves the read order at its initiation. A User write owns no reread. */
     portOwnsReread: ({ context }) => context.port.ownsReread,
-    /** The write-owned read reservation is still open: a Workspace mutation is
-     * in flight and its own reread will come. A presentation bounce must not
-     * steal that reserved read order with a competing read. */
-    readReservationOpen: ({ context }) => context.port.ownsReread && context.submission !== undefined,
+    /** The write-owned reread still holds publication authority. A pending
+     * write alone is never enough: its reservation may already be revoked. */
+    holdsRereadReservation: ({ context }) => context.rereadReservation !== undefined,
     generationChanged: ({ context, event }) => event.type === 'TRANSPORT' && event.generation !== context.generation,
     isConflict: ({ event }) => classifyWriteFailure((event as unknown as { error: unknown }).error) === 'conflict',
     isUncertain: ({ event }) => classifyWriteFailure((event as unknown as { error: unknown }).error) === 'uncertain',
@@ -265,6 +284,12 @@ export const settingsTargetMachine = setup({
       staleObservation: ({ context }) => context.observation ?? context.staleObservation,
     }),
     recordChasing: assign({ chasing: ({ context }) => publicationObligation(context) }),
+    /** The Workspace write just initiated reserves the read order for its own
+     * reread. */
+    reserveOwnedReread: assign({ rereadReservation: ({ context }) => ({ token: context.submission!.token }) }),
+    /** Permanently end the write-owned reread's publication authority. The
+     * write itself is untouched and still settles. */
+    revokeRereadReservation: assign({ rereadReservation: () => undefined }),
     reportStaleApplication: assign({
       writeError: ({ context }) => {
         const held = context.observation!;
@@ -382,6 +407,7 @@ export const settingsTargetMachine = setup({
       enqueue.assign({
         unobservedCommit: () => ({ identity: submission.identity }),
         submission: () => undefined,
+        rereadReservation: () => undefined,
       });
     }),
     /** The saved notice is truthful against the projection the presentation is
@@ -390,14 +416,17 @@ export const settingsTargetMachine = setup({
      * read that owed it failed and the observation is explicitly uncertain. The
      * commit itself was definitive either way. */
     reportSaved: assign({ message: () => 'Source saved. Native coordination owns application.' }),
-    adoptOwnedReread: raise(({ event }) => ({
-      type: 'READ.ADOPT' as const,
-      projection: ((event as unknown as { output: WriteOutcome }).output.reread as { status: 'observed'; projection: SourceSettings }).projection,
-    })),
-    reportOwnedRereadFailure: raise(({ event }) => ({
-      type: 'READ.REREAD_FAILED' as const,
-      error: ((event as unknown as { output: WriteOutcome }).output.reread as { status: 'failed'; error: unknown }).error,
-    })),
+    /** Publish the write's own reread — in either outcome — only if this exact
+     * submission still holds the reservation it took. A revoked reservation
+     * publishes nothing, however the reread turned out: its projection is not
+     * current observation and its failure is not the current read failure. */
+    offerOwnedReread: enqueueActions(({ context, event, enqueue }) => {
+      const { reread } = (event as unknown as { output: WriteOutcome }).output;
+      if (!reread || context.rereadReservation === undefined || context.rereadReservation.token !== context.submission?.token) return;
+      enqueue.raise(reread.status === 'observed'
+        ? { type: 'READ.ADOPT', projection: reread.projection }
+        : { type: 'READ.REREAD_FAILED', error: reread.error });
+    }),
     /** The write did not commit. The transaction keeps its browser intent and
      * its exact reviewed base; the mutation is never replayed. */
     recordWriteFailure: enqueueActions(({ context, event, enqueue }) => {
@@ -408,6 +437,7 @@ export const settingsTargetMachine = setup({
       enqueue.assign({
         writeError: () => writeFailureMessage(classifyWriteFailure(cause), cause),
         submission: () => undefined,
+        rereadReservation: () => undefined,
       });
     }),
   },
@@ -437,12 +467,13 @@ export const settingsTargetMachine = setup({
         // projection" obligation starts the validation read through the single
         // read owner, coalesced with any publication or commit obligation
         // already outstanding. The one reattachment that must not start a
-        // competing read is one that lands in the middle of a Workspace write:
-        // that write reserved the read order at its initiation, and the
-        // reservation — like the mutation and its settlement — outlives the
-        // presentation.
+        // competing read is one whose Workspace write still holds the read
+        // order it reserved: `DETACH` does not revoke a reservation, so a
+        // presentation bounce resumes it. A write that is merely still pending
+        // is not enough — a replaced generation or a newer read has revoked
+        // its reservation for good, and the new attachment reads for itself.
         ATTACH: [
-          { guard: 'readReservationOpen', target: '.attached.awaitingWrite', actions: 'demoteObservation' },
+          { guard: 'holdsRereadReservation', target: '.attached.awaitingWrite', actions: 'demoteObservation' },
           { target: '.attached', actions: 'demoteObservation' },
         ],
         DETACH: { target: '.suspended', actions: 'demoteObservation' },
@@ -479,15 +510,17 @@ export const settingsTargetMachine = setup({
               on: {
                 REFRESH: 'reading',
                 'READ.FORCE': 'reading',
-                'WRITE.STARTED': { guard: 'portOwnsReread', target: 'awaitingWrite' },
+                'WRITE.STARTED': { guard: 'portOwnsReread', target: 'awaitingWrite', actions: 'reserveOwnedReread' },
               },
             },
             /** Exactly one authoritative read is in flight. Starting another
              * read re-enters this state, which stops the older read actor: a
              * superseded read is cancelled, not compared, so it can never
-             * publish a projection, a read failure or a commit observation. */
+             * publish a projection, a read failure or a commit observation.
+             * Starting a read likewise revokes any write-owned reread
+             * reservation: the newer read owns the order from here on. */
             reading: {
-              entry: 'recordChasing',
+              entry: ['revokeRereadReservation', 'recordChasing'],
               invoke: {
                 src: 'readSource',
                 input: ({ context }) => ({ port: context.port }),
@@ -497,20 +530,22 @@ export const settingsTargetMachine = setup({
               on: {
                 REFRESH: { target: 'reading', reenter: true },
                 'READ.FORCE': { target: 'reading', reenter: true },
-                'WRITE.STARTED': { guard: 'portOwnsReread', target: 'awaitingWrite' },
+                'WRITE.STARTED': { guard: 'portOwnsReread', target: 'awaitingWrite', actions: 'reserveOwnedReread' },
                 // A reread that no longer owns the read order is silent, in both
                 // outcomes: the newer read in flight owns this presentation, and
                 // the commit's own observation obligation stays with it.
               },
             },
             /** The reread a Workspace write owns is reserved here, at the moment
-             * that write is initiated. Any authoritative read started afterwards
-             * leaves this state, and the Host's reread is then silently
+             * that write is initiated, and `rereadReservation` names it. Any
+             * authoritative read started afterwards leaves this state and
+             * revokes the reservation, and the Host's reread is then silently
              * superseded however late it arrives — it neither replaces a newer
              * projection nor publishes a failure the newer read has retired.
-             * The reservation survives `DETACH` / `ATTACH`: a reattachment while
-             * the write is in flight rejoins this state, and the write's own
-             * reread becomes the fresh observation of the new attachment. */
+             * An unrevoked reservation survives `DETACH` / `ATTACH`: a
+             * reattachment of the same generation rejoins this state, and the
+             * write's own reread becomes the fresh observation of the new
+             * attachment. */
             awaitingWrite: {
               always: { guard: 'owesPublicationRead', target: 'reading' },
               on: {
@@ -571,15 +606,15 @@ export const settingsTargetMachine = setup({
               mutation: (event as Extract<SettingsTargetEvent, { type: 'UNIT.SUBMIT' }>).mutation,
             }),
             // A write that owns a reread offers it to the authority region and
-            // then announces the commit. The reread is only *offered*: the
-            // region adopts it if it still owns the read order and ignores it
-            // otherwise, and `COMMIT.PENDING` is what makes the commit reach a
-            // terminal classification in the second case. A write that owns no
-            // reread forces its own post-commit read instead, which is itself
-            // the classification path, so it announces nothing.
+            // then announces the commit. The reread is only *offered*: it is
+            // published only while its reservation still stands, and the write
+            // ending revokes that reservation either way. `COMMIT.PENDING` is
+            // what makes the commit reach a terminal classification when the
+            // reread is not adopted. A write that owns no reread forces its own
+            // post-commit read instead, which is itself the classification
+            // path, so it announces nothing.
             onDone: [
-              { guard: 'rereadObserved', target: 'observing', actions: ['recordAcknowledgement', 'adoptOwnedReread', raise({ type: 'COMMIT.PENDING' })] },
-              { guard: 'rereadFailed', target: 'observing', actions: ['recordAcknowledgement', 'reportOwnedRereadFailure', raise({ type: 'COMMIT.PENDING' })] },
+              { guard: 'carriesOwnedReread', target: 'observing', actions: ['offerOwnedReread', 'recordAcknowledgement', raise({ type: 'COMMIT.PENDING' })] },
               { target: 'observing', actions: ['recordAcknowledgement', raise({ type: 'READ.FORCE' })] },
             ],
             onError: [
@@ -635,7 +670,9 @@ export const settingsTargetMachine = setup({
       // A replaced connection generation is not a trigger to re-read the old
       // observation lifetime: it ends that lifetime and starts a new one, which
       // obtains its own authoritative observation from nothing.
-      { guard: 'generationChanged', actions: ['applyTransport', 'retireObservation', raise({ type: 'GENERATION.REPLACED' })] },
+      // Its write-owned reread reservation ends with it, whether or not a
+      // presentation is attached to witness the replacement.
+      { guard: 'generationChanged', actions: ['applyTransport', 'retireObservation', 'revokeRereadReservation', raise({ type: 'GENERATION.REPLACED' })] },
       { actions: ['applyTransport', raise({ type: 'TRIGGER' })] },
     ],
     'UNIT.EDIT': { actions: ['ensureUnit', 'forwardEdit'] },

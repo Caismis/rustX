@@ -105,10 +105,13 @@ for every value, conflict, application and adoption decision.
 Read ordering is structural rather than compared: exactly one authoritative read
 is in flight, and starting a newer one stops the older read actor, so a
 superseded response has no completion path at all. The reread a Workspace write
-owns is reserved by the state the write enters, and is silently superseded — in
+owns is reserved when the write starts, and is silently superseded — in
 success and in failure alike — by any read a newer native publication owes.
-The reservation, like the mutation and its settlement, survives a Settings
-close and reopen.
+The pending write and its reread's authority to publish are separate facts. The
+write always settles, even across a connection generation replacement; the
+reservation survives a plain Settings close and reopen, but a newer read or a
+replaced connection generation revokes it for good, so reopening Settings while
+that write is still pending performs a fresh read instead of reviving it.
 
 Authored source state and effective resolution state are two independent
 dimensions, not one state machine. "This Workspace authors no override" and "the

@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { createActor } from 'xstate';
+import { createActor, type InspectionEvent } from 'xstate';
 import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v18';
 import { settingsTargetMachine } from '../src/app/settings/machines/settings-target';
 import { sessionConfigurationMachine, type SessionConfigurationPort } from '../src/app/settings/machines/session-configuration';
@@ -52,12 +52,16 @@ function scriptedPort(ownsReread = false): Scripted {
     },
   };
 }
-function settingsActor(port: ConfigurationPort, publications?: Record<string, ConfigurationApplication>, workspace = false) {
+function settingsActor(
+  port: ConfigurationPort, publications?: Record<string, ConfigurationApplication>, workspace = false,
+  inspect?: (inspection: InspectionEvent) => void,
+) {
   const actor = createActor(settingsTargetMachine, {
     input: {
       target: workspace ? workspaceSettingsTarget('A', 'A') : userSettingsTarget,
       port, connection: 'connected', generation: 1, publications,
     },
+    inspect,
   });
   actor.start();
   actor.send({ type: 'ATTACH' });
@@ -704,6 +708,164 @@ it('R23 a late failure of an old-generation read cannot populate the read failur
   const snapshot = actor.getSnapshot();
   expect(snapshot.context.observation?.user.revision).toBe('new-generation');
   expect(snapshot.context.readError).toBe('');
+});
+
+// ── 4e. A write outlives its generation; its reread authority does not ──────
+//
+// A Workspace write that crossed the native submission boundary settles its own
+// transaction whatever happens to the connection or the presentation. The read
+// order it reserved for its own reread is a different fact: it is publication
+// authority of the generation that took it, and once revoked no later
+// `DETACH` / `ATTACH` restores it merely because the write is still pending.
+
+/** The settlement facts of the actor system: every definitive commit delivered
+ * to a transaction, and every state the target's `mutation` region passes
+ * through, collapsed to changes. */
+function settlementLog() {
+  const log = { commits: 0, mutation: [] as string[] };
+  const inspect = (inspection: InspectionEvent) => {
+    if (inspection.type === '@xstate.event' && inspection.event.type === 'COMMITTED') log.commits += 1;
+    if (inspection.type !== '@xstate.snapshot' || inspection.actorRef.sessionId !== inspection.rootId) return;
+    const mutation = String((inspection.snapshot as ReturnType<ReturnType<typeof settingsActor>['getSnapshot']>).value.mutation);
+    if (log.mutation.at(-1) !== mutation) log.mutation.push(mutation);
+  };
+  return { log, inspect };
+}
+const obsoleteReread = (outcome: 'observed' | 'failed'): WriteOutcome['reread'] => outcome === 'observed'
+  ? { status: 'observed', projection: projection('obsolete-reread') }
+  : { status: 'failed', error: new Error('obsolete reread failed') };
+const canSubmit = (actor: ReturnType<typeof settingsActor>, revision: string) =>
+  actor.getSnapshot().can({ type: 'UNIT.SUBMIT', identity: toolsIdentity, selector: revisionSelector(toolsMutation), revision, mutation: toolsMutation });
+
+it.each([
+  ['observed', 'established'],
+  ['observed', 'in flight'],
+  ['failed', 'established'],
+  ['failed', 'in flight'],
+] as const)('R24 reattaching after a generation replacement never resurrects the Workspace reread reservation, when the obsolete reread %s and the generation-2 read is %s', async (outcome, replacement) => {
+  const scripted = scriptedPort(true);
+  const settlement = settlementLog();
+  const actor = settingsActor(scripted.port, undefined, true, settlement.inspect);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  expect(actor.getSnapshot().matches({ authority: { attached: 'awaitingWrite' } })).toBe(true);
+  // Generation 2 replaces generation 1 while W1 is still pending, which
+  // revokes generation 1's reread authority and starts generation 2's own read.
+  reconnect(actor, 2);
+  await flush();
+  expect(scripted.reads).toHaveLength(2);
+  if (replacement === 'established') {
+    scripted.reads[1].resolve(projection('generation-2'));
+    await flush();
+    expect(actor.getSnapshot().context.observation?.user.revision).toBe('generation-2');
+  }
+  // The Settings presentation bounces while W1 is still pending.
+  actor.send({ type: 'DETACH' });
+  actor.send({ type: 'ATTACH' });
+  await flush();
+  // The pending write does not restore the revoked reservation: the new
+  // attachment validates through its own generation-2 read.
+  expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
+  expect(actor.getSnapshot().matches({ mutation: 'submitting' })).toBe(true);
+  expect(scripted.reads).toHaveLength(3);
+  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: obsoleteReread(outcome) });
+  await flush();
+  const late = actor.getSnapshot();
+  // W1 still records its definitive commit on the transaction that submitted it…
+  expect(unitOf(actor).getSnapshot().context.submitted?.committed).toBe('r2');
+  expect(late.matches({ mutation: 'observing' })).toBe(true);
+  // …but its generation-1 reread publishes nothing: no projection, no read
+  // failure, no block. The generation-2 read still owns the observation.
+  expect(late.context.observation).toBeUndefined();
+  expect(late.context.staleObservation?.user.revision).toBe(replacement === 'established' ? 'generation-2' : undefined);
+  expect(late.context.readError).toBe('');
+  expect(late.matches({ authority: { attached: 'reading' } })).toBe(true);
+  scripted.reads[2].resolve(projection('r2'));
+  await flush();
+  const snapshot = actor.getSnapshot();
+  expect(snapshot.context.observation?.user.revision).toBe('r2');
+  expect(snapshot.context.readError).toBe('');
+  expect(snapshot.matches({ authority: { attached: 'idle' } })).toBe(true);
+  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expect(snapshot.matches({ mutation: 'idle' })).toBe(true);
+  expect(snapshot.context.message).toContain('Source saved');
+  // Editing is governed by generation 2 alone.
+  expect(canSubmit(actor, 'r2')).toBe(true);
+  // W1 settled exactly once, and was never replayed.
+  expect(settlement.log).toEqual({ commits: 1, mutation: ['idle', 'submitting', 'observing', 'idle'] });
+  expect(scripted.writes).toHaveLength(1);
+  expect(scripted.reads).toHaveLength(3);
+});
+
+it.each(['observed', 'failed'] as const)('R24 a generation replaced while Settings is detached revokes the Workspace reread reservation, when the obsolete reread %s', async outcome => {
+  const scripted = scriptedPort(true);
+  const settlement = settlementLog();
+  const actor = settingsActor(scripted.port, undefined, true, settlement.inspect);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  // The reservation is suspended, not revoked, by the close…
+  actor.send({ type: 'DETACH' });
+  // …and revoked by the replacement, which no presentation has to witness.
+  reconnect(actor, 2);
+  actor.send({ type: 'ATTACH' });
+  await flush();
+  expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
+  expect(scripted.reads).toHaveLength(2);
+  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: obsoleteReread(outcome) });
+  await flush();
+  expect(actor.getSnapshot().context.observation).toBeUndefined();
+  expect(actor.getSnapshot().context.readError).toBe('');
+  expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
+  scripted.reads[1].resolve(projection('r2'));
+  await flush();
+  const snapshot = actor.getSnapshot();
+  expect(snapshot.context.observation?.user.revision).toBe('r2');
+  expect(snapshot.context.readError).toBe('');
+  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expect(snapshot.matches({ mutation: 'idle' })).toBe(true);
+  expect(canSubmit(actor, 'r2')).toBe(true);
+  expect(settlement.log).toEqual({ commits: 1, mutation: ['idle', 'submitting', 'observing', 'idle'] });
+  expect(scripted.writes).toHaveLength(1);
+  expect(scripted.reads).toHaveLength(2);
+});
+
+it('R24 a reservation superseded by a newer publication read is not resurrected by reattaching', async () => {
+  const scripted = scriptedPort(true);
+  const actor = settingsActor(scripted.port, { 'source:user': userApplication('1') }, true);
+  await flush();
+  scripted.reads[0].resolve(projection('r1', userApplication('1')));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  // Same generation: a newer publication owes a read that supersedes the
+  // write-owned reread.
+  reconnect(actor, 1, { 'source:user': userApplication('2') });
+  await flush();
+  expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
+  actor.send({ type: 'DETACH' });
+  actor.send({ type: 'ATTACH' });
+  await flush();
+  expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
+  expect(scripted.reads).toHaveLength(3);
+  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: obsoleteReread('observed') });
+  await flush();
+  expect(actor.getSnapshot().context.observation).toBeUndefined();
+  scripted.reads[2].resolve(projection('r2', userApplication('2')));
+  await flush();
+  const snapshot = actor.getSnapshot();
+  expect(snapshot.context.observation?.user.revision).toBe('r2');
+  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expect(snapshot.matches({ mutation: 'idle' })).toBe(true);
+  expect(scripted.writes).toHaveLength(1);
 });
 
 // ── 6./7./8. Per-unit CAS transactions ──────────────────────────────────────
