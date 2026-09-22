@@ -29,7 +29,12 @@ test('native Settings reference cards, inventories, keyboard scopes and narrow t
  await settings.getByRole('button', { name: 'Agents', exact: true }).click(); await settings.getByRole('button', { name: 'Edit Agent reviewer' }).click();
  await settings.getByRole('form', { name: 'Agent reviewer' }).evaluate(el => el.scrollIntoView({ block: 'start' }));
  await expect(settings.getByLabel('Description', { exact: true })).toBeVisible();
- await expect(page).toHaveScreenshot('settings-agent-narrow-dark.png');
+ // The panel's two rounded bottom corners blend the panel fill into the
+ // blurred mask. Chromium's analytic sub-pixel coverage for those arcs rounds
+ // differently across host CPUs (13 pixels, max channel delta 3; geometry and
+ // content identical), so bound only that rasterizer noise. A real content or
+ // layout change touches far more than these corner pixels.
+ await expect(page).toHaveScreenshot('settings-agent-narrow-dark.png', { maxDiffPixels: 20 });
  expect(await settings.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
  await page.keyboard.press('Escape'); await expect(settings).toHaveCount(0);
  // The global entry restores focus to its own trigger; the Workspace entry is
