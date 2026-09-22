@@ -115,14 +115,19 @@ rustX-authored presentation seats, with no protocol imports or persistence.
 
 `app/settings/Settings` reads the existing typed AppServerClient operations. It
 composes runtime, catalog, Root, MCP and named-Agent adapters with the resource
-inventory. `UnitForm` owns one native mutation's editable intent. The target-keyed
-`SettingsDrafts` map retains only modified drafts and their exact base revisions
-while navigating targets/sections/identities. Identity includes endpoint, client
-authority and the exact Settings target (`user` or `workspace:<id>`), not source
-revision or focused Session. Base revision is independent. Workspace A drafts never
-become Workspace B or User drafts. No draft, credential, configuration or runtime
-snapshot goes into browser storage. Clean forms follow authoritative source updates;
-dirty forms require review.
+inventory. `UnitForm` presents one native mutation's editable intent. The
+`SettingsTransactionStore` (created in `app/settings/drafts.tsx`, one per exact
+endpoint/authority/target lifetime) owns each unit's draft, exact CAS base,
+submitted-operation token and intent generation, committed acknowledgement and
+final projection settlement. `Settings` records both the confirmed native commit
+and the adopted authoritative projection directly on that store, so a save that
+completes after its editor unmounts still retires exactly its own submitted
+intent and never a newer draft. Identity includes endpoint, client authority and
+the exact Settings target (`user` or `workspace:<id>`), not source revision or
+focused Session. Base revision is independent. Workspace A drafts never become
+Workspace B or User drafts. No draft, credential, configuration or runtime
+snapshot goes into browser storage. Clean forms follow authoritative source
+updates; dirty forms require review.
 
 Catalog identity suggestions can include published and authored identities. This
 is a union of names for input assistance, never a browser overlay or claim of
@@ -232,8 +237,9 @@ presentation sheet. Removed the duplicate global `.activity-card` rules. The
 obsolete `app/Conversation.tsx` remains deleted after Goal reconciliation. Removed
 the ordinary `Configuration owner` selector and its catalog-driven target switching;
 the target is now an explicit immutable Settings prop and drafts are keyed by it.
-`app/settings/drafts.tsx` keeps only draft/context state; authored membership and
-provenance projection moved to the pure `app/settings/projection.ts`. `UnitForm`
+`app/settings/drafts.tsx` owns the per-unit editing transaction (draft/context
+state, operation identity and its projection settlement); authored membership and
+provenance projection live in the pure `app/settings/projection.ts`. `UnitForm`
 no longer takes an `initial` value seeded from `authored ?? <client default>`;
 call sites pass the exact native `authored` value plus a separate `blank` seed. No
 compatibility export, alternate Settings root, legacy mode or feature flag exists.
