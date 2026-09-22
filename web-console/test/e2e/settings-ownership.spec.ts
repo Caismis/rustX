@@ -53,8 +53,9 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
    await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();
    const authored = await f.workspaceHost.host.configureWorkspace(a.id, f.endpoint, { kind: 'read' });
-   expect(authored.workspace?.authored?.agent?.tools?.builtin).not.toContain('read');
-   expect(authored.workspace?.authored?.agent?.tools?.builtin).toContain('write');
+   if (authored.kind !== 'read') throw new Error('expected a read outcome');
+   expect(authored.projection.workspace?.authored?.agent?.tools?.builtin).not.toContain('read');
+   expect(authored.projection.workspace?.authored?.agent?.tools?.builtin).toContain('write');
    expect((await sessions()).sessions).toEqual([]);
    expect(wire.requests.some(row => ['session/create', 'session/attach', 'turn/start'].includes(row.method))).toBe(false);
    await expect(f.workspaceHost.host.configureWorkspace('unregistered', f.endpoint, { kind: 'read' })).rejects.toThrow('Unknown');

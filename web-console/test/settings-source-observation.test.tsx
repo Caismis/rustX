@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v18';
 import { Settings } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
-import type { ProductHostWorkspaces } from '../src/workspaces/host';
+import type { ProductHostWorkspaces, WorkspaceConfigurationReread } from '../src/workspaces/host';
 import { cfg3Source } from './cfg3-data';
 import { Server } from './fixture';
 afterEach(cleanup);
@@ -293,9 +293,13 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
     ...s.workspaceHost,
     configureWorkspace: async (id, _endpoint, operation) => {
       const target: SourceTarget = { kind: 'workspace', directory: `/workspace/${id === 'workspace-a' ? 'A' : 'B'}` };
-      if (operation.kind === 'write') return (await s.client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
+      if (operation.kind === 'write') {
+        const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
+        const reread: WorkspaceConfigurationReread = { status: 'observed', projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection };
+        return { kind: 'write', commit: { acknowledgement, reread } };
+      }
       if (operation.kind === 'reconcile') await s.client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_application');
-      return (await s.client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection;
+      return { kind: operation.kind, projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection };
     },
   };
   await s.connect();

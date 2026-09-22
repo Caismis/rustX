@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, exists
 import { isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
-import type { ProductHostWorkspaces, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation } from '../src/workspaces/host.ts';
+import type { ProductHostWorkspaces, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread } from '../src/workspaces/host.ts';
 import { AppServerClient } from '../../tui/src/app-server/client.ts';
 import { WebSocketTransport } from '../../tui/src/app-server/websocket-transport.ts';
 
@@ -93,7 +93,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     return this.lane(id, async () => { this.registered(id); this.commit(this.registrations.filter(row => row.id !== id)); });
   }
   async resolveWorkspace(id: string, endpoint: string) { this.route(endpoint); return { cwd: this.cwd(this.registered(id).location) }; }
-  async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation) {
+  async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult> {
     return this.lane(id, async () => {
       const { cwd } = await this.resolveWorkspace(id, endpoint);
       if (!this.config.transportToken) throw new Error('Workspace Host has no native configuration connection');
@@ -103,12 +103,25 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         // Resolve again after asynchronous admission, immediately before submission.
         if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
         const target = { kind: 'workspace' as const, directory: cwd };
-        if (operation.kind === 'write') await client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: operation.mutation }, 'source_settings');
-        else if (operation.kind === 'reconcile') await client.call('configuration/reconcile', { target }, 'configuration_application');
+        if (operation.kind === 'write') {
+          // The native write is the linearization point. Once it acknowledges,
+          // the mutation is committed and nothing below may turn it into a
+          // rejection; the authoritative reread is a separate, independent fact.
+          const acknowledgement = await client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: operation.mutation }, 'source_settings');
+          let reread: WorkspaceConfigurationReread;
+          try {
+            const result = await client.call('configuration/sourcesRead', { target }, 'source_settings');
+            reread = (await this.resolveWorkspace(id, endpoint)).cwd === cwd
+              ? { status: 'observed', projection: result.projection }
+              : { status: 'failed', error: 'Workspace authority changed during the authoritative reread' };
+          } catch (error) { reread = { status: 'failed', error: error instanceof Error ? error.message : String(error) }; }
+          return { kind: 'write', commit: { acknowledgement: acknowledgement.projection, reread } };
+        }
+        if (operation.kind === 'reconcile') await client.call('configuration/reconcile', { target }, 'configuration_application');
         else if (operation.kind !== 'read') throw new Error('Unknown configuration operation');
         const result = await client.call('configuration/sourcesRead', { target }, 'source_settings');
         if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
-        return result.projection;
+        return { kind: operation.kind, projection: result.projection };
       } finally { await client.close(); }
     });
   }

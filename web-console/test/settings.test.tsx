@@ -379,3 +379,79 @@ it.each(['before acknowledgement', 'after acknowledgement', 'after the next edit
   expect(screen.getByText(/Draft base revision:/).textContent).toContain('r2');
   expect(screen.getByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();
 });
+
+it('retires a confirmed Provider save, including its literal credential, after the editor unmounts', async () => {
+  let release!: (result: import('../../protocol/app-server/v18').MethodResult) => void;
+  const heldWrite = new Promise<import('../../protocol/app-server/v18').MethodResult>(resolve => { release = resolve; });
+  const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourceWrite') return heldWrite; });
+  const host = cfg3Host(subject); subject.host = host;
+  render(<Settings client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
+  await screen.findByText(/Revision: workspace-1/);
+  fireEvent.click(screen.getByRole('button', { name: 'Providers & Models' }));
+  fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } }); fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
+  fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } });
+  fireEvent.change(screen.getByLabelText('Credential source'), { target: { value: 'literal' } });
+  fireEvent.change(screen.getByLabelText('New literal credential'), { target: { value: 'SECRET_SENTINEL' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
+  await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(1));
+  // The editor unmounts while the native write is still in flight.
+  fireEvent.click(screen.getByRole('button', { name: 'General' }));
+  expect(screen.queryByLabelText('New literal credential')).toBeNull();
+  // Native commit and its authoritative reread both succeed after unmount.
+  subject.source.workspace!.revision = 'saved-2';
+  subject.source.workspace!.authored = { providers: { secret: { base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
+  release({ type: 'source_settings', projection: structuredClone(subject.source) });
+  await screen.findByText(/Revision: saved-2/);
+  // Reopening reconstructs from the redacted native projection, not the draft.
+  fireEvent.click(screen.getByRole('button', { name: 'Providers & Models' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Provider secret' }));
+  expect((screen.getByLabelText('Credential source') as HTMLSelectElement).value).toBe('retain');
+  expect(document.body.innerHTML).not.toContain('SECRET_SENTINEL');
+  expect(screen.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull();
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(1);
+});
+
+it('a late acknowledgement advances the CAS base without erasing a newer draft submitted after it', async () => {
+  let release!: (result: import('../../protocol/app-server/v18').MethodResult) => void;
+  const heldWrite = new Promise<import('../../protocol/app-server/v18').MethodResult>(resolve => { release = resolve; });
+  const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourceWrite') return heldWrite; });
+  const host = cfg3Host(subject); subject.host = host;
+  render(<Settings client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
+  await screen.findByText(/Revision: workspace-1/);
+  fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+  fireEvent.click(screen.getByLabelText('read'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+  await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(1));
+  // A newer editing intent exists before the first mutation is acknowledged.
+  fireEvent.click(screen.getByLabelText('write'));
+  subject.source.workspace!.revision = 'saved-2';
+  release({ type: 'source_settings', projection: structuredClone(subject.source) });
+  await screen.findByText(/Revision: saved-2/);
+  // The newer draft survives the old acknowledgement; only the submitted
+  // mutation is retired, and the newer intent's base advanced to the commit.
+  expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
+  expect((screen.getByLabelText('write') as HTMLInputElement).checked).toBe(true);
+  expect(screen.getByText(/Draft base revision:/).textContent).toContain('saved-2');
+  expect(screen.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull();
+});
+
+it('keeps a confirmed Workspace save when the post-write authoritative reread fails', async () => {
+  let failReads = false;
+  const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourcesRead' && failReads) throw new Error('reread unavailable'); });
+  const host = cfg3Host(subject); subject.host = host;
+  render(<Settings client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
+  await screen.findByText(/Revision: workspace-1/);
+  fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+  fireEvent.click(screen.getByLabelText('read'));
+  failReads = true;
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+  // The commit is reported as saved, and the failed reread is a separate fact.
+  await screen.findByText(/Source saved. Native coordination/);
+  await screen.findByText(/Saved, but the authoritative reread failed/);
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(1);
+  // A failed reread never turns the confirmed write back into an unsaved draft:
+  // the submitted intent was retired with its confirmed commit, so there is no
+  // pending Save and no review conflict against a stale base.
+  expect((screen.getByRole('button', { name: 'Save Native Tools' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull();
+});

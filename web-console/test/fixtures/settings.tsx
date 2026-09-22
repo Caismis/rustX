@@ -26,7 +26,11 @@ source.prospective_resources = effective.resources;
 source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/workspace/.agents/agents/reviewer.toml', revision: 'agent-1', authored: { description: 'Independent code review', instructions: 'Inspect changed boundaries and report findings.', tools: { builtin: ['read', 'grep'] }, skills: ['review'] } } }];
 source.resolved = { ...source.user.authored, ...source.workspace!.authored };
 server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: { ...source, target: { kind: 'user' } } }));
-server.workspaceHost.configureWorkspace = async () => ({ ...source, target: { kind: 'workspace', directory: '/workspace' } });
+server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
+  const projection = { ...source, target: { kind: 'workspace' as const, directory: '/workspace' } };
+  if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: projection, reread: { status: 'observed', projection } } };
+  return { kind: operation.kind, projection };
+};
 server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_configuration', projection: effective }));
 await server.attached('A');
 localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));

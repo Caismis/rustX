@@ -11,11 +11,11 @@ import { RootEditor, type RootSection } from './RootEditor';
 import { RuntimeEditor } from './RuntimeEditor';
 import { UnitForm, type SaveSource } from './controls';
 import css from '../../presentation/settings/SettingsContent.module.css';
-import { EditorStateContext, SourceContext, type UnitEditState } from './drafts';
+import { EditorStateContext, SourceContext, SettingsTransactionStore } from './drafts';
 import { SettingsPanel } from '../../presentation/settings/SettingsRoot';
 import type { ConnectionController } from '../../connection/controller';
 import { ConnectionSettings } from './ConnectionSettings';
-import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceConfigurationOperation } from '../../workspaces/host';
+import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceConfigurationReread } from '../../workspaces/host';
 import {
   applicationScope, changeBehavior, changeBehaviorLabel, observedResult, observedResultLabel, observedUnitLabel,
   observedUnits, settingsLifecycle, settingsLifecycleLabel, settingsTargetKey, settingsTargetLabel, settingsTargetScope,
@@ -31,7 +31,7 @@ const sections = [
   ['skills', 'Skills', 'Integrations'], ['workflows', 'Workflows', 'Integrations'], ['advanced', 'Server & source diagnostics', 'Advanced'],
 ] as const;
 type Section = typeof sections[number][0] | 'appearance' | 'connection';
-const draftStores = new WeakMap<AppServerClient, Map<string, Map<string, UnitEditState>>>();
+const draftStores = new WeakMap<AppServerClient, Map<string, SettingsTransactionStore>>();
 interface SettingsProps {
   client: AppServerClient; target: SettingsTarget; host?: ProductHostWorkspaces; onClose?: () => void;
   theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void;
@@ -78,20 +78,53 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
   // Stable primitive dependency: a fresh target object literal must not restart
   // the read/convergence lifetime on every parent render.
   const workspaceTargetId = target.kind === 'workspace' ? target.id : undefined;
+  // Every unit's editing transaction is owned by one store per target/authority
+  // lifetime, so section navigation and editor remounts never orphan settlement.
   let stores = draftStores.get(client);
   if (!stores) { stores = new Map(); draftStores.set(client, stores); }
-  const draftKey = identity + ':' + section;
-  let drafts = stores.get(draftKey);
-  if (!drafts) { drafts = new Map(); stores.set(draftKey, drafts); }
-  const request = useCallback(async (operation: WorkspaceConfigurationOperation) => {
+  let transactions = stores.get(identity);
+  if (!transactions) { transactions = new SettingsTransactionStore(); stores.set(identity, transactions); }
+  // A section change still remounts the editor subtree (its local picker state
+  // must not leak across sections); the transaction store is deliberately not
+  // keyed by section so settlement survives that remount.
+  const editorKey = identity + ':' + section;
+  /** One authoritative read of this exact target. A write acknowledgement never
+   * passes through here: it is not a projection and never replaces the read
+   * model. */
+  const read = useCallback(async (): Promise<SourceSettings> => {
     if (workspaceTargetId !== undefined) {
       if (!host?.configureWorkspace) throw new Error('Workspace Settings requires an authorized Product Host connection.');
-      return host.configureWorkspace(workspaceTargetId, endpoint, operation);
+      const result = await host.configureWorkspace(workspaceTargetId, endpoint, { kind: 'read' });
+      if (result.kind !== 'read') throw new Error('Workspace Host returned a non-read result for a read');
+      return result.projection;
     }
-    const nativeTarget = { kind: 'user' as const };
-    if (operation.kind === 'write') return (await client.request({ method: 'configuration/sourceWrite', params: { target: nativeTarget, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
-    if (operation.kind === 'reconcile') await client.request({ method: 'configuration/reconcile', params: { target: nativeTarget } }, 'configuration_application');
-    return (await client.request({ method: 'configuration/sourcesRead', params: { target: nativeTarget } }, 'source_settings')).projection;
+    return (await client.request({ method: 'configuration/sourcesRead', params: { target: { kind: 'user' as const } } }, 'source_settings')).projection;
+  }, [client, endpoint, host, workspaceTargetId]);
+  /** Submit one exact native mutation. On the Workspace Host path the write
+   * operation also attempts its own authoritative reread and returns it as an
+   * independent outcome, so a failed reread can never erase the confirmed
+   * commit. The User Settings path keeps its single authoritative read on the
+   * shared `refresh` path. */
+  const write = useCallback(async (expected_revision: string, mutation: SourceMutation): Promise<{ acknowledgement: SourceSettings; reread?: WorkspaceConfigurationReread }> => {
+    if (workspaceTargetId !== undefined) {
+      if (!host?.configureWorkspace) throw new Error('Workspace Settings requires an authorized Product Host connection.');
+      const result = await host.configureWorkspace(workspaceTargetId, endpoint, { kind: 'write', expected_revision, mutation });
+      if (result.kind !== 'write') throw new Error('Workspace Host returned a non-write result for a write');
+      return { acknowledgement: result.commit.acknowledgement, reread: result.commit.reread };
+    }
+    const acknowledgement = (await client.request({ method: 'configuration/sourceWrite', params: { target: { kind: 'user' as const }, expected_revision, mutation } }, 'source_settings')).projection;
+    return { acknowledgement };
+  }, [client, endpoint, host, workspaceTargetId]);
+  /** A reconcile is not a projection: it re-derives native state and the caller
+   * then issues a separate authoritative read. */
+  const reconcile = useCallback(async (): Promise<void> => {
+    if (workspaceTargetId !== undefined) {
+      if (!host?.configureWorkspace) throw new Error('Workspace Settings requires an authorized Product Host connection.');
+      const result = await host.configureWorkspace(workspaceTargetId, endpoint, { kind: 'reconcile' });
+      if (result.kind !== 'reconcile') throw new Error('Workspace Host returned a non-reconcile result for a reconcile');
+      return;
+    }
+    await client.request({ method: 'configuration/reconcile', params: { target: { kind: 'user' as const } } }, 'configuration_application');
   }, [client, endpoint, host, workspaceTargetId]);
   /** Adopt one whole authoritative projection. Only `configuration/sourcesRead`
    * results reach here, ordered by `reads`: a source-write acknowledgement
@@ -99,23 +132,36 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
    * not an application observation and never replaces the read model. */
   const accept = useCallback((next: SourceSettings) => {
     observation.current = next; ++accepted.current;
+    // The adopted projection is authoritative for every unit's transaction:
+    // retire an acknowledged mutation whose committed revision it now carries,
+    // even when the editor that submitted it has unmounted.
+    transactions.observeAll(next, sourceRevision);
     setSource(next); setTargetValid(true); setReadError('');
-  }, []);
+  }, [transactions]);
+  /** Adopt an authoritative read returned inside a write operation. It is one
+   * real read issued after the acknowledged commit, so it satisfies that
+   * commit's observation obligation and fences any older in-flight read exactly
+   * as a `refresh` result would. */
+  const adopt = useCallback((next: SourceSettings, afterCommits: number) => {
+    ++reads.current;
+    if (afterCommits > observedCommits.current) observedCommits.current = afterCommits;
+    accept(next);
+  }, [accept]);
   /** One authoritative read. Resolves true only when this read's own projection
    * was adopted; a newer outstanding read wins instead. An adopted read was
    * issued after every commit acknowledged before it started, so it observes
    * them. Read failures are reported only when no projection accepted meanwhile
    * already answered them. */
   const refresh = useCallback(async () => {
-    const at = epoch.current, read = ++reads.current, settled = accepted.current, afterCommits = commits.current;
+    const at = epoch.current, read_ = ++reads.current, settled = accepted.current, afterCommits = commits.current;
     ++outstanding.current;
     try {
-      const next = await request({ kind: 'read' });
-      if (at !== epoch.current || read !== reads.current) return false;
+      const next = await read();
+      if (at !== epoch.current || read_ !== reads.current) return false;
       if (afterCommits > observedCommits.current) observedCommits.current = afterCommits;
       accept(next); return true;
     } catch (cause) {
-      if (at === epoch.current && read === reads.current && settled === accepted.current) { setReadError(String(cause)); setTargetValid(false); }
+      if (at === epoch.current && read_ === reads.current && settled === accepted.current) { setReadError(String(cause)); setTargetValid(false); }
       throw cause;
     } finally {
       if (at === epoch.current) --outstanding.current;
@@ -123,7 +169,7 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
       // a superseded read is not evidence that the obligation was satisfied.
       const resolve = settle.current; settle.current = undefined; resolve?.();
     }
-  }, [accept, request]);
+  }, [accept, read]);
   /** The outstanding publication obligation: an application version published
    * for this target's scope that the accepted projection has not reached yet.
    * Level, not edge — it survives reads, acknowledgements and worker restarts
@@ -210,23 +256,34 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
     const at = epoch.current;
     writing.current = at; setBusy(true); setWriteError(''); setMessage('');
     try {
-      const next = await request({ kind: 'write', expected_revision, mutation });
+      const outcome = await write(expected_revision, mutation);
       if (at !== epoch.current) return undefined;
-      // The acknowledgement confirms this one mutation and supplies its
-      // committed revision; it is not adopted as a projection. Success settles
-      // only after an authoritative read issued after this commit is adopted,
-      // so every draft's CAS base reads from a projection at least as current
-      // as the acknowledged write — never from the acknowledgement itself. A
-      // failed read does not undo the committed write: refresh already
-      // reported it and the outcome still stands.
+      // The acknowledgement confirms exactly this mutation and supplies its
+      // committed revision. It is one fact, recorded before the reread: a
+      // committed mutation stays committed even if the reread fails.
       const commit = ++commits.current;
-      const committed = sourceRevision(next, mutation);
-      while (at === epoch.current && observedCommits.current < commit) {
-        try { await refresh(); } catch { break; }
+      const committed = sourceRevision(outcome.acknowledgement, mutation);
+      if (outcome.reread) {
+        // The Workspace Host write owns its own authoritative reread. Its
+        // outcome is a separate fact: adopt it as the projection when it
+        // succeeded, and report read/application uncertainty when it did not.
+        // A failed reread is never retried as part of this save; the
+        // level-triggered convergence worker recovers on the next native
+        // publication, reconnect or manual read.
+        if (outcome.reread.status === 'observed') { adopt(outcome.reread.projection, commit); void converge(); }
+        else { setReadError(`Saved, but the authoritative reread failed. Application status is uncertain. ${String(outcome.reread.error)}`); setTargetValid(false); }
+        setMessage('Source saved. Native coordination owns application.');
+      } else {
+        // User Settings owns no in-operation reread; the shared authoritative
+        // read path observes the commit here. The saved notice is only truthful
+        // once that read has settled, so it waits for the read obligation.
+        while (at === epoch.current && observedCommits.current < commit) {
+          try { await refresh(); } catch { break; }
+        }
+        if (at !== epoch.current) return undefined;
+        setMessage('Source saved. Native coordination owns application.');
+        void converge();
       }
-      if (at !== epoch.current) return undefined;
-      setMessage('Source saved. Native coordination owns application.');
-      void converge();
       return committed;
     } catch (cause) {
       if (at !== epoch.current) return undefined;
@@ -265,7 +322,7 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
         {source?.prospective_diagnostic && <p role="status">{source.prospective_diagnostic}</p>}
         {scope === 'workspace' && <p>Remove an override to reset to the global default. An explicit empty selection means none.</p>}
         <h3>{sections.find(([id]) => id === section)?.[1]}</h3>
-        <SourceContext value={source}><EditorStateContext value={drafts}><div key={draftKey}>{editor}
+        <SourceContext value={source}><EditorStateContext value={transactions}><div key={editorKey}>{editor}
           {selected?.diagnostic && !selected.authored && <UnitForm title="Repair malformed source" blank="" revision={selected.revision} save={save} removable={false}
             mutation={document => ({ kind: 'repair_config', document: document ?? '' })}>
             {(value, change) => <label>Replacement TOML<textarea value={value} onChange={event => change(event.target.value)} /></label>}
@@ -289,7 +346,7 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
           {source.application?.units.process_bindings?.status === 'applied' && <p role="status">Saved process policy is active.</p>}
           <details><summary>Resolved preview — source resolution only</summary><pre>{JSON.stringify({ resolved: source.resolved, provenance: source.provenance }, null, 2)}</pre></details>
           <details><summary>Source and application diagnostics</summary><pre>{JSON.stringify(source, null, 2)}</pre></details>
-          <Button disabled={busy || !targetValid} onClick={() => { const at = epoch.current; void request({ kind: 'reconcile' }).then(() => { if (at === epoch.current) return refresh(); }).catch(cause => { if (at === epoch.current) setWriteError(String(cause)); }); }}>Rescan configuration files</Button>
+          <Button disabled={busy || !targetValid} onClick={() => { const at = epoch.current; void reconcile().then(() => { if (at === epoch.current) return refresh(); }).catch(cause => { if (at === epoch.current) setWriteError(String(cause)); }); }}>Rescan configuration files</Button>
         </>}
       </section>}
   </SettingsPanel>;
