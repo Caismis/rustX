@@ -419,7 +419,7 @@
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "destination": "web-console/src/app/settings/Settings.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation.",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation. Read ordering: a Workspace write-owned reread is ordered by the identity reserved when the write operation is initiated and may replace only a projection older than the newest already accepted, and both the success and the failure of an owning-Workspace lookup are fenced by the Settings navigation epoch and App Server authority revision.",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
         "../../../../protocol/app-server/v18",
@@ -455,7 +455,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3769bbecc3e5cf27f22812dcf2ca718a4e69a8724a0fbeb94c40ba1c79210f2d"
+      "local_sha256": "3a69e725442aaac6c79a0456b3935d8ccf7e0f705b1d53e4bc2c651bcd06db60"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",

@@ -5,7 +5,7 @@ import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } 
 import { Settings } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import type { ProductHostWorkspaces, WorkspaceConfigurationReread } from '../src/workspaces/host';
-import { cfg3Source } from './cfg3-data';
+import { cfg3Source, cfg3SourceApplication } from './cfg3-data';
 import { Server } from './fixture';
 afterEach(cleanup);
 
@@ -388,4 +388,68 @@ it('S11 a superseded convergence worker transfers a publication that arrived beh
   // Exactly one write, no replay, one read per real obligation, nothing after.
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
   expect(sent(s, 'configuration/sourcesRead').length).toBe(4);
+});
+
+it('S12 a held Workspace post-write reread cannot regress a newer authoritative read', async () => {
+  // One Workspace source. The committed revision B and the later external
+  // revision C deliberately share application version 2, so application
+  // version cannot be used as a false ordering shortcut.
+  const target: SourceTarget = { kind: 'workspace', directory: '/workspace/A' };
+  let revision = 'ws-A';
+  let application: ConfigurationApplication | null = { ...cfg3SourceApplication(target), version: '1' };
+  const projection = () => {
+    const source = cfg3Source();
+    source.target = target;
+    source.workspace = { path: '/workspace/rustx.toml', revision, authored: { agent: { tools: { builtin: [] } } } };
+    source.application = application ? structuredClone(application) : null;
+    return source;
+  };
+  // The Host write commits B and captures reread B, then holds the whole write
+  // response until the test releases it. Capture and delivery are separate.
+  let captured!: () => void;
+  const capturedB = new Promise<void>(resolve => { captured = resolve; });
+  let releaseWrite!: () => void;
+  const heldWrite = new Promise<void>(resolve => { releaseWrite = resolve; });
+  const s = new Server();
+  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: projection() }));
+  s.handlers.set('configuration/sourceWrite', () => { revision = 'ws-B'; return { type: 'source_settings', projection: projection() }; });
+  const host: ProductHostWorkspaces = {
+    ...s.workspaceHost,
+    configureWorkspace: async (_id, _endpoint, operation) => {
+      if (operation.kind === 'write') {
+        const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
+        const reread: WorkspaceConfigurationReread = { status: 'observed', projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection };
+        captured();
+        await heldWrite;
+        return { kind: 'write', commit: { acknowledgement, reread } };
+      }
+      if (operation.kind === 'reconcile') await s.client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_application');
+      return { kind: operation.kind, projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection };
+    },
+  };
+  await s.connect();
+  render(<Settings client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
+  await screen.findByText(/Revision: ws-A/);
+  // B and C will both settle at application version 2; only the authored
+  // revision distinguishes them.
+  application = { ...cfg3SourceApplication(target), version: '2' };
+  fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+  fireEvent.click(screen.getByLabelText('read'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+  await capturedB;
+  // Step: external authority advances to C while the write response is held.
+  revision = 'ws-C';
+  await publish(s, { ...cfg3SourceApplication(target), version: '2' });
+  await screen.findByText(/Revision: ws-C/);
+  // Step: release the held response carrying the equal-version reread B.
+  releaseWrite();
+  await screen.findByText(/Source saved\. Native coordination/);
+  // The newer accepted projection C is never regressed by the late, stale B.
+  expect(screen.getByText(/Revision: ws-C/)).toBeTruthy();
+  expect(screen.queryByText(/Revision: ws-B/)).toBeNull();
+  expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
+  // No replay, and convergence stays bounded to the real commit obligation.
+  await waitFor(() => expect(screen.getByText(/Revision: ws-C/)).toBeTruthy());
+  expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
+  expect(sent(s, 'configuration/sourcesRead').length).toBeLessThanOrEqual(5);
 });

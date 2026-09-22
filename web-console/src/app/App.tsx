@@ -2,7 +2,7 @@ import { ConversationStats } from './agent/ConversationStats';
 import { navigateTabs } from '../presentation/primitives/tabs';
 import { readTheme, applyTheme } from './appearance';
 import { Settings } from './settings/Settings';
-import { HttpWorkspaceHost, type ProductHostWorkspaces } from '../workspaces/host';
+import { HttpWorkspaceHost, type ProductHostWorkspaces, type WorkspaceCatalog } from '../workspaces/host';
 import { WorkspaceNavigation } from '../workspaces/WorkspaceNavigation';
 import { createWorkspaceSession, WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { Trajectory } from './trajectory/Trajectory';
@@ -217,17 +217,31 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const openOwningSettings = (owner: SourceTarget) => {
     if (owner.kind === 'user') { openSettings(userSettingsTarget); return; }
     // Invalidate older navigation and capture the authority this lookup is
-    // allowed to commit under. The catalog read is preparation: it may resolve,
-    // but only a still-current epoch under the same authority may navigate.
+    // allowed to commit under. The catalog read is preparation, not authority:
+    // both its success and its failure may affect UI state only while this
+    // exact epoch and App Server authority remain current. A newer navigation
+    // decision, a closed Settings or a retired authority retires the lookup
+    // entirely, so an obsolete rejection never publishes a stale error and an
+    // obsolete success never reopens or retargets Settings. This lifetime
+    // belongs to the Settings navigation operation, not to the generic `run`
+    // wrapper whose check only tracks connection generation.
     const epoch = ++settingsNavigation.current;
     const authority = client.getSnapshot().authorityRevision;
-    run(async () => {
-      const catalog = await workspaceHost.listWorkspaces();
-      if (epoch !== settingsNavigation.current || authority !== client.getSnapshot().authorityRevision) return;
+    const current = () => epoch === settingsNavigation.current && authority === client.getSnapshot().authorityRevision;
+    setError('');
+    void (async () => {
+      let catalog: WorkspaceCatalog;
+      try {
+        catalog = await workspaceHost.listWorkspaces();
+      } catch (cause) {
+        if (current()) setError(String(cause));
+        return;
+      }
+      if (!current()) return;
       const row = catalog.workspaces.find(workspace => workspace.displayPath === owner.directory);
       if (!row) { setError(`The owning Workspace ${owner.directory} is not registered by this Product Host.`); return; }
       setSettingsTarget(workspaceSettingsTarget(row.id, row.displayName)); setSettingsOpen('overview');
-    });
+    })();
   };
   const deletePreview = (id: string) => run(async () => {
     const generation = client.getSnapshot().generation;

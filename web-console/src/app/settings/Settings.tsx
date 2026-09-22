@@ -57,8 +57,10 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
   const [targetValid, setTargetValid] = useState(false);
   // Separate facts, never one counter: `epoch` fences target, authority and
   // connection lifetime; `reads` orders authoritative reads; `accepted` counts
-  // adopted projections so a mutation acknowledgement never poses as read order.
-  const epoch = useRef(0), reads = useRef(0), accepted = useRef(0), writing = useRef<number | undefined>(undefined);
+  // adopted projections so a mutation acknowledgement never poses as read
+  // order; `acceptedRead` is the ordering identity of the newest projection
+  // accepted so far, so an earlier read can never replace a newer accepted one.
+  const epoch = useRef(0), reads = useRef(0), accepted = useRef(0), acceptedRead = useRef(0), writing = useRef<number | undefined>(undefined);
   // Level-triggered observation state. `observation` is the latest accepted whole
   // projection; `publications` mirrors the client's per-scope application map;
   // `commits` counts acknowledged source writes whose committed revision no
@@ -126,26 +128,31 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
     }
     await client.request({ method: 'configuration/reconcile', params: { target: { kind: 'user' as const } } }, 'configuration_application');
   }, [client, endpoint, host, workspaceTargetId]);
-  /** Adopt one whole authoritative projection. Only `configuration/sourcesRead`
-   * results reach here, ordered by `reads`: a source-write acknowledgement
-   * confirms one authoring mutation and supplies its committed revision, but is
-   * not an application observation and never replaces the read model. */
-  const accept = useCallback((next: SourceSettings) => {
-    observation.current = next; ++accepted.current;
+  /** Adopt one whole authoritative projection. Only authoritative reads reach
+   * here — an ordinary `refresh` result or a write-owned reread — each ordered
+   * by the read identity reserved when that read was initiated. A source-write
+   * acknowledgement confirms one authoring mutation and supplies its committed
+   * revision, but is not an application observation and never replaces the
+   * read model. */
+  const accept = useCallback((next: SourceSettings, read_: number) => {
+    observation.current = next; ++accepted.current; acceptedRead.current = read_;
     // The adopted projection is authoritative for every unit's transaction:
     // retire an acknowledged mutation whose committed revision it now carries,
     // even when the editor that submitted it has unmounted.
     transactions.observeAll(next, sourceRevision);
     setSource(next); setTargetValid(true); setReadError('');
   }, [transactions]);
-  /** Adopt an authoritative read returned inside a write operation. It is one
-   * real read issued after the acknowledged commit, so it satisfies that
-   * commit's observation obligation and fences any older in-flight read exactly
-   * as a `refresh` result would. */
-  const adopt = useCallback((next: SourceSettings, afterCommits: number) => {
-    ++reads.current;
+  /** Adopt an authoritative read that its enclosing write operation already
+   * ordered by the identity reserved when that operation was initiated. It may
+   * replace only what it is newer than: if a projection carrying a newer read
+   * identity has already been accepted, this reread is stale and is ignored.
+   * Delivery order is irrelevant; the accepted high-water mark, not the moment
+   * the enclosing response arrived, decides. */
+  const adopt = useCallback((next: SourceSettings, afterCommits: number, read_: number) => {
+    if (read_ < acceptedRead.current) return false;
     if (afterCommits > observedCommits.current) observedCommits.current = afterCommits;
-    accept(next);
+    accept(next, read_);
+    return true;
   }, [accept]);
   /** One authoritative read. Resolves true only when this read's own projection
    * was adopted; a newer outstanding read wins instead. An adopted read was
@@ -159,7 +166,7 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
       const next = await read();
       if (at !== epoch.current || read_ !== reads.current) return false;
       if (afterCommits > observedCommits.current) observedCommits.current = afterCommits;
-      accept(next); return true;
+      accept(next, read_); return true;
     } catch (cause) {
       if (at === epoch.current && read_ === reads.current && settled === accepted.current) { setReadError(String(cause)); setTargetValid(false); }
       throw cause;
@@ -254,6 +261,13 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
   const save: SaveSource = async (mutation, expected_revision) => {
     if (writing.current === epoch.current || !targetValid || transport.connection !== 'connected') return undefined;
     const at = epoch.current;
+    // A Workspace write owns an authoritative reread. That reread is an
+    // ordinary read of this same model, so its ordering identity is reserved
+    // now, when the operation that issues it is initiated — never when the
+    // enclosing response happens to be delivered. A projection accepted under
+    // a newer identity therefore supersedes it even when the held write
+    // response lands last.
+    const read_ = workspaceTargetId !== undefined ? ++reads.current : undefined;
     writing.current = at; setBusy(true); setWriteError(''); setMessage('');
     try {
       const outcome = await write(expected_revision, mutation);
@@ -264,14 +278,23 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
       const commit = ++commits.current;
       const committed = sourceRevision(outcome.acknowledgement, mutation);
       if (outcome.reread) {
-        // The Workspace Host write owns its own authoritative reread. Its
-        // outcome is a separate fact: adopt it as the projection when it
-        // succeeded, and report read/application uncertainty when it did not.
-        // A failed reread is never retried as part of this save; the
-        // level-triggered convergence worker recovers on the next native
-        // publication, reconnect or manual read.
-        if (outcome.reread.status === 'observed') { adopt(outcome.reread.projection, commit); void converge(); }
-        else { setReadError(`Saved, but the authoritative reread failed. Application status is uncertain. ${String(outcome.reread.error)}`); setTargetValid(false); }
+        // The Workspace Host write owns its own authoritative reread. Fence it
+        // by the identity reserved at initiation exactly like any other read:
+        // it may be adopted only while no projection under a newer identity has
+        // already been accepted. A stale or superseded reread never replaces or
+        // clears a newer projection, never turns the committed write into a
+        // failure, and never triggers a replay. A reread that is still current
+        // reports its own failure; a superseded one leaves its outstanding
+        // commit obligation to the level-triggered convergence worker.
+        if (outcome.reread.status === 'observed') {
+          adopt(outcome.reread.projection, commit, read_!);
+          void converge();
+        } else if (read_! >= acceptedRead.current) {
+          setReadError(`Saved, but the authoritative reread failed. Application status is uncertain. ${String(outcome.reread.error)}`);
+          setTargetValid(false);
+        } else {
+          void converge();
+        }
         setMessage('Source saved. Native coordination owns application.');
       } else {
         // User Settings owns no in-operation reread; the shared authoritative
