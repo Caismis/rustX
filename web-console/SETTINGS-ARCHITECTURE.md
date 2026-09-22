@@ -5,6 +5,118 @@ overlays, identity, provenance, CAS, serialization, publication and execution.
 The browser separates User/Workspace source authoring from Session selection and
 adoption. No Session is an authority for source reads, writes or rescans.
 
+## Orchestration: explicit actors, not component effects
+
+Configuration UI asynchronous semantics are owned by explicit actors and state
+machines (XState v5). React presentation may subscribe and submit intent;
+component-local effects, counters, refs or booleans are **not** authoritative for
+configuration transaction, read ordering, adoption or terminal settlement.
+
+```text
+native App Server / Product Host authority
+        ↓
+XState v5 actors and machines      app/settings/machines/*
+        ↓
+explicit machine snapshots + events
+        ↓
+React presentation                 Settings.tsx, controls.tsx, SessionConfiguration.tsx
+```
+
+XState orchestrates browser behaviour only. It is never configuration authority:
+every value, provenance, conflict, application and adoption decision stays native.
+
+### Module hierarchy
+
+```text
+app/settings/machines/port.ts                  the one native I/O boundary of a Settings target
+app/settings/machines/settings-target.ts       the Settings authority of one exact target
+app/settings/machines/unit-transaction.ts      one native semantic unit's CAS editing transaction
+app/settings/machines/session-configuration.ts Session observation + Session adoption
+app/settings/machines/navigation.ts            top-level Settings navigation and owner lookup
+app/settings/machines/system.ts                lifetime ownership of the actors above
+app/settings/machines/react.ts                 the React subscription boundary
+```
+
+Machines never touch a client, a socket or a Product Host: they invoke a
+`ConfigurationPort` / `SessionConfigurationPort` / `OwnerLookup`. That is what
+lets a machine test drive the real transition graph with deferred promises
+instead of timers, and it keeps transports out of machine context.
+
+### Actor ownership and the three lifetimes
+
+```text
+ConfigurationSystem(client)                    keyed by (endpoint, authority revision)
+  ├── settingsTarget: user                     ─┐
+  ├── settingsTarget: workspace:<id>            │ one per exact target
+  │     └── unitTransaction: <semantic unit>    │ one per unit touched in this lifetime
+  └── sessionConfiguration: <session>          ─┘ reference counted by its presentation
+
+React Settings dialog ──ATTACH/DETACH──▶ an existing target actor
+```
+
+- **App Server authority lifetime** — `(endpoint, authorityRevision)`. Replacing
+  the authority detaches every target actor of the old lifetime and starts the
+  replacement from nothing, so old state cannot leak into it. A retired lifetime
+  is kept, not stopped, only while a native mutation it submitted is still in
+  flight: a definitive acknowledgement must still settle the exact transaction
+  that submitted it, under its own old authority.
+- **Transaction lifetime** — per-unit actors live for the whole authority
+  lifetime. Closing Settings, changing section or switching target is a React
+  unmount and cannot reach them.
+- **Presentation lifetime** — `ATTACH` / `DETACH`. A detached presentation reads
+  nothing and converges nothing; it neither polls nor keeps a background read
+  alive. A mutation already in flight still settles.
+- **Connection lifetime** — a new `generation` retires this lifetime's
+  observation and presentation state, and deliberately keeps its transactions:
+  a reconnect is not a reason to lose a draft or a pinned CAS base.
+
+### The Settings target machine
+
+Two genuinely independent facts, therefore two parallel regions (plus a small
+`maintenance` region for the explicit native rescan):
+
+```text
+authority   suspended → idle ⇄ reading → settling → idle | blocked
+                         ↑                                   ↑
+                         └── awaitingWrite ──────────────────┘
+mutation    idle → submitting → observing → idle
+                             ↘ conflicted | rejected | uncertain
+```
+
+Important events: `ATTACH`, `DETACH`, `TRANSPORT`, `REFRESH`, `RECONCILE`,
+`UNIT.EDIT`, `UNIT.SUBMIT`, `UNIT.REVIEW`, `UNIT.DISCARD`, `UNIT.RETIRED`,
+`READ.FORCE`, `READ.ADOPT`, `READ.REREAD_FAILED`, `WRITE.STARTED`,
+`COMMIT.OBSERVED`, `TRIGGER`.
+
+### The per-unit transaction machine
+
+Three orthogonal facts, three regions — never a combination of `draft?` /
+`pinned` / `submitting?` flags:
+
+```text
+intent     clean ⇄ dirty
+base       following ⇄ pinned
+mutation   idle → submitting → acknowledged → settled
+                            ↘ conflicted
+```
+
+A clean Remove is exactly `intent.clean` + `base.pinned`: delete intent pins the
+reviewed revision without manufacturing a fake value draft. A late
+acknowledgement of an older intent is exactly `mutation.acknowledged` while
+`intent.dirty` already holds a newer generation.
+
+### The Session configuration machine
+
+```text
+observation  idle → loading → ready | unavailable
+adoption     idle → submitting → idle | rejected | uncertain
+```
+
+Observation and adoption are two regions over two separate context fields
+(`readError`, `adoptionError`). Neither region can assign the other's field, so a
+successful read structurally cannot clear an adoption rejection, and an adoption
+response structurally cannot clear a read failure.
+
 ## Entry and target ownership
 
 The global Settings entry opens **User Settings** directly against the User source.
@@ -13,9 +125,10 @@ to that Product-Host-authorized Workspace for the whole lifetime of the Settings
 instance. There is no ordinary `Configuration owner` selector and no second editor
 tree: both entries share the same shell and editors. Session focus changes never
 retarget an open editor. A Workspace that becomes unregistered or unauthorized, or
-whose Product Host/endpoint authority changes, is fenced by the target/authority/
-connection epoch and read ordering; its draft and error are retained rather than
-redirected to User or another Workspace. Opening either entry allocates no hidden
+whose Product Host/endpoint authority changes, is fenced because the Settings
+authority actor is addressed by `(endpoint, authority revision, target)` and a
+different address is a different actor; its draft and error are retained rather
+than redirected to User or another Workspace. Opening either entry allocates no hidden
 Session, resident runtime, MCP connection or Python environment.
 
 ## Presentation projection
@@ -30,9 +143,14 @@ a native default into an authored draft.
 separately, because they answer different questions:
 
 ```text
-authored   present | absent | invalid | unavailable   does this exact scope author the unit
-effective  available | unset | invalid | unavailable  did native resolution produce a value
+authored   present | redacted | absent | invalid | unavailable   does this exact scope author the unit
+effective  available | redacted | unset | invalid | unavailable  did native resolution produce a value
 ```
+
+`redacted` is the fifth, separate fact: native reports that a unit *exists* and
+never projects its value, because the value is a secret-bearing literal. It is
+not `present`, not `absent` and not `unavailable`, and no branch of the editor can
+render or copy a value it does not have.
 
 `authored` reads only `SourceSettings[scope]`. Native sets `authored` and
 `diagnostic` exclusively — a document that parses always yields an authored
@@ -72,15 +190,20 @@ identity for a Session application — and is never a source owner.
 `applicationOwners` reads the native `sources` projection instead, so no code
 parses a scope string, guesses from a Session `cwd` or rebuilds source ownership.
 
-Settings navigation itself is linearized by one epoch owned by the product shell
-(`App.tsx`), and every user action that changes Settings navigation passes
-through it: open User Settings, open an exact Workspace, open an owning
-Workspace, open Connection Settings — including the disconnected recovery
-"Show details" gesture — close Settings, and authority replacement. Owner lookup
-(`listWorkspaces`) is asynchronous *preparation*, never standing authority to
-commit navigation later: it may publish a target or an error only while its own
-epoch and App Server authority are still current. There is exactly one such
-epoch; no surface keeps a private one.
+Settings navigation itself is one machine owned by the product shell
+(`machines/navigation.ts`), and every user action that changes Settings
+navigation is an event on it: open User Settings, open an exact Workspace, open
+an owning Workspace, open Connection Settings — including the disconnected
+recovery "Show details" gesture — close Settings, and authority replacement.
+Each of those re-enters `idle`, which **stops** the owning-Workspace lookup
+actor. Owner lookup (`listWorkspaces`) is asynchronous *preparation*, never
+standing authority to commit navigation later, and that is now structural rather
+than a comparison: a stale lookup has no completion path at all, so neither its
+success nor its failure can overwrite a newer decision, reopen a closed dialog or
+publish an obsolete error. A lookup that completes under a replaced App Server
+authority answers `retired`, which is neither a navigation decision nor an
+error — the lookup has no error channel that could report one. There is exactly
+one navigation machine; no surface keeps a private epoch.
 
 Settings surface states (`connecting`/`loading`/`ready`/`stale`/`failed`) and
 change behavior (`Applies immediately`/`Requires App Server restart`) are likewise
@@ -140,15 +263,45 @@ named semantic-unit container reached from a list — source-tool selections, MC
 invocation policies and environment variables — through one shared
 `reachableIdentities` projection.
 
+## Sensitive projection boundary
+
+Native authority owns every secret-bearing authored value, and **no projection
+that leaves native authority carries one**. That is a type-level fact, not a rule
+each surface has to remember:
+
+```text
+Provider credential        CredentialSourceView   kind, and an environment variable name
+MCP env / headers          McpView                cleared, plus retained_env / retained_headers
+Tool environment           RuntimeLayer.environment  a list of identities, never a map of values
+```
+
+`RuntimeLayer` is generic over both secret-bearing members
+(`RuntimeLayer<P, E>`): authoring instantiates it with `AuthoredEnvironment`
+(`BTreeMap<String, String>`) and the single wire view instantiates it with
+`EnvironmentIdentities` (`Vec<String>`). `settings::redact` is the only way to
+build the view from the authored document, so adding a secret-bearing member has
+exactly one place to be redacted. Consequently `SourceSettings.user`,
+`SourceSettings.workspace`, `SourceSettings.resolved`, the Advanced diagnostics
+that render them verbatim, and any generic `UnitForm` inheritance path *cannot*
+express a literal environment value — the browser has no value to leak.
+
+What the browser still gets is everything it actually needs: the identity exists,
+which document authors it, its native provenance (`environment.<name>`) and its
+availability. Authoring an override therefore replaces the value outright instead
+of reading the lower owner's value back, exactly as a Provider credential already
+worked. The environment editor declares `redacted`, so it seeds from `blank`,
+renders a `password` field and says plainly that the existing value is never
+projected.
+
 ## Sensitive authoring lifetime
 
 An authored payload may carry a secret: a Provider literal credential, an MCP
-literal environment value or header. Before submission it lives in exactly one
-place, the live editing draft. `beginSubmit` hands the transaction owner only the
-mutation's `RevisionSelector` — the mutation family, plus a named resource's
-identity — which is the whole of what settlement needs to resolve which native
-document revision a commit landed in. The store therefore never holds an authored
-payload at all:
+literal environment value or header, a literal Tool environment value. Before
+submission it lives in exactly one place, the live editing draft. `UNIT.SUBMIT`
+hands the transaction actor only the mutation's `RevisionSelector` — the mutation
+family, plus a named resource's identity — which is the whole of what settlement
+needs to resolve which native document revision a commit landed in. The
+transaction therefore never holds an authored payload at all:
 
 ```text
 before acknowledgement   live draft value (authored, may be secret)
@@ -157,8 +310,8 @@ after acknowledgement    token · intent generation · savedFrom · selector
                          committed revision
 ```
 
-`acknowledge` clears the confirmed draft unless the browser intent has already
-moved on to a newer one the user is still editing. A confirmed commit whose
+The `COMMITTED` transition clears the confirmed draft unless the browser intent
+has already moved on to a newer one the user is still editing. A confirmed commit whose
 post-write authoritative reread failed therefore leaves an unsettled transaction
 that carries no secret-bearing payload, across editor unmount, section navigation
 and Settings close, until a later authoritative projection carrying its committed
@@ -173,19 +326,23 @@ compact field rows, disclosures, diagnostics and narrow layouts. `Switch` is the
 pinned controlled Harness primitive. `SettingsContent.tsx` contains small
 rustX-authored presentation seats, with no protocol imports or persistence.
 
-`app/settings/Settings` reads the existing typed AppServerClient operations. It
-composes runtime, catalog, Root, MCP and named-Agent adapters with the resource
-inventory. `UnitForm` presents one native mutation's editable intent. The
-`SettingsTransactionStore` (created in `app/settings/drafts.tsx`, one per exact
-endpoint/authority/target lifetime) owns each unit's draft, exact CAS base,
-submitted-operation revision selector, token and intent generation, committed
-acknowledgement and final projection settlement. `Settings` records both the confirmed native commit
-and the adopted authoritative projection directly on that store, so a save that
-completes after its editor unmounts still retires exactly its own submitted
-intent and never a newer draft. Identity includes endpoint, client authority and
-the exact Settings target (`user` or `workspace:<id>`), not source revision or
-focused Session. Base revision is independent. Workspace A drafts never become
-Workspace B or User drafts. No draft, credential, configuration or runtime
+`app/settings/Settings` renders one Settings presentation and owns no
+asynchronous configuration semantics at all: it attaches to the Settings
+authority actor of its exact target, selects presentation state from that
+actor's snapshot, and sends user intent. It composes runtime, catalog, Root, MCP
+and named-Agent adapters with the resource inventory. `UnitForm` presents one
+native mutation's editable intent, reading that unit's transaction actor and
+sending `UNIT.EDIT` / `UNIT.SUBMIT` / `UNIT.REVIEW` / `UNIT.DISCARD`; it holds no
+ref, no effect and no local orchestration state. The unit transaction actor owns
+the draft, the exact CAS base, the submitted mutation's revision selector, token
+and intent generation, the committed acknowledgement and the final projection
+settlement. The target actor records both the confirmed native commit and the
+adopted authoritative projection, so a save that completes after its editor
+unmounts still retires exactly its own submitted intent and never a newer draft.
+Actor identity is endpoint, client authority and the exact Settings target
+(`user` or `workspace:<id>`), not source revision or focused Session. Base
+revision is independent. Workspace A drafts never become Workspace B or User
+drafts. No draft, credential, configuration or runtime
 snapshot goes into browser storage. Clean forms follow authoritative source
 updates; dirty forms require review.
 
@@ -233,42 +390,58 @@ serialization is implemented in TypeScript.
 
 Lost Save/adoption replies and reconnect cause authoritative rereads, never replay.
 
-**Authoritative read ordering.** Every authoritative source read of a Settings
-lifetime — effect/startup read, explicit refresh, convergence read, save recovery
-read and Workspace write-owned reread alike — reserves the next read identity
-when it is *initiated*, and may publish presentation state (a projection, a read
-failure, a commit observation) only while it still owns the current read sequence
-of the current epoch. Ordering is therefore by reservation, never by delivery and
-never by what has already been accepted: once a newer authoritative read has been
-initiated, an older read or write-owned reread is superseded and silent, whatever
-order the responses arrive in, and a superseded reread discharges no commit
-observation — that obligation stays with the single level-triggered convergence
-owner until an authoritative current read observes it. A save whose write-owned
-reread was superseded waits for the read that superseded it to settle before
-reporting the saved notice — the notice is truthful only against the projection
-the current authoritative read carries, exactly as the User path already
-requires — and it waits on that outstanding read rather than racing it with a
-redundant read of its own. Both success and rejection commit only within the same
-epoch and read sequence, including explicit refresh failures.
+**Authoritative read ordering is structural.** The `authority` region is the one
+owner of every authoritative source read of a Settings lifetime — startup read,
+explicit refresh, convergence read, post-commit read and Workspace write-owned
+reread alike — and it is also the single convergence owner. Exactly one read is
+in flight; starting a newer read re-enters `reading`, which **stops** the older
+read actor. An older read therefore has no completion path at all: it cannot
+publish a projection, cannot publish a read failure, and cannot discharge a
+commit observation, whatever order the network answers in. There is no
+reservation counter to compare and no accepted-projection comparison to get
+wrong.
 
-**Presentation lifetime is not mutation lifetime.** The Settings epoch fences
-projection adoption, UI messages, current target validity, read errors, rendering
-and convergence ownership. It does not fence a definitive native `sourceWrite`
-acknowledgement: that is a durable fact about the transaction store which
-submitted the mutation, and it is returned to that store even when the editor,
-or the whole Settings dialog, unmounted first. Presentation retirement may stop
-an old operation from updating the current UI, but never reinterprets a
-definitive commit as a failed submission — which would strand an already
-committed secret-bearing draft and a stale CAS base in the transaction store.
-The store is keyed by endpoint, authority and target identity, so an
-acknowledgement settles exactly its own transaction and never reaches a
-replacement authority or a different target. An outcome that is genuinely
-uncertain keeps the existing authoritative-reread-only recovery, with no replay. One Session adoption attempt's terminal
-cleanup owns only that attempt's own state: it releases the in-flight guard and
-clears `busy` independently of the authoritative reread it then issues, and only
-within its own lifetime, so neither a failed reread nor a superseded lifetime's
-settlement can strand the adoption guard or clear the busy state of the attempt
-that replaced it. `busy` is client submission state, never authority.
+The reread a Workspace write owns is the one read the browser does not start
+itself, so it is reserved by a state: `WRITE.STARTED` moves the region to
+`awaitingWrite`, which is exactly the old "reserve the read order at write
+initiation". Any authoritative read owed by a *newer native publication* leaves
+that state, and the Host's reread is then silently superseded however late it
+arrives — in both outcomes, so a superseded reread failure is not published as
+this presentation's read failure either. The commit's own observation obligation
+never ejects `awaitingWrite`: that obligation is precisely what the reread is
+about to answer.
+
+Convergence is level-triggered and has no loop, worker, timer or poll:
+`idle` takes an eventless transition to `reading` whenever an obligation is
+outstanding — a publication this projection has not reached, a definitive commit
+no post-commit read has observed, or no projection at all. Publications arriving
+while a read is in flight coalesce, because the region is not in `idle`. After a
+read is adopted, `settling` decides once: the obligation is satisfied, or it
+advanced (one more bounded read), or native is measurably stale (reported once,
+then `blocked`). A failed read also lands in `blocked`, where nothing retries on
+its own until a publication, reconnect, reattach or explicit refresh arrives.
+
+The saved notice is reported at the definitive acknowledgement, because that is
+when the commit became a fact; the projection, the read outcome and the native
+application remain separate facts reported separately.
+
+**Presentation lifetime is not mutation lifetime.** `DETACH` suspends reading,
+convergence and every presentation fact. It does not fence a definitive native
+`sourceWrite` acknowledgement: the write is invoked by the target actor, not by
+the dialog, so it completes and is recorded on the transaction that submitted it
+even when the editor, or the whole Settings dialog, unmounted first. A
+presentation lifetime can stop an old operation from updating the current UI, but
+it never reinterprets a definitive commit as a failed submission — which would
+strand an already committed secret-bearing draft and a stale CAS base. Actors are
+keyed by endpoint, authority and target identity, so an acknowledgement settles
+exactly its own transaction and never reaches a replacement authority or a
+different target. An outcome that is genuinely
+uncertain keeps the existing authoritative-reread-only recovery, with no replay. Session adoption is one region of the Session
+configuration machine, so it leaves `submitting` on the adoption response alone:
+the authoritative reread it then raises is a separate region's work, and neither a
+failed reread nor a superseded lifetime can strand the adoption guard. `busy` is
+that region's state, never authority — `session/adoptConfiguration` revalidates
+its own gate natively.
 Busy adoption leaves work running. Failed preparation leaves old effective resources
 available. Settings renders native per-unit state without inferring field impact.
 
@@ -331,10 +504,20 @@ presentation sheet. Removed the duplicate global `.activity-card` rules. The
 obsolete `app/Conversation.tsx` remains deleted after Goal reconciliation. Removed
 the ordinary `Configuration owner` selector and its catalog-driven target switching;
 the target is now an explicit immutable Settings prop and drafts are keyed by it.
-`app/settings/drafts.tsx` owns the per-unit editing transaction (draft/context
-state, operation identity and its projection settlement); authored membership and
-provenance projection live in the pure `app/settings/projection.ts`. `UnitForm`
-no longer takes an `initial` value seeded from `authored ?? <client default>`;
-call sites pass the exact native `authored` value plus a separate `blank` seed. No
-compatibility export, alternate Settings root, legacy mode or feature flag exists.
+Deleted `app/settings/drafts.tsx` and its hand-written `SettingsTransactionStore`:
+the per-unit editing transaction is now `machines/unit-transaction.ts`, and the
+only thing left of that module is the `SourceContext` in
+`app/settings/source-context.ts`. The `SaveSource` callback prop is gone from
+every editor; editors submit intent to the Settings authority actor instead.
+Deleted the Settings `epoch` / `reads` / `writing` / `outstanding` / `waiting` /
+`commits` / `observedCommits` / `converging` / `publications` / `observation`
+refs, the `awaitSettlement` / `wake` / `owns` / `converge` helpers and the
+lifetime `useEffect`; the `settingsNavigation` epoch in `App.tsx`; and the
+`epoch` / `reads` / `submitting` refs in `SessionConfiguration.tsx`. None of them
+has a replacement in machine context: the semantics they encoded are states,
+regions and actor lifetimes now. Authored membership and provenance projection
+stay in the pure `app/settings/projection.ts`. `UnitForm` takes the exact native
+`authored` value plus a separate `blank` seed, and a `redacted` flag for a unit
+whose value native never projects. No compatibility export, alternate Settings
+root, legacy mode or feature flag exists.
 Tests formerly addressing newline textareas now exercise structured identity rows.

@@ -360,7 +360,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "fd371b6baf7251fc0f9f865d4df680ccfc7f32f9c47d28a6613103ea54a8a2ca"
+      "local_sha256": "1909513166614270ecde3b847cdc7a07523445114ce2889271228e7b9f9f7c01"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -416,7 +416,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "046a89a320ffa57793e8dab6f1ce0e7eb2bcb4c9bf50e745a37ec57d1a3c2572"
+      "local_sha256": "01a4c2b680df0f60e56b48679d8405ceb53eb9dd6c450e49a4ea662684a2e059"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -439,8 +439,11 @@
         "./RootEditor",
         "./RuntimeEditor",
         "./controls",
-        "./drafts",
+        "./machines/react",
+        "./machines/system",
         "./projection",
+        "./source-context",
+        "@xstate/react",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -457,7 +460,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "a60313434068833346216d28a4fb8b363a425f0331bc72374d64626ee22111b3"
+      "local_sha256": "b7413703c27486a9fd5fb241c34f7f33e5bf94042dde9a6a8aac7bd6ac6d3253"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",

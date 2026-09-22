@@ -5,7 +5,8 @@ import { Settings } from '../src/app/settings/Settings';
 import { TextField, UnitForm } from '../src/app/settings/controls';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import { cfg3Application } from './cfg3-data';
+import { cfg3Application, cfg3Source } from './cfg3-data';
+import { renderEditor, sameRevision } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 afterEach(cleanup);
 
@@ -360,27 +361,28 @@ it.each([
 
 
 it.each(['before acknowledgement', 'after acknowledgement', 'after the next edit'] as const)('T12/T16 source projection %s preserves subsequent drafts', async order => {
-  let acknowledge!: (revision: string) => void;
-  const pending = new Promise<string>(resolve => { acknowledge = resolve; });
-  const save = async () => pending;
+  // The acknowledgement is held explicitly; nothing here depends on timing.
+  let acknowledge!: (outcome: { acknowledgement: import('../../protocol/app-server/v18').SourceSettings }) => void;
+  const held = new Promise<{ acknowledgement: import('../../protocol/app-server/v18').SourceSettings }>(resolve => { acknowledge = resolve; });
+  const source = cfg3Source();
   const form = (authored: { command: string }, revision: string) => <UnitForm<{ command: string }>
-    title="MCP acknowledgement" authored={authored} blank={{ command: '' }} revision={revision} save={save}
+    title="MCP acknowledgement" authored={authored} blank={{ command: '' }} revision={revision}
     mutation={value => ({ kind: 'mcp', id: 'fixture', authored: value ? { definition: { type: 'stdio', command: value.command } } : null })}>
     {(value, change) => <TextField label="Acknowledged command" value={value.command} change={command => change({ command })} />}
   </UnitForm>;
-  const ui = render(form({ command: 'original' }, 'r1'));
+  const { rerender } = await renderEditor(form({ command: 'original' }, 'r1'), { source, write: () => held });
   fireEvent.change(screen.getByLabelText('Acknowledged command'), { target: { value: 'submitted-literal' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save MCP acknowledgement' }));
-  // Hold source publication and save return independently; no timers establish order.
-  if (order === 'before acknowledgement') ui.rerender(form({ command: 'native-redacted' }, 'r2'));
-  await act(async () => { acknowledge('r2'); await pending; });
-  if (order === 'after acknowledgement') ui.rerender(form({ command: 'native-redacted' }, 'r2'));
+  // Hold source publication and the acknowledgement independently.
+  if (order === 'before acknowledgement') rerender(form({ command: 'native-redacted' }, 'r2'));
+  await act(async () => { acknowledge({ acknowledgement: sameRevision(source, 'r2') }); await held; });
+  if (order === 'after acknowledgement') rerender(form({ command: 'native-redacted' }, 'r2'));
   if (order !== 'after the next edit') expect((screen.getByLabelText('Acknowledged command') as HTMLInputElement).value).toBe('native-redacted');
   fireEvent.change(screen.getByLabelText('Acknowledged command'), { target: { value: 'preserved-draft' } });
   // A later native application notification rereads the same source, then a
   // conflict reread advances its revision. Neither owns this subsequent edit.
-  ui.rerender(form({ command: 'native-redacted' }, 'r2'));
-  ui.rerender(form({ command: 'external' }, 'r3'));
+  rerender(form({ command: 'native-redacted' }, 'r2'));
+  rerender(form({ command: 'external' }, 'r3'));
   expect((screen.getByLabelText('Acknowledged command') as HTMLInputElement).value).toBe('preserved-draft');
   expect(screen.getByText(/Draft base revision:/).textContent).toContain('r2');
   expect(screen.getByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();

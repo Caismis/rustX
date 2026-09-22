@@ -1,17 +1,14 @@
 // @vitest-environment jsdom
-import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, expect, it } from 'vitest';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { CatalogEditor } from '../src/app/settings/CatalogEditor';
 import { RootEditor } from '../src/app/settings/RootEditor';
 import { RuntimeEditor } from '../src/app/settings/RuntimeEditor';
 import { AgentEditor } from '../src/app/settings/AgentEditor';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v18';
-import type { ReactNode } from 'react';
-import { SourceContext } from '../src/app/settings/drafts';
-import type { SaveSource } from '../src/app/settings/controls';
+import type { ModelLayer, SourceScope } from '../../protocol/app-server/v18';
+import { renderEditor } from './settings-harness';
 afterEach(cleanup);
-const save = () => vi.fn<SaveSource>().mockResolvedValue(undefined);
 /** An editor bound to a real Workspace source projection, so `UnitForm` sees the
  * same authored/effective/provenance facts it sees inside Settings. */
 function workspaceSource(resolved: Record<string, unknown> = {}) {
@@ -29,11 +26,10 @@ function catalogSource(scope: SourceScope, document: Record<string, unknown>) {
   source.resolved = document as never;
   return source;
 }
-const inWorkspace = (source: SourceSettings, children: ReactNode) => <SourceContext value={source}>{children}</SourceContext>;
 it('preserves complete Model replacement, profile params and all compatibility fields', async () => {
   const model = { ...cfg3Effective().document.models!.main, request_params: { temperature: .3, nested: { budget: 32 } }, reasoning: { default_profile: 'deep', profiles: { deep: { enabled: true, request_params: { reasoning: { effort: 'high' } } } } }, compat: { chat_max_tokens_field: 'max_completion_tokens' as const, chat_stream_usage: 'supported' as const, chat_reasoning_replay: 'omit' as const, chat_tool_protocol: 'native' as const, responses_storage: 'stateless' as const } };
   const source = catalogSource('workspace', { models: { main: model } });
-  const write = save(); render(inWorkspace(source, <CatalogEditor source={source} scope="workspace" revision="exact" save={write} />));
+  const { writes: write } = await renderEditor(<CatalogEditor source={source} scope="workspace" revision="exact" />, { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Edit Model main' }));
   fireEvent.change(screen.getByLabelText('Wire model identity'), { target: { value: 'new-wire' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
@@ -43,7 +39,7 @@ it('preserves complete Model replacement, profile params and all compatibility f
 });
 it('edits reasoning profiles and native request values without interpreting semantics', async () => {
   const source = catalogSource('user', { models: { main: cfg3Effective().document.models!.main } });
-  const write = save(); render(<SourceContext value={source}><CatalogEditor source={source} scope="user" revision="r1" save={write} /></SourceContext>);
+  const { writes: write } = await renderEditor(<CatalogEditor source={source} scope="user" revision="r1" />, { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Edit Model main' })); fireEvent.click(screen.getByText('Reasoning profiles'));
   fireEvent.change(screen.getByLabelText('New reasoning profile'), { target: { value: 'deep' } }); fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
   const profile = screen.getByLabelText('deep').parentElement!.parentElement!;
@@ -52,15 +48,15 @@ it('edits reasoning profiles and native request values without interpreting sema
   await waitFor(() => expect(write.mock.calls[0][0]).toMatchObject({ mutation: { authored: { reasoning: { default_profile: 'deep', profiles: { deep: { enabled: true, request_params: { budget: 1024 } } } } } } }));
 });
 it.each(['all', 'none', 'exact'] as const)('writes exact native %s Skill selection', async mode => {
-  const write = save(); render(<RootEditor document={{}} scope="workspace" revision="s1" save={write} section="root-skills" models={[]} skillRoots={['/user/skills', '/workspace/skills']} />);
+  const { writes: write } = await renderEditor(<RootEditor document={{}} scope="workspace" revision="s1" section="root-skills" models={[]} skillRoots={['/user/skills', '/workspace/skills']} />);
   fireEvent.change(screen.getByLabelText('Selection'), { target: { value: mode } });
   if (mode === 'exact') fireEvent.change(screen.getByLabelText('Visible Skills identities 1'), { target: { value: 'review' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Skill visibility' }));
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'skills', authored: mode === 'all' ? 'all' : mode === 'none' ? [] : ['review'] } }, 's1'));
 });
 it('writes Native and MCP invocation policies independently, and an empty policy only when explicitly authored', async () => {
-  const write = save();
-  render(inWorkspace(workspaceSource(), <RuntimeEditor policyOnly document={{}} scope="workspace" revision="p1" save={write} />));
+  const context = workspaceSource();
+  const { writes: write } = await renderEditor(<RuntimeEditor policyOnly document={{}} scope="workspace" revision="p1" />, { source: context, context });
   const form = within(screen.getByRole('form', { name: 'bash policy' }));
   fireEvent.change(form.getByLabelText('execution'), { target: { value: 'model_selectable' } }); fireEvent.change(form.getByLabelText('concurrency'), { target: { value: 'parallel' } }); fireEvent.change(form.getByLabelText('approval'), { target: { value: 'always' } });
   fireEvent.click(form.getByRole('button', { name: 'Save bash policy' }));
@@ -76,10 +72,10 @@ it('writes Native and MCP invocation policies independently, and an empty policy
   await waitFor(() => expect(write.mock.calls[1][0]).toEqual({ kind: 'config', mutation: { unit: 'mcp_policy', id: 'search', authored: {} } }));
 });
 it('round-trips an independent Agent profile with delegation, guidance, model and worktree', async () => {
-  const source = cfg3Source(), write = save();
+  const source = cfg3Source();
   const authored = { description: 'Review', instructions: 'Inspect', agents: ['helper'], workflows: ['audit'], model: { model: 'main', reasoning_profile: { mode: 'catalog_default' as const }, max_output_tokens: { mode: 'catalog_default' as const }, summary_model: { mode: 'session' as const }, request_params: { temperature: .5 } }, tools: { builtin: ['read'], sources: { 'python:analysis': 'all' as const, search: [] } }, skills: 'all' as const, agents_md: { inherit: false, files: ['REVIEW.md'] }, timeout_ms: '30000', worktree: { enabled: true, require_clean_parent: false }, plugins: { todo: { enabled: true }, goal: { enabled: false }, agent_status: { enabled: true, time: { enabled: false }, background: { enabled: true } } } };
   source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/workspace/.agents/agents/reviewer.toml', revision: 'agent-r1', authored } }];
-  render(<AgentEditor source={source} scope="workspace" models={['main']} save={write} />);
+  const { writes: write } = await renderEditor(<AgentEditor source={source} scope="workspace" models={['main']} />, { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Edit Agent reviewer' }));
   // Opening an authored profile authors nothing new, so a no-op Save is
   // unavailable; an edit back to the same text still round-trips every field.
@@ -90,7 +86,7 @@ it('round-trips an independent Agent profile with delegation, guidance, model an
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'agent', name: 'reviewer', authored }, 'agent-r1'));
 });
 it.each(['search', 'python:analysis'])('keeps all, none and exact Tool selection distinct for %s', async id => {
-  const write = save(); render(<RootEditor document={{ agent: { tools: { sources: { [id]: [] } } } }} scope="user" revision="tools-r1" save={write} section="root-tools" models={[]} skillRoots={[]} />);
+  const { writes: write } = await renderEditor(<RootEditor document={{ agent: { tools: { sources: { [id]: [] } } } }} scope="user" revision="tools-r1" section="root-tools" models={[]} skillRoots={[]} />);
   const form = within(screen.getByRole('form', { name: `Source ${id}` }));
   for (const mode of ['all', 'none', 'exact']) {
     fireEvent.change(form.getByLabelText('Selection'), { target: { value: mode } });
@@ -100,8 +96,7 @@ it.each(['search', 'python:analysis'])('keeps all, none and exact Tool selection
   }
 });
 it('replaces Root model intent and project guidance as independent native units', async () => {
-  const write = save();
-  render(<RootEditor document={{ agent: { model: { model: 'main', request_params: { temperature: .4 } } } }} scope="workspace" revision="root-r1" save={write} section="root-model" models={['main', 'summary']} skillRoots={[]} />);
+  const { writes: write } = await renderEditor(<RootEditor document={{ agent: { model: { model: 'main', request_params: { temperature: .4 } } } }} scope="workspace" revision="root-r1" section="root-model" models={['main', 'summary']} skillRoots={[]} />);
   const model = within(screen.getByRole('form', { name: 'Root model' }));
   fireEvent.change(model.getByLabelText('Reasoning profile'), { target: { value: 'profile' } });
   fireEvent.change(model.getByLabelText('Profile identity'), { target: { value: 'deep' } });
@@ -123,15 +118,15 @@ it('replaces Root model intent and project guidance as independent native units'
   await waitFor(() => expect(write.mock.calls.at(-1)?.[0]).toMatchObject({ mutation: { authored: { inherit: false, files: ['REVIEW.md'] } } }));
 });
 it.each(['Root', 'named Agent'] as const)('%s preserves and edits the complete explicit Summary Model independently', async owner => {
-  const write = save();
   const summary = { mode: 'explicit' as const, model: 'summary-a', reasoning_profile: { mode: 'profile' as const, name: 'deep' }, max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
   const model = { model: 'main', reasoning_profile: { mode: 'catalog_default' as const }, request_params: { temperature: .7 }, summary_model: summary };
   const models = ['main', 'summary-a', 'summary-b'];
-  if (owner === 'Root') render(<RootEditor document={{ agent: { model } }} scope="workspace" revision="r1" save={write} section="root-model" models={models} skillRoots={[]} />);
+  let write!: Awaited<ReturnType<typeof renderEditor>>['writes'];
+  if (owner === 'Root') ({ writes: write } = await renderEditor(<RootEditor document={{ agent: { model } }} scope="workspace" revision="r1" section="root-model" models={models} skillRoots={[]} />));
   else {
     const source = cfg3Source();
     source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
-    render(<AgentEditor source={source} scope="workspace" models={models} save={write} />);
+    ({ writes: write } = await renderEditor(<AgentEditor source={source} scope="workspace" models={models} />, { source, context: source }));
     fireEvent.click(screen.getByRole('button', { name: 'Edit Agent reviewer' }));
   }
   const commit = async (expected: ModelLayer) => {
@@ -162,9 +157,9 @@ it.each(['Root', 'named Agent'] as const)('%s preserves and edits the complete e
   await commit({ ...model, summary_model: { mode: 'explicit', model: 'summary-a' } });
 });
 it.each([{}, { description: 'Review' }, { instructions: 'Inspect' }])('saves an Agent with optional profile text omitted: %j', async authored => {
-  const source = cfg3Source(), write = save();
+  const source = cfg3Source();
   source.agents = [{ name: 'optional', scope: 'workspace', source: { path: '/agent.toml', revision: 'optional-r1', authored } }];
-  render(<AgentEditor source={source} scope="workspace" models={[]} save={write} />);
+  const { writes: write } = await renderEditor(<AgentEditor source={source} scope="workspace" models={[]} />, { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Edit Agent optional' }));
   fireEvent.click(screen.getByLabelText('read'));
   expect((screen.getByRole('form', { name: 'Agent optional' }) as HTMLFormElement).checkValidity()).toBe(true);

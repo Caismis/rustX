@@ -1,19 +1,12 @@
-import { useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useContext, type ReactNode } from 'react';
+import { useSelector } from '@xstate/react';
 import type { SourceMutation } from '../../../../protocol/app-server/v18';
 import { Switch } from '../../presentation/primitives/Switch';
 import { Button } from '../../presentation/primitives/Button';
-import { EditorStateContext, SettingsTransactionStore, SourceContext } from './drafts';
+import { SourceContext } from './source-context';
+import { useSettingsActor, useUnitCommitted, useUnitTransaction } from './machines/react';
 import { authoredStateLabel, effectiveStateLabel, provenanceLabel, revisionSelector, unitFacts } from './projection';
 import css from '../../presentation/settings/SettingsContent.module.css';
-
-/** Submit one exact native semantic-unit mutation.
- *
- * Resolves with the committed revision whenever the native source write became
- * definitive — including when the Settings presentation that hosted this editor
- * was retired while the acknowledgement was in flight — and with `undefined`
- * only when no commit became definitive. A presentation lifetime fence is never
- * reported here as a failed submission. */
-export type SaveSource = (mutation: SourceMutation, revision: string) => Promise<string | undefined>;
 
 /** One native semantic unit's editing surface.
  *
@@ -26,6 +19,11 @@ export type SaveSource = (mutation: SourceMutation, revision: string) => Promise
  * - the **dirty draft** carrying that intent's value;
  * - the exact **CAS base revision** the next write is fenced on.
  *
+ * None of those five live in this component. It renders the unit's transaction
+ * actor and sends user intent to the Settings authority actor; the transaction,
+ * its pinned base and its settlement are owned by that actor and outlive this
+ * form, the section it sits in and the whole Settings dialog.
+ *
  * Rendering an inherited unit shows the native effective value while authoring
  * nothing: no draft is created, Save stays unavailable, and a no-op Save can
  * therefore never turn "no Workspace override" into an explicit empty one.
@@ -37,7 +35,7 @@ export type SaveSource = (mutation: SourceMutation, revision: string) => Promise
  * unit" has no meaning for one that is already absent. Authored presence is the
  * native projection fact the call site passes, never a truthiness test — `false`,
  * `[]`, `{}` and `""` are authored values like any other. */
-export function UnitForm<T>({ title, authored, blank, revision, mutation, save, children, removable = true, inherited = value => value as T }: {
+export function UnitForm<T>({ title, authored, blank, revision, mutation, children, removable = true, inherited = value => value as T, redacted = false }: {
   title: string;
   /** The exact value this scope authors for this unit, or `undefined` when it
    * authors none. Call sites pass the native projection without a fallback. */
@@ -45,13 +43,17 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, save, 
   /** The neutral seed for authoring a unit this scope does not have yet. */
   blank: T;
   revision: string; mutation: (value: T | null) => SourceMutation;
-  save: SaveSource; children: (value: T, change: (value: T) => void) => ReactNode; removable?: boolean;
+  children: (value: T, change: (value: T) => void) => ReactNode; removable?: boolean;
   /** Adapt one native effective value into this control's authored shape.
    * Returning `undefined` declares the unit non-inheritable in the editor —
    * a Provider credential is never read back from a shadowed definition. */
   inherited?: (effective: unknown) => T | undefined;
+  /** The native projection of this unit carries its presence but never its
+   * value, because the value is a secret-bearing literal. The form then never
+   * displays or copies an existing value: authoring replaces it outright. */
+  redacted?: boolean;
 }) {
-  const context = useContext(EditorStateContext);
+  const actor = useSettingsActor();
   const source = useContext(SourceContext);
   const scope = source?.target.kind ?? 'user';
   const unitMutation = mutation(null);
@@ -59,65 +61,43 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, save, 
   const workspace = scope === 'workspace';
   const inheritance = workspace && unitMutation.kind === 'config';
   const identity = JSON.stringify(unitMutation);
-  // A direct `UnitForm` test may render without a Settings-owned store; a local
-  // one then owns this form's transaction for its mounted lifetime.
-  const local = useRef<SettingsTransactionStore | undefined>(undefined);
-  if (!local.current) local.current = new SettingsTransactionStore();
-  const edits = context ?? local.current;
-  // Settlement is owned by the store, not this component. An acknowledgement
-  // recorded after this form unmounts still re-renders a newer instance and is
-  // observed by the shared store.
-  useSyncExternalStore(edits.subscribe, edits.version, edits.version);
-  const transaction = edits.read(identity);
-  // Override intent and its dirty draft. `undefined` means this browser has
-  // authored nothing for this unit: rendering, opening and navigating never
-  // create it, and only an explicit Override or a real edit does.
+  const selector = revisionSelector(unitMutation);
+  // The unit's live transaction, owned by the Settings authority actor.
+  // `undefined` is exactly "this browser authored nothing for the unit and
+  // fences on native authority".
+  const transaction = useUnitTransaction(actor, identity);
+  const committed = useUnitCommitted(actor, identity);
+  const busy = useSelector(actor, snapshot => snapshot.matches({ mutation: 'submitting' }) && snapshot.context.submission?.identity === identity);
   const draft = transaction?.draft as { value: T } | undefined;
   // This exact scope's authored presence, from the native projection the call
   // site passes without a fallback. Only `undefined` means "authors none".
   const authoredPresent = authored !== undefined;
   const base = transaction?.base ?? revision;
-  // A submitted Save or Remove pins the reviewed base revision even for an
-  // otherwise clean form. The store keeps that pinned base across remounts; a
-  // rejected removal must never adopt the reread revision implicitly.
-  const [busy, setBusy] = useState(false), [saved, setSaved] = useState(false);
-  // The exact revision this unit's authoritative projection currently carries.
-  // The store uses it to retire an acknowledged mutation once it is observed,
-  // independent of which component instance submitted it.
-  useEffect(() => { edits.observe(identity, revision); }, [edits, identity, revision]);
+  const observed = transaction?.observed ?? revision;
   // The native effective value, adapted to this control's authored shape. It is
-  // displayed, never copied into authoring state.
+  // displayed, never copied into authoring state. A redacted unit has no value
+  // to adapt, so nothing can be copied out of it by construction.
   const inheritedValue = inheritance && facts.effective.state === 'available' ? inherited(facts.effective.value) : undefined;
   const overriding = draft !== undefined || authoredPresent;
-  const displayed: T = draft ? draft.value : authored !== undefined ? authored : inheritedValue !== undefined ? inheritedValue : blank;
+  const displayed: T = draft ? draft.value
+    : redacted ? blank
+      : authored !== undefined ? authored
+        : inheritedValue !== undefined ? inheritedValue : blank;
   // An edit is an unambiguous override transition: it starts from whatever this
   // control currently displays and becomes this browser's authored intent.
-  const edit = (next: T) => { edits.edit(identity, base, next); setSaved(false); };
-  const commit = async (remove = false) => {
+  const edit = (value: T) => actor.send({ type: 'UNIT.EDIT', identity, selector, revision, value });
+  const submit = (remove = false) => {
     if (!remove && !draft) return;
-    const submission = remove ? null : draft!.value;
-    // The transaction owner is handed the mutation's non-sensitive revision
-    // selector, never its authored payload: an authored secret exists only in
-    // this call's own request and in the live draft the acknowledgement clears.
-    const token = edits.beginSubmit(identity, base, revisionSelector(mutation(submission)));
-    setBusy(true); setSaved(false);
-    try {
-      // The acknowledgement is recorded against this exact transaction owner,
-      // which is scoped by endpoint, authority and target identity and outlives
-      // both this form and the Settings dialog. `undefined` is therefore a real
-      // "no commit became definitive", never "the UI that asked went away".
-      const next = await save(mutation(submission), base);
-      if (next) { edits.acknowledge(identity, token, next); setSaved(true); }
-      else edits.fail(identity, token);
-    } catch { edits.fail(identity, token); }
-    finally { setBusy(false); }
+    // Only the mutation itself carries the authored payload; the transaction is
+    // handed the token and the non-sensitive selector that settle it.
+    actor.send({ type: 'UNIT.SUBMIT', identity, selector, revision, mutation: mutation(remove ? null : draft!.value) });
   };
   // An acknowledgement advances `base` before the authoritative projection
   // catches up; while the projection still carries exactly the pre-save base,
   // the source is merely unobserved, not changed — no review prompt. Any other
   // revision means the source really moved and keeps the explicit review.
-  const reviewNeeded = base !== revision && revision !== transaction?.submitting?.savedFrom;
-  return <form aria-label={title} className={css.unit} onSubmit={e => { e.preventDefault(); void commit(); }}>
+  const reviewNeeded = base !== observed && observed !== transaction?.submitted?.savedFrom;
+  return <form aria-label={title} className={css.unit} onSubmit={e => { e.preventDefault(); submit(); }}>
     <fieldset disabled={busy}><legend>{title}</legend>
       {source && unitMutation.kind === 'config' && <>
         <p className={css.hint} data-authored={facts.authored.state} data-effective={facts.effective.state}>
@@ -128,15 +108,16 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, save, 
         {inheritance && <details><summary>Native resolved value (not Session adoption)</summary>
           <pre>{facts.effective.state === 'available' ? JSON.stringify(facts.effective.value, null, 2) : effectiveStateLabel(facts.effective)}</pre></details>}
       </>}
+      {redacted && <p className={css.hint}>The authored value is never projected to the browser. Saving replaces it with exactly what you enter here.</p>}
       {children(displayed, edit)}
-      <details><summary>Source revision & replacement</summary><p className={css.hint}>Draft base revision: {base}<br />Current revision: {revision}</p><p>Save replaces this native semantic unit. Remove omits it from this scope. Empty selections remain explicit.</p></details>
-      {reviewNeeded && <div className={css.review}><p role="status">Source revision changed. Your draft and original revision are preserved. Review the current source before replacing it.</p><details><summary>Review current authored unit (redacted)</summary><pre>{JSON.stringify(authored, null, 2)}</pre></details></div>}
+      <details><summary>Source revision & replacement</summary><p className={css.hint}>Draft base revision: {base}<br />Current revision: {observed}</p><p>Save replaces this native semantic unit. Remove omits it from this scope. Empty selections remain explicit.</p></details>
+      {reviewNeeded && <div className={css.review}><p role="status">Source revision changed. Your draft and original revision are preserved. Review the current source before replacing it.</p><details><summary>Review current authored unit (redacted)</summary><pre>{redacted ? 'Authored value not projected' : JSON.stringify(authored, null, 2)}</pre></details></div>}
       <div className={css.actions}><Button variant="primary" type="submit" disabled={!draft}>Save {title}</Button>
         {inheritance && !overriding && <Button type="button" title="Author this unit in this Workspace. Nothing is written until you save." onClick={() => edit(displayed)}>Override {title}</Button>}
-        {removable && authoredPresent && <Button type="button" title={workspace ? 'Remove the unit this Workspace authors, through exact CAS. The native inherited value becomes effective.' : 'Remove the authored value through exact CAS'} onClick={() => void commit(true)}>{workspace ? 'Use global default' : 'Remove'} {title}</Button>}
-        <Button type="button" onClick={() => { edits.discard(identity); setSaved(false); }}>Discard draft</Button>
-        {reviewNeeded && <Button type="button" onClick={() => edits.review(identity, revision)}>Use reviewed revision</Button>}
-      </div>{saved && <p role="status">Saved. Native application proceeds automatically.</p>}
+        {removable && authoredPresent && <Button type="button" title={workspace ? 'Remove the unit this Workspace authors, through exact CAS. The native inherited value becomes effective.' : 'Remove the authored value through exact CAS'} onClick={() => submit(true)}>{workspace ? 'Use global default' : 'Remove'} {title}</Button>}
+        <Button type="button" onClick={() => actor.send({ type: 'UNIT.DISCARD', identity })}>Discard draft</Button>
+        {reviewNeeded && <Button type="button" onClick={() => actor.send({ type: 'UNIT.REVIEW', identity })}>Use reviewed revision</Button>}
+      </div>{committed && <p role="status">Saved. Native application proceeds automatically.</p>}
     </fieldset>
   </form>;
 }

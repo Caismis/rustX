@@ -5,7 +5,7 @@ import css from '../../presentation/settings/SettingsContent.module.css';
 import { useState } from 'react';
 import type { McpWrite, SourceScope, SourceSettings } from '../../../../protocol/app-server/v18';
 import { Button } from '../../presentation/primitives/Button';
-import { Names, TextField, UnitForm, type SaveSource } from './controls';
+import { Names, TextField, UnitForm } from './controls';
 import { inheritedResources } from './projection';
 
 export function StringEntries({ label, value, change, secret = false }: { label: string; value: Record<string, string>; change: (value: Record<string, string>) => void; secret?: boolean }) {
@@ -21,7 +21,7 @@ export function StringEntries({ label, value, change, secret = false }: { label:
  * discoverable here without the browser deciding ownership of its own. An
  * inherited identity is presented as a native fact and authors nothing until an
  * explicit override replaces the whole definition. */
-export function Integrations({ source, scope, save }: { source: SourceSettings; scope: SourceScope; save: SaveSource }) {
+export function Integrations({ source, scope }: { source: SourceSettings; scope: SourceScope }) {
   const [selected, select] = useState(''), [name, setName] = useState('');
   const catalog = scope === 'user' ? source.user_mcp : source.workspace_mcp;
   if (!catalog) return <p role="alert">Workspace source authority is unavailable.</p>;
@@ -33,7 +33,7 @@ export function Integrations({ source, scope, save }: { source: SourceSettings; 
     <div className={css.rows}>{Object.entries(authored).map(([id, entry]) => <SettingsCard key={id} title={id} meta={<Badge>{mcpTransport(entry.definition)}</Badge>} actions={<Button onClick={() => select(id)}>Edit MCP {id}</Button>}><p className={css.hint}>{entry.definition.url ?? entry.definition.command}</p></SettingsCard>)}
       {inherited.map(entry => <SettingsCard key={entry.name} title={entry.name} meta={<><Badge tone={entry.valid ? 'success' : 'error'}>{entry.valid ? 'Valid definition' : 'Invalid definition'}</Badge><Badge>Inherited from User</Badge></>} actions={<Button onClick={() => select(entry.name)}>Override MCP {entry.name}</Button>}><p className={css.hint}>{entry.path} · no override in this Workspace</p></SettingsCard>)}</div>
     <TextField label="New MCP identity" value={name} change={setName} /><Button disabled={!name || name in authored || inherited.some(entry => entry.name === name)} onClick={() => { select(name); setName(''); }}>Add MCP</Button>
-    {selected && <UnitForm<McpWrite> key={selected} title={`MCP ${selected}`} revision={catalog.revision} authored={current} blank={{ definition: { type: 'stdio', command: '', args: [] }, retained_env: [], retained_headers: [] }} mutation={authored => ({ kind: 'mcp', id: selected, authored })} save={save}>{(value, change) => <>
+    {selected && <UnitForm<McpWrite> key={selected} title={`MCP ${selected}`} revision={catalog.revision} authored={current} blank={{ definition: { type: 'stdio', command: '', args: [] }, retained_env: [], retained_headers: [] }} mutation={authored => ({ kind: 'mcp', id: selected, authored })}>{(value, change) => <>
       <label>Transport<select value={mcpTransport(value.definition)} onChange={e => change({ ...value, definition: e.target.value === 'http' ? { type: 'http', url: '' } : { type: 'stdio', command: '', args: [] }, retained_env: [], retained_headers: [] })}><option value="stdio">stdio</option><option value="http">HTTP</option></select></label>
       {mcpTransport(value.definition) === 'http' ? <TextField label="MCP URL" required value={value.definition.url} change={url => change({ ...value, definition: { ...value.definition, url } })} /> : <><TextField label="MCP command" required value={value.definition.command} change={command => change({ ...value, definition: { ...value.definition, command } })} /><Names label="Arguments" value={value.definition.args ?? []} change={args => change({ ...value, definition: { ...value.definition, args } })} /><TextField label="Working directory" value={value.definition.cwd} change={cwd => change({ ...value, definition: { ...value.definition, cwd: cwd || null } })} /></>}
       <StringEntries label="Environment references ($VARIABLE)" value={value.definition.sensitive_env ?? {}} change={sensitive_env => change({ ...value, definition: { ...value.definition, sensitive_env } })} />

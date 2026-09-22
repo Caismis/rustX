@@ -367,20 +367,22 @@ it('S11 a superseded convergence worker transfers a publication that arrived beh
   await publish(s, native.applied('3', 'applied'));
   // The busy owner does not fan out one read per notification.
   expect(sent(s, 'configuration/sourcesRead').length).toBe(3);
-  // Step 6: release R2 first. It advances accepted state to application 2, but
-  // the newer publication 3 remains an unowned obligation until R1/R3 settle.
+  // Step 6: release R2 first. It advances accepted state to application 2 and
+  // settles the commit's observation; publication 3 is still owed. R1 was not
+  // merely superseded, it was *cancelled* when the save took the read order, so
+  // the transferred obligation is discharged by exactly one new authoritative
+  // read instead of waiting for a response no owner is left for.
   await deliver(s, r2);
   await screen.findByText(/Source saved\. Native coordination/);
   diagnostics();
   expect(acceptedProjection().application?.version).toBe('2');
   expect(screen.queryByText('Saved process policy is active.')).toBeNull();
-  expect(sent(s, 'configuration/sourcesRead').length).toBe(3);
-  // Step 7: release R1 second; it is superseded and cannot discharge v3.
-  await deliver(s, r1);
-  // Step 8: with no further notification, save, refresh, navigation, reconnect or
-  // timer, the transferred obligation drives exactly one more authoritative read.
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(4));
-  // Step 9: the authoritative read carries application 3 and its applied state.
+  // Step 7: release the cancelled R1. It can neither discharge v3, nor publish
+  // a projection, nor arm another read.
+  await deliver(s, r1);
+  expect(sent(s, 'configuration/sourcesRead').length).toBe(4);
+  // Step 8: the one authoritative read the level owed carries application 3.
   await deliver(s, sent(s, 'configuration/sourcesRead')[3]);
   await expectApplied();
   expect(acceptedProjection().application?.version).toBe('3');
@@ -533,6 +535,9 @@ it('S13 a write-owned reread cannot commit over a newer read that was only initi
   // than racing it with a redundant read of its own.
   expect(screen.queryByText(/Revision: ws-B/)).toBeNull();
   expect(screen.getByText(/Revision: ws-A/)).toBeTruthy();
+  // The commit is definitive, but the saved notice is truthful only against the
+  // projection this presentation is actually showing, so it waits for the read
+  // that owns the read sequence instead of racing it with a redundant one.
   expect(screen.queryByText(/Source saved/)).toBeNull();
   expect(screen.queryByRole('alert')).toBeNull();
   expect(sent(s, 'configuration/sourcesRead')).toHaveLength(3);
@@ -593,6 +598,8 @@ it('S14 a superseded write-owned reread failure publishes no read error and leav
   expect(screen.queryByText(/Saved, but the authoritative reread failed/)).toBeNull();
   expect(screen.queryByText(/Source read failed/)).toBeNull();
   expect(screen.queryByRole('alert')).toBeNull();
+  // The superseded reread is silent in both directions: it publishes no read
+  // failure, and it settles no saved notice. The newer initiated read owns both.
   expect(screen.queryByText(/Source saved/)).toBeNull();
   // The newer authoritative read settles and owns the presentation; the
   // definitive commit is then reported saved against the revision that read

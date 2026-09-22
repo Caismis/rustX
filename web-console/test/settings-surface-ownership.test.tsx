@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { Settings, settingsTransactionStores } from '../src/app/settings/Settings';
+import { Settings, settingsTransactionOwners } from '../src/app/settings/Settings';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/app-server';
@@ -374,7 +374,7 @@ const SECRET_SENTINEL = 'SECRET_SENTINEL';
 /** Everything the Settings transaction owner itself still holds. The assertion
  * is on the owner's retained state, not on the DOM: an editor that unmounted
  * proves nothing about what the store kept. */
-const retained = (s: ReturnType<typeof cfg3Client>) => JSON.stringify(settingsTransactionStores(s.client).map(store => store.retainedState()));
+const retained = (s: ReturnType<typeof cfg3Client>) => JSON.stringify(settingsTransactionOwners(s.client).map(owner => owner.retainedState()));
 
 it('S1-14 a confirmed Provider literal-secret save drops the submitted payload even when the authoritative reread fails, and settles later without replay', async () => {
   let failReads = false;
@@ -633,7 +633,7 @@ it('S1-16 a definitive acknowledgement outlives the whole Settings dialog and re
 it('S1-16 an acknowledgement from the retired authority settles its own transaction and never reaches the replacement', async () => {
   const s = cfg3Client(commitsProvider);
   const { ui, host, release } = await heldSecretSave(s);
-  const submitting = settingsTransactionStores(s.client);
+  const submitting = settingsTransactionOwners(s.client);
   expect(submitting).toHaveLength(1);
   ui.unmount();
   // The App Server authority is replaced while the acknowledgement is in
@@ -641,7 +641,7 @@ it('S1-16 an acknowledgement from the retired authority settles its own transact
   s.state.authorityRevision = (s.state.authorityRevision ?? 0) + 1;
   render(<Settings client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={host} />);
   await screen.findByText(/Revision: /);
-  const replacement = settingsTransactionStores(s.client).filter(store => !submitting.includes(store));
+  const replacement = settingsTransactionOwners(s.client).filter(owner => !submitting.includes(owner));
   expect(replacement).toHaveLength(1);
   await release();
   // The old authority's acknowledgement settles the old authority's

@@ -112,7 +112,11 @@ it('C17 a failed authoritative reread after adoption strands neither busy nor th
  // The rejection and the failed reread are two separate visible facts; neither
  // replays the adoption.
  await screen.findByText(/Configuration status unavailable/);
- expect(screen.getByRole('alert')).toBeTruthy();
+ // Two independent facts, reported independently: the adoption rejection and
+ // the read failure. Neither region can clear or hide the other's error.
+ const alerts = screen.getAllByRole('alert').map(node => node.textContent ?? '');
+ expect(alerts.some(text => text.includes('NotReady'))).toBe(true);
+ expect(alerts.some(text => text.includes('configuration read unavailable'))).toBe(true);
  expect(writes(s)).toHaveLength(1);
  // `busy` cleared and the candidate is retained, merely not actionable while
  // native status is unknown.

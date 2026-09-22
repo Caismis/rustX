@@ -4,7 +4,7 @@ import { Button } from '../../presentation/primitives/Button';
 import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';
 import css from '../../presentation/settings/SettingsContent.module.css';
 import { RequestPolicy } from './RequestPolicy';
-import { CheckboxList, Toggle, OptionalBoolean, Names, nativeTools, Selection, TextField, UnitForm, type SaveSource } from './controls';
+import { CheckboxList, Toggle, OptionalBoolean, Names, nativeTools, Selection, TextField, UnitForm } from './controls';
 import { inheritedResources } from './projection';
 
 function ModelRequestFields<T extends Pick<ModelLayer, 'reasoning_profile' | 'max_output_tokens' | 'request_params'>>({ value, change, prefix = '' }: { value: T; change: (next: T) => void; prefix?: string }) {
@@ -34,7 +34,7 @@ export function StatusPluginFields({ value, change }: { value: AgentStatusExtens
     <OptionalBoolean label="Time contributor" value={value.time?.enabled} change={enabled => change({ ...value, time: { ...value.time, enabled } })} /><TextField label="Time zone (IANA)" value={value.time?.timezone ?? ''} change={timezone => change({ ...value, time: { ...value.time, timezone: timezone || null } })} />
     <OptionalBoolean label="Background contributor" value={value.background?.enabled} change={enabled => change({ ...value, background: { ...value.background, enabled } })} /></>;
 }
-export function AgentEditor({ source, scope, models, save }: { source: SourceSettings; scope: SourceScope; models: string[]; save: SaveSource }) {
+export function AgentEditor({ source, scope, models }: { source: SourceSettings; scope: SourceScope; models: string[] }) {
   const [selected, select] = useState(''), [name, setName] = useState('');
   const agents = source.agents.filter(agent => agent.scope === scope);
   // A named Agent profile is one whole resource document. The native resource
@@ -47,7 +47,7 @@ export function AgentEditor({ source, scope, models, save }: { source: SourceSet
     <div className={css.rows}>{agents.map(agent => <SettingsCard key={agent.name} title={agent.name} meta={<Badge>{scope}</Badge>} actions={<Button onClick={() => select(agent.name)}>Edit Agent {agent.name}</Button>}><p className={css.hint}>{agent.source.path}</p>{agent.source.diagnostic && <p role="alert">{agent.source.diagnostic}</p>}</SettingsCard>)}
       {inherited.map(entry => <SettingsCard key={entry.name} title={entry.name} meta={<><Badge tone={entry.valid ? 'success' : 'error'}>{entry.valid ? 'Valid definition' : 'Invalid definition'}</Badge><Badge>Inherited from User</Badge></>} actions={<Button onClick={() => select(entry.name)}>Override Agent {entry.name}</Button>}><p className={css.hint}>{entry.path} · no override in this Workspace</p></SettingsCard>)}</div>
     <TextField label="New Agent identity" value={name} change={setName} /><Button disabled={!name || agents.some(agent => agent.name === name) || inherited.some(entry => entry.name === name)} onClick={() => { select(name); setName(''); }}>Add Agent</Button>
-    {selected && <UnitForm<AgentProfileDocument> key={selected} title={`Agent ${selected}`} authored={current?.source.authored ?? undefined} blank={{}} revision={current?.source.revision ?? source.absent_resource_revision} mutation={authored => ({ kind: 'agent', name: selected, authored })} save={save}>{(value, change) => <>
+    {selected && <UnitForm<AgentProfileDocument> key={selected} title={`Agent ${selected}`} authored={current?.source.authored ?? undefined} blank={{}} revision={current?.source.revision ?? source.absent_resource_revision} mutation={authored => ({ kind: 'agent', name: selected, authored })}>{(value, change) => <>
       <TextField label="Description" value={value.description} change={description => change({ ...value, description })} />
       <label>Instructions<textarea value={value.instructions ?? ''} onChange={e => change({ ...value, instructions: e.target.value })} /></label>
       <label><input type="checkbox" checked={!!value.model} onChange={e => change({ ...value, model: e.target.checked ? {} : null })} />Explicit child model</label>

@@ -32,6 +32,12 @@ export function applicationScope(target: SourceTarget): string {
   return target.kind === 'user' ? 'source:user' : `source:workspace:${target.directory}`;
 }
 
+/** The native projection of this unit carries its presence but never its
+ * value, because the value is a secret-bearing literal that native authority
+ * never releases. Presence and absence stay distinguishable; the literal is not
+ * representable at all, so no surface can render, copy or retain it. */
+export const REDACTED = Symbol('native value not projected');
+
 /** Project authored membership only. Defaults and merging remain native. */
 export function authoredUnit(document: RuntimeLayer | null | undefined, mutation: SourceMutation): unknown {
   if (!document || mutation.kind !== 'config') return undefined;
@@ -59,7 +65,7 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
     case 'capacity': return document.subagents;
     case 'native_policy': return document.native_tools?.[unit.id];
     case 'mcp_policy': return document.mcp_tool_policies?.[unit.id];
-    case 'environment': return document.environment?.[unit.name];
+    case 'environment': return document.environment?.includes(unit.name) ? REDACTED : undefined;
     case 'app_server': return document.app_server;
   }
 }
@@ -165,8 +171,8 @@ export function provenanceLabel(origin: UnitOrigin): string {
  * unavailable effective value when the User document does not parse. Absent is
  * never `false`, `[]` or `{}`, and invalid/unavailable are never empty or a
  * client fallback. */
-export type AuthoredState = 'present' | 'absent' | 'invalid' | 'unavailable';
-export type EffectiveState = 'available' | 'unset' | 'invalid' | 'unavailable';
+export type AuthoredState = 'present' | 'redacted' | 'absent' | 'invalid' | 'unavailable';
+export type EffectiveState = 'available' | 'redacted' | 'unset' | 'invalid' | 'unavailable';
 export interface AuthoredFacts { state: AuthoredState; value?: unknown; diagnostic?: string }
 export interface EffectiveFacts { state: EffectiveState; value?: unknown; diagnostic?: string }
 export interface UnitFacts { authored: AuthoredFacts; effective: EffectiveFacts; origin: UnitOrigin }
@@ -182,7 +188,8 @@ export function authoredFacts(source: SourceSettings | undefined, scope: SourceS
   if (view.diagnostic) return { state: 'invalid', diagnostic: view.diagnostic };
   if (!view.authored) return { state: 'unavailable' };
   const value = authoredUnit(view.authored, mutation);
-  return value === undefined ? { state: 'absent' } : { state: 'present', value };
+  if (value === undefined) return { state: 'absent' };
+  return value === REDACTED ? { state: 'redacted' } : { state: 'present', value };
 }
 /** Native source resolution for this unit. `resolved` is absent exactly when a
  * participating document failed to parse, and `prospective_diagnostic` reports
@@ -194,7 +201,8 @@ export function effectiveFacts(source: SourceSettings | undefined, mutation: Sou
   if (!source.resolved) return diagnostic ? { state: 'invalid', diagnostic } : { state: 'unavailable' };
   if (diagnostic) return { state: 'invalid', diagnostic };
   const value = authoredUnit(source.resolved, mutation);
-  return value === undefined ? { state: 'unset' } : { state: 'available', value };
+  if (value === undefined) return { state: 'unset' };
+  return value === REDACTED ? { state: 'redacted' } : { state: 'available', value };
 }
 export function unitFacts(source: SourceSettings | undefined, scope: SourceScope, mutation: SourceMutation): UnitFacts {
   return { authored: authoredFacts(source, scope, mutation), effective: effectiveFacts(source, mutation), origin: unitProvenance(source, mutation) };
@@ -202,15 +210,17 @@ export function unitFacts(source: SourceSettings | undefined, scope: SourceScope
 export function authoredStateLabel(authored: AuthoredFacts, scope: SourceScope): string {
   const workspace = scope === 'workspace';
   return authored.state === 'present' ? (workspace ? 'Workspace override — empty selections remain explicit' : 'User authored value')
-    : authored.state === 'absent' ? (workspace ? 'Inherited — no Workspace override' : 'No User authored value')
-      : authored.state === 'invalid' ? 'Authored source is invalid'
-        : 'Authored source unavailable';
+    : authored.state === 'redacted' ? (workspace ? 'Workspace override — value never projected' : 'User authored value — value never projected')
+      : authored.state === 'absent' ? (workspace ? 'Inherited — no Workspace override' : 'No User authored value')
+        : authored.state === 'invalid' ? 'Authored source is invalid'
+          : 'Authored source unavailable';
 }
 export function effectiveStateLabel(effective: EffectiveFacts): string {
   return effective.state === 'available' ? 'Native effective value available'
-    : effective.state === 'unset' ? 'No source authors this unit — native default applies'
-      : effective.state === 'invalid' ? 'Native effective value unavailable — resolution failed'
-        : 'Native effective value not observed';
+    : effective.state === 'redacted' ? 'Native effective value exists — the literal is never projected'
+      : effective.state === 'unset' ? 'No source authors this unit — native default applies'
+        : effective.state === 'invalid' ? 'Native effective value unavailable — resolution failed'
+          : 'Native effective value not observed';
 }
 
 /** The non-sensitive native selector that names which source revision settles
@@ -277,6 +287,13 @@ export function catalogEntries<T>(source: SourceSettings | undefined, scope: Sou
  * order is preserved. */
 export function reachableIdentities(scope: SourceScope, authored: object | null | undefined, effective: object | null | undefined): string[] {
   return [...new Set([...(scope === 'workspace' ? Object.keys(effective ?? {}) : []), ...Object.keys(authored ?? {})])];
+}
+/** The environment identities this scope must be able to reach, on exactly the
+ * same terms as any other named container. Native projects the identities
+ * alone — `RuntimeLayer.environment` is a list, not a map — so enumeration here
+ * cannot expose a literal value even by accident. */
+export function reachableEnvironment(scope: SourceScope, authored: readonly string[] | null | undefined, effective: readonly string[] | null | undefined): string[] {
+  return [...new Set([...(scope === 'workspace' ? effective ?? [] : []), ...(authored ?? [])])];
 }
 
 /** One native whole-file resource identity, exactly as the native inventory

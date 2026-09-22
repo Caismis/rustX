@@ -86,6 +86,25 @@ projection (`app/settings/projection.ts`) maps native facts into display state
 without becoming authority: it never recomputes inheritance and never materializes
 a native default into a draft.
 
+The browser's asynchronous configuration semantics are owned by explicit XState
+v5 actors under `app/settings/machines/`, not by component effects: the Settings
+authority of one exact target (its authoritative reads, its one in-flight
+mutation and its single level-triggered convergence obligation), one CAS editing
+transaction per native semantic unit, Session observation and Session adoption,
+and top-level Settings navigation. React subscribes and submits intent. Those
+actors are addressed by `(endpoint, authority revision, subject)`, so a Settings
+dialog closing is a detach — never a cancelled native commit and never a
+discarded editing transaction — and replacing the App Server authority retires
+the old lifetime without letting it publish into its replacement. XState
+orchestrates browser behaviour only; the native App Server remains the authority
+for every value, conflict, application and adoption decision.
+
+Read ordering is structural rather than compared: exactly one authoritative read
+is in flight, and starting a newer one stops the older read actor, so a
+superseded response has no completion path at all. The reread a Workspace write
+owns is reserved by the state the write enters, and is silently superseded — in
+success and in failure alike — by any read a newer native publication owes.
+
 Authored source state and effective resolution state are two independent
 dimensions, not one state machine. "This Workspace authors no override" and "the
 effective value is unset" are different claims: when a lower document does not
@@ -122,15 +141,26 @@ redacted, is never read back from the shadowed definition, and an override alway
 authors a new credential. User Settings is the lowest authored source and
 inherits from nothing, so its catalogs list exactly what it authors.
 
-A submitted mutation may carry an authored secret: a Provider literal
-credential, an MCP literal environment value or header. Before submission that
-value lives in exactly one place, the live editing draft. The transaction owner
-is handed only the mutation's non-sensitive revision selector — the mutation
-family, plus a named resource's identity — which is all settlement needs to match
-a commit against a later authoritative projection. Once native acknowledges the
-commit, the confirmed draft is dropped, so no secret-bearing authored payload
-survives a confirmed commit, even when the post-write authoritative reread fails
-and the transaction stays unsettled across an editor unmount or a section change.
+No projection that leaves native authority carries a secret-bearing authored
+value. A Provider credential is a redacted `CredentialSourceView`; an MCP
+definition's literal `env`/`headers` are cleared natively and only their retained
+identities are named; and a literal Tool environment value is projected as its
+identity alone — `RuntimeLayer.environment` is a list of names on the wire, not a
+map of values. The browser therefore knows that an environment identity exists,
+which document authors it and what its provenance is, and authors an override by
+entering a new value rather than reading the lower owner's value back. The
+authoring document keeps the literal, which is what the running Tool environment
+resolves from.
+
+A submitted mutation may still carry an authored secret, because the user just
+typed it. Before submission that value lives in exactly one place, the live
+editing draft. The unit's transaction actor is handed only the mutation's
+non-sensitive revision selector — the mutation family, plus a named resource's
+identity — which is all settlement needs to match a commit against a later
+authoritative projection. Once native acknowledges the commit, the confirmed
+draft is dropped, so no secret-bearing authored payload survives a confirmed
+commit, even when the post-write authoritative reread fails and the transaction
+stays unsettled across an editor unmount or a section change.
 
 Provenance is looked up by the exact native key a semantic unit owns
 (`providers.<id>`, `models.<id>`, `agent.tools.sources.<id>`,
