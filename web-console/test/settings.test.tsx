@@ -292,6 +292,31 @@ it('preserves the original revision when removing an otherwise clean unit confli
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { mutation: { authored: null } } } });
 });
+it('preserves a clean removal\'s frozen CAS base across an editor remount and advances it only through explicit review', async () => {
+  const subject = cfg3Client(async (op, source) => {
+    if (op.method === 'configuration/sourceWrite') {
+      source.workspace!.revision = 'external-removal-conflict';
+      throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: op.params.expected_revision, actual: source.workspace!.revision } });
+    }
+  });
+  await open(subject, 'Tools');
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Native Tools' }));
+  await screen.findByRole('button', { name: 'Use reviewed revision' });
+  // Leaving and re-entering the section remounts the editor subtree. The frozen
+  // base is durable editor state, not component-local state.
+  fireEvent.click(screen.getByRole('button', { name: 'General' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+  await screen.findByRole('button', { name: 'Remove Native Tools' });
+  expect(screen.getByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Native Tools' }));
+  await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { mutation: { authored: null } } } });
+  // Only the explicit reviewed-revision gesture advances the operation to R2.
+  fireEvent.click(screen.getByRole('button', { name: 'Use reviewed revision' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Native Tools' }));
+  await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(3));
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[2][0]).toMatchObject({ params: { expected_revision: 'external-removal-conflict', mutation: { mutation: { authored: null } } } });
+});
 it.each([
   ['effect', 'refresh'], ['refresh', 'refresh'], ['refresh', 'write'],
 ] as const)('fences an obsolete %s read rejection after a newer %s', async (readKind, successor) => {

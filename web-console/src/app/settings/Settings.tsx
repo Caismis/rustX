@@ -11,7 +11,7 @@ import { RootEditor, type RootSection } from './RootEditor';
 import { RuntimeEditor } from './RuntimeEditor';
 import { UnitForm, type SaveSource } from './controls';
 import css from '../../presentation/settings/SettingsContent.module.css';
-import { DraftContext, SourceContext, type UnitDraft } from './drafts';
+import { EditorStateContext, SourceContext, type UnitEditState } from './drafts';
 import { SettingsPanel } from '../../presentation/settings/SettingsRoot';
 import type { ConnectionController } from '../../connection/controller';
 import { ConnectionSettings } from './ConnectionSettings';
@@ -31,7 +31,7 @@ const sections = [
   ['skills', 'Skills', 'Integrations'], ['workflows', 'Workflows', 'Integrations'], ['advanced', 'Server & source diagnostics', 'Advanced'],
 ] as const;
 type Section = typeof sections[number][0] | 'appearance' | 'connection';
-const draftStores = new WeakMap<AppServerClient, Map<string, Map<string, UnitDraft>>>();
+const draftStores = new WeakMap<AppServerClient, Map<string, Map<string, UnitEditState>>>();
 interface SettingsProps {
   client: AppServerClient; target: SettingsTarget; host?: ProductHostWorkspaces; onClose?: () => void;
   theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void;
@@ -265,12 +265,12 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
         {source?.prospective_diagnostic && <p role="status">{source.prospective_diagnostic}</p>}
         {scope === 'workspace' && <p>Remove an override to reset to the global default. An explicit empty selection means none.</p>}
         <h3>{sections.find(([id]) => id === section)?.[1]}</h3>
-        <SourceContext value={source}><DraftContext value={drafts}><div key={draftKey}>{editor}
+        <SourceContext value={source}><EditorStateContext value={drafts}><div key={draftKey}>{editor}
           {selected?.diagnostic && !selected.authored && <UnitForm title="Repair malformed source" blank="" revision={selected.revision} save={save} removable={false}
             mutation={document => ({ kind: 'repair_config', document: document ?? '' })}>
             {(value, change) => <label>Replacement TOML<textarea value={value} onChange={event => change(event.target.value)} /></label>}
           </UnitForm>}
-        </div></DraftContext></SourceContext>
+        </div></EditorStateContext></SourceContext>
         {section === 'overview' && <p>Definitions and defaults belong to this source. Session selections and explicit adoption belong to each Session.</p>}
         {section === 'advanced' && source && <>
           <h3>Application observation</h3>

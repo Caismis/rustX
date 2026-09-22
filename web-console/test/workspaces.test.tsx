@@ -418,3 +418,51 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B' })));
   expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
 });
+
+// Settings navigation is linearized by one App-owned epoch. A delayed owning
+// Workspace catalog lookup is preparation, never authority to override a newer
+// navigation decision.
+async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v18').SourceTarget[]) {
+  const host = await failedSessionConfiguration(sources);
+  const catalog = await host.listWorkspaces();
+  const gate = deferred<WorkspaceCatalog>();
+  host.listWorkspaces = vi.fn(() => gate.promise);
+  fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/A' }));
+  return { gate, catalog };
+}
+
+it('S1-10 a newer User Settings decision rejects a late owning Workspace lookup', async () => {
+  const { gate, catalog } = await pendingOwnershipLookup([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Settings' })));
+  await screen.findByRole('heading', { name: 'User Settings' });
+  await act(async () => { gate.resolve(catalog); });
+  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
+  expect(screen.queryByRole('heading', { name: /^Workspace Settings/ })).toBeNull();
+});
+
+it('S1-10 a newer Workspace B Settings decision rejects a late owning Workspace A lookup', async () => {
+  const { gate, catalog } = await pendingOwnershipLookup([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Workspace B' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace settings' })));
+  await screen.findByRole('heading', { name: 'Workspace Settings — Workspace B' });
+  await act(async () => { gate.resolve(catalog); });
+  expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace B' })).toBeTruthy();
+  expect(screen.queryByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeNull();
+});
+
+it('S1-10 closing Settings rejects a late owning Workspace lookup', async () => {
+  const { gate, catalog } = await pendingOwnershipLookup([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Settings' })));
+  await screen.findByRole('heading', { name: 'User Settings' });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Close Settings' })));
+  await act(async () => { gate.resolve(catalog); });
+  expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+});
+
+it('S1-10 an authority replacement rejects a late owning Workspace lookup', async () => {
+  const { gate, catalog } = await pendingOwnershipLookup([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
+  const before = server.client.getSnapshot();
+  vi.spyOn(server.client, 'getSnapshot').mockReturnValue({ ...before, authorityRevision: (before.authorityRevision ?? 0) + 1 });
+  await act(async () => { gate.resolve(catalog); });
+  expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+});
