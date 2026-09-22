@@ -3,6 +3,7 @@ import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v18';
 import { Settings } from '../src/app/settings/Settings';
+import { RpcFailure } from '../src/client/app-server';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import type { ProductHostWorkspaces, WorkspaceConfigurationReread } from '../src/workspaces/host';
 import { cfg3Source, cfg3SourceApplication } from './cfg3-data';
@@ -452,4 +453,155 @@ it('S12 a held Workspace post-write reread cannot regress a newer authoritative 
   await waitFor(() => expect(screen.getByText(/Revision: ws-C/)).toBeTruthy());
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
   expect(sent(s, 'configuration/sourcesRead').length).toBeLessThanOrEqual(5);
+});
+
+/** One Workspace source whose authored revision and application version advance
+ * separately, for the S13/S14 ordering contracts below. */
+function workspaceSource() {
+  const target: SourceTarget = { kind: 'workspace', directory: '/workspace/A' };
+  const native = {
+    target, revision: 'ws-A', application: { ...cfg3SourceApplication(target), version: '1' } as ConfigurationApplication,
+    projection(): SourceSettings {
+      const source = cfg3Source();
+      source.target = target;
+      source.workspace = { path: '/workspace/rustx.toml', revision: native.revision, authored: { agent: { tools: { builtin: [] } } } };
+      source.application = structuredClone(native.application);
+      return source;
+    },
+  };
+  return native;
+}
+function barrier() {
+  let release!: () => void;
+  const reached = new Promise<void>(resolve => { release = resolve; });
+  return { reached, release };
+}
+/** Drain the microtask queue deterministically. No timer, no sleep: every
+ * continuation these tests release is a promise continuation. */
+const flush = () => act(async () => { for (let turn = 0; turn < 32; turn++) await Promise.resolve(); });
+
+it('S13 a write-owned reread cannot commit over a newer read that was only initiated', async () => {
+  // The defect this pins: ordering by the newest *accepted* projection lets a
+  // held reread land while a newer authoritative read is merely pending, so the
+  // older projection becomes visible and the newer read then fails on top of it.
+  const native = workspaceSource();
+  let readFails = false;
+  const captured = barrier(), held = barrier();
+  const s = new Server();
+  s.handlers.set('configuration/sourcesRead', () => {
+    if (readFails) throw new RpcFailure({ code: -32000, message: 'authoritative read unavailable', data: { kind: 'operation_failed' } });
+    return { type: 'source_settings', projection: native.projection() };
+  });
+  s.handlers.set('configuration/sourceWrite', () => { native.revision = 'ws-B'; return { type: 'source_settings', projection: native.projection() }; });
+  const host: ProductHostWorkspaces = {
+    ...s.workspaceHost,
+    configureWorkspace: async (_id, _endpoint, operation) => {
+      if (operation.kind === 'write') {
+        const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target: native.target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
+        // Native has committed B and this operation owns its authoritative
+        // reread of B; the whole Host response is then held.
+        const reread: WorkspaceConfigurationReread = { status: 'observed', projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target: native.target } }, 'source_settings')).projection };
+        captured.release(); await held.reached;
+        return { kind: 'write', commit: { acknowledgement, reread } };
+      }
+      return { kind: operation.kind, projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target: native.target } }, 'source_settings')).projection };
+    },
+  };
+  await s.connect();
+  render(<Settings client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
+  // Step 1: Workspace Settings is open at revision A.
+  await screen.findByText(/Revision: ws-A/);
+  // Step 2: a Workspace save whose write-owned reread captured revision B.
+  fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+  fireEvent.click(screen.getByLabelText('read'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+  // Step 3: hold the write response carrying that reread.
+  await captured.reached;
+  // Step 4/5: a newer authoritative read N+1 is initiated and stays pending. It
+  // is never accepted, so only read *reservation* can order it ahead of the
+  // held reread.
+  s.held.add('configuration/sourcesRead');
+  native.application = { ...cfg3SourceApplication(native.target), version: '2' };
+  await publish(s, native.application);
+  await waitFor(() => expect(sent(s, 'configuration/sourcesRead')).toHaveLength(3));
+  const newer = sent(s, 'configuration/sourcesRead')[2];
+  // Step 6: release the older write-owned reread N.
+  held.release();
+  await flush();
+  // Step 7: B is not adopted merely because N+1 has not completed yet, and the
+  // saved notice waits for the read that actually owns the read sequence rather
+  // than racing it with a redundant read of its own.
+  expect(screen.queryByText(/Revision: ws-B/)).toBeNull();
+  expect(screen.getByText(/Revision: ws-A/)).toBeTruthy();
+  expect(screen.queryByText(/Source saved/)).toBeNull();
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(sent(s, 'configuration/sourcesRead')).toHaveLength(3);
+  // Step 8: reject N+1.
+  readFails = true;
+  await deliver(s, newer);
+  // Step 9: the current read failure is reported truthfully, by the read that
+  // owns the read sequence — and the definitive commit is still reported saved.
+  await screen.findByText(/Source read failed/);
+  expect(screen.getByText(/authoritative read unavailable/)).toBeTruthy();
+  await screen.findByText(/Source saved\. Native coordination/);
+  // Step 10: the older B projection never became authoritative presentation.
+  expect(screen.queryByText(/Revision: ws-B/)).toBeNull();
+  expect(screen.getByText(/Revision: ws-A/)).toBeTruthy();
+  // Steps 11/12: exactly one source write, no replay, and the still-unobserved
+  // commit drives at most one more bounded convergence read.
+  await flush();
+  expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
+  expect(sent(s, 'configuration/sourcesRead').length).toBeLessThanOrEqual(4);
+});
+
+it('S14 a superseded write-owned reread failure publishes no read error and leaves its commit to convergence', async () => {
+  const native = workspaceSource();
+  const captured = barrier(), held = barrier();
+  const s = new Server();
+  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: native.projection() }));
+  s.handlers.set('configuration/sourceWrite', () => { native.revision = 'ws-B'; return { type: 'source_settings', projection: native.projection() }; });
+  const host: ProductHostWorkspaces = {
+    ...s.workspaceHost,
+    configureWorkspace: async (_id, _endpoint, operation) => {
+      if (operation.kind === 'write') {
+        const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target: native.target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
+        // The commit is definitive; only this operation's own reread failed.
+        const reread: WorkspaceConfigurationReread = { status: 'failed', error: new Error('authoritative reread unavailable') };
+        captured.release(); await held.reached;
+        return { kind: 'write', commit: { acknowledgement, reread } };
+      }
+      return { kind: operation.kind, projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target: native.target } }, 'source_settings')).projection };
+    },
+  };
+  await s.connect();
+  render(<Settings client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
+  await screen.findByText(/Revision: ws-A/);
+  fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+  fireEvent.click(screen.getByLabelText('read'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+  await captured.reached;
+  // A newer authoritative read is initiated and held pending.
+  s.held.add('configuration/sourcesRead');
+  native.application = { ...cfg3SourceApplication(native.target), version: '2' };
+  await publish(s, native.application);
+  await waitFor(() => expect(sent(s, 'configuration/sourcesRead')).toHaveLength(2));
+  held.release();
+  await flush();
+  // The superseded reread failure is not this presentation's read state: the
+  // newer initiated read owns it, the target stays valid, and nothing is
+  // reported until that read settles.
+  expect(screen.queryByText(/Saved, but the authoritative reread failed/)).toBeNull();
+  expect(screen.queryByText(/Source read failed/)).toBeNull();
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.queryByText(/Source saved/)).toBeNull();
+  // The newer authoritative read settles and owns the presentation; the
+  // definitive commit is then reported saved against the revision that read
+  // actually carries.
+  s.held.delete('configuration/sourcesRead');
+  await settleReads(s, 1);
+  await screen.findByText(/Source saved\. Native coordination/);
+  expect(screen.queryByText(/Saved, but the authoritative reread failed/)).toBeNull();
+  await waitFor(() => expect(screen.getByText(/Revision: ws-B/)).toBeTruthy());
+  await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBeLessThanOrEqual(4));
+  expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
 });
