@@ -55,11 +55,18 @@ React Settings dialog ──ATTACH/DETACH──▶ an existing target actor
 ```
 
 - **App Server authority lifetime** — `(endpoint, authorityRevision)`. Replacing
-  the authority detaches every target actor of the old lifetime and starts the
-  replacement from nothing, so old state cannot leak into it. A retired lifetime
-  is kept, not stopped, only while a native mutation it submitted is still in
-  flight: a definitive acknowledgement must still settle the exact transaction
-  that submitted it, under its own old authority.
+  the authority retires every target actor of the old lifetime and starts the
+  replacement from nothing, so old state cannot leak into it. A target with no
+  native mutation in flight (`mutationInFlight`, the `mutation.submitting` span)
+  is stopped and dropped at the replacement itself — an unsaved draft, including
+  a Provider credential or a literal environment value, belongs to the authority
+  it was authored against and is never retained, migrated or replayed. A target
+  whose mutation already crossed the native submission boundary is detached and
+  kept only until that mutation leaves `submitting`: a definitive
+  acknowledgement or failure must still settle the exact transaction that
+  submitted it, under its own old authority. The `ConfigurationSystem` observes
+  that settlement through a subscription it owns and stops and drops the actor at
+  once — no poll, and no dependence on a later authority replacement.
 - **Transaction lifetime** — per-unit actors live for the whole authority
   lifetime. Closing Settings, changing section or switching target is a React
   unmount and cannot reach them.
@@ -135,7 +142,7 @@ acknowledgement of an older intent is exactly `mutation.acknowledged` while
 ### The Session configuration machine
 
 ```text
-observation  idle → loading → ready | unavailable
+observation  idle → loading.{requested | adoptionReread} → ready | unavailable
 adoption     idle → submitting → idle | rejected | uncertain
 ```
 
@@ -143,6 +150,16 @@ Observation and adoption are two regions over two separate context fields
 (`readError`, `adoptionError`). Neither region can assign the other's field, so a
 successful read structurally cannot clear an adoption rejection, and an adoption
 response structurally cannot clear a read failure.
+
+One adoption transaction spans both regions, and the `adoptionInFlight` tag names
+that span: `adoption.submitting`, then `observation.loading.adoptionReread` — the
+authoritative reread the native response owes. The transaction's terminal point
+is that reread settling, or a newer read superseding it. Session actors are
+reference counted by their presentations; when the last holder leaves, the
+`ConfigurationSystem` stops and removes the actor at once, or — while the
+adoption transaction is in flight — subscribes and does so exactly at its
+terminal point. A holder attaching before then cancels that subscription and
+keeps the actor alive.
 
 ## Entry and target ownership
 
@@ -431,8 +448,8 @@ wrong.
 The reread a Workspace write owns is the one read the browser does not start
 itself, so it is reserved by a state: `WRITE.STARTED` moves the region to
 `awaitingWrite`, which is exactly the old "reserve the read order at write
-initiation". Any authoritative read owed by a *newer native publication* leaves
-that state, and the Host's reread is then silently superseded however late it
+initiation". A native publication newer than the reservation's watermark leaves
+that state for the publication-owned read, and the Host's reread is then silently superseded however late it
 arrives — in both outcomes, so a superseded reread failure is not published as
 this presentation's read failure either. The commit's own observation obligation
 never ejects `awaitingWrite`: that obligation is precisely what the reread is
@@ -443,7 +460,14 @@ authoritative observation of the new attachment.
 
 The reservation is therefore explicit context, `rereadReservation`, named by the
 token of the submission that took it, and it is a different fact from that
-submission. The write transaction may outlive its connection generation and any
+submission. It also records the publication watermark it was established
+against — the application scope of the observation it was submitted over, and
+the version then published for it. The Host's reread is issued after the commit,
+so it answers every publication up to that watermark. Supersession compares the
+current publication with that watermark only, never with the current
+presentation observation, which every `ATTACH` demotes: a newer publication
+arriving after a detach/reattach — or while detached — still supersedes the
+reservation. The write transaction may outlive its connection generation and any
 number of attachments, and still settles exactly once. The reservation is
 publication authority and is revoked — never restored — by the first of: entry
 to `reading` (a newer read owns the order), a connection generation replacement
@@ -483,8 +507,8 @@ exactly its own transaction and never reaches a replacement authority or a
 different target. An outcome that is genuinely
 uncertain keeps the existing authoritative-reread-only recovery, with no replay. Session adoption is one region of the Session
 configuration machine, so it leaves `submitting` on the adoption response alone:
-the authoritative reread it then raises is a separate region's work, and neither a
-failed reread nor a superseded lifetime can strand the adoption guard. `busy` is
+the authoritative reread it then raises is settled by the observation region, and
+neither a failed reread nor a superseded lifetime can strand the adoption guard. `busy` is
 that region's state, never authority — `session/adoptConfiguration` revalidates
 its own gate natively.
 Busy adoption leaves work running. Failed preparation leaves old effective resources

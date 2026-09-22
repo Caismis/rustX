@@ -43,7 +43,9 @@ export function useSettingsTarget(client: AppServerClient, target: SettingsTarge
   );
   useEffect(() => {
     actor.send({ type: 'ATTACH' });
-    return () => actor.send({ type: 'DETACH' });
+    // An authority replacement may already have stopped this lifetime, which
+    // leaves no presentation attachment to end.
+    return () => { if (actor.getSnapshot().status === 'active') actor.send({ type: 'DETACH' }); };
   }, [actor]);
   const publications = publicationKey(transport);
   const connection = transport.connection, generation = transport.generation, configuration = transport.configuration;

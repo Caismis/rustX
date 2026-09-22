@@ -1,4 +1,4 @@
-import { assign, enqueueActions, fromPromise, raise, setup, type ActorRefFrom } from 'xstate';
+import { assign, enqueueActions, fromPromise, raise, setup, type ActorRefFrom, type SnapshotFrom } from 'xstate';
 import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v18';
 import { isOutcomeUncertain, RpcFailure, type ConnectionState } from '../../../client/app-server';
 import { WorkspaceHostError } from '../../../workspaces/host';
@@ -69,8 +69,17 @@ export interface SettingsTargetContext {
    * the write ending. Revocation is permanent — nothing but a new submission
    * ever takes a reservation — so no later `ATTACH` can restore publication
    * authority that a replacement or a newer read took away. `DETACH` alone
-   * neither takes nor revokes it. */
-  rereadReservation?: { token: number };
+   * neither takes nor revokes it.
+   *
+   * The reservation also records the native publication watermark it was
+   * established against: the application scope the observed projection
+   * publishes under, and the version published for it at that moment. The
+   * Host's reread is issued after the write commits, so it answers every
+   * publication up to that watermark and no newer one. Whether a later
+   * publication supersedes the reservation is decided against this watermark
+   * alone — never against the current presentation observation, which every
+   * `ATTACH` demotes. */
+  rereadReservation?: { token: number; scope: string; publication?: bigint };
   /** One live transaction actor per native semantic unit touched in this
    * lifetime. Owned here, not by the editors that render them. */
   units: Record<string, UnitTransactionRef>;
@@ -121,6 +130,12 @@ function publicationObligation(context: SettingsTargetContext): bigint | undefin
   return settled === undefined || BigInt(settled) < BigInt(publication.version) ? BigInt(publication.version) : undefined;
 }
 
+/** The version native currently publishes for one application scope. */
+function publishedVersion(context: SettingsTargetContext, scope: string): bigint | undefined {
+  const publication = (context.publications ?? {})[scope];
+  return publication ? BigInt(publication.version) : undefined;
+}
+
 function classifyWriteFailure(cause: unknown): WriteFailureKind {
   if ((cause instanceof RpcFailure && cause.error.data?.kind === 'source_conflict')
     || (cause instanceof WorkspaceHostError && cause.kind === 'source_conflict')) return 'conflict';
@@ -157,7 +172,8 @@ function unitRevision(projection: SourceSettings, selector: RevisionSelector): s
  *
  * - *App Server authority* — the actor is created per (endpoint, authority
  *   revision, target) and retired when that authority is replaced, so an old
- *   lifetime can never publish into its replacement.
+ *   lifetime can never publish into its replacement. A retired actor outlives
+ *   its authority only while `mutationInFlight` holds.
  * - *connection generation* — inside one authority, `authority.attached` is
  *   entered by exactly one generation and re-entered by its replacement. An
  *   observation belongs to the generation that acquired it: once a newer
@@ -188,6 +204,7 @@ export const settingsTargetMachine = setup({
       target: SettingsTarget; port: ConfigurationPort; connection: ConnectionState;
       generation: number; publications: Record<string, ConfigurationApplication> | undefined;
     },
+    tags: {} as 'mutationInFlight',
   },
   actors: {
     readSource: fromPromise(({ input }: { input: { port: ConfigurationPort } }) => input.port.read()),
@@ -204,14 +221,20 @@ export const settingsTargetMachine = setup({
      * never a poll. */
     owesRead: ({ context }) => context.connection === 'connected'
       && (context.unobservedCommit !== undefined || publicationObligation(context) !== undefined),
-    /** The publication half of the obligation alone — and exactly it. A write
-     * holding the read order open is only superseded by a read that a *newer
-     * native publication* owes: never by the commit obligation of its own
-     * acknowledgement, and never by the bare "no current projection" first-read
-     * obligation a reattached presentation carries — both of which the
-     * reserved reread is exactly about to answer. */
-    owesPublicationRead: ({ context }) => context.connection === 'connected'
-      && context.observation !== undefined && publicationObligation(context) !== undefined,
+    /** Native published a version of the reservation's scope newer than the
+     * watermark the reservation was established against. This is the one
+     * publication fact that supersedes a write-owned reread — and it is a fact
+     * about native publication progress, so it holds whether or not a current
+     * presentation observation exists. What never supersedes the reservation is
+     * the commit obligation of its own acknowledgement, or the bare "no current
+     * projection" first-read obligation a reattached presentation carries: the
+     * reserved reread is exactly about to answer both. */
+    publicationSupersedesReservation: ({ context }) => {
+      const reservation = context.rereadReservation;
+      if (context.connection !== 'connected' || !reservation) return false;
+      const published = publishedVersion(context, reservation.scope);
+      return published !== undefined && (reservation.publication === undefined || published > reservation.publication);
+    },
     /** Native authority is the only gate on authoring. The browser may submit
      * only against an observed authoritative projection of a live connection —
      * and only against the observation of the current presentation attachment,
@@ -285,8 +308,15 @@ export const settingsTargetMachine = setup({
     }),
     recordChasing: assign({ chasing: ({ context }) => publicationObligation(context) }),
     /** The Workspace write just initiated reserves the read order for its own
-     * reread. */
-    reserveOwnedReread: assign({ rereadReservation: ({ context }) => ({ token: context.submission!.token }) }),
+     * reread, against the publication watermark of the observation it was
+     * submitted over. A submission is only ever opened over a current
+     * observation, so that observation names the scope. */
+    reserveOwnedReread: assign({
+      rereadReservation: ({ context }) => {
+        const scope = applicationScope(context.observation!.target);
+        return { token: context.submission!.token, scope, publication: publishedVersion(context, scope) };
+      },
+    }),
     /** Permanently end the write-owned reread's publication authority. The
      * write itself is untouched and still settles. */
     revokeRereadReservation: assign({ rereadReservation: () => undefined }),
@@ -545,9 +575,14 @@ export const settingsTargetMachine = setup({
              * An unrevoked reservation survives `DETACH` / `ATTACH`: a
              * reattachment of the same generation rejoins this state, and the
              * write's own reread becomes the fresh observation of the new
-             * attachment. */
+             * attachment.
+             *
+             * A native publication newer than the reservation's watermark
+             * supersedes it — in this state or on re-entering it after a
+             * reattach — by starting the publication-owned read, whose entry
+             * revokes the reservation for good. */
             awaitingWrite: {
-              always: { guard: 'owesPublicationRead', target: 'reading' },
+              always: { guard: 'publicationSupersedesReservation', target: 'reading' },
               on: {
                 'READ.ADOPT': { target: 'settling', actions: 'adoptProjection' },
                 'READ.REREAD_FAILED': { target: 'blocked', actions: 'recordRereadFailure' },
@@ -597,7 +632,13 @@ export const settingsTargetMachine = setup({
       initial: 'idle',
       states: {
         idle: { on: { 'UNIT.SUBMIT': { guard: 'canSubmit', target: 'submitting', actions: ['ensureUnit', 'openSubmission'] } } },
+        /** The mutation has crossed the native submission boundary and its
+         * outcome is not known yet. Leaving this state — on the definitive
+         * acknowledgement, a conflict, a native rejection or an unknown outcome
+         * — is the mutation's settlement point: from then on the transaction
+         * that submitted it records the outcome, and nothing is in flight. */
         submitting: {
+          tags: 'mutationInFlight',
           invoke: {
             src: 'writeSource',
             input: ({ context, event }) => ({
@@ -681,3 +722,10 @@ export const settingsTargetMachine = setup({
     'UNIT.RETIRED': { actions: 'retireUnit' },
   },
 });
+
+/** Whether this target has a native mutation in flight: submitted across the
+ * native submission boundary and not yet settled on the transaction that
+ * submitted it. */
+export function mutationInFlight(snapshot: SnapshotFrom<typeof settingsTargetMachine>): boolean {
+  return snapshot.hasTag('mutationInFlight');
+}

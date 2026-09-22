@@ -1,4 +1,4 @@
-import { assign, fromPromise, raise, setup } from 'xstate';
+import { assign, fromPromise, raise, setup, type SnapshotFrom } from 'xstate';
 import type { AvailableConfiguration, ConfigurationApplication } from '../../../../../protocol/app-server/v18';
 import { isOutcomeUncertain, type AppServerClient, type ConnectionState } from '../../../client/app-server';
 
@@ -52,7 +52,10 @@ export interface SessionConfigurationContext {
 export type SessionConfigurationEvent =
   | { type: 'TRANSPORT'; connection: ConnectionState; generation: number }
   | { type: 'REFRESH' }
-  | { type: 'ADOPT'; candidate: AvailableConfiguration };
+  | { type: 'ADOPT'; candidate: AvailableConfiguration }
+  /** The native adoption response was classified and now owes the adoption
+   * transaction's own authoritative reread. Raised by the `adoption` region. */
+  | { type: 'ADOPTION.REREAD' };
 
 /** Session configuration observation and Session adoption.
  *
@@ -72,12 +75,20 @@ export type SessionConfigurationEvent =
  * need the same care, because a native application version is a per-process
  * runtime counter: a generation change retires the held observation into
  * explicitly stale presentation data, so the first observation of the new
- * generation is never compared against a counter from a different process. */
+ * generation is never compared against a counter from a different process.
+ *
+ * One adoption transaction spans both regions, and its span is explicit: the
+ * `adoptionInFlight` tag holds from the moment the adoption is submitted,
+ * through the native response, until the authoritative reread that response
+ * owes has settled or been superseded by a newer read. That terminal point is
+ * what the configuration system observes to release a Session actor that no
+ * presentation holds any longer. */
 export const sessionConfigurationMachine = setup({
   types: {
     context: {} as SessionConfigurationContext,
     events: {} as SessionConfigurationEvent,
     input: {} as { port: SessionConfigurationPort; connection: ConnectionState; generation: number },
+    tags: {} as 'adoptionInFlight',
   },
   actors: {
     readConfiguration: fromPromise(({ input }: { input: { port: SessionConfigurationPort } }) => input.port.read()),
@@ -134,11 +145,17 @@ export const sessionConfigurationMachine = setup({
     /** Does this browser currently know the native Session application? */
     observation: {
       initial: 'idle',
+      // Every adoption response owes a fresh authoritative reread. The
+      // transition is internal to this region, so it leaves the `adoption`
+      // region untouched, yet it still re-enters `loading` and so stops any
+      // read already in flight.
+      on: { 'ADOPTION.REREAD': '.loading.adoptionReread' },
       states: {
         /** Nothing has asked for an observation yet. The actor reads when a
          * presentation attaches or a native trigger arrives, never on its own. */
         idle: { on: { REFRESH: 'loading' } },
         loading: {
+          initial: 'requested',
           invoke: {
             src: 'readConfiguration',
             input: ({ context }) => ({ port: context.port }),
@@ -149,6 +166,15 @@ export const sessionConfigurationMachine = setup({
           // ordering is structural: a superseded read can never publish a
           // projection or a failure, in any delivery order.
           on: { REFRESH: { target: 'loading', reenter: true } },
+          states: {
+            /** A read a presentation or a native trigger asked for. */
+            requested: {},
+            /** The authoritative reread an adoption response owes. It is the
+             * last step of that adoption transaction, which ends when this read
+             * settles — or when a newer read supersedes it and takes the read
+             * order over. */
+            adoptionReread: { tags: 'adoptionInFlight' },
+          },
         },
         /** The last observation is authoritative and current. */
         ready: { on: { REFRESH: 'loading' } },
@@ -163,16 +189,18 @@ export const sessionConfigurationMachine = setup({
       states: {
         idle: { on: { ADOPT: { target: 'submitting', actions: 'clearAdoptionFailure' } } },
         submitting: {
+          tags: 'adoptionInFlight',
           invoke: {
             src: 'adoptConfiguration',
             input: ({ context, event }) => ({ port: context.port, candidate: (event as Extract<SessionConfigurationEvent, { type: 'ADOPT' }>).candidate }),
-            // The authoritative reread after an adoption response is
-            // independent cleanup: it is raised here, and whether it succeeds
-            // or fails it can neither strand this region nor replay adoption.
-            onDone: { target: 'idle', actions: raise({ type: 'REFRESH' }) },
+            // The authoritative reread after an adoption response is owed by
+            // the adoption transaction but settles in the `observation` region:
+            // it is raised here, and whether it succeeds or fails it can
+            // neither strand this region nor replay adoption.
+            onDone: { target: 'idle', actions: raise({ type: 'ADOPTION.REREAD' }) },
             onError: [
-              { guard: 'adoptionUncertain', target: 'uncertain', actions: ['recordAdoptionFailure', raise({ type: 'REFRESH' })] },
-              { target: 'rejected', actions: ['recordAdoptionFailure', raise({ type: 'REFRESH' })] },
+              { guard: 'adoptionUncertain', target: 'uncertain', actions: ['recordAdoptionFailure', raise({ type: 'ADOPTION.REREAD' })] },
+              { target: 'rejected', actions: ['recordAdoptionFailure', raise({ type: 'ADOPTION.REREAD' })] },
             ],
           },
         },
@@ -188,3 +216,10 @@ export const sessionConfigurationMachine = setup({
     ],
   },
 });
+
+/** Whether one Session adoption transaction is still in flight: submitted and
+ * not yet answered natively, or answered and still awaiting the authoritative
+ * reread it owes. Its end is the adoption transaction's terminal point. */
+export function adoptionInFlight(snapshot: SnapshotFrom<typeof sessionConfigurationMachine>): boolean {
+  return snapshot.hasTag('adoptionInFlight');
+}

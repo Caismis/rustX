@@ -5,8 +5,9 @@ import { settingsTargetMachine } from '../src/app/settings/machines/settings-tar
 import { sessionConfigurationMachine, type SessionConfigurationPort } from '../src/app/settings/machines/session-configuration';
 import { settingsNavigationMachine, type OwnerResolution } from '../src/app/settings/machines/navigation';
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
+import { ConfigurationSystem } from '../src/app/settings/machines/system';
 import { revisionSelector, userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
-import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
+import { OutcomeUncertain, RpcFailure, type AppServerClient, type ClientView } from '../src/client/app-server';
 import { cfg3Source, cfg3SourceApplication } from './cfg3-data';
 
 /** Every ordering in this file is established by an explicit deferred promise
@@ -868,6 +869,116 @@ it('R24 a reservation superseded by a newer publication read is not resurrected 
   expect(scripted.writes).toHaveLength(1);
 });
 
+// ── 4f. Publication progress is independent of presentation observation ─────
+//
+// A Workspace reread reservation records the native publication watermark it
+// was established against. A publication newer than that watermark supersedes
+// the reservation whether or not a current presentation observation exists —
+// and every `ATTACH` deliberately demotes the observation. `DETACH` alone never
+// revokes the reservation; a newer read or a replaced generation always does.
+
+it.each([
+  ['after the reattach', 'observed'],
+  ['after the reattach', 'failed'],
+  ['while detached', 'observed'],
+  ['while detached', 'failed'],
+] as const)('R25 a same-generation publication newer than the reservation watermark supersedes the reserved Workspace reread across a reattach, when it arrives %s and the late reread %s', async (arrival, outcome) => {
+  const scripted = scriptedPort(true);
+  const settlement = settlementLog();
+  const actor = settingsActor(scripted.port, { 'source:user': userApplication('1') }, true, settlement.inspect);
+  await flush();
+  scripted.reads[0].resolve(projection('r1', userApplication('1')));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  // The Workspace write reserves the read order at publication 1.
+  expect(actor.getSnapshot().matches({ authority: { attached: 'awaitingWrite' } })).toBe(true);
+  expect(actor.getSnapshot().context.rereadReservation).toEqual({ token: 1, scope: 'source:user', publication: 1n });
+  actor.send({ type: 'DETACH' });
+  if (arrival === 'while detached') reconnect(actor, 1, { 'source:user': userApplication('2') });
+  else {
+    // A presentation bounce alone neither revokes the reservation nor lets the
+    // reattached presentation start a competing read: the publication the
+    // reservation was established against is exactly what its reread answers.
+    actor.send({ type: 'ATTACH' });
+    await flush();
+    const reattached = actor.getSnapshot();
+    expect(reattached.matches({ authority: { attached: 'awaitingWrite' } })).toBe(true);
+    expect(reattached.context.observation).toBeUndefined();
+    expect(reattached.context.rereadReservation).toEqual({ token: 1, scope: 'source:user', publication: 1n });
+    expect(scripted.reads).toHaveLength(1);
+    // With no current observation at all, publication 2 is still newer than
+    // the reservation's watermark.
+    reconnect(actor, 1, { 'source:user': userApplication('2') });
+  }
+  if (arrival === 'while detached') actor.send({ type: 'ATTACH' });
+  await flush();
+  // The publication supersedes the reservation for good and the authority
+  // region performs the publication-owned read.
+  const superseded = actor.getSnapshot();
+  expect(superseded.matches({ authority: { attached: 'reading' } })).toBe(true);
+  expect(superseded.context.rereadReservation).toBeUndefined();
+  expect(superseded.matches({ mutation: 'submitting' })).toBe(true);
+  expect(scripted.reads).toHaveLength(2);
+  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: obsoleteReread(outcome) });
+  await flush();
+  // The late reread publishes nothing in either outcome: no projection, no
+  // read failure, no block. The commit itself is recorded on its transaction.
+  const late = actor.getSnapshot();
+  expect(unitOf(actor).getSnapshot().context.submitted?.committed).toBe('r2');
+  expect(late.context.observation).toBeUndefined();
+  expect(late.context.readError).toBe('');
+  expect(late.matches({ authority: { attached: 'reading' } })).toBe(true);
+  // A second bounce cannot resurrect the revoked reservation either.
+  actor.send({ type: 'DETACH' });
+  actor.send({ type: 'ATTACH' });
+  await flush();
+  expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
+  expect(scripted.reads).toHaveLength(3);
+  // The publication-owned read becomes authoritative and settles the mutation.
+  scripted.reads[2].resolve(projection('r2', userApplication('2')));
+  await flush();
+  const snapshot = actor.getSnapshot();
+  expect(snapshot.context.observation?.user.revision).toBe('r2');
+  expect(snapshot.context.readError).toBe('');
+  expect(snapshot.matches({ authority: { attached: 'idle' } })).toBe(true);
+  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expect(snapshot.matches({ mutation: 'idle' })).toBe(true);
+  expect(snapshot.context.message).toContain('Source saved');
+  // Settled exactly once, never replayed, and nothing polls afterwards.
+  expect(settlement.log).toEqual({ commits: 1, mutation: ['idle', 'submitting', 'observing', 'idle'] });
+  expect(scripted.writes).toHaveLength(1);
+  expect(scripted.reads).toHaveLength(3);
+});
+
+it('R25 a publication no newer than the reservation watermark never supersedes the reserved reread', async () => {
+  const scripted = scriptedPort(true);
+  const actor = settingsActor(scripted.port, { 'source:user': userApplication('1') }, true);
+  await flush();
+  scripted.reads[0].resolve(projection('r1', userApplication('1')));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  actor.send({ type: 'DETACH' });
+  actor.send({ type: 'ATTACH' });
+  // The same publication delivered again is no publication progress.
+  reconnect(actor, 1, { 'source:user': userApplication('1') });
+  await flush();
+  expect(actor.getSnapshot().matches({ authority: { attached: 'awaitingWrite' } })).toBe(true);
+  expect(scripted.reads).toHaveLength(1);
+  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: { status: 'observed', projection: projection('r2', userApplication('1')) } });
+  await flush();
+  // The reserved reread is the reattached presentation's fresh observation.
+  const snapshot = actor.getSnapshot();
+  expect(snapshot.context.observation?.user.revision).toBe('r2');
+  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expect(snapshot.matches({ mutation: 'idle' })).toBe(true);
+  expect(scripted.reads).toHaveLength(1);
+  expect(scripted.writes).toHaveLength(1);
+});
+
 // ── 6./7./8. Per-unit CAS transactions ──────────────────────────────────────
 
 it('R06 a clean Remove that conflicts keeps its pinned CAS base across an editor remount', async () => {
@@ -1143,6 +1254,209 @@ it('R13c an obsolete result of the same connection generation still cannot regre
   expect(snapshot.context.application?.version).toBe('3');
   expect(snapshot.context.application?.candidate).toEqual(otherCandidate);
   expect(snapshot.matches({ observation: 'ready' })).toBe(true);
+});
+
+// ── 13c. The configuration system owns actor lifetime ───────────────────────
+//
+// An actor retained only for a transaction in flight is released exactly at
+// that transaction's terminal point, observed by the system — never by
+// polling, and never by waiting for some later, unrelated lifetime change.
+
+/** An App Server client whose every request is released explicitly by the
+ * test, and whose App Server authority the test replaces. */
+function scriptedClient() {
+  const view = {
+    endpoint: 'ws://native.invalid', authorityRevision: 1, connection: 'connected', generation: 1,
+    sessions: [], views: {}, uncertain: [], interactionOperations: {},
+  } satisfies ClientView;
+  const requests: { method: string; resolve: (value: unknown) => void; reject: (reason?: unknown) => void }[] = [];
+  const client = {
+    getSnapshot: () => view,
+    subscribe: () => () => {},
+    request: ({ method }: { method: string }) => { const gate = deferred<unknown>(); requests.push({ method, ...gate }); return gate.promise; },
+  } as unknown as AppServerClient;
+  return {
+    system: new ConfigurationSystem(client),
+    pending: (method: string) => requests.filter(request => request.method === method),
+    replaceAuthority: () => { view.authorityRevision += 1; },
+  };
+}
+
+const PROVIDER_SECRET = 'R26-PROVIDER-SECRET';
+const providerIdentity = JSON.stringify({ kind: 'config', mutation: { unit: 'provider', id: 'secret', authored: null } });
+const providerWrite = { base_url: 'https://native.invalid', credential: { kind: 'literal', value: PROVIDER_SECRET } } as const;
+const providerMutation: SourceMutation = { kind: 'config', mutation: { unit: 'provider', id: 'secret', authored: providerWrite } };
+const retainedBy = (system: ConfigurationSystem) => JSON.stringify(system.transactionOwners().map(owner => owner.retainedState()));
+
+/** One User Settings target of the current authority, attached and observed at
+ * r1, holding a dirty Provider literal credential draft. */
+async function observedTarget(native: ReturnType<typeof scriptedClient>) {
+  const actor = native.system.settingsTarget(userSettingsTarget, () => undefined);
+  actor.send({ type: 'ATTACH' });
+  await flush();
+  native.pending('configuration/sourcesRead').at(-1)!.resolve({ projection: projection('r1') });
+  await flush();
+  actor.send({ type: 'UNIT.EDIT', identity: providerIdentity, selector: revisionSelector(providerMutation), revision: 'r1', value: providerWrite });
+  return actor;
+}
+
+it('R26 an authority replacement stops and drops a target with no native mutation in flight, its dirty secret-bearing draft with it', async () => {
+  const native = scriptedClient();
+  const old = await observedTarget(native);
+  const oldUnit = old.getSnapshot().context.units[providerIdentity];
+  // The unsaved literal credential is the live editing draft of the old authority.
+  const [oldOwner] = native.system.transactionOwners();
+  expect(retainedBy(native.system)).toContain(PROVIDER_SECRET);
+  native.replaceAuthority();
+  const replacement = native.system.settingsTarget(userSettingsTarget, () => undefined);
+  expect(replacement).not.toBe(old);
+  // Nothing of the old authority crossed the native submission boundary, so
+  // nothing of it may outlive the replacement: it is stopped at the
+  // replacement itself, its transactions with it.
+  expect(old.getSnapshot().status).toBe('stopped');
+  expect(oldUnit.getSnapshot().status).toBe('stopped');
+  // The old transaction owner is unreachable, and the secret-bearing draft is
+  // neither retained nor migrated into the replacement.
+  const owners = native.system.transactionOwners();
+  expect(owners).toHaveLength(1);
+  expect(owners).not.toContain(oldOwner);
+  expect(retainedBy(native.system)).toBe('[[]]');
+  expect(replacement.getSnapshot().context.units).toEqual({});
+  expect(native.pending('configuration/sourceWrite')).toHaveLength(0);
+});
+
+it.each(['acknowledged', 'conflicted'] as const)('R26 an authority replacement retains a target with a native mutation in flight only until that mutation settles, when it is %s', async outcome => {
+  const native = scriptedClient();
+  const old = await observedTarget(native);
+  const commits = { count: 0 };
+  old.system.inspect(inspection => { if (inspection.type === '@xstate.event' && inspection.event.type === 'COMMITTED') commits.count += 1; });
+  old.send({ type: 'UNIT.SUBMIT', identity: providerIdentity, selector: revisionSelector(providerMutation), revision: 'r1', mutation: providerMutation });
+  await flush();
+  expect(native.pending('configuration/sourceWrite')).toHaveLength(1);
+  const oldUnit = old.getSnapshot().context.units[providerIdentity];
+  const [oldOwner] = native.system.transactionOwners();
+  native.replaceAuthority();
+  const replacement = native.system.settingsTarget(userSettingsTarget, () => undefined);
+  // The mutation already crossed the native submission boundary: the old
+  // lifetime is retained, detached, for exactly that settlement.
+  expect(old.getSnapshot().status).toBe('active');
+  expect(old.getSnapshot().matches({ authority: 'suspended' })).toBe(true);
+  expect(old.getSnapshot().matches({ mutation: 'submitting' })).toBe(true);
+  expect(native.system.transactionOwners()).toHaveLength(2);
+  expect(native.system.transactionOwners()[0]).toBe(oldOwner);
+  replacement.send({ type: 'ATTACH' });
+  await flush();
+  native.pending('configuration/sourcesRead')[1].resolve({ projection: projection('fresh') });
+  await flush();
+  const write = native.pending('configuration/sourceWrite')[0];
+  if (outcome === 'acknowledged') write.resolve({ projection: projection('r2') });
+  else write.reject(new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: 'r1', actual: 'r-external' } }));
+  await flush();
+  // The old outcome settles the exact transaction that submitted it…
+  if (outcome === 'acknowledged') {
+    expect(oldUnit.getSnapshot().matches({ mutation: 'acknowledged' })).toBe(true);
+    expect(oldUnit.getSnapshot().context.submitted?.committed).toBe('r2');
+    expect(commits.count).toBe(1);
+  } else {
+    expect(oldUnit.getSnapshot().matches({ mutation: 'conflicted' })).toBe(true);
+    expect(commits.count).toBe(0);
+  }
+  expect(old.getSnapshot().matches({ mutation: outcome === 'acknowledged' ? 'observing' : 'conflicted' })).toBe(true);
+  // …and that settlement is the retained lifetime's terminal point: the system
+  // stops and drops it at once, with no further authority replacement.
+  expect(old.getSnapshot().status).toBe('stopped');
+  expect(oldUnit.getSnapshot().status).toBe('stopped');
+  expect(native.system.transactionOwners()).toHaveLength(1);
+  expect(native.system.transactionOwners()).not.toContain(oldOwner);
+  expect(retainedBy(native.system)).not.toContain(PROVIDER_SECRET);
+  // The detached old lifetime issued no read of its own while settling, and
+  // the replacement stayed isolated from it throughout.
+  expect(native.pending('configuration/sourcesRead')).toHaveLength(2);
+  const isolated = replacement.getSnapshot();
+  expect(isolated.context.units).toEqual({});
+  expect(isolated.context.observation?.user.revision).toBe('fresh');
+  expect(isolated.context.message).toBe('');
+  expect(isolated.context.writeError).toBe('');
+  // The mutation left the browser exactly once.
+  expect(native.pending('configuration/sourceWrite')).toHaveLength(1);
+});
+
+/** A Session actor of the current authority, held by one presentation, observed
+ * with a candidate and with an adoption of it in flight. */
+async function adoptingSession(native: ReturnType<typeof scriptedClient>) {
+  const actor = native.system.sessionConfiguration('session-1');
+  native.system.retainSession(actor);
+  actor.send({ type: 'REFRESH' });
+  await flush();
+  native.pending('session/configuration')[0].resolve({ application: { ...cfg3SourceApplication(), candidate } });
+  await flush();
+  actor.send({ type: 'ADOPT', candidate });
+  await flush();
+  expect(native.pending('session/adoptConfiguration')).toHaveLength(1);
+  return actor;
+}
+
+it.each([
+  ['accepted', 'observed'],
+  ['accepted', 'failed'],
+  ['uncertain', 'observed'],
+  ['rejected', 'failed'],
+] as const)('R27 a Session actor no presentation holds is released exactly at its adoption transaction terminal point, when adoption is %s and its reread %s', async (adoption, reread) => {
+  const native = scriptedClient();
+  const actor = await adoptingSession(native);
+  // The last presentation leaves while the adoption is in flight.
+  native.system.releaseSession(actor);
+  expect(actor.getSnapshot().status).toBe('active');
+  expect(native.system.sessionConfiguration('session-1')).toBe(actor);
+  const response = native.pending('session/adoptConfiguration')[0];
+  if (adoption === 'accepted') response.resolve({});
+  else if (adoption === 'uncertain') response.reject(new OutcomeUncertain());
+  else response.reject(new Error('NotReady'));
+  await flush();
+  // The native response alone is not the terminal point: the authoritative
+  // reread it owes is part of the same adoption transaction and still settles
+  // under this Session lifetime.
+  const answered = actor.getSnapshot();
+  expect(answered.status).toBe('active');
+  expect(answered.matches({ adoption: adoption === 'accepted' ? 'idle' : adoption })).toBe(true);
+  expect(answered.matches({ observation: { loading: 'adoptionReread' } })).toBe(true);
+  expect(native.pending('session/configuration')).toHaveLength(2);
+  const rereadGate = native.pending('session/configuration')[1];
+  if (reread === 'observed') rereadGate.resolve({ application: cfg3SourceApplication() });
+  else rereadGate.reject(new Error('configuration read unavailable'));
+  await flush();
+  // The reread settled: that is the terminal point, and the system stops and
+  // removes the actor at once, with no second release.
+  const terminal = actor.getSnapshot();
+  expect(terminal.status).toBe('stopped');
+  expect(terminal.matches({ observation: reread === 'observed' ? 'ready' : 'unavailable' })).toBe(true);
+  expect(native.system.sessionConfiguration('session-1')).not.toBe(actor);
+  // Adoption was never replayed, whatever its outcome, and nothing reread twice.
+  expect(native.pending('session/adoptConfiguration')).toHaveLength(1);
+  expect(native.pending('session/configuration')).toHaveLength(2);
+});
+
+it.each(['stays attached', 'leaves again'] as const)('R27 a presentation that attaches before the adoption settles and %s governs release', async holder => {
+  const native = scriptedClient();
+  const actor = await adoptingSession(native);
+  native.system.releaseSession(actor);
+  // A new presentation holds the actor before the adoption settles.
+  native.system.retainSession(actor);
+  if (holder === 'leaves again') native.system.releaseSession(actor);
+  native.pending('session/adoptConfiguration')[0].resolve({});
+  await flush();
+  native.pending('session/configuration')[1].resolve({ application: cfg3SourceApplication() });
+  await flush();
+  if (holder === 'stays attached') {
+    // A held actor outlives the adoption's terminal point…
+    expect(actor.getSnapshot().status).toBe('active');
+    expect(native.system.sessionConfiguration('session-1')).toBe(actor);
+    // …and its last holder leaving with nothing in flight releases it at once.
+    native.system.releaseSession(actor);
+  }
+  expect(actor.getSnapshot().status).toBe('stopped');
+  expect(native.system.sessionConfiguration('session-1')).not.toBe(actor);
+  expect(native.pending('session/adoptConfiguration')).toHaveLength(1);
 });
 
 // ── 14./15. Settings navigation ─────────────────────────────────────────────

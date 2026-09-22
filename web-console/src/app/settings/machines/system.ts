@@ -1,10 +1,10 @@
-import { createActor, type Actor } from 'xstate';
+import { createActor, type Actor, type Subscription } from 'xstate';
 import type { AppServerClient } from '../../../client/app-server';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
 import { settingsTargetKey, type SettingsTarget } from '../projection';
 import { createConfigurationPort } from './port';
-import { createSessionConfigurationPort, sessionConfigurationMachine } from './session-configuration';
-import { settingsTargetMachine } from './settings-target';
+import { adoptionInFlight, createSessionConfigurationPort, sessionConfigurationMachine } from './session-configuration';
+import { mutationInFlight, settingsTargetMachine } from './settings-target';
 
 export type SettingsTargetActor = Actor<typeof settingsTargetMachine>;
 export type SessionConfigurationActor = Actor<typeof sessionConfigurationMachine>;
@@ -23,6 +23,15 @@ function transactionOwner(actor: SettingsTargetActor): TransactionOwner {
   };
 }
 
+interface SessionEntry {
+  readonly actor: SessionConfigurationActor;
+  holders: number;
+  /** Present exactly while no presentation holds the actor and an adoption
+   * transaction is still in flight: the subscription that releases the actor at
+   * that transaction's terminal point. */
+  settlement?: Subscription;
+}
+
 /** The configuration actor system of one App Server client.
  *
  * It exists because presentation lifetime, transaction lifetime and App Server
@@ -35,7 +44,11 @@ function transactionOwner(actor: SettingsTargetActor): TransactionOwner {
  *   that no old state can leak into the replacement.
  *
  * Ownership is therefore explicit and keyed, never ambient: every actor is
- * addressed by (endpoint, authority revision, subject). */
+ * addressed by (endpoint, authority revision, subject). The system owns every
+ * actor's lifetime, and releases an actor retained only for a transaction in
+ * flight by observing that transaction's terminal state — never by polling,
+ * and never by waiting for some later, unrelated lifetime change. The actors
+ * own their transaction state and know nothing of the system. */
 export class ConfigurationSystem {
   /** Keyed by `<endpoint>|<authority>|<target>`. Kept for the whole authority
    * lifetime, so drafts, pinned CAS bases and in-flight settlement survive the
@@ -43,13 +56,18 @@ export class ConfigurationSystem {
   private readonly targets = new Map<string, SettingsTargetActor>();
   /** Keyed by `<endpoint>|<authority>|<session>`, released when no presentation
    * holds them and no adoption is in flight. */
-  private readonly sessions = new Map<string, { actor: SessionConfigurationActor; holders: number }>();
-  /** Lifetimes a replaced authority left behind. A retired lifetime is inert:
-   * it is detached, so it reads nothing and converges nothing. It is kept — not
-   * stopped — precisely because a definitive acknowledgement already in flight
-   * must still settle the exact transaction that submitted it, under its own
-   * old authority and never under the replacement. */
-  private retired: SettingsTargetActor[] = [];
+  private readonly sessions = new Map<string, SessionEntry>();
+  /** Target actors a replaced authority left behind with a native mutation in
+   * flight, each with the subscription that releases it.
+   *
+   * A retired lifetime is inert: it is detached, so it reads nothing and
+   * converges nothing. It is kept — not stopped — only because a mutation that
+   * already crossed the native submission boundary must still settle the exact
+   * transaction that submitted it, under its own old authority and never under
+   * the replacement. The moment that mutation settles, the actor is stopped and
+   * dropped. Nothing else of a replaced authority survives it: an unsaved draft
+   * belongs to the authority it was authored against and is never migrated. */
+  private readonly retired = new Map<SettingsTargetActor, Subscription>();
   private readonly owners = new WeakMap<SettingsTargetActor, TransactionOwner>();
   private lifetime = '';
 
@@ -58,18 +76,35 @@ export class ConfigurationSystem {
   private reconcileLifetime(lifetime: string) {
     if (this.lifetime === lifetime) return;
     this.lifetime = lifetime;
-    // A retired lifetime that has no native mutation left in flight owns
-    // nothing at all, so it is dropped at the next authority change.
-    this.retired = this.retired.filter(actor => actor.getSnapshot().matches({ mutation: 'submitting' }));
-    for (const actor of this.targets.values()) {
-      actor.send({ type: 'DETACH' });
-      this.retired.push(actor);
-    }
+    for (const actor of this.targets.values()) this.retireTarget(actor);
     this.targets.clear();
     // A Session actor owns no durable browser intent, so a replaced authority
     // simply ends it.
-    for (const entry of this.sessions.values()) entry.actor.stop();
-    this.sessions.clear();
+    for (const [key, entry] of this.sessions) this.dropSession(key, entry);
+  }
+
+  /** Retire one target actor of a replaced authority.
+   *
+   * With no native mutation in flight it owns nothing that may outlive its
+   * authority, so it is stopped and dropped now, drafts included. With one in
+   * flight it is detached and retained until that mutation leaves flight — its
+   * settlement point, at which the transaction that submitted it has recorded
+   * the outcome — and is then stopped and dropped at once. */
+  private retireTarget(actor: SettingsTargetActor) {
+    if (!mutationInFlight(actor.getSnapshot())) {
+      actor.stop();
+      return;
+    }
+    actor.send({ type: 'DETACH' });
+    const release = () => {
+      this.retired.get(actor)?.unsubscribe();
+      this.retired.delete(actor);
+      actor.stop();
+    };
+    this.retired.set(actor, actor.subscribe({
+      next: snapshot => { if (!mutationInFlight(snapshot)) release(); },
+      error: release,
+    }));
   }
 
   private currentLifetime() {
@@ -121,24 +156,43 @@ export class ConfigurationSystem {
    * actors deliberately are not: their editing transactions are exactly the
    * thing that has to outlive every presentation. */
   retainSession(actor: SessionConfigurationActor) {
-    for (const entry of this.sessions.values()) if (entry.actor === actor) entry.holders += 1;
+    for (const entry of this.sessions.values()) {
+      if (entry.actor !== actor) continue;
+      entry.holders += 1;
+      // A holder owns the actor again; nothing waits on settlement to release it.
+      entry.settlement?.unsubscribe();
+      entry.settlement = undefined;
+    }
   }
+  /** The last holder leaving releases the actor — at once, or, when an adoption
+   * transaction is still in flight, exactly at that transaction's terminal
+   * point, so the adoption settles under its own Session lifetime. */
   releaseSession(actor: SessionConfigurationActor) {
     for (const [key, entry] of this.sessions) {
       if (entry.actor !== actor) continue;
       entry.holders -= 1;
       if (entry.holders > 0) continue;
-      // An adoption already in flight settles under its own Session lifetime.
-      if (entry.actor.getSnapshot().matches({ adoption: 'submitting' })) continue;
-      entry.actor.stop();
-      this.sessions.delete(key);
+      if (!adoptionInFlight(entry.actor.getSnapshot())) {
+        this.dropSession(key, entry);
+        continue;
+      }
+      entry.settlement = entry.actor.subscribe({
+        next: snapshot => { if (!adoptionInFlight(snapshot)) this.dropSession(key, entry); },
+        error: () => this.dropSession(key, entry),
+      });
     }
+  }
+  private dropSession(key: string, entry: SessionEntry) {
+    entry.settlement?.unsubscribe();
+    entry.settlement = undefined;
+    entry.actor.stop();
+    this.sessions.delete(key);
   }
 
   /** Test-only inspection of every live transaction owner, oldest lifetime
    * first. Production code never reads it. */
   transactionOwners(): readonly TransactionOwner[] {
-    return [...this.retired, ...this.targets.values()].map(actor => {
+    return [...this.retired.keys(), ...this.targets.values()].map(actor => {
       let owner = this.owners.get(actor);
       if (!owner) { owner = transactionOwner(actor); this.owners.set(actor, owner); }
       return owner;
