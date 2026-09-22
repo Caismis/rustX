@@ -54,8 +54,8 @@ it('C10 Workspace revocation disables mutation and preserves local draft', async
 });
 
 it.each(['target', 'connection'] as const)('C10 late response after %s replacement cannot overwrite new authority', async invalidation => {
- let release!: (result: import('../../protocol/app-server/v17').MethodResult) => void;
- const pending = new Promise<import('../../protocol/app-server/v17').MethodResult>(resolve => { release = resolve; });
+ let release!: (result: import('../../protocol/app-server/v18').MethodResult) => void;
+ const pending = new Promise<import('../../protocol/app-server/v18').MethodResult>(resolve => { release = resolve; });
  let reads = 0;
  const s = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++reads === 1) return pending; });
  const host = cfg3Host(s); const ui = render(<Settings client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
@@ -187,6 +187,10 @@ it('replaces against the newer revision only after an explicit review gesture', 
 
 it.each(['empty', 'omit'] as const)('preserves native %s Tool selection as a distinct semantic-unit operation', async mode => {
   const subject = cfg3Client(); await open(subject, 'Tools');
+  // An explicit empty selection and a removal are two different authored
+  // intents. The empty one has to be authored first: rendering an inherited
+  // unit never produces it.
+  if (mode === 'empty') fireEvent.click(screen.getByRole('button', { name: 'Override Native Tools' }));
   fireEvent.click(screen.getByRole('button', { name: `${mode === 'empty' ? 'Save' : 'Remove'} Native Tools` }));
   await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'native_tools', authored: mode === 'empty' ? [] : null } } } }));
 });
@@ -234,7 +238,7 @@ it('reconnect rereads native sources without replaying a dirty draft', async () 
 });
 
 it('an older authoritative read cannot replace a newer read', async () => {
-  let release: (value: import('../../protocol/app-server/v17').MethodResult) => void = () => {};
+  let release: (value: import('../../protocol/app-server/v18').MethodResult) => void = () => {};
   let count = 0;
   const subject = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++count === 2) return new Promise(resolve => { release = resolve; }); });
   render(<Settings client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={subject.host ??= cfg3Host(subject)} />); await screen.findByText(/Revision: workspace-1/);
@@ -292,7 +296,7 @@ it.each([
   ['effect', 'refresh'], ['refresh', 'refresh'], ['refresh', 'write'],
 ] as const)('fences an obsolete %s read rejection after a newer %s', async (readKind, successor) => {
   let rejectRead!: (error: Error) => void;
-  const pending = new Promise<import('../../protocol/app-server/v17').MethodResult>((_, reject) => { rejectRead = reject; });
+  const pending = new Promise<import('../../protocol/app-server/v18').MethodResult>((_, reject) => { rejectRead = reject; });
   let reads = 0;
   const subject = cfg3Client(async op => {
     if (op.method === 'configuration/sourcesRead' && ++reads === 2) return pending;
@@ -328,8 +332,8 @@ it.each(['before acknowledgement', 'after acknowledgement', 'after the next edit
   let acknowledge!: (revision: string) => void;
   const pending = new Promise<string>(resolve => { acknowledge = resolve; });
   const save = async () => pending;
-  const form = (initial: { command: string }, revision: string) => <UnitForm
-    title="MCP acknowledgement" initial={initial} revision={revision} save={save}
+  const form = (authored: { command: string }, revision: string) => <UnitForm<{ command: string }>
+    title="MCP acknowledgement" authored={authored} blank={{ command: '' }} revision={revision} save={save}
     mutation={value => ({ kind: 'mcp', id: 'fixture', authored: value ? { definition: { type: 'stdio', command: value.command } } : null })}>
     {(value, change) => <TextField label="Acknowledged command" value={value.command} change={command => change({ command })} />}
   </UnitForm>;

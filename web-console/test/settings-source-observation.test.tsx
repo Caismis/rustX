@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v17';
+import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v18';
 import { Settings } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
@@ -28,7 +28,7 @@ class Native {
     return source;
   }
   applied(version: string, status: 'preparing' | 'applied'): ConfigurationApplication {
-    return { scope: 'source:user', version, desired: { input_revision: 'input-1', attempt: '1' },
+    return { scope: 'source:user', sources: [{ kind: 'user' }], version, desired: { input_revision: 'input-1', attempt: '1' },
       units: { process_bindings: { status } }, candidate: null, eligibility: { status: 'unavailable' } };
   }
 }

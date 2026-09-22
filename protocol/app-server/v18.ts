@@ -7152,7 +7152,20 @@ export interface RuntimeClientSessionDeletePreview {
   owned_child_count: number;
 }
 export interface ConfigurationApplication {
+  /**
+   * The application-scope key. A Session application carries the Session
+   * identity here; a source application carries `SourceTarget::
+   * application_scope`. It is an application key, never a source owner.
+   */
   scope: string;
+  /**
+   * The authored source owners this application composes, lowest authority
+   * first. The User document always participates; a Workspace-rooted capture
+   * also names the exact canonical configuration directory it was taken
+   * from. This is the only fact that answers which authoring surface owns a
+   * configuration failure; it is never derived from `scope`.
+   */
+  sources: SourceTarget[];
   version: string;
   desired: ApplicationIdentity;
   units: {

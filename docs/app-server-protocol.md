@@ -1,19 +1,34 @@
-# App Server protocol v17
+# App Server protocol v18
 
-App Server v17 adds `session/summaryInvalidated`: the Session-scoped
+App Server v18 adds `ConfigurationApplication.sources`: the ordered authored
+source owners one configuration application composes (Issue #391). Its existing
+`scope` is an application-scope key — a Session identity for a Session
+application, `SourceTarget::application_scope` for a source application — and
+carries no source ownership at all. Before v18 a client reading
+`session/configuration` had no native fact naming which authored document owns a
+failed Session configuration, so owner-specific Settings navigation had to parse
+the scope string; that inference is wrong, because `configuration_application`
+resolves a Session application by Session identity. `sources` is the native fact
+instead: the User source always participates, and a Workspace-rooted capture also
+names the exact canonical configuration directory it was taken from. It is a
+required member of a type in a strict vocabulary, so v17 and every earlier
+version are rejected; there is no dual handling and no compatibility shim.
+Generated v17 artifacts are removed.
+
+App Server v17 added `session/summaryInvalidated`: the Session-scoped
 post-commit metadata invalidation that lets a live client reread authoritative
 Catalog metadata after an asynchronous display-projection publication
 (Issue #386). It is a new notification method in a strict vocabulary, so v16
 and every earlier version are rejected; there is no dual handling and no
 compatibility shim. Generated v16 artifacts are removed.
 
-App Server v17 also carries v16's producer identity on Trace context additions
+App Server v18 also carries v16's producer identity on Trace context additions
 and typed accepted contributions on request detail. These are historical
 RequestSnapshot facts, not live Todo/Goal authority. See
 [native contribution lifecycle](native-context-contributions.md)
 for atomic startup and same-step reuse. Generated v14 artifacts are removed.
 
-App Server v17 identifies one complete mandatory vocabulary, including exact
+App Server v18 identifies one complete mandatory vocabulary, including exact
 `session/summary`, bounded historical Trace detail, and read-only Subagent
 transcripts. v12 and all earlier initialization and WebSocket admission versions
 are rejected; there is no downgrade or compatibility path.
@@ -121,13 +136,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v17",
+  "rustx.app-server.v18",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v17` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v18` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -144,7 +159,7 @@ The [local Web launcher](../web-console/CONNECTION.md) implements delivery throu
 a separate browser launch-token exchange and a process-ephemeral browser proof in
 origin-scoped sessionStorage (not a Cookie). A dedicated header authenticates
 same-origin carrier APIs. Its bootstrap returns the exact native
-endpoint/token; the browser then connects directly using the v17 subprotocols above.
+endpoint/token; the browser then connects directly using the v18 subprotocols above.
 The browser launch credential is never a valid substitute for the native credential.
 Remote Web attachment is explicit Settings configuration. Neither browser login
 nor remote attachment grants Product Host Workspace filesystem authority.
@@ -241,7 +256,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v17; pipeline individual requests instead. This limitation is
+supported in v18; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -330,7 +345,7 @@ fenced. Attachment cleanup does not grant durable deletion authority.
 
 ## Attachment and observation lifetime
 
-Protocol v17 admits at most one writable external controller per resident
+Protocol v18 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -446,8 +461,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v17.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v17.ts`: TypeScript generated from that schema using pinned
+- `v18.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v18.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -712,7 +727,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v17; no compatibility path is provided.
+This remains mandatory protocol v18; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -742,7 +757,7 @@ The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 43 carries this vocabulary;
 version 38 clients are rejected by strict negotiation. This remains mandatory
-App Server protocol v17, with no compatibility field and no activation mode.
+App Server protocol v18, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
 `Paused` and `Blocked` offer Resume, and there is no separate Play/arm control
@@ -757,7 +772,7 @@ boundary.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v17 includes `inbound/edit { target, expected, text }` and
+Protocol v18 includes `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and controller attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -871,12 +886,53 @@ Workspace registration, rename and order remain Product Host metadata. They do
 not rewrite Session state. Switching Workspace does not unload or cancel a
 Session, and unregistering a Workspace is not Session deletion.
 
+## Configuration application ownership (Issue #391)
+
+`ConfigurationApplication` carries two distinct identities and they are never
+interchangeable:
+
+```text
+scope    the application-scope key this application is published and read under
+sources  the authored source owners this application composes, lowest first
+```
+
+`session/configuration`, `session/attach` and `configuration/changed` resolve a
+Session application through `configuration_application(&SessionId)`, which reads
+`applications.view(session_id)`. Its `scope` is therefore the **Session
+identity**, not `source:user` or `source:workspace:<directory>`. A source
+application published for `configuration/sourcesRead`/`sourceWrite` carries
+`SourceTarget::application_scope` instead. Neither form is a source owner, and a
+client must not parse either one to decide which authoring surface to open.
+
+`sources` answers that question directly. Native records the exact source target
+each application scope was captured from at capture time — `capture_source` for a
+source scope, `capture`/`register_session_scope` for a Session scope — and
+projects it as an ordered `SourceTarget[]`:
+
+```text
+source:user                    -> [ {kind:"user"} ]
+source:workspace:/w            -> [ {kind:"user"}, {kind:"workspace",directory:"/w"} ]
+<session id>                   -> [ {kind:"user"}, {kind:"workspace",directory:"<cwd>"} ]
+```
+
+The User document always participates because every capture overlays it; a
+Workspace-rooted capture also composes `<directory>/rustx.toml`. Each entry is
+exactly the `SourceTarget` a client passes back to `configuration/sourcesRead` or
+`configuration/sourceWrite`, so owner navigation needs no directory parsing, no
+Session `cwd` inspection and no client-side inheritance model. A Workspace owner
+that the Product Host does not register is an explicit client-side error, never a
+fallback to User authoring.
+
+Per-unit ownership is deliberately **not** projected. `UnitApplication::Failed`
+carries a diagnostic string, and native failure paths do not thread the owning
+document through it, so no truthful per-unit owner exists to publish.
+
 ## CFG3 configuration authoring and publication
 
 [Configuration](configuration.md) defines the native source model and
 [Web Settings](web-settings.md) documents its projection. User and Workspace
 read/write operations return exact revisions and redacted structured documents.
-Protocol v17 uses one `SourceTarget`: `{kind:"user"}` or
+Protocol v18 uses one `SourceTarget`: `{kind:"user"}` or
 `{kind:"workspace",directory:"/canonical/native/context"}`. Source read, write and
 reconcile have no Session parameter; mutations carry no second scope authority.
 Product Host translates an authorized registered Workspace ID into this native
@@ -991,9 +1047,9 @@ the authored unit in that scope. Clients never write whole config documents.
 
 ## Current Session lifecycle contract
 
-Initialization requires exactly v17 and WebSocket requires `rustx.app-server.v17`.
+Initialization requires exactly v18 and WebSocket requires `rustx.app-server.v18`.
 v13 and all earlier versions are rejected without fallback. Rust DTOs generate
-`v17.ts`, `v17.schema.json`, and the serialized fixtures; only the current version is kept.
+`v18.ts`, `v18.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -1022,7 +1078,7 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
-explicit recovery action. These recovery semantics remain in App Server v17;
+explicit recovery action. These recovery semantics remain in App Server v18;
 native Runtime Client is v44.
 
 ## Rich historical Trace inspection (#364)
@@ -1044,7 +1100,7 @@ request Context that exact request introduced, in frozen snapshot order).
 `TraceRecord` gains `originating_tool_call_id`, the exact outer `ToolCall` of a
 Background, Subagent or Workflow record. All three are resolved by native
 authority before they reach a client; no client infers them. `TraceLifecycle`
-is unchanged and never repeats them. This v17 vocabulary includes v12's
+is unchanged and never repeats them. This v18 vocabulary includes v12's
 read-only native `subagent/transcript` contract and these Trace DTO changes.
 Version 12 and earlier clients are rejected without a compatibility decoder or a
 dual Trace DTO path.
@@ -1064,7 +1120,7 @@ Unknown Session/capacity use their existing failures. No raw storage/provider
 error is projected. See [Session archive safety and errors](session-archive.md).
 
 
-## Read-only native Subagent conversations (v17)
+## Read-only native Subagent conversations (v18)
 
 `subagent/transcript { target, subagent_id, before, limit }` returns the existing
 `transcript { page }` result. `target` is the **parent** AttachmentTarget (Session,

@@ -21,18 +21,88 @@ Session, resident runtime, MCP connection or Python environment.
 ## Presentation projection
 
 `app/settings/projection.ts` is a pure adapter over the generated protocol. It
-projects the authoritative effective value, authored membership and explicit
-presence, native provenance/origin, native availability/diagnostics and per-unit
-application observations. It never recomputes inheritance (`workspace.foo ?? user.foo`)
-and never materializes a native default into an authored draft. Absent override,
-`false`, `[]`, `{}`, explicit values, invalid and unavailable are distinct states;
-unavailable is not empty, false or a client fallback. `UnitForm` renders the native
-effective value plus a provenance-appropriate inherited/default label for a
-Workspace with no override, and `Override`/`Use global default` create or remove the
-exact native semantic unit through CAS without copying the User value. Settings
-surface states (`connecting`/`loading`/`ready`/`stale`/`failed`) and change behavior
-(`Applies immediately`/`Requires App Server restart`) are likewise projected rather
-than inferred.
+never recomputes inheritance (`workspace.foo ?? user.foo`) and never materializes
+a native default into an authored draft.
+
+### Two orthogonal dimensions, never one state machine
+
+`unitFacts` reports **authored state** and **effective resolution state**
+separately, because they answer different questions:
+
+```text
+authored   present | absent | invalid | unavailable   does this exact scope author the unit
+effective  available | unset | invalid | unavailable  did native resolution produce a value
+```
+
+`authored` reads only `SourceSettings[scope]`. Native sets `authored` and
+`diagnostic` exclusively — a document that parses always yields an authored
+layer — so `invalid` means "this scope's document did not load", `absent` means
+"it loaded and omits this unit", and `unavailable` means the scope has no view at
+all. Absent is never `false`, `[]` or `{}`.
+
+`effective` reads `SourceSettings.resolved` and `prospective_diagnostic`. Native
+drops `resolved` exactly when a participating document fails to parse, and sets
+`prospective_diagnostic` when the merged documents parse but do not resolve. So a
+valid Workspace source that authors nothing still reports
+`authored=absent, effective=invalid` when the User document is malformed. That is
+never rendered as `Unset`, as an empty value or as a native default, and it never
+disables authoring of the valid scope: repair, inventory, diagnostics and exact
+CAS writes stay available. `unset` is the distinct fact that resolution succeeded
+and no source authors the unit, so the native default governs.
+
+### Exact provenance identity
+
+`unitProvenancePath` maps every semantic unit to the exact dotted key native
+records, derived from `RuntimeLayer::overlay`: `replace` records a whole-unit
+path, `named` records `<container>.<identity>`, and `replace_origin` drops that
+path's descendants. So `providers.a`, `models.a`, `agent.tools.sources.a`,
+`native_tools.read`, `mcp_tool_policies.a`, `environment.A` and `mcp_servers.a`
+each resolve independently; a sibling identity's name, length or insertion order
+cannot change the answer. `unitProvenance` then takes the exact key, else the
+nearest recorded ancestor (a member omitted from a replaced object belongs to
+that winning object), else the unit's own members — reporting `mixed` when they
+disagree rather than electing a longest key. `app_server` and named-Agent
+resources have no native origin at all and report `unavailable` instead of an
+invented claim.
+
+### Owner navigation
+
+`ConfigurationApplication.scope` is an application-scope key — the Session
+identity for a Session application — and is never a source owner.
+`applicationOwners` reads the native `sources` projection instead, so no code
+parses a scope string, guesses from a Session `cwd` or rebuilds source ownership.
+
+Settings surface states (`connecting`/`loading`/`ready`/`stale`/`failed`) and
+change behavior (`Applies immediately`/`Requires App Server restart`) are likewise
+projected rather than inferred.
+
+## Authoring intent
+
+`UnitForm` keeps five facts distinct and never collapses them into one form value:
+
+```text
+native effective value        projected from SourceSettings.resolved
+native authored value         this scope's own membership (`authored` prop)
+local override intent         exists only after Override or a real edit
+local dirty draft             the value carrying that intent
+CAS base revision             the exact revision the next write is fenced on
+```
+
+For a Workspace unit with no override the control **displays the native effective
+value** while authored intent stays absent and the form stays clean. Rendering,
+opening and navigating create nothing. `Save` is unavailable until a draft exists,
+so a no-op Save can never turn "no Workspace override" into an explicit `[]`,
+`{}`, `false`, the inherited value or any other client default. An override is
+created only by an explicit `Override <unit>` action or by an unambiguous edit
+transition, both of which start from what the control already displays.
+`blank` is only the editing seed for a unit this scope has yet to author; it is
+never presented as an effective value. `Remove <unit>` sends `authored: null` at
+the exact reviewed revision (at Workspace scope that is "use the global default")
+and never copies the User value, while an explicitly authored empty array, object
+or `false` stays that exact value. `Discard draft` returns to the inherited
+presentation rather than to a client-side empty default. A Provider editor
+declares itself non-inheritable, because a credential is never read back from a
+shadowed definition.
 
 ## Composition
 
@@ -163,6 +233,8 @@ obsolete `app/Conversation.tsx` remains deleted after Goal reconciliation. Remov
 the ordinary `Configuration owner` selector and its catalog-driven target switching;
 the target is now an explicit immutable Settings prop and drafts are keyed by it.
 `app/settings/drafts.tsx` keeps only draft/context state; authored membership and
-provenance projection moved to the pure `app/settings/projection.ts`. No
+provenance projection moved to the pure `app/settings/projection.ts`. `UnitForm`
+no longer takes an `initial` value seeded from `authored ?? <client default>`;
+call sites pass the exact native `authored` value plus a separate `blank` seed. No
 compatibility export, alternate Settings root, legacy mode or feature flag exists.
 Tests formerly addressing newline textareas now exercise structured identity rows.

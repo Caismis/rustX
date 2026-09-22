@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { SourceSettings, SourceMutation, SourceScope } from '../../../../protocol/app-server/v17';
+import type { SourceSettings, SourceMutation, SourceScope } from '../../../../protocol/app-server/v18';
 import { RpcFailure, isOutcomeUncertain, type AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { ResourceInventory } from './ResourceInventory';
@@ -266,7 +266,7 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
         {scope === 'workspace' && <p>Remove an override to reset to the global default. An explicit empty selection means none.</p>}
         <h3>{sections.find(([id]) => id === section)?.[1]}</h3>
         <SourceContext value={source}><DraftContext value={drafts}><div key={draftKey}>{editor}
-          {selected?.diagnostic && !selected.authored && <UnitForm title="Repair malformed source" initial="" revision={selected.revision} save={save} removable={false}
+          {selected?.diagnostic && !selected.authored && <UnitForm title="Repair malformed source" blank="" revision={selected.revision} save={save} removable={false}
             mutation={document => ({ kind: 'repair_config', document: document ?? '' })}>
             {(value, change) => <label>Replacement TOML<textarea value={value} onChange={event => change(event.target.value)} /></label>}
           </UnitForm>}

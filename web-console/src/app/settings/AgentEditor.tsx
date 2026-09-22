@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AgentProfileDocument, ModelLayer, SourceScope, SourceSettings, AgentStatusExtensionDocument } from '../../../../protocol/app-server/v17';
+import type { AgentProfileDocument, ModelLayer, SourceScope, SourceSettings, AgentStatusExtensionDocument } from '../../../../protocol/app-server/v18';
 import { Button } from '../../presentation/primitives/Button';
 import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';
 import css from '../../presentation/settings/SettingsContent.module.css';
@@ -40,7 +40,7 @@ export function AgentEditor({ source, scope, models, save }: { source: SourceSet
   return <section aria-label="Named Agents"><h3>Named Agents</h3><p>Each resource is an independent complete profile. Workspace shadows the whole same-name User resource, including invalid definitions. Root delegates only to its named-Agent allowlist.</p>
     <div className={css.rows}>{agents.map(agent => <SettingsCard key={agent.name} title={agent.name} meta={<Badge>{scope}</Badge>} actions={<Button onClick={() => select(agent.name)}>Edit Agent {agent.name}</Button>}><p className={css.hint}>{agent.source.path}</p>{agent.source.diagnostic && <p role="alert">{agent.source.diagnostic}</p>}</SettingsCard>)}</div>
     <TextField label="New Agent identity" value={name} change={setName} /><Button disabled={!name || agents.some(agent => agent.name === name)} onClick={() => { select(name); setName(''); }}>Add Agent</Button>
-    {selected && <UnitForm<AgentProfileDocument> key={selected} title={`Agent ${selected}`} initial={current?.source.authored ?? {}} revision={current?.source.revision ?? source.absent_resource_revision} mutation={authored => ({ kind: 'agent', name: selected, authored })} save={save}>{(value, change) => <>
+    {selected && <UnitForm<AgentProfileDocument> key={selected} title={`Agent ${selected}`} authored={current?.source.authored ?? undefined} blank={{}} revision={current?.source.revision ?? source.absent_resource_revision} mutation={authored => ({ kind: 'agent', name: selected, authored })} save={save}>{(value, change) => <>
       <TextField label="Description" value={value.description} change={description => change({ ...value, description })} />
       <label>Instructions<textarea value={value.instructions ?? ''} onChange={e => change({ ...value, instructions: e.target.value })} /></label>
       <label><input type="checkbox" checked={!!value.model} onChange={e => change({ ...value, model: e.target.checked ? {} : null })} />Explicit child model</label>

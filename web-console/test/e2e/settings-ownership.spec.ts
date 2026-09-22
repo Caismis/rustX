@@ -30,31 +30,47 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await closeSettings(page);
    await openWorkspaceSettings(page, a.displayName);
    await settings.getByRole('button', { name: 'Tools', exact: true }).click();
-   await settings.getByLabel('read', { exact: true }).check();
+   // The User source authors every Native Tool, so this Workspace displays the
+   // native effective value while authoring none of it.
+   await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
+   await expect(settings.getByText('Inherited — no Workspace override')).toBeVisible();
+   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
+   // An explicit edit against that displayed value is Workspace A's own draft.
+   await settings.getByLabel('read', { exact: true }).uncheck();
    await closeSettings(page);
    await openWorkspaceSettings(page, b.displayName);
    await settings.getByRole('button', { name: 'Tools', exact: true }).click();
-   await expect(settings.getByLabel('read', { exact: true })).not.toBeChecked();
-   await settings.getByLabel('write', { exact: true }).check();
+   // Workspace B is a different target: it still shows the inherited value and
+   // never receives Workspace A's draft.
+   await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
+   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
+   await settings.getByLabel('write', { exact: true }).uncheck();
    await closeSettings(page);
    await openWorkspaceSettings(page, a.displayName);
    await settings.getByRole('button', { name: 'Tools', exact: true }).click();
-   await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-   await expect(settings.getByLabel('write', { exact: true })).not.toBeChecked();
+   await expect(settings.getByLabel('read', { exact: true })).not.toBeChecked();
+   await expect(settings.getByLabel('write', { exact: true })).toBeChecked();
    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
    await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();
    const authored = await f.workspaceHost.host.configureWorkspace(a.id, f.endpoint, { kind: 'read' });
-   expect(authored.workspace?.authored?.agent?.tools?.builtin).toEqual(['read']);
+   expect(authored.workspace?.authored?.agent?.tools?.builtin).not.toContain('read');
+   expect(authored.workspace?.authored?.agent?.tools?.builtin).toContain('write');
    expect((await sessions()).sessions).toEqual([]);
    expect(wire.requests.some(row => ['session/create', 'session/attach', 'turn/start'].includes(row.method))).toBe(false);
    await expect(f.workspaceHost.host.configureWorkspace('unregistered', f.endpoint, { kind: 'read' })).rejects.toThrow('Unknown');
    await f.workspaceHost.host.removeWorkspace(a.id);
+   // A revoked target fences the next authored change and retains the draft.
+   await settings.getByLabel('read', { exact: true }).check();
    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
    await expect(settings.getByRole('alert').filter({ hasText: /^WorkspaceHostError: Workspace Host: Error: Unknown/ })).toBeVisible();
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
    await closeSettings(page);
    await page.getByRole('button', { name: 'Settings', exact: true }).click();
    await settings.getByRole('button', { name: 'Tools', exact: true }).click();
+   // A fresh User lifetime carries no draft, so there is nothing to save until
+   // an explicit edit changes the authored value.
+   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
+   await settings.getByLabel('read', { exact: true }).uncheck();
    await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeEnabled();
    const before = wire.requests.filter(row => row.method === 'configuration/sourceWrite').length;
    wire.loseNext('configuration/sourceWrite');

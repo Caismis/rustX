@@ -1149,7 +1149,7 @@ impl SessionRuntimeManager {
             .map(|document| document.app_server.clone().unwrap_or_default())
             .ok_or_else(|| "User process policy source is invalid or unreadable".into())
             .and_then(|policy| policy.validate().map(|()| policy));
-        application.capture_source(target.application_scope(), revision, process);
+        application.capture_source(target, revision, process);
         if let SourceTarget::Workspace { directory } = target {
             let input = super::configuration::SessionConfigInput::new(directory.clone());
             application.record_source(directory, &self.configuration.capture_application(&input));

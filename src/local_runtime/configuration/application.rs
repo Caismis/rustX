@@ -90,7 +90,16 @@ pub struct ApplicationIdentity {
     Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 pub struct ConfigurationApplication {
+    /// The application-scope key. A Session application carries the Session
+    /// identity here; a source application carries `SourceTarget::
+    /// application_scope`. It is an application key, never a source owner.
     pub scope: String,
+    /// The authored source owners this application composes, lowest authority
+    /// first. The User document always participates; a Workspace-rooted capture
+    /// also names the exact canonical configuration directory it was taken
+    /// from. This is the only fact that answers which authoring surface owns a
+    /// configuration failure; it is never derived from `scope`.
+    pub sources: Vec<super::settings::SourceTarget>,
     pub version: u64,
     pub desired: ApplicationIdentity,
     pub units: BTreeMap<ApplyUnit, UnitApplication>,
@@ -130,6 +139,11 @@ pub(crate) struct ApplicationState {
     available: BTreeMap<std::path::PathBuf, super::ProspectiveSessionConfig>,
     desired_sources: BTreeMap<std::path::PathBuf, Result<CapturedApplication, String>>,
     scope_sources: BTreeMap<String, std::path::PathBuf>,
+    // The exact authored source target each application scope was captured
+    // from. A Session scope is keyed by its Session identity but owned by the
+    // Workspace source at its configuration directory; an application scope key
+    // is never itself a source owner.
+    scope_targets: BTreeMap<String, super::settings::SourceTarget>,
     deferred: BTreeSet<String>,
     desired_process: Option<super::super::app_server_policy::AppServerPolicy>,
     process: Option<(
@@ -216,6 +230,7 @@ impl ConfigurationApplications {
         let mut state = self.lock();
         state.scopes.remove(scope);
         state.scope_sources.remove(scope);
+        state.scope_targets.remove(scope);
         state.pending.remove(scope);
         state.inputs.remove(scope);
         state.ready.remove(scope);
@@ -276,6 +291,7 @@ impl ApplicationState {
     ) {
         let source = adopted.input.cwd.clone();
         self.scope_sources.insert(scope.clone(), source.clone());
+        self.own_scope(&scope, &source);
         if let Some(mut input) = self.desired_sources.get(&source).cloned() {
             if let Ok(captured) = &mut input
                 && let Ok(context) = &mut captured.context
@@ -398,10 +414,12 @@ impl ApplicationState {
             input_revision,
             attempt: self.next_attempt,
         };
+        let sources = self.source_owners(&scope);
         self.scopes.insert(
             scope.clone(),
             ConfigurationApplication {
                 scope: scope.clone(),
+                sources,
                 version: self.version,
                 desired: identity.clone(),
                 candidate: None,
@@ -432,6 +450,7 @@ impl ApplicationState {
         self.record_source(source, &input);
         self.scope_sources
             .insert(scope.clone(), source.to_path_buf());
+        self.own_scope(&scope, source);
         if let Ok(capture) = &input
             && let Some(current) = self.scopes.get(&scope)
             && current.desired.input_revision.as_ref() == Some(&capture.revision)
@@ -460,10 +479,21 @@ impl ApplicationState {
 
     pub(crate) fn capture_source(
         &mut self,
-        scope: String,
+        target: &super::settings::SourceTarget,
         revision: Option<String>,
         process: Result<super::super::app_server_policy::AppServerPolicy, String>,
     ) {
+        let scope = target.application_scope();
+        // A source application scope owns exactly the target it was captured
+        // for. The User source scope has no Workspace owner at all.
+        match target {
+            super::settings::SourceTarget::User => {
+                self.scope_targets.remove(&scope);
+            }
+            super::settings::SourceTarget::Workspace { directory } => {
+                self.own_scope(&scope, directory);
+            }
+        }
         if self
             .scopes
             .get(&scope)
@@ -559,12 +589,49 @@ impl ApplicationState {
             .is_some_and(|state| state.desired == *identity)
     }
 
+    /// Record which authored source target owns one application scope. Source
+    /// ownership is registered at capture, never inferred from the scope key.
+    fn own_scope(&mut self, scope: &str, directory: &std::path::Path) {
+        self.scope_targets.insert(
+            scope.to_owned(),
+            super::settings::SourceTarget::Workspace {
+                directory: directory.to_path_buf(),
+            },
+        );
+    }
+
+    /// The authored source owners of one application scope, lowest authority
+    /// first. Every capture composes the User document; a Workspace-rooted
+    /// capture also composes the Workspace document at its exact canonical
+    /// configuration directory. No ownership is parsed out of the scope key.
+    fn source_owners(&self, scope: &str) -> Vec<super::settings::SourceTarget> {
+        use super::settings::SourceTarget;
+        match self.scope_targets.get(scope) {
+            Some(SourceTarget::Workspace { directory }) => vec![
+                SourceTarget::User,
+                SourceTarget::Workspace {
+                    directory: directory.clone(),
+                },
+            ],
+            _ => vec![SourceTarget::User],
+        }
+    }
+
+    fn owned(&self, mut view: ConfigurationApplication) -> ConfigurationApplication {
+        view.sources = self.source_owners(&view.scope);
+        view
+    }
+
     pub(crate) fn views(&self) -> Vec<ConfigurationApplication> {
-        self.scopes.values().cloned().collect()
+        self.scopes
+            .values()
+            .cloned()
+            .map(|view| self.owned(view))
+            .collect()
     }
 
     pub(crate) fn view(&self, scope: &str) -> Option<ConfigurationApplication> {
-        self.scopes.get(scope).cloned()
+        self.scopes.get(scope).cloned().map(|view| self.owned(view))
     }
 
     /// The caller holds this same guard while swapping the complete runtime
@@ -594,6 +661,56 @@ impl ApplicationState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #391: an application scope key is not a source owner. A Session
+    /// application is keyed by its Session identity and must still name the
+    /// exact authored documents its capture composed.
+    #[test]
+    fn s1_application_scope_is_never_the_source_owner() {
+        use super::super::settings::SourceTarget;
+        let workspace = SourceTarget::Workspace {
+            directory: "/workspace/A".into(),
+        };
+        let mut state = ApplicationState::default();
+
+        // A Session scope: the key is the Session identity, the owners are the
+        // User document plus the Workspace document at its capture directory.
+        let session = "ses_00000000-0000-7000-8000-000000000001";
+        state.capture(
+            session.into(),
+            std::path::Path::new("/workspace/A"),
+            Err("capture failed".into()),
+        );
+        let view = state.view(session).unwrap();
+        assert_eq!(view.scope, session);
+        assert!(!view.scope.starts_with("source:"));
+        assert_eq!(view.sources, vec![SourceTarget::User, workspace.clone()]);
+
+        // A Workspace source scope owns the same two documents; the User source
+        // scope owns only the User document.
+        state.capture_source(&workspace, Some("w".into()), Err("policy".into()));
+        assert_eq!(
+            state.view(&workspace.application_scope()).unwrap().sources,
+            vec![SourceTarget::User, workspace.clone()]
+        );
+        state.capture_source(&SourceTarget::User, Some("u".into()), Err("policy".into()));
+        assert_eq!(
+            state
+                .view(&SourceTarget::User.application_scope())
+                .unwrap()
+                .sources,
+            vec![SourceTarget::User]
+        );
+
+        // Every projection carries the owners, and retiring a scope forgets them
+        // rather than leaving one Session's directory attached to another key.
+        assert!(state.views().iter().all(|view| !view.sources.is_empty()));
+        let owner = ConfigurationApplications::default();
+        *owner.lock() = state;
+        owner.forget(session);
+        assert!(owner.lock().view(session).is_none());
+        assert!(!owner.lock().scope_targets.contains_key(session));
+    }
 
     #[test]
     fn t08_failed_capture_has_no_manufactured_input_revision() {

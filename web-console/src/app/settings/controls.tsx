@@ -1,27 +1,62 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { SourceMutation } from '../../../../protocol/app-server/v17';
+import type { SourceMutation } from '../../../../protocol/app-server/v18';
 import { Switch } from '../../presentation/primitives/Switch';
 import { Button } from '../../presentation/primitives/Button';
 import { DraftContext, SourceContext } from './drafts';
-import { provenanceLabel, unitFacts } from './projection';
+import { authoredStateLabel, effectiveStateLabel, provenanceLabel, unitFacts } from './projection';
 import css from '../../presentation/settings/SettingsContent.module.css';
 
 export type SaveSource = (mutation: SourceMutation, revision: string) => Promise<string | undefined>;
-export function UnitForm<T>({ title, initial, revision, mutation, save, children, removable = true }: {
-  title: string; initial: T; revision: string; mutation: (value: T | null) => SourceMutation;
+
+/** One native semantic unit's editing surface.
+ *
+ * Five facts stay distinct and are never collapsed into one form value:
+ *
+ * - the native **effective** value, projected from `SourceSettings.resolved`;
+ * - this scope's native **authored** presence/value (`authored`);
+ * - this browser's **override intent**, which exists only after an explicit
+ *   Override action or an actual edit;
+ * - the **dirty draft** carrying that intent's value;
+ * - the exact **CAS base revision** the next write is fenced on.
+ *
+ * Rendering an inherited unit shows the native effective value while authoring
+ * nothing: no draft is created, Save stays unavailable, and a no-op Save can
+ * therefore never turn "no Workspace override" into an explicit empty one.
+ * `blank` is only an editing seed for a unit this scope has yet to author; it
+ * is never presented as an effective value and never written on its own. */
+export function UnitForm<T>({ title, authored, blank, revision, mutation, save, children, removable = true, inherited = value => value as T }: {
+  title: string;
+  /** The exact value this scope authors for this unit, or `undefined` when it
+   * authors none. Call sites pass the native projection without a fallback. */
+  authored?: T;
+  /** The neutral seed for authoring a unit this scope does not have yet. */
+  blank: T;
+  revision: string; mutation: (value: T | null) => SourceMutation;
   save: SaveSource; children: (value: T, change: (value: T) => void) => ReactNode; removable?: boolean;
+  /** Adapt one native effective value into this control's authored shape.
+   * Returning `undefined` declares the unit non-inheritable in the editor —
+   * a Provider credential is never read back from a shadowed definition. */
+  inherited?: (effective: unknown) => T | undefined;
 }) {
   const drafts = useContext(DraftContext);
   const source = useContext(SourceContext);
-  const scope = source?.target.kind;
+  const scope = source?.target.kind ?? 'user';
   const unitMutation = mutation(null);
-  const facts = unitFacts(source, scope ?? 'user', unitMutation);
+  const facts = unitFacts(source, scope, unitMutation);
   const workspace = scope === 'workspace';
   const inheritance = workspace && unitMutation.kind === 'config';
-  const identity = JSON.stringify(mutation(null));
+  const identity = JSON.stringify(unitMutation);
   const cached = drafts?.get(identity);
-  const [value, change] = useState<T>(() => cached ? cached.value as T : initial), [base, setBase] = useState(cached?.base ?? revision);
-  const [busy, setBusy] = useState(false), [saved, setSaved] = useState(false), [dirty, setDirty] = useState(cached?.dirty ?? false);
+  // Override intent and its dirty draft. `undefined` means this browser has
+  // authored nothing for this unit: rendering, opening and navigating never
+  // create it, and only an explicit Override or a real edit does.
+  const [draft, setDraft] = useState<{ value: T } | undefined>(cached ? { value: cached.value as T } : undefined);
+  const [base, setBase] = useState(cached?.base ?? revision);
+  // A submitted Save or Remove freezes the reviewed base revision even for an
+  // otherwise clean form. A rejected removal must never adopt the reread
+  // revision implicitly.
+  const [frozen, setFrozen] = useState(cached !== undefined);
+  const [busy, setBusy] = useState(false), [saved, setSaved] = useState(false);
   const committed = useRef<string | undefined>(cached?.committed);
   // The pre-save revision this form's last acknowledged save was based on. An
   // acknowledgement advances `base` before the authoritative projection catches
@@ -29,43 +64,52 @@ export function UnitForm<T>({ title, initial, revision, mutation, save, children
   // source is merely unobserved, not changed — no review prompt. Any other
   // revision means the source really moved and keeps the explicit review.
   const savedFrom = useRef<string | undefined>(undefined);
-  useEffect(() => { if (dirty) drafts?.set(identity, { value, base, dirty, committed: committed.current }); else drafts?.delete(identity); }, [drafts, identity, value, base, dirty]);
+  useEffect(() => { if (draft) drafts?.set(identity, { value: draft.value, base, dirty: true, committed: committed.current }); else drafts?.delete(identity); }, [drafts, identity, draft, base]);
   useEffect(() => {
-    if (committed.current === revision || !dirty) {
+    // Consume this form's own acknowledgement once the authoritative projection
+    // carries the committed revision; the redacted projection then owns the
+    // displayed value again, so no literal credential survives in a draft.
+    if (committed.current === revision) {
       committed.current = undefined; savedFrom.current = undefined;
-      // Reconstruct from the native redacted projection after acknowledgement.
-      // Literal credentials must not remain in a successful editor draft.
-      change(initial); setBase(revision); setDirty(false);
-      drafts?.delete(identity);
-    }
+      setDraft(undefined); setFrozen(false); setBase(revision); drafts?.delete(identity);
+    } else if (!draft && !frozen) setBase(revision);
     // Source publication may precede the save promise. Consume its
     // acknowledgement even when the projection dependencies already settled.
-  }, [initial, revision, dirty, saved, drafts, identity]);
+  }, [revision, draft, frozen, saved, drafts, identity]);
+  // The native effective value, adapted to this control's authored shape. It is
+  // displayed, never copied into authoring state.
+  const inheritedValue = inheritance && facts.effective.state === 'available' ? inherited(facts.effective.value) : undefined;
+  const overriding = draft !== undefined || authored !== undefined;
+  const displayed: T = draft ? draft.value : authored !== undefined ? authored : inheritedValue !== undefined ? inheritedValue : blank;
+  // An edit is an unambiguous override transition: it starts from whatever this
+  // control currently displays and becomes this browser's authored intent.
+  const edit = (next: T) => { committed.current = undefined; setDraft({ value: next }); setSaved(false); };
   const commit = async (remove = false) => {
-    // Save and Remove both freeze the revision, including an otherwise clean form.
-    // A rejected removal must never adopt the reread revision implicitly.
+    if (!remove && !draft) return;
     const from = base;
-    setDirty(true); setBusy(true); setSaved(false);
-    try { const next = await save(mutation(remove ? null : value), base); if (next) { drafts?.delete(identity); committed.current = next; savedFrom.current = from; setBase(next); setSaved(true); } }
+    setFrozen(true); setBusy(true); setSaved(false);
+    try { const next = await save(mutation(remove ? null : draft!.value), base); if (next) { drafts?.delete(identity); committed.current = next; savedFrom.current = from; setBase(next); setSaved(true); setDraft(undefined); } }
     finally { setBusy(false); }
   };
   const reviewNeeded = base !== revision && revision !== savedFrom.current;
   return <form aria-label={title} className={css.unit} onSubmit={e => { e.preventDefault(); void commit(); }}>
     <fieldset disabled={busy}><legend>{title}</legend>
-      {inheritance && <>
-        {facts.presence === 'invalid'
-          ? <p role="alert">Authored source is invalid. {facts.diagnostic}</p>
-          : facts.presence === 'unavailable'
-            ? <p className={css.hint}>This Workspace source is unavailable. The native effective value below is the last observation.</p>
-            : <p className={css.hint}>{facts.presence === 'authored' ? 'Workspace override — empty selections remain explicit' : 'Inherited — no Workspace override'} · {provenanceLabel(facts.origin)}</p>}
-        <details><summary>Native resolved value (not Session adoption)</summary><pre>{JSON.stringify(facts.effective, null, 2) ?? 'Unset'}</pre></details></>}
-      {source && scope === 'user' && unitMutation.kind === 'config' && <p className={css.hint}>{facts.presence === 'invalid' ? `Authored source is invalid. ${facts.diagnostic ?? ''}` : facts.presence === 'authored' ? 'User authored value' : `Native default — no authored value · ${provenanceLabel(facts.origin)}`}</p>}
-      {children(value, next => { committed.current = undefined; change(next); setDirty(true); setSaved(false); })}
+      {source && unitMutation.kind === 'config' && <>
+        <p className={css.hint} data-authored={facts.authored.state} data-effective={facts.effective.state}>
+          {authoredStateLabel(facts.authored, scope)} · {effectiveStateLabel(facts.effective)} · {provenanceLabel(facts.origin)}
+        </p>
+        {facts.authored.state === 'invalid' && <p role="alert">Authored source is invalid. {facts.authored.diagnostic}</p>}
+        {facts.effective.state === 'invalid' && <p role="alert">Native effective resolution failed. {facts.effective.diagnostic}</p>}
+        {inheritance && <details><summary>Native resolved value (not Session adoption)</summary>
+          <pre>{facts.effective.state === 'available' ? JSON.stringify(facts.effective.value, null, 2) : effectiveStateLabel(facts.effective)}</pre></details>}
+      </>}
+      {children(displayed, edit)}
       <details><summary>Source revision & replacement</summary><p className={css.hint}>Draft base revision: {base}<br />Current revision: {revision}</p><p>Save replaces this native semantic unit. Remove omits it from this scope. Empty selections remain explicit.</p></details>
-      {reviewNeeded && <div className={css.review}><p role="status">Source revision changed. Your draft and original revision are preserved. Review the current source before replacing it.</p><details><summary>Review current authored unit (redacted)</summary><pre>{JSON.stringify(initial, null, 2)}</pre></details></div>}
-      <div className={css.actions}><Button variant="primary" type="submit">Save {title}</Button>
-        {removable && <Button type="button" title={workspace ? 'Reset to global default — remove this override' : 'Remove authored value'} onClick={() => void commit(true)}>Remove {title}</Button>}
-        <Button type="button" onClick={() => { change(initial); setBase(revision); setDirty(false); setSaved(false); }}>Discard draft</Button>
+      {reviewNeeded && <div className={css.review}><p role="status">Source revision changed. Your draft and original revision are preserved. Review the current source before replacing it.</p><details><summary>Review current authored unit (redacted)</summary><pre>{JSON.stringify(authored, null, 2)}</pre></details></div>}
+      <div className={css.actions}><Button variant="primary" type="submit" disabled={!draft}>Save {title}</Button>
+        {inheritance && !overriding && <Button type="button" title="Author this unit in this Workspace. Nothing is written until you save." onClick={() => edit(displayed)}>Override {title}</Button>}
+        {removable && <Button type="button" title={workspace ? 'Use global default — remove this Workspace override' : 'Remove authored value'} onClick={() => void commit(true)}>Remove {title}</Button>}
+        <Button type="button" onClick={() => { setDraft(undefined); setFrozen(false); setBase(revision); setSaved(false); drafts?.delete(identity); }}>Discard draft</Button>
         {reviewNeeded && <Button type="button" onClick={() => setBase(revision)}>Use reviewed revision</Button>}
       </div>{saved && <p role="status">Saved. Native application proceeds automatically.</p>}
     </fieldset>

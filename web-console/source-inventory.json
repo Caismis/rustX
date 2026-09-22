@@ -22,7 +22,7 @@
       "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. No local delivery preference, runtime or slot/store authority.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../client/app-server",
         "../../client/uploads",
         "../../presentation/agent/Composer.module.css",
@@ -42,7 +42,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "b8e96a01c556186f7ac6754f5ea32e8ff068b74bfbae88ff293b9a350f4606ec"
+      "local_sha256": "891689090c068daf575cd22088abf8f3fe823037124207b5c55e28b00e2771f2"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -53,7 +53,7 @@
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../bindings/questionnaire",
         "../../presentation/agent/Question.module.css",
         "../../presentation/primitives/Button",
@@ -67,7 +67,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "9d2dc22f8f6b3971ef0a30e4a41f636581a3916b46873a74cad466551aa93af2"
+      "local_sha256": "1daa99f08e6bafb98ac45a49d3e22a19850bc3582a7e153a7eb6f78e1320ee4e"
     },
     {
       "upstream": "packages/client/ui-input-trigger/src/client/MenuView.tsx",
@@ -95,7 +95,7 @@
       "treatment": "rewritten selectors with Harness Modal and typed rustX dispatch",
       "upstream_sha256": "c6a89ae2771f36ff6da26886fbc6719369f41f9eae004e52561644c788df153f",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../bindings/projection",
         "../../client/app-server",
         "../../presentation/primitives/Button",
@@ -113,7 +113,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "9d340d73ccc7836c2e5c60c4b41414519ca30f541d398e04ce886ed9a52df5e4"
+      "local_sha256": "00e3437d7b62f7d5917c6ccc83962489c1332405001f13d33f97fd5397c8ec73"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -215,7 +215,7 @@
       "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds the rustX durable GoalPhase as the sole lifecycle authority (one Pause-or-Resume control, no activation flag), adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs",
       "upstream_sha256": "fcd9ec77f6e40cf4220a883f276d59be5641768a606ff128a5aa209222a637fa",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -232,7 +232,7 @@
         "clear/tombstone control"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "b3966adc1f77923201c61236fcd23c0d474419eaa861f05c08ab9cb5fa913a8b"
+      "local_sha256": "446bc339edfdecdd6994146f902ea36bc631820fcf15f583a9b901587f2907e3"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
@@ -254,7 +254,7 @@
       "treatment": "adapted: collapsible queue, inline text editing, remove, busy controls and preserved drafts; native exact pending CAS and authoritative readback; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Use latest version conflict copy; exact expected revision remains native. Native authority unchanged.",
       "upstream_sha256": "682d5bb4aa11478acbac0f2e21ed1e129baddd18cbff732c64ae5bdb95fb738e",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -269,7 +269,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "bc905e55182e2bb05820e18713b51d469a1affd3baf94020d9dc673cd24c7eb1"
+      "local_sha256": "335a5e50ca9e5d9dddf971716b5250045f6301c9bab75f448dfbc8705d3bbda8"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -291,7 +291,7 @@
       "treatment": "adapted: Harness empty-renders-nothing, collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds blocked_by and active_form. Issue #377 removes the composed-empty strip so extension-absent and composed-empty share one visual result; Harness turn-scoped plan clearing is deliberately excluded.",
       "upstream_sha256": "1d1e9d87c12b505fc8bc2bdf9973fc349fb80b9385419e0247420ecdb1fc2f4a",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../bindings/composer-context",
         "../../presentation/primitives/icons",
         "./TodoDock.module.css",
@@ -305,7 +305,7 @@
         "Harness locale runtime"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "fdacb098343c47cba3993fa842943b46faf1d6c2bc00c0cc2e848f96e7772f0a"
+      "local_sha256": "09f9b952aa49f9efebb85508c1c6cd31f5dd97f3c0b56f31501b70b5c51a98c9"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
@@ -337,7 +337,7 @@
       "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery. Dedicated Provider/Model drill-down with explicit return to the native catalog; unsaved units retained by app draft owner.",
       "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../presentation/primitives/Button",
         "../../presentation/settings/SettingsContent",
         "../../presentation/settings/SettingsContent.module.css",
@@ -359,7 +359,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "a8c3c42e409678e5732f1afeb5e0faaa7285c549772a4b1e388f2b16ed243cc8"
+      "local_sha256": "5f104dcf341497e2f543ccb0127a71de6182922a4513f094079ca9d9d55a6cea"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -367,7 +367,7 @@
       "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS. infer native MCP transport for display without rewriting authored intent",
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../bindings/mcp",
         "../../presentation/primitives/Button",
         "../../presentation/settings/SettingsContent",
@@ -414,7 +414,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "29a8c52454e1bd6d7ea9c6f4b5c9ec1c9ec3293dde6b9246c30e3fac1c740a97"
+      "local_sha256": "9f3ee0b911d68db828cbe64b1ce58a551417014247fee45ca93aec4f1fc6c208"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -422,7 +422,7 @@
       "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation.",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../client/app-server",
         "../../connection/controller",
         "../../presentation/primitives/Button",
@@ -455,7 +455,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "7e8a794284e7b478080cf408bf7d7173c9908a6fb52d8fbae365e3d2dfafc52e"
+      "local_sha256": "05a69b5e4dad183df1c50fa2838129442a86a6853e37ce37a90910d8e7b607de"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -483,7 +483,7 @@
       "treatment": "adapted dense ledger, folding, loaded-window search, virtualization, prepend anchoring and tail-follow onto server-resolved native Trace records; the Harness toolbar is folded into this one view seat; preserve the virtualization enable boundary and bounded canonical message batches. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: one paging authority feeds the toolbar, the ledger history row and the overview marker; an explicit overview selection clears a search that would otherwise hide the selected record.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../client/trace",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Input",
@@ -525,7 +525,7 @@
           "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1"
         }
       ],
-      "local_sha256": "5d8cc7fba99faf57948955b87bc15dd1054134e2b997ec3c6f031533981e43a7"
+      "local_sha256": "e5d99185d9e5ff461cad93d3b69301c2670f2d5d14c91a35a483b71461f857f6"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -533,7 +533,7 @@
       "treatment": "adapted per-kind inspector sections onto native Trace detail; Markdown, JSON tree, code and artifact rendering use the existing audited rustX primitives; refetch detail after authoritative lifecycle repair; preserve the virtualization enable boundary and bounded canonical message batches; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; distinguish recorded empty text from unavailable authority; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: the request title reads as model plus native retry, and the native disclosure names retry_number as the retry / recovery ordinal it is.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../presentation/markdown/CodeBlock",
         "../../presentation/markdown/MarkdownText",
         "../../presentation/primitives/Button",
@@ -568,7 +568,7 @@
           "upstream_sha256": "a31b4253ba9c7c2490f942768d060c769ff1b5b4fb653ccf67ab54af1e1593b7"
         }
       ],
-      "local_sha256": "d2dfdb28f7fc78f02884511188ddbf656cec6a9e167605ce5d9a1c2175d01c0b"
+      "local_sha256": "b64e3b3bccc467e50e4eb22b9892d7a7fcc88dcdf35ec40b46168f523299e823"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -596,7 +596,7 @@
       "treatment": "adapted lane overview with drag-to-focus, wheel zoom, right-button clear/pan and the recorded TTFT/decode split; spans come only from two authoritative timestamps; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: adapted the upstream EarlierHistoryBoundary as a keyboard-reachable earlier-history marker gated, as upstream gates it, to the earliest edge of the projection; unlike upstream it holds no pending state of its own, because the rustX Trace cache already owns loading and the finite history limit. Request spans are named by model, native retry ordinal and exact request identity, never by a synthesized request number.",
       "upstream_sha256": "c062d06535a38498051346095bb713a292f45085e7de817a9400a92292c4eedc",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Tooltip",
         "./TrajectoryTimeline.module.css",
@@ -613,7 +613,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "f90af46798727b1dff0814577925a1094ef3d0db63c2534e6f861654bc45f119"
+      "local_sha256": "5eaee75831e638880075f642354dad5203eba24a81fcb3d30f7ca3fb38521174"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -621,7 +621,7 @@
       "treatment": "adapted section/group/fold projection; rustX reads the Attempt and Step the server resolved instead of deriving turn and step membership in the browser. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation.",
       "upstream_sha256": "9d198059498d082555cb5ea8d3d1a0bf4f991afc47bc55646028eada2fb981f1",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17"
+        "../../../../protocol/app-server/v18"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -633,7 +633,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "9333bb0c3768e6df023ace364a665782281d21d8d8c53d0d294ffdcd5e6a69b7"
+      "local_sha256": "5dd32468391ba1fa4b52b3731ce20bc2693dcf08b405dbcd337f81d4c3e9cdae"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
@@ -641,7 +641,7 @@
       "treatment": "adapted incremental loaded-window index over native Trace record fields",
       "upstream_sha256": "081fdf9092da9fe24e23b255262f3bd0f0e020aa9f377e318722f956b6cd371a",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "./layout"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -654,7 +654,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "a4ac80c159a398ad0d0e776005dd7544876b808d52731b2db585aed9412072c9"
+      "local_sha256": "57df13bb75e46b3a1d7907b867c6c488aa7799ef06e2f8934361b1a740881751"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
@@ -662,7 +662,7 @@
       "treatment": "adapted sequence/duration projections, focus interval and duration formatting over native Trace timing and settled generation evidence; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT WEB-15 review: request span labels carry model, native retry ordinal and exact request identity; retry_number is never presented as a request number.",
       "upstream_sha256": "ed2ebfd8b4233022115d9757d50d3af6cf399690ccc4fcf36f9f3edcf8e7b173",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17"
+        "../../../../protocol/app-server/v18"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -674,7 +674,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "19652a6c2bf6e6d2a8757f098073b1ab4f101637412894f7f08eef82ff7b328e"
+      "local_sha256": "7b8d69d725c772209a991e4730df9fb8ceedb0f8f617480592bf131d3204472d"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2345,7 +2345,7 @@
         }
       ],
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Modal",
         "../../presentation/primitives/Tooltip",
@@ -2362,7 +2362,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "02d93af69e5abf0fdfcb0302bdc7ea52b258801e73ad33d43868193258cd9a97"
+      "local_sha256": "ae61c2c964d4e84ce7d9da400f425095677e646344e086155a91dea2341dee66"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
@@ -2399,7 +2399,7 @@
         }
       ],
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../presentation/primitives/Tooltip",
         "./ResponseTail",
         "./ResponseTail.module.css"
@@ -2411,7 +2411,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "cee078fcdbd701c423260a9bc511773b39b260b0a490dc60b5abe91ccb95add8"
+      "local_sha256": "95e882ce46878d73090f356ca9e59fb89570e73b8fc3cbc71f94b4d1d1d53777"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -2419,7 +2419,7 @@
       "treatment": "Adapt semantic role glyphs, compact icon/tag cells, Tool name/argument/result separation and content previews. Uses existing MarkdownText; reads native TraceRecord only. No Harness event assembly, Tool-name dispatch or inferred membership. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: ordinary rows carry compact artifact identity (native name, image/file distinction, count for the rest) rendered summary-only, with no ArtifactResources read; rustX-specific domain kinds keep a persistent short label so they stay distinguishable without hover.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v17",
+        "../../../../protocol/app-server/v18",
         "../../presentation/markdown/MarkdownText",
         "../../presentation/primitives/icons",
         "./Trajectory.module.css"
@@ -2435,7 +2435,7 @@
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "additional_sources": [],
-      "local_sha256": "d117b2c924999fac00f126d20b2d0473e98270a8f813fa8a00205738290f46a2"
+      "local_sha256": "3b860c8f19dec13cdda01f026d212c2fe6ee208b60f27a4eb8a1f7401cadb459"
     }
   ],
   "inspected_only": [

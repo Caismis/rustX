@@ -1,7 +1,7 @@
 import type {
   ConfigurationApplication, Origin, ProcessPolicyImpact, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
-} from '../../../../protocol/app-server/v17';
+} from '../../../../protocol/app-server/v18';
 import type { ConnectionState } from '../../client/app-server';
 
 /** The single owner a Settings instance is bound to for its whole lifetime.
@@ -64,92 +64,170 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
   }
 }
 
-/** The native provenance prefixes one semantic unit owns. Native resolution and
- * the overlay remain the sole authority; this only names which authored unit a
- * computed origin belongs to. */
-export function unitProvenancePrefixes(mutation: SourceMutation): string[] {
-  if (mutation.kind === 'mcp') return ['mcp_servers'];
-  if (mutation.kind === 'agent') return ['agents'];
-  if (mutation.kind === 'repair_config') return [];
-  switch (mutation.mutation.unit) {
-    case 'provider': return ['providers'];
-    case 'model': return ['models'];
-    case 'root_model': return ['agent.model'];
-    case 'native_tools': return ['agent.tools.builtin'];
-    case 'source_tools': return ['agent.tools.sources'];
-    case 'skills': return ['agent.skills'];
-    case 'todo': return ['agent.plugins.todo'];
-    case 'goal': return ['agent.plugins.goal'];
-    case 'agent_status': return ['agent.plugins.agent_status'];
-    case 'agents': return ['agent.agents'];
-    case 'workflows': return ['agent.workflows'];
-    case 'agent_identity': return ['agent_id'];
-    case 'description': return ['agent.description'];
-    case 'instructions': return ['agent.instructions'];
-    case 'project_guidance': return ['agent.agents_md'];
-    case 'approval': return ['approval_mode'];
-    case 'context': return ['context'];
-    case 'model_timeout': return ['model_timeout_policy'];
-    case 'tool_deadline': return ['tool_deadline_policy'];
-    case 'capacity': return ['subagents'];
-    case 'native_policy': return ['native_tools'];
-    case 'mcp_policy': return ['mcp_tool_policies'];
-    case 'environment': return ['environment'];
-    case 'app_server': return ['app_server'];
+/** The exact native provenance key one semantic unit owns.
+ *
+ * Native `RuntimeLayer::overlay` records provenance by dotted field path:
+ * `replace` records the whole-unit path it moved, and `named` records
+ * `<container>.<identity>` for every identity it replaced. `replace_origin`
+ * then drops that path's descendants, so an identity-bearing unit is always
+ * addressed by its own exact key and never by its container. Sibling
+ * identities are independent facts; their names, lengths and insertion order
+ * are irrelevant to this lookup.
+ *
+ * `app_server` is deliberately absent: native composition assigns the User
+ * document's process policy directly and records no origin for it, so this
+ * projection reports no origin rather than inventing one. Named Agent and MCP
+ * resources are separate documents outside `RuntimeLayer`; only MCP server
+ * definitions carry a `mcp_servers.<id>` default origin. */
+export function unitProvenancePath(mutation: SourceMutation): string | undefined {
+  if (mutation.kind === 'mcp') return `mcp_servers.${mutation.id}`;
+  if (mutation.kind === 'agent' || mutation.kind === 'repair_config') return undefined;
+  const unit = mutation.mutation;
+  switch (unit.unit) {
+    case 'provider': return `providers.${unit.id}`;
+    case 'model': return `models.${unit.id}`;
+    case 'root_model': return 'agent.model';
+    case 'native_tools': return 'agent.tools.builtin';
+    case 'source_tools': return `agent.tools.sources.${unit.id}`;
+    case 'skills': return 'agent.skills';
+    case 'todo': return 'agent.plugins.todo';
+    case 'goal': return 'agent.plugins.goal';
+    case 'agent_status': return 'agent.plugins.agent_status';
+    case 'agents': return 'agent.agents';
+    case 'workflows': return 'agent.workflows';
+    case 'agent_identity': return 'agent_id';
+    case 'description': return 'agent.description';
+    case 'instructions': return 'agent.instructions';
+    case 'project_guidance': return 'agent.agents_md';
+    case 'approval': return 'approval_mode';
+    case 'context': return 'context';
+    case 'model_timeout': return 'model_timeout_policy';
+    case 'tool_deadline': return 'tool_deadline_policy';
+    case 'capacity': return 'subagents';
+    case 'native_policy': return `native_tools.${unit.id}`;
+    case 'mcp_policy': return `mcp_tool_policies.${unit.id}`;
+    case 'environment': return `environment.${unit.name}`;
+    case 'app_server': return undefined;
   }
 }
 
-/** Native provenance keyed by dotted field path. The longest matching prefix is
- * the unit's origin; an unknown unit reports no origin rather than inventing a
- * User/Workspace/builtin claim. */
-export function unitProvenance(source: SourceSettings | undefined, mutation: SourceMutation): Origin | undefined {
-  const provenance = source?.provenance;
-  if (!provenance) return undefined;
-  const prefixes = unitProvenancePrefixes(mutation);
-  let best: string | undefined;
-  for (const key of Object.keys(provenance)) {
-    if (!prefixes.some(prefix => key === prefix || key.startsWith(prefix + '.') || prefix.startsWith(key + '.'))) continue;
-    if (best === undefined || key.length > best.length) best = key;
-  }
-  return best === undefined ? undefined : provenance[best];
+/** One unit's native origin. A container whose identities were recorded by
+ * different layers has no single origin; that is reported as `mixed` rather
+ * than resolved by electing a sibling key. */
+export type UnitOrigin =
+  | { state: 'known'; origin: Origin }
+  | { state: 'mixed' }
+  | { state: 'unavailable' };
+function sameOrigin(left: Origin, right: Origin): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'builtin' || right.kind === 'builtin') return true;
+  const base = 'base' in left && 'base' in right && left.base === right.base;
+  const document = ('document' in left ? left.document : undefined) === ('document' in right ? right.document : undefined);
+  return base && document;
 }
-export type ProvenanceOrigin = Origin | undefined;
-export function provenanceLabel(origin: ProvenanceOrigin): string {
-  if (!origin) return 'Native-resolved value';
-  return origin.kind === 'builtin' ? 'Native default'
-    : origin.kind === 'user' ? 'Inherited from User'
-      : origin.kind === 'workspace' ? 'Workspace override'
+/** Native provenance keyed by exact dotted field path.
+ *
+ * 1. the unit's own key, when a layer replaced exactly this unit;
+ * 2. otherwise its nearest recorded ancestor, because a member omitted from a
+ *    replaced object belongs to that winning object (native resolves the same
+ *    container chain in `record_default_origins`);
+ * 3. otherwise the unit's recorded members, which have one origin only when
+ *    they agree. */
+export function unitProvenance(source: SourceSettings | undefined, mutation: SourceMutation): UnitOrigin {
+  const provenance = source?.provenance;
+  const path = unitProvenancePath(mutation);
+  if (!provenance || path === undefined) return { state: 'unavailable' };
+  const exact = provenance[path];
+  if (exact) return { state: 'known', origin: exact };
+  for (let parent = path; parent.includes('.');) {
+    parent = parent.slice(0, parent.lastIndexOf('.'));
+    const owner = provenance[parent];
+    if (owner) return { state: 'known', origin: owner };
+  }
+  const members = Object.entries(provenance).filter(([key]) => key.startsWith(path + '.')).map(([, origin]) => origin);
+  if (!members.length) return { state: 'unavailable' };
+  return members.every(origin => sameOrigin(origin, members[0])) ? { state: 'known', origin: members[0] } : { state: 'mixed' };
+}
+export function provenanceLabel(origin: UnitOrigin): string {
+  if (origin.state === 'unavailable') return 'Origin not reported';
+  if (origin.state === 'mixed') return 'Mixed origins';
+  return origin.origin.kind === 'builtin' ? 'Native default'
+    : origin.origin.kind === 'user' ? 'Inherited from User'
+      : origin.origin.kind === 'workspace' ? 'Workspace override'
         : 'Process default';
 }
 
-/** One semantic unit's distinct authored/effective/availability facts. These are
- * never collapsed: absent is not `false`, `[]` or `{}`; invalid and unavailable
- * are neither empty nor a client fallback. */
-export type UnitPresence = 'authored' | 'absent' | 'invalid' | 'unavailable';
-export interface UnitFacts {
-  presence: UnitPresence;
-  /** Native authored membership for this exact unit; `undefined` when omitted. */
-  authored: unknown;
-  /** Native effective/resolved value for this exact unit; never a client merge. */
-  effective: unknown;
-  /** Native provenance of the effective value, when the DTO carries one. */
-  origin: ProvenanceOrigin;
-  /** Native diagnostic when the owning source document is malformed. */
-  diagnostic?: string;
-}
+/** One semantic unit's authored and effective facts, kept orthogonal.
+ *
+ * Authored state answers "does this exact scope author this unit"; effective
+ * state answers "did native resolution produce a value for it". They are
+ * independent: a valid Workspace document that authors nothing still has an
+ * unavailable effective value when the User document does not parse. Absent is
+ * never `false`, `[]` or `{}`, and invalid/unavailable are never empty or a
+ * client fallback. */
+export type AuthoredState = 'present' | 'absent' | 'invalid' | 'unavailable';
+export type EffectiveState = 'available' | 'unset' | 'invalid' | 'unavailable';
+export interface AuthoredFacts { state: AuthoredState; value?: unknown; diagnostic?: string }
+export interface EffectiveFacts { state: EffectiveState; value?: unknown; diagnostic?: string }
+export interface UnitFacts { authored: AuthoredFacts; effective: EffectiveFacts; origin: UnitOrigin }
 export function sourceView(source: SourceSettings | undefined, scope: SourceScope): SourceView | undefined {
   if (!source) return undefined;
   return scope === 'user' ? source.user : source.workspace ?? undefined;
 }
-export function unitFacts(source: SourceSettings | undefined, scope: SourceScope, mutation: SourceMutation): UnitFacts {
+/** Native authored membership for exactly this scope. A parse failure means the
+ * document was not loaded, so membership is unknown, never absent. */
+export function authoredFacts(source: SourceSettings | undefined, scope: SourceScope, mutation: SourceMutation): AuthoredFacts {
   const view = sourceView(source, scope);
-  if (!source || !view) return { presence: 'unavailable', authored: undefined, effective: undefined, origin: undefined };
-  const effective = authoredUnit(source.resolved, mutation);
-  const authored = authoredUnit(view.authored, mutation);
-  const origin = unitProvenance(source, mutation);
-  if (view.diagnostic) return { presence: 'invalid', authored, effective, origin, diagnostic: view.diagnostic };
-  if (authored === undefined) return { presence: 'absent', authored: undefined, effective, origin };
-  return { presence: 'authored', authored, effective, origin };
+  if (!source || !view) return { state: 'unavailable' };
+  if (view.diagnostic) return { state: 'invalid', diagnostic: view.diagnostic };
+  if (!view.authored) return { state: 'unavailable' };
+  const value = authoredUnit(view.authored, mutation);
+  return value === undefined ? { state: 'absent' } : { state: 'present', value };
+}
+/** Native source resolution for this unit. `resolved` is absent exactly when a
+ * participating document failed to parse, and `prospective_diagnostic` reports
+ * a merged configuration that parsed but does not resolve. Neither is an empty
+ * value, an unset unit or a native default. */
+export function effectiveFacts(source: SourceSettings | undefined, mutation: SourceMutation): EffectiveFacts {
+  if (!source) return { state: 'unavailable' };
+  const diagnostic = source.prospective_diagnostic ?? undefined;
+  if (!source.resolved) return diagnostic ? { state: 'invalid', diagnostic } : { state: 'unavailable' };
+  if (diagnostic) return { state: 'invalid', diagnostic };
+  const value = authoredUnit(source.resolved, mutation);
+  return value === undefined ? { state: 'unset' } : { state: 'available', value };
+}
+export function unitFacts(source: SourceSettings | undefined, scope: SourceScope, mutation: SourceMutation): UnitFacts {
+  return { authored: authoredFacts(source, scope, mutation), effective: effectiveFacts(source, mutation), origin: unitProvenance(source, mutation) };
+}
+export function authoredStateLabel(authored: AuthoredFacts, scope: SourceScope): string {
+  const workspace = scope === 'workspace';
+  return authored.state === 'present' ? (workspace ? 'Workspace override — empty selections remain explicit' : 'User authored value')
+    : authored.state === 'absent' ? (workspace ? 'Inherited — no Workspace override' : 'No User authored value')
+      : authored.state === 'invalid' ? 'Authored source is invalid'
+        : 'Authored source unavailable';
+}
+export function effectiveStateLabel(effective: EffectiveFacts): string {
+  return effective.state === 'available' ? 'Native effective value available'
+    : effective.state === 'unset' ? 'No source authors this unit — native default applies'
+      : effective.state === 'invalid' ? 'Native effective value unavailable — resolution failed'
+        : 'Native effective value not observed';
+}
+
+/** Owner navigation from native facts only.
+ *
+ * `ConfigurationApplication.scope` is an application-scope key — a Session
+ * identity for a Session application — and is never a source owner. Native
+ * names the authored owners separately in `sources`, lowest authority first,
+ * so the browser never parses a scope string, guesses from a Session cwd or
+ * rebuilds source ownership of its own. */
+export function applicationOwners(application: ConfigurationApplication | null | undefined): readonly SourceTarget[] {
+  return application?.sources ?? [];
+}
+export function sourceTargetKey(target: SourceTarget): string {
+  return target.kind === 'user' ? 'user' : `workspace:${target.directory}`;
+}
+export function openOwnerLabel(target: SourceTarget): string {
+  return target.kind === 'user' ? 'Open User Settings' : `Open Workspace Settings — ${target.directory}`;
 }
 
 /** Per-unit native application/process observation. A unit is never inferred

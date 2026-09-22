@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v17';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v18';
 import { interactionKey, OutcomeUncertain } from '../src/client/app-server';
 import { conversation } from '../src/bindings/projection';
 import { capabilities, endpoint, interaction, Server, snapshot, TOKEN } from './fixture';
@@ -12,7 +12,7 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 17 } });
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 18 } });
     expect(JSON.stringify(s.client.log.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
@@ -352,7 +352,7 @@ it.each(['preview', 'blocked', 'stale', 'not_found'] as const)('recovery settles
 it('T12 native configuration notifications reject stale versions independently per Session', async () => {
   const s = server(); await s.attached('A', 'B');
   const desired = { input_revision: 'input', attempt: '9007199254740993' };
-  const application = { eligibility: { status: 'unavailable' as const }, scope: 'A', version: '9007199254740993', desired, units: { execution_policy: { status: 'applied' as const } }, candidate: null };
+  const application = { eligibility: { status: 'unavailable' as const }, scope: 'A', sources: [{ kind: 'user' as const }], version: '9007199254740993', desired, units: { execution_policy: { status: 'applied' as const } }, candidate: null };
   s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application } });
   s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: { ...application, version: '9007199254740992', units: { execution_policy: { status: 'preparing' } } } } });
   s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: { ...application, scope: 'B', version: '2' } } });

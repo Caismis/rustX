@@ -12990,7 +12990,15 @@
       "type": "object",
       "properties": {
         "scope": {
+          "description": "The application-scope key. A Session application carries the Session\nidentity here; a source application carries `SourceTarget::\napplication_scope`. It is an application key, never a source owner.",
           "type": "string"
+        },
+        "sources": {
+          "description": "The authored source owners this application composes, lowest authority\nfirst. The User document always participates; a Workspace-rooted capture\nalso names the exact canonical configuration directory it was taken\nfrom. This is the only fact that answers which authoring surface owns a\nconfiguration failure; it is never derived from `scope`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceTarget"
+          }
         },
         "version": {
           "type": "string",
@@ -13039,6 +13047,7 @@
       },
       "required": [
         "scope",
+        "sources",
         "version",
         "desired",
         "units",

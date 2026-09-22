@@ -40,13 +40,19 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();
     await settings.getByLabel('New Model identity').fill('independent');
     await settings.getByRole('button', { name: 'Add Model', exact: true }).click();
-    await expect(settings.getByLabel('Wire model identity')).toHaveValue('');
+    // The same-name User Model is the native effective definition for this
+    // identity, so the Workspace editor shows it while authoring nothing: there
+    // is no Workspace override yet and nothing to save until one is authored.
+    await expect(settings.getByLabel('Wire model identity')).toHaveValue('wire-a');
+    await expect(settings.getByRole('button', { name: 'Save Model independent', exact: true })).toBeDisabled();
     await settings.getByLabel('Wire model identity').fill('wire-workspace');
     await settings.getByLabel('Provider identity', { exact: true }).fill('acceptance');
     await settings.getByRole('button', { name: 'Save Model independent', exact: true }).click(); await saved();
     await settings.getByRole('button', { name: 'Back to catalog' }).click();
     await settings.getByLabel('New Provider identity').fill('acceptance');
     await settings.getByRole('button', { name: 'Add Provider', exact: true }).click();
+    // A Provider credential is never read back from a shadowed definition, so
+    // this editor inherits nothing even though a same-name User Provider exists.
     await expect(settings.getByLabel('Endpoint', { exact: true })).toHaveValue('');
     await expect(settings.getByLabel('Credential source')).not.toContainText('Retain');
     await settings.getByLabel('Endpoint', { exact: true }).fill('http://127.0.0.1:2/v1');
@@ -55,8 +61,11 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     await expect(settings.getByRole('button', { name: 'Adopt prepared context', exact: true })).toHaveCount(0);
     await settings.getByRole('button', { name: 'Tools', exact: true }).click();
-    await expect(settings.getByLabel('read', { exact: true })).not.toBeChecked();
-    await settings.getByLabel('read', { exact: true }).check();
+    // The User source authors every Native Tool; this Workspace inherits that
+    // effective value and authors nothing until an explicit edit.
+    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
+    await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
+    await settings.getByLabel('read', { exact: true }).uncheck();
     await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click(); await saved();
     // Source families share exact/all/none selection without activating definitions.
     for (const [family, id] of [['mcp', 'absent-mcp'], ['python', 'absent-python']]) {
@@ -84,6 +93,10 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await settings.screenshot({ path: test.info().outputPath('cfg3-native-plugins.png') });
     await settings.getByRole('button', { name: 'Agents & Workflows', exact: true }).click();
     await expect(settings.getByRole('group', { name: 'agents', exact: true }).getByRole('textbox')).toHaveCount(0);
+    // An explicitly empty Workspace allowlist is authored, not inferred: the
+    // unit must be overridden before an empty list becomes a written value.
+    await expect(settings.getByRole('button', { name: 'Save Agent allowlist', exact: true })).toBeDisabled();
+    await settings.getByRole('button', { name: 'Override Agent allowlist', exact: true }).click();
     await settings.getByRole('button', { name: 'Save Agent allowlist', exact: true }).click(); await saved();
     await expect(settings.getByRole('button', { name: 'Adopt prepared context', exact: true })).toHaveCount(0);
     await settings.getByRole('button', { name: 'Server & source diagnostics', exact: true }).click();

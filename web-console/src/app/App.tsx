@@ -8,7 +8,7 @@ import { createWorkspaceSession, WorkspaceSessionNavigation } from '../workspace
 import { Trajectory } from './trajectory/Trajectory';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
-import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../../protocol/app-server/v17';
+import type { RuntimeClientSessionDeletePreview, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v18';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { NavigationEpoch } from './commands/native';
 import { available, commands } from './commands/registry';
@@ -195,17 +195,19 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       finally { if (generation === client.getSnapshot().generation) setCreating(undefined); }
     });
   };
-  // Owner-specific Settings navigation from native Session facts. A User-scope
-  // failure opens User authoring; a Workspace-scope failure opens only the exact
-  // registered Workspace. An unresolvable Workspace is never rerouted to User.
-  const openOwningSettings = (scope: string) => {
-    if (scope === 'source:user') { setSettingsTarget(userSettingsTarget); setSettingsOpen('overview'); return; }
-    const directory = scope.startsWith('source:workspace:') ? scope.slice('source:workspace:'.length) : '';
-    if (!directory) return;
+  // Owner-specific Settings navigation from one native authored source owner.
+  // The owner arrives as a `SourceTarget` from `ConfigurationApplication.sources`;
+  // nothing here parses an application scope, a Session cwd or a display string.
+  // A Workspace owner opens only the exact Product-Host-registered Workspace
+  // whose canonical directory the native owner names; an unregistered or revoked
+  // one reports that explicitly and is never rerouted to User authoring, and no
+  // Workspace, Session or runtime is allocated to resolve it.
+  const openOwningSettings = (owner: SourceTarget) => {
+    if (owner.kind === 'user') { setSettingsTarget(userSettingsTarget); setSettingsOpen('overview'); return; }
     run(async () => {
       const catalog = await workspaceHost.listWorkspaces();
-      const row = catalog.workspaces.find(workspace => workspace.location === directory || workspace.displayPath === directory);
-      if (!row) { setError('The owning Workspace is not registered by this Product Host.'); return; }
+      const row = catalog.workspaces.find(workspace => workspace.displayPath === owner.directory);
+      if (!row) { setError(`The owning Workspace ${owner.directory} is not registered by this Product Host.`); return; }
       setSettingsTarget(workspaceSettingsTarget(row.id, row.displayName)); setSettingsOpen('overview');
     });
   };

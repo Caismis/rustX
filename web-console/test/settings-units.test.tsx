@@ -6,10 +6,21 @@ import { RootEditor } from '../src/app/settings/RootEditor';
 import { RuntimeEditor } from '../src/app/settings/RuntimeEditor';
 import { AgentEditor } from '../src/app/settings/AgentEditor';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer } from '../../protocol/app-server/v17';
+import type { ModelLayer, SourceSettings } from '../../protocol/app-server/v18';
+import type { ReactNode } from 'react';
+import { SourceContext } from '../src/app/settings/drafts';
 import type { SaveSource } from '../src/app/settings/controls';
 afterEach(cleanup);
 const save = () => vi.fn<SaveSource>().mockResolvedValue(undefined);
+/** An editor bound to a real Workspace source projection, so `UnitForm` sees the
+ * same authored/effective/provenance facts it sees inside Settings. */
+function workspaceSource(resolved: Record<string, unknown> = {}) {
+  const source = cfg3Source();
+  source.target = { kind: 'workspace', directory: '/workspace/A' };
+  source.resolved = resolved as never;
+  return source;
+}
+const inWorkspace = (source: SourceSettings, children: ReactNode) => <SourceContext value={source}>{children}</SourceContext>;
 it('preserves complete Model replacement, profile params and all compatibility fields', async () => {
   const model = { ...cfg3Effective().document.models!.main, request_params: { temperature: .3, nested: { budget: 32 } }, reasoning: { default_profile: 'deep', profiles: { deep: { enabled: true, request_params: { reasoning: { effort: 'high' } } } } }, compat: { chat_max_tokens_field: 'max_completion_tokens' as const, chat_stream_usage: 'supported' as const, chat_reasoning_replay: 'omit' as const, chat_tool_protocol: 'native' as const, responses_storage: 'stateless' as const } };
   const write = save(); render(<CatalogEditor document={{ models: { main: model } }} scope="workspace" revision="exact" save={write} />);
@@ -36,14 +47,21 @@ it.each(['all', 'none', 'exact'] as const)('writes exact native %s Skill selecti
   fireEvent.click(screen.getByRole('button', { name: 'Save Skill visibility' }));
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'skills', authored: mode === 'all' ? 'all' : mode === 'none' ? [] : ['review'] } }, 's1'));
 });
-it('writes Native and MCP invocation policies independently, including empty native defaults', async () => {
-  const write = save(); render(<RuntimeEditor policyOnly document={{}} scope="workspace" revision="p1" save={write} />);
+it('writes Native and MCP invocation policies independently, and an empty policy only when explicitly authored', async () => {
+  const write = save();
+  render(inWorkspace(workspaceSource(), <RuntimeEditor policyOnly document={{}} scope="workspace" revision="p1" save={write} />));
   const form = within(screen.getByRole('form', { name: 'bash policy' }));
   fireEvent.change(form.getByLabelText('execution'), { target: { value: 'model_selectable' } }); fireEvent.change(form.getByLabelText('concurrency'), { target: { value: 'parallel' } }); fireEvent.change(form.getByLabelText('approval'), { target: { value: 'always' } });
   fireEvent.click(form.getByRole('button', { name: 'Save bash policy' }));
   await waitFor(() => expect(write.mock.calls[0]).toEqual([{ kind: 'config', mutation: { unit: 'native_policy', id: 'bash', authored: { execution: 'model_selectable', concurrency: 'parallel', approval: 'always' } } }, 'p1']));
   fireEvent.change(screen.getByLabelText('MCP policy identity'), { target: { value: 'search' } }); fireEvent.click(screen.getByRole('button', { name: 'Edit MCP policy' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save MCP policy search' }));
+  const mcp = within(screen.getByRole('form', { name: 'MCP policy search' }));
+  // This Workspace authors no `search` policy; opening its editor authors none
+  // either, so there is nothing to save until the user says so.
+  expect((mcp.getByRole('button', { name: 'Save MCP policy search' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(mcp.getByRole('button', { name: 'Override MCP policy search' }));
+  fireEvent.click(mcp.getByRole('button', { name: 'Save MCP policy search' }));
+  // An explicitly authored empty policy object stays `{}` and is never null.
   await waitFor(() => expect(write.mock.calls[1][0]).toEqual({ kind: 'config', mutation: { unit: 'mcp_policy', id: 'search', authored: {} } }));
 });
 it('round-trips an independent Agent profile with delegation, guidance, model and worktree', async () => {
@@ -51,7 +69,13 @@ it('round-trips an independent Agent profile with delegation, guidance, model an
   const authored = { description: 'Review', instructions: 'Inspect', agents: ['helper'], workflows: ['audit'], model: { model: 'main', reasoning_profile: { mode: 'catalog_default' as const }, max_output_tokens: { mode: 'catalog_default' as const }, summary_model: { mode: 'session' as const }, request_params: { temperature: .5 } }, tools: { builtin: ['read'], sources: { 'python:analysis': 'all' as const, search: [] } }, skills: 'all' as const, agents_md: { inherit: false, files: ['REVIEW.md'] }, timeout_ms: '30000', worktree: { enabled: true, require_clean_parent: false }, plugins: { todo: { enabled: true }, goal: { enabled: false }, agent_status: { enabled: true, time: { enabled: false }, background: { enabled: true } } } };
   source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/workspace/.agents/agents/reviewer.toml', revision: 'agent-r1', authored } }];
   render(<AgentEditor source={source} scope="workspace" models={['main']} save={write} />);
-  fireEvent.click(screen.getByRole('button', { name: 'Edit Agent reviewer' })); fireEvent.click(screen.getByRole('button', { name: 'Save Agent reviewer' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Agent reviewer' }));
+  // Opening an authored profile authors nothing new, so a no-op Save is
+  // unavailable; an edit back to the same text still round-trips every field.
+  expect((screen.getByRole('button', { name: 'Save Agent reviewer' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Review draft' } });
+  fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Review' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Agent reviewer' }));
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'agent', name: 'reviewer', authored }, 'agent-r1'));
 });
 it.each(['search', 'python:analysis'])('keeps all, none and exact Tool selection distinct for %s', async id => {

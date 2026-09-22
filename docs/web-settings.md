@@ -49,8 +49,14 @@ the draft. Settings renders simultaneous applied, preparing, failed/retry,
 process-restart state. The single **Adopt configuration** control lives below the
 focused Session title, outside Settings. It sends the inspected candidate and
 expected Session binding; native eligibility is advisory and the native admission
-gate revalidates both. Failed preparation offers owner-specific Settings
-navigation from the native source scope. Busy never cancels work or schedules
+gate revalidates both. Failed preparation offers one owner-specific Settings
+action per authored owner named by native `ConfigurationApplication.sources`.
+That application's `scope` is the Session identity, never a source owner, so the
+browser parses no scope string, infers nothing from the Session `cwd` and routes
+nothing to a default owner. A Workspace owner the Product Host does not register
+reports an explicit error and never falls back to User authoring; opening an
+owning editor allocates no Workspace, Session or runtime, and a later Session
+focus change never retargets it. Busy never cancels work or schedules
 automatic adoption. Diagnostics offers native rescan. Uncertain writes/adoption
 are repaired by rereading authority, never replayed. Reconnect rereads native
 state.
@@ -76,11 +82,34 @@ These captures come from the real App Server/provider-emulator acceptance suite:
 [Settings architecture](../web-console/SETTINGS-ARCHITECTURE.md) describes the one
 Harness shell, grouped sections, Provider/Model drill-down, structured exact-identity
 rows, native resource cards and target-scoped unsaved drafts. A pure presentation
-projection (`app/settings/projection.ts`) maps native facts — authoritative effective
-value, authored membership and explicit presence, native provenance/availability,
-and per-unit application observations — into display state without becoming
-authority: it never recomputes inheritance and never materializes a native default
-into a draft. General uses native source units; process settings are User-only and
+projection (`app/settings/projection.ts`) maps native facts into display state
+without becoming authority: it never recomputes inheritance and never materializes
+a native default into a draft.
+
+Authored source state and effective resolution state are two independent
+dimensions, not one state machine. "This Workspace authors no override" and "the
+effective value is unset" are different claims: when a lower document does not
+parse, native drops `resolved` and reports `prospective_diagnostic`, so the unit
+is `authored=absent, effective=unavailable` and its effective value is shown as
+unavailable rather than as `Unset`, an empty value or a native default. The valid
+scope stays inspectable, repairable and authorable through exact CAS throughout.
+
+An inherited Workspace unit displays the native effective value while authoring
+nothing. Opening it creates no draft, and Save stays unavailable until an
+explicit **Override** action or a real edit creates an override, so a no-op Save
+can never convert "no Workspace override" into an explicit empty one. **Remove**
+(use the global default) sends `authored: null` at the exact reviewed revision and
+never copies the User value; an explicitly authored `[]`, `{}` or `false` remains
+that exact value. **Discard draft** returns to the inherited presentation.
+
+Provenance is looked up by the exact native key a semantic unit owns
+(`providers.<id>`, `models.<id>`, `agent.tools.sources.<id>`,
+`native_tools.<id>`, `mcp_tool_policies.<id>`, `environment.<name>`,
+`mcp_servers.<id>`, and whole-unit paths such as `agent.model`,
+`agent.tools.builtin` or `context`). Sibling identities are independent: one
+Provider resolving to User never depends on another Provider's name or length. A
+container whose members genuinely disagree reports mixed origins instead of
+electing one. General uses native source units; process settings are User-only and
 consume native hot/restart classification. Theme is an intentionally browser-local
 preference. Resource discovery never implies Root selection or native preparation.
 
