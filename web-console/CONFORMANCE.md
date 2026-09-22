@@ -166,7 +166,11 @@ Agent references; the real-server suite runs the same production entry path.
 
 Visual authority remains the digest-pinned Playwright 1.63.0 container. Use
 `pnpm --dir web-console test:e2e:update` only for reviewed baseline changes, then
-`pnpm --dir web-console test:e2e` with zero pixel tolerance. `CONTAINER_ENGINE=podman`
+`pnpm --dir web-console test:e2e` with zero pixel tolerance. Two references bound
+documented host rasterizer variance with `maxDiffPixels: 20` —
+`settings-plugins-light.png` (sidebar glyphs) and `settings-agent-narrow-dark.png`
+(the Settings panel's rounded corners composited over the blurred mask) — while
+every other reference stays at zero tolerance. `CONTAINER_ENGINE=podman`
 is the supported local engine selection when Docker is absent. Current composer
 references cover idle empty/draft, running Stop/Queue, attachments and the context
 stack in both themes at 1440px and 390px. Shell/Settings baselines also include the
