@@ -5,6 +5,7 @@ import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent
 import css from '../../presentation/settings/SettingsContent.module.css';
 import { RequestPolicy } from './RequestPolicy';
 import { CheckboxList, Toggle, OptionalBoolean, Names, nativeTools, Selection, TextField, UnitForm, type SaveSource } from './controls';
+import { inheritedResources } from './projection';
 
 function ModelRequestFields<T extends Pick<ModelLayer, 'reasoning_profile' | 'max_output_tokens' | 'request_params'>>({ value, change, prefix = '' }: { value: T; change: (next: T) => void; prefix?: string }) {
   return <><label>{prefix}Reasoning profile<select value={value.reasoning_profile?.mode ?? ''} onChange={e => change({ ...value, reasoning_profile: e.target.value === 'profile' ? { mode: 'profile', name: '' } : e.target.value === 'catalog_default' ? { mode: 'catalog_default' } : null })}><option value="">Domain default</option><option value="catalog_default">Catalog default</option><option value="profile">Named profile</option></select></label>
@@ -36,10 +37,16 @@ export function StatusPluginFields({ value, change }: { value: AgentStatusExtens
 export function AgentEditor({ source, scope, models, save }: { source: SourceSettings; scope: SourceScope; models: string[]; save: SaveSource }) {
   const [selected, select] = useState(''), [name, setName] = useState('');
   const agents = source.agents.filter(agent => agent.scope === scope);
+  // A named Agent profile is one whole resource document. The native resource
+  // inventory names the winning scope of every identity, so an identity this
+  // Workspace inherits is discoverable without the browser merging two
+  // documents or deciding ownership of its own.
+  const inherited = inheritedResources(source, scope, 'agent', agents.map(agent => agent.name));
   const current = agents.find(agent => agent.name === selected);
   return <section aria-label="Named Agents"><h3>Named Agents</h3><p>Each resource is an independent complete profile. Workspace shadows the whole same-name User resource, including invalid definitions. Root delegates only to its named-Agent allowlist.</p>
-    <div className={css.rows}>{agents.map(agent => <SettingsCard key={agent.name} title={agent.name} meta={<Badge>{scope}</Badge>} actions={<Button onClick={() => select(agent.name)}>Edit Agent {agent.name}</Button>}><p className={css.hint}>{agent.source.path}</p>{agent.source.diagnostic && <p role="alert">{agent.source.diagnostic}</p>}</SettingsCard>)}</div>
-    <TextField label="New Agent identity" value={name} change={setName} /><Button disabled={!name || agents.some(agent => agent.name === name)} onClick={() => { select(name); setName(''); }}>Add Agent</Button>
+    <div className={css.rows}>{agents.map(agent => <SettingsCard key={agent.name} title={agent.name} meta={<Badge>{scope}</Badge>} actions={<Button onClick={() => select(agent.name)}>Edit Agent {agent.name}</Button>}><p className={css.hint}>{agent.source.path}</p>{agent.source.diagnostic && <p role="alert">{agent.source.diagnostic}</p>}</SettingsCard>)}
+      {inherited.map(entry => <SettingsCard key={entry.name} title={entry.name} meta={<><Badge tone={entry.valid ? 'success' : 'error'}>{entry.valid ? 'Valid definition' : 'Invalid definition'}</Badge><Badge>Inherited from User</Badge></>} actions={<Button onClick={() => select(entry.name)}>Override Agent {entry.name}</Button>}><p className={css.hint}>{entry.path} · no override in this Workspace</p></SettingsCard>)}</div>
+    <TextField label="New Agent identity" value={name} change={setName} /><Button disabled={!name || agents.some(agent => agent.name === name) || inherited.some(entry => entry.name === name)} onClick={() => { select(name); setName(''); }}>Add Agent</Button>
     {selected && <UnitForm<AgentProfileDocument> key={selected} title={`Agent ${selected}`} authored={current?.source.authored ?? undefined} blank={{}} revision={current?.source.revision ?? source.absent_resource_revision} mutation={authored => ({ kind: 'agent', name: selected, authored })} save={save}>{(value, change) => <>
       <TextField label="Description" value={value.description} change={description => change({ ...value, description })} />
       <label>Instructions<textarea value={value.instructions ?? ''} onChange={e => change({ ...value, instructions: e.target.value })} /></label>

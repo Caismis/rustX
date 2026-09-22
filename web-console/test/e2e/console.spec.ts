@@ -56,7 +56,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     await expect(settings.getByRole('button', { name: /Adopt/ })).toHaveCount(0);
     await settings.getByRole('button', { name: 'Default model', exact: true }).click();
-    await settings.getByRole('button', { name: 'Remove Root model', exact: true }).click();
+    await settings.getByRole('button', { name: 'Use global default Root model', exact: true }).click();
     await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 

@@ -2,10 +2,10 @@
 import { expect, it } from 'vitest';
 import type { Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v18';
 import {
-  applicationOwners, applicationScope, authoredUnit, changeBehavior, changeBehaviorLabel, effectiveStateLabel,
-  observedResult, observedResultLabel, openOwnerLabel, provenanceLabel, settingsLifecycle, settingsTargetKey,
-  settingsTargetLabel, sourceTargetKey, unitApplication, unitFacts, unitProvenance, unitProvenancePath,
-  userSettingsTarget, workspaceSettingsTarget,
+  applicationOwners, applicationScope, authoredUnit, catalogEntries, changeBehavior, changeBehaviorLabel,
+  effectiveStateLabel, inheritedResources, observedResult, observedResultLabel, openOwnerLabel, provenanceLabel,
+  reachableIdentities, revisionSelector, selectedRevision, settingsLifecycle, settingsTargetKey, settingsTargetLabel, sourceTargetKey,
+  unitApplication, unitFacts, unitProvenance, unitProvenancePath, userSettingsTarget, workspaceSettingsTarget,
 } from '../src/app/settings/projection';
 import { cfg3Application, cfg3Source, cfg3SourceApplication } from './cfg3-data';
 
@@ -232,4 +232,87 @@ it('S1-07 connecting, loading, ready, stale and failed are distinct lifecycle st
   expect(settingsLifecycle({ connection: 'connected', hasSource: true, targetValid: false, readError: 'read failed' })).toBe('stale');
   expect(settingsLifecycle({ connection: 'connected', hasSource: false, targetValid: false, readError: 'read failed' })).toBe('failed');
   expect(settingsLifecycle({ connection: 'error', hasSource: true, targetValid: true, readError: '' })).toBe('failed');
+});
+
+it('S1-14 a revision selector names the settling native document without any authored payload', () => {
+  const literal: SourceMutation = { kind: 'config', mutation: { unit: 'provider', id: 'secret', authored: { base_url: 'https://native.invalid', credential: { kind: 'literal', value: 'SECRET_SENTINEL' } } } };
+  const mcp: SourceMutation = { kind: 'mcp', id: 'search', authored: { definition: { type: 'stdio', command: 'search', env: { TOKEN: 'SECRET_SENTINEL' } } } };
+  const agent: SourceMutation = { kind: 'agent', name: 'reviewer', authored: { instructions: 'Inspect' } };
+  const repair: SourceMutation = { kind: 'repair_config', document: '[agent]\n' };
+  // Only the family, and for a named resource its identity, is retained.
+  expect(revisionSelector(literal)).toEqual({ kind: 'config' });
+  expect(revisionSelector(repair)).toEqual({ kind: 'config' });
+  expect(revisionSelector(mcp)).toEqual({ kind: 'mcp' });
+  expect(revisionSelector(agent)).toEqual({ kind: 'agent', name: 'reviewer' });
+  for (const mutation of [literal, mcp, agent]) expect(JSON.stringify(revisionSelector(mutation))).not.toContain('SECRET_SENTINEL');
+  // Each selector resolves the exact revision of its own native document, in
+  // this projection's own scope.
+  const source = cfg3Source();
+  source.target = { kind: 'workspace', directory: '/workspace/A' };
+  source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/workspace/.agents/agents/reviewer.toml', revision: 'agent-7', authored: {} } }];
+  expect(selectedRevision(source, revisionSelector(literal))).toBe('workspace-1');
+  expect(selectedRevision(source, revisionSelector(mcp))).toBe('mcp-2');
+  expect(selectedRevision(source, revisionSelector(agent))).toBe('agent-7');
+  // An identity this scope does not author yet settles on the native absent
+  // revision, never on another scope's document.
+  expect(selectedRevision(source, { kind: 'agent', name: 'absent' })).toBe(source.absent_resource_revision);
+  source.target = { kind: 'user' };
+  expect(selectedRevision(source, revisionSelector(literal))).toBe('user-1');
+  expect(selectedRevision(source, revisionSelector(mcp))).toBe('mcp-1');
+  expect(selectedRevision(source, revisionSelector(agent))).toBe(source.absent_resource_revision);
+});
+
+it('S1-15 a catalog enumerates native effective identities with this scope\'s authoring kept separate', () => {
+  const source = resolvedSource({ providers: { transport: { base_url: 'https://user.invalid', credential: { type: 'literal' } }, local: { base_url: 'https://workspace.invalid', credential: { type: 'environment', variable: 'W' } } } },
+    { 'providers.transport': user, 'providers.local': workspace });
+  source.workspace!.authored = { providers: { local: { base_url: 'https://workspace.invalid', credential: { type: 'environment', variable: 'W' } } } };
+  const entries = catalogEntries(source, 'workspace', 'providers');
+  expect(entries.map(entry => entry.id)).toEqual(['transport', 'local']);
+  // The inherited identity is present with the native effective value and the
+  // native origin, while this scope authors nothing for it.
+  expect(entries[0].authored).toBeUndefined();
+  expect(entries[0].effective).toEqual({ base_url: 'https://user.invalid', credential: { type: 'literal' } });
+  expect(provenanceLabel(entries[0].origin)).toBe('Inherited from User');
+  expect(entries[1].authored).toBeTruthy();
+  expect(provenanceLabel(entries[1].origin)).toBe('Workspace override');
+  // User authoring inherits from nothing: a Workspace-owned identity is never
+  // offered there as something User may override.
+  expect(catalogEntries(source, 'user', 'providers').map(entry => entry.id)).toEqual(['transport']);
+  // An unresolvable lower document removes the effective fact without making
+  // this scope's authored identities unreachable.
+  source.resolved = null;
+  const unresolved = catalogEntries(source, 'workspace', 'providers');
+  expect(unresolved.map(entry => entry.id)).toEqual(['local']);
+  expect(unresolved[0].effective).toBeUndefined();
+  expect(unresolved[0].authored).toBeTruthy();
+});
+
+it('S1-15 inherited whole-file resources come from the native inventory and only a Workspace inherits', () => {
+  const source = cfg3Source();
+  source.prospective_resources = { definitions: [
+    { family: 'mcp', name: 'search', valid: true, location: { scope: 'user', path: '/user/mcp.toml' } },
+    { family: 'mcp', name: 'shadowed', valid: false, location: { scope: 'workspace', path: '/workspace/mcp.toml', shadowed: '/user/mcp.toml' } },
+    { family: 'agent', name: 'reviewer', valid: true, location: { scope: 'user', path: '/user/reviewer.toml' } },
+  ], resource_diagnostics: [], agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] } as never;
+  expect(inheritedResources(source, 'workspace', 'mcp', []).map(entry => entry.name)).toEqual(['search']);
+  expect(inheritedResources(source, 'workspace', 'agent', []).map(entry => entry.name)).toEqual(['reviewer']);
+  // An identity this scope already authors is not also presented as inherited.
+  expect(inheritedResources(source, 'workspace', 'mcp', ['search'])).toEqual([]);
+  // A Workspace definition shadows the User one, so User authoring never
+  // inherits from a Workspace.
+  expect(inheritedResources(source, 'user', 'mcp', [])).toEqual([]);
+  expect(inheritedResources(source, 'user', 'agent', [])).toEqual([]);
+  // Without a native inventory nothing is invented.
+  source.prospective_resources = null;
+  expect(inheritedResources(source, 'workspace', 'mcp', [])).toEqual([]);
+});
+
+it('S1-15 a Workspace reaches native effective identities of a named container, User reaches only its own', () => {
+  // The same rule the catalogs use governs every named semantic-unit container:
+  // source-tool selections, MCP invocation policies and environment variables.
+  expect(reachableIdentities('workspace', { local: 'all' }, { local: 'all', inherited: [] })).toEqual(['local', 'inherited']);
+  expect(reachableIdentities('user', { local: 'all' }, { local: 'all', inherited: [] })).toEqual(['local']);
+  // An authored identity native resolution did not produce stays reachable.
+  expect(reachableIdentities('workspace', { unresolved: {} }, null)).toEqual(['unresolved']);
+  expect(reachableIdentities('workspace', null, null)).toEqual([]);
 });

@@ -96,13 +96,63 @@ so a no-op Save can never turn "no Workspace override" into an explicit `[]`,
 created only by an explicit `Override <unit>` action or by an unambiguous edit
 transition, both of which start from what the control already displays.
 `blank` is only the editing seed for a unit this scope has yet to author; it is
-never presented as an effective value. `Remove <unit>` sends `authored: null` at
-the exact reviewed revision (at Workspace scope that is "use the global default")
-and never copies the User value, while an explicitly authored empty array, object
-or `false` stays that exact value. `Discard draft` returns to the inherited
+never presented as an effective value. `Discard draft` returns to the inherited
 presentation rather than to a client-side empty default. A Provider editor
 declares itself non-inheritable, because a credential is never read back from a
-shadowed definition.
+shadowed definition; the inherited definition is still reported, redacted.
+
+Removal is the exact inverse of authoring, not a generic mutation. `Use global
+default <unit>` (Workspace) and `Remove <unit>` (User) both send `authored: null`
+at the exact reviewed revision and never copy the lower scope's value, and both
+exist **only while this scope really authors the unit**: removing an absent unit
+has no meaning, so an inherited Workspace unit offers `Override <unit>` instead.
+Authored presence is the native projection value the call site passes without a
+fallback — only `undefined` means "authors none" — so an explicitly authored `[]`,
+`{}`, `false` or `""` counts as an override and keeps its removal action. An
+invalid or unobserved authored document proves no override, so it offers none.
+
+## Identity discovery
+
+Enumerating an identity is a native fact, not an authored one. Workspace catalogs
+list every Provider and Model identity in `SourceSettings.resolved`, together with
+whatever this scope authors for it and the native `provenance` origin, so an
+inherited identity is reachable without being retyped and is reported as
+inherited rather than as an override. Whole-file resource families (MCP
+definitions, named Agent profiles) are shadowed as whole identities, so there is
+no value to merge: `prospective_resources.definitions` names the winning scope of
+each identity, and an identity owned by User is listed as inherited with an
+`Override` action. User authoring is the lowest authored source and inherits from
+nothing, so its catalogs list exactly what it authors and never present a
+Workspace-owned identity as User-overridable. Opening an inherited identity
+authors nothing, and an override always begins from a safe authoring seed — for a
+Provider that seed contains no credential at all. The same rule governs every
+named semantic-unit container reached from a list — source-tool selections, MCP
+invocation policies and environment variables — through one shared
+`reachableIdentities` projection.
+
+## Sensitive authoring lifetime
+
+An authored payload may carry a secret: a Provider literal credential, an MCP
+literal environment value or header. Before submission it lives in exactly one
+place, the live editing draft. `beginSubmit` hands the transaction owner only the
+mutation's `RevisionSelector` — the mutation family, plus a named resource's
+identity — which is the whole of what settlement needs to resolve which native
+document revision a commit landed in. The store therefore never holds an authored
+payload at all:
+
+```text
+before acknowledgement   live draft value (authored, may be secret)
+                         token · intent generation · savedFrom · selector
+after acknowledgement    token · intent generation · savedFrom · selector
+                         committed revision
+```
+
+`acknowledge` clears the confirmed draft unless the browser intent has already
+moved on to a newer one the user is still editing. A confirmed commit whose
+post-write authoritative reread failed therefore leaves an unsettled transaction
+that carries no secret-bearing payload, across editor unmount, section navigation
+and Settings close, until a later authoritative projection carrying its committed
+revision settles it — with no replay and no second write.
 
 ## Composition
 
@@ -118,8 +168,8 @@ composes runtime, catalog, Root, MCP and named-Agent adapters with the resource
 inventory. `UnitForm` presents one native mutation's editable intent. The
 `SettingsTransactionStore` (created in `app/settings/drafts.tsx`, one per exact
 endpoint/authority/target lifetime) owns each unit's draft, exact CAS base,
-submitted-operation token and intent generation, committed acknowledgement and
-final projection settlement. `Settings` records both the confirmed native commit
+submitted-operation revision selector, token and intent generation, committed
+acknowledgement and final projection settlement. `Settings` records both the confirmed native commit
 and the adopted authoritative projection directly on that store, so a save that
 completes after its editor unmounts still retires exactly its own submitted
 intent and never a newer draft. Identity includes endpoint, client authority and
@@ -131,7 +181,8 @@ updates; dirty forms require review.
 
 Catalog identity suggestions can include published and authored identities. This
 is a union of names for input assistance, never a browser overlay or claim of
-availability. Provider/Model editors are separate detail views. Model replacement
+availability. Adding a new identity is offered only for one the catalog does not
+already reach, so an inherited identity is overridden rather than re-created. Provider/Model editors are separate detail views. Model replacement
 preserves the generated capabilities, reasoning profiles, request params and
 compatibility fields. Named Agents write complete independent profiles, including
 delegation fields; Rust validates scope applicability. Description and instructions
@@ -174,7 +225,12 @@ Lost Save/adoption replies and reconnect cause authoritative rereads, never repl
 Connection/target epochs fence obsolete work, and a read sequence prevents an
 older overlapping read from replacing a newer observation or a write acknowledgement.
 Both success and rejection commit only within the same epoch and read sequence,
-including explicit refresh failures.
+including explicit refresh failures. One Session adoption attempt's terminal
+cleanup owns only that attempt's own state: it releases the in-flight guard and
+clears `busy` independently of the authoritative reread it then issues, and only
+within its own lifetime, so neither a failed reread nor a superseded lifetime's
+settlement can strand the adoption guard or clear the busy state of the attempt
+that replaced it. `busy` is client submission state, never authority.
 Busy adoption leaves work running. Failed preparation leaves old effective resources
 available. Settings renders native per-unit state without inferring field impact.
 

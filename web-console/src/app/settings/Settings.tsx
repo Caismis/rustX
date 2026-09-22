@@ -18,8 +18,8 @@ import { ConnectionSettings } from './ConnectionSettings';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceConfigurationReread } from '../../workspaces/host';
 import {
   applicationScope, changeBehavior, changeBehaviorLabel, observedResult, observedResultLabel, observedUnitLabel,
-  observedUnits, settingsLifecycle, settingsLifecycleLabel, settingsTargetKey, settingsTargetLabel, settingsTargetScope,
-  unitApplication, type SettingsTarget,
+  observedUnits, revisionSelector, selectedRevision, settingsLifecycle, settingsLifecycleLabel, settingsTargetKey,
+  settingsTargetLabel, settingsTargetScope, unitApplication, type SettingsTarget,
 } from './projection';
 
 const sections = [
@@ -37,11 +37,11 @@ interface SettingsProps {
   theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void;
   connection?: ConnectionController; initialSection?: 'overview' | 'connection';
 }
-function sourceRevision(source: SourceSettings, mutation: SourceMutation) {
-  const scope = source.target.kind;
-  if ((mutation.kind === 'config' || mutation.kind === 'repair_config')) return source[scope]!.revision;
-  if (mutation.kind === 'mcp') return (scope === 'user' ? source.user_mcp : source.workspace_mcp)!.revision;
-  return source.agents.find(agent => agent.scope === scope && agent.name === mutation.name)?.source.revision ?? source.absent_resource_revision;
+/** Test-only inspection of the live transaction stores of one client, for the
+ * regression that proves a confirmed commit leaves no secret-bearing authored
+ * payload reachable. Production code never reads it. */
+export function settingsTransactionStores(client: AppServerClient): readonly SettingsTransactionStore[] {
+  return [...(draftStores.get(client)?.values() ?? [])];
 }
 export function Settings({ client, target, host, onClose = () => {}, theme = 'light', setTheme, connection, initialSection }: SettingsProps) {
   const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
@@ -139,7 +139,7 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
     // The adopted projection is authoritative for every unit's transaction:
     // retire an acknowledged mutation whose committed revision it now carries,
     // even when the editor that submitted it has unmounted.
-    transactions.observeAll(next, sourceRevision);
+    transactions.observeAll(next);
     setSource(next); setTargetValid(true); setReadError('');
   }, [transactions]);
   /** Adopt an authoritative read that its enclosing write operation already
@@ -276,7 +276,7 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
       // committed revision. It is one fact, recorded before the reread: a
       // committed mutation stays committed even if the reread fails.
       const commit = ++commits.current;
-      const committed = sourceRevision(outcome.acknowledgement, mutation);
+      const committed = selectedRevision(outcome.acknowledgement, revisionSelector(mutation));
       if (outcome.reread) {
         // The Workspace Host write owns its own authoritative reread. Fence it
         // by the identity reserved at initiation exactly like any other read:
@@ -322,9 +322,9 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
   const roots = [source?.user_resource_root ? source.user_resource_root + '/skills' : '', source?.workspace_resource_root ? source.workspace_resource_root + '/skills' : ''];
   const lifecycle = settingsLifecycle({ connection: transport.connection, hasSource: !!source, targetValid, readError });
   const editor = selected && <fieldset disabled={busy || !targetValid || transport.connection !== 'connected'} className={css.editor}>
-    {section === 'catalog' && <CatalogEditor document={selected.authored ?? {}} scope={scope} revision={selected.revision} save={save} />}
-    {(section === 'general' || section === 'policies') && <RuntimeEditor document={selected.authored ?? {}} scope={scope} revision={selected.revision} save={save} policyOnly={section === 'policies'} processPolicyImpacts={source!.process_policy_impacts} />}
-    {section.startsWith('root-') && <RootEditor document={selected.authored ?? {}} scope={scope} revision={selected.revision} save={save} section={section as RootSection} models={models} skillRoots={roots} />}
+    {section === 'catalog' && <CatalogEditor source={source!} scope={scope} revision={selected.revision} save={save} />}
+    {(section === 'general' || section === 'policies') && <RuntimeEditor document={selected.authored ?? {}} resolved={source!.resolved} scope={scope} revision={selected.revision} save={save} policyOnly={section === 'policies'} processPolicyImpacts={source!.process_policy_impacts} />}
+    {section.startsWith('root-') && <RootEditor document={selected.authored ?? {}} resolved={source!.resolved} scope={scope} revision={selected.revision} save={save} section={section as RootSection} models={models} skillRoots={roots} />}
     {section === 'mcp' && <Integrations source={source!} scope={scope} save={save} />}
     {section === 'agents' && <AgentEditor source={source!} scope={scope} models={models} save={save} />}
     {['mcp', 'agents', 'python', 'skills', 'workflows'].includes(section) && source?.prospective_resources && <ResourceInventory resources={source.prospective_resources} family={section} scope={scope} />}

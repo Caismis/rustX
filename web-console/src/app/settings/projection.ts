@@ -1,5 +1,5 @@
 import type {
-  ConfigurationApplication, Origin, ProcessPolicyImpact, RuntimeLayer,
+  ConfigurationApplication, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
 } from '../../../../protocol/app-server/v18';
 import type { ConnectionState } from '../../client/app-server';
@@ -211,6 +211,90 @@ export function effectiveStateLabel(effective: EffectiveFacts): string {
     : effective.state === 'unset' ? 'No source authors this unit — native default applies'
       : effective.state === 'invalid' ? 'Native effective value unavailable — resolution failed'
         : 'Native effective value not observed';
+}
+
+/** The non-sensitive native selector that names which source revision settles
+ * one submitted mutation.
+ *
+ * A mutation's authored payload may carry Provider credentials, MCP literal
+ * environment values or literal headers. Settlement never needs any of them: it
+ * needs only which native document the commit landed in, which is the mutation
+ * *family* plus, for a named Agent resource, its identity. Deriving the selector
+ * at submission time is what lets the transaction owner keep a submitted
+ * mutation settleable without retaining its secret-bearing payload. */
+export type RevisionSelector =
+  | { kind: 'config' }
+  | { kind: 'mcp' }
+  | { kind: 'agent'; name: string };
+export function revisionSelector(mutation: SourceMutation): RevisionSelector {
+  return mutation.kind === 'agent' ? { kind: 'agent', name: mutation.name }
+    : mutation.kind === 'mcp' ? { kind: 'mcp' } : { kind: 'config' };
+}
+
+/** The exact revision this projection carries for the selected native document
+ * of this projection's own scope. An identity the scope does not author yet has
+ * the native absent-resource revision, never a fabricated one. */
+export function selectedRevision(source: SourceSettings, selector: RevisionSelector): string {
+  const scope = source.target.kind;
+  if (selector.kind === 'config') return source[scope]!.revision;
+  if (selector.kind === 'mcp') return (scope === 'user' ? source.user_mcp : source.workspace_mcp)!.revision;
+  return source.agents.find(agent => agent.scope === scope && agent.name === selector.name)?.source.revision ?? source.absent_resource_revision;
+}
+
+/** One named-catalog identity, with this scope's authored ownership kept
+ * strictly separate from the native effective fact.
+ *
+ * `authored` is what this exact scope's document declares for the identity and
+ * is `undefined` when it declares none; `effective` is what native resolution
+ * produced. The browser never merges two documents to manufacture either one:
+ * enumeration comes from the native resolved layer, ownership from this scope's
+ * own authored layer, and provenance from native `provenance`. */
+export interface CatalogEntry<T> { id: string; authored?: T; effective?: T; origin: UnitOrigin }
+export type CatalogContainer = 'providers' | 'models';
+export function catalogMutation(container: CatalogContainer, id: string): SourceMutation {
+  return { kind: 'config', mutation: container === 'providers' ? { unit: 'provider', id } : { unit: 'model', id } };
+}
+/** Every identity of one named catalog this Settings surface must be able to
+ * reach.
+ *
+ * A Workspace reaches the native effective identities as well as the ones it
+ * authors, so an identity it inherits is discoverable without being retyped;
+ * an authored identity native resolution did not produce is still listed, since
+ * an unresolvable lower document leaves `resolved` absent without making this
+ * scope's own authoring vanish. User authoring inherits from nothing — it is the
+ * lowest authored source — so its catalog is exactly what it authors and never
+ * presents a Workspace-owned identity as something User may override. Native
+ * order is preserved; no client ordering is invented. */
+export function catalogEntries<T>(source: SourceSettings | undefined, scope: SourceScope, container: CatalogContainer): CatalogEntry<T>[] {
+  const authored = (sourceView(source, scope)?.authored?.[container] ?? undefined) as Record<string, T> | undefined;
+  const effective = (source?.resolved?.[container] ?? undefined) as Record<string, T> | undefined;
+  return reachableIdentities(scope, authored, effective)
+    .map(id => ({ id, authored: authored?.[id], effective: effective?.[id], origin: unitProvenance(source, catalogMutation(container, id)) }));
+}
+/** The identities of one named semantic-unit container this scope must be able
+ * to reach, on the same terms as a catalog: a Workspace reaches the native
+ * effective identities as well as its own, User reaches exactly its own. Native
+ * order is preserved. */
+export function reachableIdentities(scope: SourceScope, authored: object | null | undefined, effective: object | null | undefined): string[] {
+  return [...new Set([...(scope === 'workspace' ? Object.keys(effective ?? {}) : []), ...Object.keys(authored ?? {})])];
+}
+
+/** One native whole-file resource identity, exactly as the native inventory
+ * reports it. Resource families are owned as whole identities — a Workspace
+ * definition shadows the entire same-name User definition — so the winning
+ * scope is a native fact and is never recomputed from two authored catalogs. */
+export interface ResourceIdentity { name: string; scope: SourceScope; path: string; valid: boolean; shadowed?: string }
+export function resourceIdentities(source: SourceSettings | undefined, family: ResourceFamily): readonly ResourceIdentity[] {
+  return (source?.prospective_resources?.definitions ?? []).filter(entry => entry.family === family)
+    .map(entry => ({ name: entry.name, scope: entry.location.scope, path: entry.location.path, valid: entry.valid, shadowed: entry.location.shadowed ?? undefined }));
+}
+/** The resource identities a Workspace surface must be able to reach although
+ * this Workspace authors none of them. Only a Workspace inherits: a Workspace
+ * definition shadows the User one, so User authoring is never presented as
+ * inheriting from a Workspace. */
+export function inheritedResources(source: SourceSettings | undefined, scope: SourceScope, family: ResourceFamily, authored: readonly string[]): readonly ResourceIdentity[] {
+  if (scope !== 'workspace') return [];
+  return resourceIdentities(source, family).filter(entry => entry.scope === 'user' && !authored.includes(entry.name));
 }
 
 /** Owner navigation from native facts only.

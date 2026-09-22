@@ -94,3 +94,69 @@ it.each(['preparing', 'failed'] as const)('C13 %s never fabricates an Adopt cand
  await screen.findByText(status === 'preparing' ? /Preparing configuration/ : /Some configuration preparation failed/);
  expect(screen.queryByRole('button', { name: 'Adopt configuration' })).toBeNull();
 });
+
+// Blocking finding — one adoption attempt's terminal client-side cleanup owns
+// only that attempt's own state. It must release that state independently of
+// the authoritative reread it then issues.
+it('C17 a failed authoritative reread after adoption strands neither busy nor the in-flight guard', async () => {
+ let unavailable = false;
+ const s = cfg3Client(async (op, source) => {
+   if (op.method === 'session/configuration' && unavailable) throw new Error('configuration read unavailable');
+   // Native keeps the candidate: this adoption attempt did not commit.
+   if (op.method === 'session/adoptConfiguration') { source.application = cfg3Application(); throw new Error('NotReady'); }
+ });
+ s.source.application = cfg3Application();
+ const ui = render(<SessionConfiguration client={s.client} view={s.state.views[cfg3Session]}/>);
+ fireEvent.click(await screen.findByRole('button', { name: 'Adopt configuration' }));
+ unavailable = true;
+ // The rejection and the failed reread are two separate visible facts; neither
+ // replays the adoption.
+ await screen.findByText(/Configuration status unavailable/);
+ expect(screen.getByRole('alert')).toBeTruthy();
+ expect(writes(s)).toHaveLength(1);
+ // `busy` cleared and the candidate is retained, merely not actionable while
+ // native status is unknown.
+ await waitFor(() => expect(screen.getByRole('button', { name: 'Adopt configuration' })).toBeTruthy());
+ expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(true);
+ // A later native observation makes the same candidate actionable again, which
+ // is only possible if the in-flight guard was released.
+ unavailable = false;
+ ui.rerender(<SessionConfiguration client={s.client} view={{ ...s.state.views[cfg3Session], snapshot: snapshot() }}/>);
+ await waitFor(() => expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(false));
+ fireEvent.click(screen.getByRole('button', { name: 'Adopt configuration' }));
+ await waitFor(() => expect(writes(s)).toHaveLength(2));
+});
+
+it('C17 a superseded lifetime\'s reread cannot clear the busy state of the adoption attempt that replaced it', async () => {
+ let held!: (value: MethodResult) => void;
+ const pending = new Promise<MethodResult>(resolve => { held = resolve; });
+ let reads = 0, holdRead = false, holdAdopt = false;
+ const s = cfg3Client(async (op, source) => {
+   if (op.method === 'session/configuration') { ++reads; if (holdRead) { holdRead = false; return pending; } }
+   if (op.method === 'session/adoptConfiguration') {
+     if (holdAdopt) return new Promise<MethodResult>(() => {});
+     source.application = cfg3Application();
+     throw new Error('NotReady');
+   }
+ });
+ s.source.application = cfg3Application();
+ const ui = render(<SessionConfiguration client={s.client} view={s.state.views[cfg3Session]}/>);
+ fireEvent.click(await screen.findByRole('button', { name: 'Adopt configuration' }));
+ // The first attempt's own reread is held open across a connection lifetime
+ // change, so it settles long after the lifetime that issued it ended.
+ holdRead = true;
+ await waitFor(() => expect(reads).toBe(2));
+ const generation = { ...s.state, generation: 2 };
+ s.client.getSnapshot = () => generation;
+ ui.rerender(<SessionConfiguration client={s.client} view={s.state.views[cfg3Session]}/>);
+ await waitFor(() => expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(false));
+ // A second attempt owns the current lifetime and is in flight.
+ holdAdopt = true;
+ fireEvent.click(screen.getByRole('button', { name: 'Adopt configuration' }));
+ await waitFor(() => expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(true));
+ await act(async () => { held({ type: 'session_configuration', application: cfg3Application() } as never); await pending; });
+ // The superseded lifetime's settlement owns none of the current attempt's
+ // state: the in-flight adoption stays in flight.
+ expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(true);
+ expect(writes(s)).toHaveLength(2);
+});

@@ -186,12 +186,16 @@ it('replaces against the newer revision only after an explicit review gesture', 
 });
 
 it.each(['empty', 'omit'] as const)('preserves native %s Tool selection as a distinct semantic-unit operation', async mode => {
-  const subject = cfg3Client(); await open(subject, 'Tools');
-  // An explicit empty selection and a removal are two different authored
-  // intents. The empty one has to be authored first: rendering an inherited
-  // unit never produces it.
+  const subject = cfg3Client();
+  // Removal replaces an existing Workspace override; an explicit empty
+  // selection authors one where none exists. They are two different authored
+  // intents, so each starts from the authored state it actually applies to.
+  if (mode === 'omit') subject.source.workspace!.authored = { agent: { tools: { builtin: ['bash'] } } };
+  await open(subject, 'Tools');
+  // The empty one has to be authored first: rendering an inherited unit never
+  // produces it.
   if (mode === 'empty') fireEvent.click(screen.getByRole('button', { name: 'Override Native Tools' }));
-  fireEvent.click(screen.getByRole('button', { name: `${mode === 'empty' ? 'Save' : 'Remove'} Native Tools` }));
+  fireEvent.click(screen.getByRole('button', { name: `${mode === 'empty' ? 'Save' : 'Use global default'} Native Tools` }));
   await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'native_tools', authored: mode === 'empty' ? [] : null } } } }));
 });
 
@@ -285,10 +289,11 @@ it('preserves the original revision when removing an otherwise clean unit confli
       throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: op.params.expected_revision, actual: source.workspace!.revision } });
     }
   });
+  subject.source.workspace!.authored = { agent: { tools: { builtin: ['bash'] } } };
   await open(subject, 'Tools');
-  fireEvent.click(screen.getByRole('button', { name: 'Remove Native Tools' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Use global default Native Tools' }));
   await screen.findByRole('button', { name: 'Use reviewed revision' });
-  fireEvent.click(screen.getByRole('button', { name: 'Remove Native Tools' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Use global default Native Tools' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { mutation: { authored: null } } } });
 });
@@ -299,21 +304,22 @@ it('preserves a clean removal\'s frozen CAS base across an editor remount and ad
       throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: op.params.expected_revision, actual: source.workspace!.revision } });
     }
   });
+  subject.source.workspace!.authored = { agent: { tools: { builtin: ['bash'] } } };
   await open(subject, 'Tools');
-  fireEvent.click(screen.getByRole('button', { name: 'Remove Native Tools' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Use global default Native Tools' }));
   await screen.findByRole('button', { name: 'Use reviewed revision' });
   // Leaving and re-entering the section remounts the editor subtree. The frozen
   // base is durable editor state, not component-local state.
   fireEvent.click(screen.getByRole('button', { name: 'General' }));
   fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
-  await screen.findByRole('button', { name: 'Remove Native Tools' });
+  await screen.findByRole('button', { name: 'Use global default Native Tools' });
   expect(screen.getByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Remove Native Tools' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Use global default Native Tools' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { mutation: { authored: null } } } });
   // Only the explicit reviewed-revision gesture advances the operation to R2.
   fireEvent.click(screen.getByRole('button', { name: 'Use reviewed revision' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Remove Native Tools' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Use global default Native Tools' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(3));
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[2][0]).toMatchObject({ params: { expected_revision: 'external-removal-conflict', mutation: { mutation: { authored: null } } } });
 });

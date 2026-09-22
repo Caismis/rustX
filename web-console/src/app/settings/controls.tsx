@@ -3,7 +3,7 @@ import type { SourceMutation } from '../../../../protocol/app-server/v18';
 import { Switch } from '../../presentation/primitives/Switch';
 import { Button } from '../../presentation/primitives/Button';
 import { EditorStateContext, SettingsTransactionStore, SourceContext } from './drafts';
-import { authoredStateLabel, effectiveStateLabel, provenanceLabel, unitFacts } from './projection';
+import { authoredStateLabel, effectiveStateLabel, provenanceLabel, revisionSelector, unitFacts } from './projection';
 import css from '../../presentation/settings/SettingsContent.module.css';
 
 export type SaveSource = (mutation: SourceMutation, revision: string) => Promise<string | undefined>;
@@ -23,7 +23,13 @@ export type SaveSource = (mutation: SourceMutation, revision: string) => Promise
  * nothing: no draft is created, Save stays unavailable, and a no-op Save can
  * therefore never turn "no Workspace override" into an explicit empty one.
  * `blank` is only an editing seed for a unit this scope has yet to author; it
- * is never presented as an effective value and never written on its own. */
+ * is never presented as an effective value and never written on its own.
+ *
+ * Remove is the exact inverse of authoring, not a generic mutation: it exists
+ * only while this scope really authors the unit, because "remove the authored
+ * unit" has no meaning for one that is already absent. Authored presence is the
+ * native projection fact the call site passes, never a truthiness test — `false`,
+ * `[]`, `{}` and `""` are authored values like any other. */
 export function UnitForm<T>({ title, authored, blank, revision, mutation, save, children, removable = true, inherited = value => value as T }: {
   title: string;
   /** The exact value this scope authors for this unit, or `undefined` when it
@@ -60,6 +66,9 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, save, 
   // authored nothing for this unit: rendering, opening and navigating never
   // create it, and only an explicit Override or a real edit does.
   const draft = transaction?.draft as { value: T } | undefined;
+  // This exact scope's authored presence, from the native projection the call
+  // site passes without a fallback. Only `undefined` means "authors none".
+  const authoredPresent = authored !== undefined;
   const base = transaction?.base ?? revision;
   // A submitted Save or Remove pins the reviewed base revision even for an
   // otherwise clean form. The store keeps that pinned base across remounts; a
@@ -72,7 +81,7 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, save, 
   // The native effective value, adapted to this control's authored shape. It is
   // displayed, never copied into authoring state.
   const inheritedValue = inheritance && facts.effective.state === 'available' ? inherited(facts.effective.value) : undefined;
-  const overriding = draft !== undefined || authored !== undefined;
+  const overriding = draft !== undefined || authoredPresent;
   const displayed: T = draft ? draft.value : authored !== undefined ? authored : inheritedValue !== undefined ? inheritedValue : blank;
   // An edit is an unambiguous override transition: it starts from whatever this
   // control currently displays and becomes this browser's authored intent.
@@ -80,7 +89,10 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, save, 
   const commit = async (remove = false) => {
     if (!remove && !draft) return;
     const submission = remove ? null : draft!.value;
-    const token = edits.beginSubmit(identity, base, mutation(submission));
+    // The transaction owner is handed the mutation's non-sensitive revision
+    // selector, never its authored payload: an authored secret exists only in
+    // this call's own request and in the live draft the acknowledgement clears.
+    const token = edits.beginSubmit(identity, base, revisionSelector(mutation(submission)));
     setBusy(true); setSaved(false);
     try {
       const next = await save(mutation(submission), base);
@@ -110,7 +122,7 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, save, 
       {reviewNeeded && <div className={css.review}><p role="status">Source revision changed. Your draft and original revision are preserved. Review the current source before replacing it.</p><details><summary>Review current authored unit (redacted)</summary><pre>{JSON.stringify(authored, null, 2)}</pre></details></div>}
       <div className={css.actions}><Button variant="primary" type="submit" disabled={!draft}>Save {title}</Button>
         {inheritance && !overriding && <Button type="button" title="Author this unit in this Workspace. Nothing is written until you save." onClick={() => edit(displayed)}>Override {title}</Button>}
-        {removable && <Button type="button" title={workspace ? 'Use global default — remove this Workspace override' : 'Remove authored value'} onClick={() => void commit(true)}>Remove {title}</Button>}
+        {removable && authoredPresent && <Button type="button" title={workspace ? 'Remove the unit this Workspace authors, through exact CAS. The native inherited value becomes effective.' : 'Remove the authored value through exact CAS'} onClick={() => void commit(true)}>{workspace ? 'Use global default' : 'Remove'} {title}</Button>}
         <Button type="button" onClick={() => { edits.discard(identity); setSaved(false); }}>Discard draft</Button>
         {reviewNeeded && <Button type="button" onClick={() => edits.review(identity, revision)}>Use reviewed revision</Button>}
       </div>{saved && <p role="status">Saved. Native application proceeds automatically.</p>}

@@ -97,10 +97,40 @@ scope stays inspectable, repairable and authorable through exact CAS throughout.
 An inherited Workspace unit displays the native effective value while authoring
 nothing. Opening it creates no draft, and Save stays unavailable until an
 explicit **Override** action or a real edit creates an override, so a no-op Save
-can never convert "no Workspace override" into an explicit empty one. **Remove**
-(use the global default) sends `authored: null` at the exact reviewed revision and
-never copies the User value; an explicitly authored `[]`, `{}` or `false` remains
-that exact value. **Discard draft** returns to the inherited presentation.
+can never convert "no Workspace override" into an explicit empty one.
+**Use global default** means exactly "remove the semantic unit this Workspace
+authors, through exact CAS": it sends `authored: null` at the reviewed revision,
+never copies the User value, and is offered only while this Workspace really
+authors the unit — an already-inherited unit offers Override instead, because
+removing an absent unit has no meaning. Authored presence is the native
+projection fact, never a truthiness test, so an explicitly authored `[]`, `{}`,
+`false` or `""` is an override like any other and remains that exact value.
+In User Settings the same action is **Remove**, since User authoring inherits
+from nothing. **Discard draft** returns to the inherited presentation.
+
+Identity discovery is a native fact too. Every Provider and Model identity in
+the native effective projection is listed in Workspace Settings, with the
+identity's native origin, even when this Workspace authors no override for it —
+the identity never has to be retyped to be reached. Whole-file resource families
+(MCP definitions, named Agent profiles) are enumerated from the native resource
+inventory, which names the winning scope of each identity, so an inherited
+definition is discoverable without the browser merging two catalogs. Opening an
+inherited identity authors nothing: the displayed value is the native effective
+one, and an override begins from a safe authoring seed. A Provider is the one
+whole unit that inherits no editing state at all — an inherited credential stays
+redacted, is never read back from the shadowed definition, and an override always
+authors a new credential. User Settings is the lowest authored source and
+inherits from nothing, so its catalogs list exactly what it authors.
+
+A submitted mutation may carry an authored secret: a Provider literal
+credential, an MCP literal environment value or header. Before submission that
+value lives in exactly one place, the live editing draft. The transaction owner
+is handed only the mutation's non-sensitive revision selector — the mutation
+family, plus a named resource's identity — which is all settlement needs to match
+a commit against a later authoritative projection. Once native acknowledges the
+commit, the confirmed draft is dropped, so no secret-bearing authored payload
+survives a confirmed commit, even when the post-write authoritative reread fails
+and the transaction stays unsettled across an editor unmount or a section change.
 
 Provenance is looked up by the exact native key a semantic unit owns
 (`providers.<id>`, `models.<id>`, `agent.tools.sources.<id>`,

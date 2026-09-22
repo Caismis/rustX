@@ -1,5 +1,6 @@
 import { createContext } from 'react';
-import type { SourceMutation, SourceSettings } from '../../../../protocol/app-server/v18';
+import type { SourceSettings } from '../../../../protocol/app-server/v18';
+import { selectedRevision, type RevisionSelector } from './projection';
 
 /** One submitted mutation inside a unit's editing transaction.
  *
@@ -8,12 +9,20 @@ import type { SourceMutation, SourceSettings } from '../../../../protocol/app-se
  * browser intent that existed when the mutation was submitted; if the intent
  * moved on, the acknowledgement may advance the CAS base but must keep the newer
  * draft. `savedFrom` is the exact pre-save base, kept only so a projection that
- * has not caught up yet is not mistaken for an external change. */
+ * has not caught up yet is not mistaken for an external change.
+ *
+ * The authored payload is deliberately absent. A submitted mutation may carry a
+ * Provider literal credential or an MCP literal environment value or header, and
+ * settlement never needs any of them: `selector` is the non-sensitive native
+ * descriptor that names which source revision settles this mutation. The store
+ * therefore never holds a secret-bearing payload, before or after
+ * acknowledgement — the live editing draft is the only place an authored secret
+ * exists, and acknowledging its commit clears it. */
 export interface SubmittedMutation {
   token: number;
   generation: number;
   savedFrom: string;
-  mutation: SourceMutation;
+  selector: RevisionSelector;
   committed?: string;
 }
 
@@ -85,22 +94,25 @@ export class SettingsTransactionStore {
   }
 
   /** Open one mutation for the current intent (or a clean Remove with none) and
-   * return its token. The exact base is frozen for the submission. */
-  beginSubmit(identity: string, base: string, mutation: SourceMutation): number {
+   * return its token. The exact base is frozen for the submission, and only the
+   * mutation's non-sensitive revision selector is retained — never its authored
+   * payload. */
+  beginSubmit(identity: string, base: string, selector: RevisionSelector): number {
     const current = this.entries.get(identity);
     const generation = current?.generation ?? 0;
     const token = this.nextToken++;
     this.entries.set(identity, {
       draft: current?.draft, base, pinned: true, generation,
-      submitting: { token, generation, savedFrom: base, mutation },
+      submitting: { token, generation, savedFrom: base, selector },
     });
     this.changed();
     return token;
   }
 
   /** Record native confirmation of exactly one submitted mutation. The committed
-   * revision advances the CAS base; a literal credential in the submitted draft
-   * is dropped as soon as the intent has not moved on. */
+   * revision advances the CAS base, and the confirmed draft — the last place a
+   * literal credential or MCP literal value still lives — is dropped unless the
+   * browser intent has moved on to a newer one the user is still editing. */
   acknowledge(identity: string, token: number, committed: string): void {
     const entry = this.entries.get(identity), submitting = entry?.submitting;
     if (!entry || !submitting || submitting.token !== token) return;
@@ -131,10 +143,10 @@ export class SettingsTransactionStore {
 
   /** Adopt one whole authoritative projection and retire every acknowledged
    * mutation whose committed revision it now carries. */
-  observeAll(projection: SourceSettings, revisionOf: (source: SourceSettings, mutation: SourceMutation) => string): void {
+  observeAll(projection: SourceSettings): void {
     for (const [identity, entry] of this.entries) {
-      const mutation = entry.submitting?.mutation;
-      if (mutation) this.observed.set(identity, revisionOf(projection, mutation));
+      const selector = entry.submitting?.selector;
+      if (selector) this.observed.set(identity, selectedRevision(projection, selector));
     }
     for (const identity of this.entries.keys()) this.trySettle(identity);
     this.changed();
@@ -154,6 +166,11 @@ export class SettingsTransactionStore {
     entry.pinned = true;
     this.changed();
   }
+
+  /** Everything this store currently retains, for the regression that proves no
+   * secret-bearing authored payload survives a confirmed commit. Production code
+   * never reads it. */
+  retainedState(): readonly unknown[] { return [...this.entries.entries(), ...this.observed.entries()]; }
 
   private trySettle(identity: string): void {
     const entry = this.entries.get(identity), submitting = entry?.submitting;

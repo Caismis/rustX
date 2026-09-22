@@ -6,7 +6,7 @@ import { RootEditor } from '../src/app/settings/RootEditor';
 import { RuntimeEditor } from '../src/app/settings/RuntimeEditor';
 import { AgentEditor } from '../src/app/settings/AgentEditor';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer, SourceSettings } from '../../protocol/app-server/v18';
+import type { ModelLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v18';
 import type { ReactNode } from 'react';
 import { SourceContext } from '../src/app/settings/drafts';
 import type { SaveSource } from '../src/app/settings/controls';
@@ -20,19 +20,30 @@ function workspaceSource(resolved: Record<string, unknown> = {}) {
   source.resolved = resolved as never;
   return source;
 }
+/** One scope's authored catalog document, bound to a source projection that
+ * resolves to exactly the same document, as a single-scope catalog does. */
+function catalogSource(scope: SourceScope, document: Record<string, unknown>) {
+  const source = cfg3Source();
+  source.target = scope === 'user' ? { kind: 'user' } : { kind: 'workspace', directory: '/workspace/A' };
+  source[scope === 'user' ? 'user' : 'workspace']!.authored = document as never;
+  source.resolved = document as never;
+  return source;
+}
 const inWorkspace = (source: SourceSettings, children: ReactNode) => <SourceContext value={source}>{children}</SourceContext>;
 it('preserves complete Model replacement, profile params and all compatibility fields', async () => {
   const model = { ...cfg3Effective().document.models!.main, request_params: { temperature: .3, nested: { budget: 32 } }, reasoning: { default_profile: 'deep', profiles: { deep: { enabled: true, request_params: { reasoning: { effort: 'high' } } } } }, compat: { chat_max_tokens_field: 'max_completion_tokens' as const, chat_stream_usage: 'supported' as const, chat_reasoning_replay: 'omit' as const, chat_tool_protocol: 'native' as const, responses_storage: 'stateless' as const } };
-  const write = save(); render(<CatalogEditor document={{ models: { main: model } }} scope="workspace" revision="exact" save={write} />);
+  const source = catalogSource('workspace', { models: { main: model } });
+  const write = save(); render(inWorkspace(source, <CatalogEditor source={source} scope="workspace" revision="exact" save={write} />));
   fireEvent.click(screen.getByRole('button', { name: 'Edit Model main' }));
   fireEvent.change(screen.getByLabelText('Wire model identity'), { target: { value: 'new-wire' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...model, id: 'new-wire' } } }, 'exact'));
-  fireEvent.click(screen.getByRole('button', { name: 'Remove Model main' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Use global default Model main' }));
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: null } }, 'exact'));
 });
 it('edits reasoning profiles and native request values without interpreting semantics', async () => {
-  const write = save(); render(<CatalogEditor document={{ models: { main: cfg3Effective().document.models!.main } }} scope="user" revision="r1" save={write} />);
+  const source = catalogSource('user', { models: { main: cfg3Effective().document.models!.main } });
+  const write = save(); render(<SourceContext value={source}><CatalogEditor source={source} scope="user" revision="r1" save={write} /></SourceContext>);
   fireEvent.click(screen.getByRole('button', { name: 'Edit Model main' })); fireEvent.click(screen.getByText('Reasoning profiles'));
   fireEvent.change(screen.getByLabelText('New reasoning profile'), { target: { value: 'deep' } }); fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
   const profile = screen.getByLabelText('deep').parentElement!.parentElement!;

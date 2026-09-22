@@ -37,9 +37,15 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await closeSettings(page);
     await openWorkspaceSettings(page, 'Workspace A');
     await settings.getByRole('button', { name: 'MCP', exact: true }).click();
-    await settings.getByLabel('New MCP identity').fill('local-fixture');
-    await settings.getByRole('button', { name: 'Add MCP', exact: true }).click();
+    // The User definition is the native effective one for this identity, so the
+    // Workspace catalog lists it as inherited instead of hiding it; it is
+    // reachable without retyping the identity, and it offers no removal.
+    await expect(settings.getByRole('button', { name: 'Override MCP local-fixture', exact: true })).toBeVisible();
+    await settings.getByRole('button', { name: 'Override MCP local-fixture', exact: true }).click();
+    // A whole-definition override starts from a safe authoring seed; nothing of
+    // the shadowed User definition is copied into this Workspace.
     await expect(settings.getByLabel('MCP command')).toHaveValue('');
+    await expect(settings.getByRole('button', { name: 'Use global default MCP local-fixture', exact: true })).toHaveCount(0);
     await settings.getByLabel('MCP command').fill('unused-workspace-command');
     await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
     await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();

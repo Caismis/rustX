@@ -32,8 +32,17 @@ export function SessionConfiguration({ client, view, openOwningSettings }: { cli
     } catch (cause) {
       if (at === epoch.current) setError(isOutcomeUncertain(cause) ? 'Adoption outcome uncertain. Rereading authority; adoption will not be replayed.' : String(cause));
     } finally {
-      if (at === epoch.current) { await refresh(); setBusy(false); }
+      // Terminal client-side cleanup owns nothing but this attempt's own state,
+      // and it releases that state before anything that can fail. The
+      // authoritative reread is a separate obligation: however it settles, it
+      // can neither strand the in-flight guard nor leave `busy` latched, and it
+      // never replays the adoption. A failed reread therefore leaves exactly
+      // "uncertain and visible", and a later native observation can make the
+      // candidate actionable again.
       if (submitting.current === at) submitting.current = undefined;
+      if (at === epoch.current) {
+        try { await refresh(); } finally { if (at === epoch.current) setBusy(false); }
+      }
     }
   };
   // Per-unit native observations. Independent units may simultaneously be
