@@ -1685,8 +1685,10 @@ mod tests {
             incarnation: "incarnation-test".to_owned(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
         };
+        // Initialize the supported local-root format before fabricating the
+        // child allocation tree, so composition's own root admission accepts it.
         let product =
-            crate::runtime::local_storage::ProductRoot::existing(&spec.product_root).unwrap();
+            crate::runtime::local_storage::ProductRoot::create(&spec.product_root).unwrap();
         let allocation = crate::runtime::subagent::child_conversation_store_path(
             product.root(),
             &spec.session_id,

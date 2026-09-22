@@ -146,7 +146,119 @@ results are not public native DTOs: their frozen scopes are cleanup authority.
 App Server v17 exposes bounded public control-plane projections. Compile-fail API
 regressions enforce this boundary.
 
+## Conversation identity reservation (Issue #387)
+
+Conversation identity consumption is separate from published Session ownership
+and from canonical conversation history:
+
+```text
+conversation-reservations/<ConversationId>   this ID is consumed, once, forever
+Session Catalog / Session graph             published Session/Conversation ownership
+ConversationStore conversation.sqlite       canonical history and semantic durability
+```
+
+### The exclusive operation (A)
+
+One narrow storage-owner primitive reserves a `ConversationId`:
+`ProductRoot::reserve_conversation`. It creates a marker file named after the
+canonical identity inside the private root-level `conversation-reservations/`
+namespace with `O_CREAT|O_EXCL` (`create_new`). That exclusive create is the one
+exclusive allocation linearization point for the identity: exactly one caller
+observes success, and every later caller observes `AlreadyExists` without
+overwriting the consuming marker. There is **no** check-then-create and **no**
+enumeration of existing Session directories or Conversation allocations. The
+marker is private: it is not a Session catalog, a runtime registry, execution
+authorization, or canonical history, and no caller interprets a marker path, a
+`SQLite` filename, a directory's existence, or a traversal algorithm as the
+reservation result.
+
+Every allocation caller uses this same primitive:
+
+| Caller | Owner |
+| --- | --- |
+| new root Session | `SessionCatalog::allocate_ids` |
+| clone / independent fork | `SessionCatalog::allocate_ids` |
+| branch/tree node | `SessionCatalog::prepare_tree_node` |
+| first Session | `SessionCatalog::create_unpublished_with_identities` |
+| child/subagent Conversation | `PhysicalChildRuntimeRoot::allocate` |
+
+Preparation then creates the private allocation directory with an exclusive
+filesystem operation. `SessionCatalog::create_conversation_allocation` is
+preparation, not identity allocation.
+
+### Persistence before durable success (B)
+
+The exclusive create alone is not a power-loss guarantee. Namespace and marker
+**visibility** are separate from their **durability**: observing an existing
+`conversation-reservations/` directory does not prove that initialization
+durability already completed. Before local storage reports the reservation
+layout initialized, and before it reports durable reservation success, it
+establishes every required parent-directory barrier itself:
+
+```text
+exclusive ConversationId allocation (create-new marker)   linearization point
+marker file fsync                                         marker data durable
+reservation-namespace directory fsync                     marker entry durable
+product-root directory fsync                              namespace entry durable
+product-root ancestry fsync (ProductRoot::create)         root entry durable
+```
+
+The barrier list names logical durability operations (one marker `sync_all`
+request and one directory `sync_all` request per entry the barrier visits). It
+is not a syscall budget: `SQLite`/library-internal filesystem work and physical
+device I/O are separate evidence layers and are not claimed by these names.
+
+A later caller re-establishes the product-root barrier whenever it observes the
+namespace, so an initializer that created the directory and then failed or
+died before the barrier, a failed barrier that left visible residue, and a
+retry all complete the obligation instead of inferring it. The supported crash
+model is: a reservation observed as successful survives process death and an
+orderly restart of the same filesystem, and the parent-entry barriers are the
+best-effort local expression of power-loss durability. A power loss between the
+exclusive create and its fsync may lose the marker; that is the ordinary
+durability limit of the supported local platform, not a claim of universal
+atomic durability, and process-death tests prove process-death semantics rather
+than every physical power-loss interleaving.
+
+### Result and retained state on persistence failure (C)
+
+If the marker create or its fsync fails, no reservation success is reported and
+no allocation is published. If a reservation succeeds but a **later**
+initialization, validation, publication, cancellation, or cleanup step fails,
+the marker is retained: the identity stays consumed. rustX never unlinks a
+reservation and never treats orphan cleanup or ordinary Session deletion as
+permission to reuse the identity. A caller that loses a reservation race
+retries with a fresh identity through the native allocation owner, bounded by
+the existing finite retry budget; it never reuses the conflicting identity and
+never overwrites the prior marker. Persistent I/O or format failures surface
+instead of being hidden by an unbounded retry.
+
+### Old-layout boundary
+
+Absence of a marker does not prove an identity was never allocated. A populated
+root whose `sessions/` tree exists without the reservation namespace predates
+this contract and is refused at the storage owner — including at child/subagent
+entry points that can bypass catalog loading — before any allocation. There is
+no backfill, migration, dual allocation mode, compatibility scan, or automatic
+deletion, and the old Session-directory scan is not retained as a fallback. A
+genuinely fresh root (no namespace and no `sessions/` tree) initializes normally.
+The format decision is linearized on the exclusive namespace creation: fresh
+initialization creates the namespace strictly before any `sessions/` tree, so an
+observer that reads the namespace absent and then sees a `sessions/` tree
+re-checks the namespace and accepts a concurrently initialized new-format root
+rather than refusing it as a legacy layout. Interrupted fresh-root
+initialization is safe because nothing was reserved yet; a surviving namespace
+is completed on the next call, and a lost namespace over an absent `sessions/`
+tree is still fresh. Deleting only `sessions/catalog.json` or only the reservation
+namespace is never a reset: manual reset deletes the whole runtime root and
+recreates the Sessions, and rustX never deletes or reinterprets old data.
+
 ## Schema
+
+The local-root reservation boundary is independent of the catalog schema; the
+catalog record layout did not change, so schema 13 remains current. See
+[Issue #387 validation](issue-387-validation.md) for the R01-R14 mapping and
+measurements.
 
 Schema 9 adds the Session-owned upload registry, frozen historical workspace roots
 and private copy-preparation cleanup claims. It retains the schema 8 rules:

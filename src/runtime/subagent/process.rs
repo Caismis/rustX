@@ -216,7 +216,7 @@ impl PhysicalChildRuntimeRoot {
     /// fresh incarnation directory beneath it.
     fn allocate(
         product: &crate::runtime::local_storage::ProductRoot,
-        ownership: &crate::runtime::local_storage::OwnershipMutation,
+        _ownership: &crate::runtime::local_storage::OwnershipMutation,
         session_id: &crate::runtime::identity::SessionId,
         conversation_id: &ConversationId,
     ) -> Result<Self, SpawnError> {
@@ -241,6 +241,24 @@ impl PhysicalChildRuntimeRoot {
             })?;
         let durable_store =
             super::child_conversation_store_path(parent, session_id, conversation_id);
+        // Identity consumption is the storage owner's exclusive reservation and
+        // precedes any child directory creation. A consumed child identity is
+        // reported as in-use so the caller retries with a fresh identity; the
+        // prior reservation is never overwritten.
+        product
+            .reserve_conversation(conversation_id)
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    SpawnError::ConversationIdentityInUse {
+                        conversation_id: conversation_id.clone(),
+                        path: semantic_root.clone(),
+                    }
+                } else {
+                    SpawnError::WorkspaceSetup {
+                        detail: error.to_string(),
+                    }
+                }
+            })?;
         for path in [
             durable_store.clone(),
             PathBuf::from(format!("{}-wal", durable_store.display())),
@@ -253,11 +271,9 @@ impl PhysicalChildRuntimeRoot {
                 });
             }
         }
-        crate::local_runtime::session::SessionCatalog::reserve_conversation_directory_under(
+        crate::local_runtime::session::SessionCatalog::create_conversation_allocation(
             product,
-            ownership,
             &semantic_root,
-            conversation_id,
         )
         .map_err(|error| {
             if error.kind() == std::io::ErrorKind::AlreadyExists {
@@ -2843,6 +2859,56 @@ mod tests {
             super::SpawnError::ConversationIdentityInUse { .. }
         ));
         first_root.remove().expect("remove the first physical root");
+    }
+
+    /// R08: the real child/subagent allocation path
+    /// (`allocate_child_runtime_root` -> `PhysicalChildRuntimeRoot::allocate`)
+    /// uses the same local-storage-owned exclusive Conversation reservation
+    /// as root Session allocation. The identity is consumed before the
+    /// allocation directory exists, the marker is the consumption proof, and
+    /// no secondary Session-directory uniqueness scan runs in this path.
+    #[tokio::test]
+    async fn r08_child_allocation_uses_the_shared_reservation_contract() {
+        let dir = tempfile::tempdir().expect("lab");
+        let plan = allocation_plan(dir.path().join("runtime"));
+        let conversation_id = ConversationId::generate();
+        let runtime_root = plan
+            .allocate_child_runtime_root(
+                &conversation_id,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
+            .expect("physical child incarnation");
+        // The storage owner's marker records the consumed identity.
+        let marker = plan
+            .product_root
+            .root()
+            .join("conversation-reservations")
+            .join(conversation_id.as_str());
+        assert!(
+            marker.is_file(),
+            "child allocation left no reservation marker"
+        );
+        assert_eq!(
+            plan.product_root
+                .reserve_conversation(&conversation_id)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::AlreadyExists,
+            "child allocation left the Conversation identity reusable"
+        );
+        // The semantic allocation directory is the child's durable store
+        // parent; the child process initializes `conversation.sqlite` there.
+        let durable = crate::runtime::subagent::child_conversation_store_path(
+            plan.product_root.root(),
+            &plan.session_id,
+            &conversation_id,
+        );
+        assert!(
+            durable.parent().expect("semantic allocation").is_dir(),
+            "child allocation did not materialize its semantic destination"
+        );
+        runtime_root.remove().expect("remove the fresh incarnation");
     }
 
     /// A committed child keeps its stable conversation database when the

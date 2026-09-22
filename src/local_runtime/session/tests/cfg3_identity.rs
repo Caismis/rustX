@@ -100,15 +100,12 @@ fn same_conversation_uuid_in_different_sessions_has_exactly_one_reservation_winn
                     .unwrap()
                     .to_owned();
                     barrier.wait();
-                    (
-                        allocation.clone(),
-                        SessionCatalog::reserve_conversation_directory_under(
-                            product,
-                            &product.ownership_mutation().unwrap(),
-                            &allocation,
-                            conversation,
-                        ),
-                    )
+                    // Mirrors production: reserve the identity first, then
+                    // materialize the allocation directory only for the winner.
+                    let result = product.reserve_conversation(conversation).and_then(|_| {
+                        SessionCatalog::create_conversation_allocation(product, &allocation)
+                    });
+                    (allocation.clone(), result)
                 })
             })
             .collect();
@@ -131,15 +128,7 @@ fn same_conversation_uuid_in_different_sessions_has_exactly_one_reservation_winn
     assert!(!loser.0.exists());
     let marker = winner.0.join("retained-output");
     fs::write(&marker, "retained").unwrap();
-    assert!(
-        SessionCatalog::reserve_conversation_directory_under(
-            &controller,
-            &controller.ownership_mutation().unwrap(),
-            &loser.0,
-            &conversation
-        )
-        .is_err()
-    );
+    assert!(controller.reserve_conversation(&conversation).is_err());
     assert_eq!(fs::read_to_string(marker).unwrap(), "retained");
 }
 
@@ -147,18 +136,27 @@ fn same_conversation_uuid_in_different_sessions_has_exactly_one_reservation_winn
 fn first_session_collision_refuses_without_overwriting_an_unpublished_reservation() {
     for collide_session in [true, false] {
         let directory = tempfile::tempdir().unwrap();
+        // A supported modern root; the legacy boundary is exercised separately.
+        let product = crate::runtime::local_storage::ProductRoot::create(directory.path()).unwrap();
         let session = SessionId::from_uuid(uuid(10)).unwrap();
         let conversation = ConversationId::from_uuid(uuid(12)).unwrap();
         let reserved_session = directory.path().join("sessions").join(session.as_str());
         let reserved_conversation = reserved_session
             .join("conversations")
             .join(conversation.as_str());
-        fs::create_dir_all(&reserved_conversation).unwrap();
-        let marker = reserved_conversation.join("conversation.sqlite");
-        fs::write(&marker, b"existing durable bytes").unwrap();
         let allocation = if collide_session {
+            // A reserved Session directory exists without a catalog entry.
+            fs::create_dir_all(&reserved_conversation).unwrap();
+            fs::write(
+                reserved_conversation.join("conversation.sqlite"),
+                b"existing durable bytes",
+            )
+            .unwrap();
             [10, 11, 13]
         } else {
+            // The Conversation identity is already consumed in the reservation
+            // namespace, independently of any allocation directory.
+            product.reserve_conversation(&conversation).unwrap();
             [20, 21, 12]
         };
         let result = SessionCatalog::create_unpublished_with_identities(
@@ -170,7 +168,14 @@ fn first_session_collision_refuses_without_overwriting_an_unpublished_reservatio
             result.is_err(),
             "the first allocation must refuse a reserved identity"
         );
-        assert_eq!(fs::read(&marker).unwrap(), b"existing durable bytes");
+        if collide_session {
+            assert_eq!(
+                fs::read(reserved_conversation.join("conversation.sqlite")).unwrap(),
+                b"existing durable bytes"
+            );
+        } else {
+            assert!(product.reserve_conversation(&conversation).is_err());
+        }
         assert!(!directory.path().join("sessions/catalog.json").exists());
     }
 }
