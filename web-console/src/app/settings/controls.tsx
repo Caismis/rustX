@@ -6,6 +6,13 @@ import { EditorStateContext, SettingsTransactionStore, SourceContext } from './d
 import { authoredStateLabel, effectiveStateLabel, provenanceLabel, revisionSelector, unitFacts } from './projection';
 import css from '../../presentation/settings/SettingsContent.module.css';
 
+/** Submit one exact native semantic-unit mutation.
+ *
+ * Resolves with the committed revision whenever the native source write became
+ * definitive — including when the Settings presentation that hosted this editor
+ * was retired while the acknowledgement was in flight — and with `undefined`
+ * only when no commit became definitive. A presentation lifetime fence is never
+ * reported here as a failed submission. */
 export type SaveSource = (mutation: SourceMutation, revision: string) => Promise<string | undefined>;
 
 /** One native semantic unit's editing surface.
@@ -95,6 +102,10 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, save, 
     const token = edits.beginSubmit(identity, base, revisionSelector(mutation(submission)));
     setBusy(true); setSaved(false);
     try {
+      // The acknowledgement is recorded against this exact transaction owner,
+      // which is scoped by endpoint, authority and target identity and outlives
+      // both this form and the Settings dialog. `undefined` is therefore a real
+      // "no commit became definitive", never "the UI that asked went away".
       const next = await save(mutation(submission), base);
       if (next) { edits.acknowledge(identity, token, next); setSaved(true); }
       else edits.fail(identity, token);

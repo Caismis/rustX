@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Settings, settingsTransactionStores } from '../src/app/settings/Settings';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/app-server';
-import type { ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v18';
+import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v18';
 import { cfg3Application } from './cfg3-data';
 import { cfg3Client, cfg3Host, cfg3Session } from './cfg3-fixture';
 afterEach(cleanup);
@@ -563,4 +563,92 @@ it('S1-15 an inherited MCP definition and named Agent are discoverable from the 
   const agents = within(screen.getByRole('region', { name: 'Named Agents' }));
   expect(agents.getByRole('button', { name: 'Override Agent reviewer' })).toBeTruthy();
   expect(writes(s)).toHaveLength(0);
+});
+
+/** Author one Provider whose credential is a literal secret, and hold the whole
+ * Product Host write response after native `sourceWrite` has definitively
+ * committed. The barrier is a deferred promise, never a timer. */
+async function heldSecretSave(s: ReturnType<typeof cfg3Client>) {
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const host = cfg3Host(s);
+  const configure = host.configureWorkspace!;
+  host.configureWorkspace = async (id, endpoint, operation) => {
+    const outcome = await configure(id, endpoint, operation);
+    // Native committed; only the Host/browser response is still in flight.
+    if (operation.kind === 'write') await held;
+    return outcome;
+  };
+  const ui = render(<Settings client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={host} />);
+  await screen.findByText(/Revision: workspace-1/);
+  fireEvent.click(screen.getByRole('button', { name: 'Providers & Models' }));
+  fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
+  fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } });
+  fireEvent.change(screen.getByLabelText('Credential source'), { target: { value: 'literal' } });
+  fireEvent.change(screen.getByLabelText('New literal credential'), { target: { value: SECRET_SENTINEL } });
+  // The dirty draft is the only place the authored secret legitimately lives.
+  expect(retained(s)).toContain(SECRET_SENTINEL);
+  fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
+  await waitFor(() => expect(writes(s)).toHaveLength(1));
+  return { ui, host, release: async () => { await act(async () => { release(); await held; }); } };
+}
+/** Native commits the literal credential and projects it redacted. */
+const commitsProvider = async (op: { method: string }, source: SourceSettings) => {
+  if (op.method === 'configuration/sourceWrite') source.workspace!.authored = { providers: { secret: { base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
+};
+
+it('S1-16 a definitive acknowledgement outlives the whole Settings dialog and retires the submitted secret-bearing transaction', async () => {
+  const s = cfg3Client(commitsProvider);
+  const { ui, host, release } = await heldSecretSave(s);
+  // The whole Settings dialog closes — not merely the editor section — while
+  // the definitive acknowledgement is still in flight.
+  ui.unmount();
+  await release();
+  // A retired presentation lifetime cannot reinterpret a definitive commit as a
+  // failed submission: the acknowledgement is recorded against the exact
+  // transaction that submitted it, and the confirmed secret-bearing draft is
+  // gone from everything that store retains.
+  await waitFor(() => expect(retained(s)).toContain('"committed":"saved-2"'));
+  expect(retained(s)).not.toContain(SECRET_SENTINEL);
+  expect(retained(s)).not.toContain('"draft"');
+  // Reopening the same Settings target reaches the same durable store, whose
+  // acknowledged mutation settles against the authoritative projection.
+  render(<Settings client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={host} />);
+  await screen.findByText(/Revision: saved-2/);
+  await waitFor(() => expect(retained(s)).not.toContain('"committed"'));
+  expect(retained(s)).not.toContain(SECRET_SENTINEL);
+  expect(document.body.innerHTML).not.toContain(SECRET_SENTINEL);
+  // The committed revision is the base, so closing Settings never manufactures
+  // an external conflict or a reviewed-revision gesture.
+  fireEvent.click(screen.getByRole('button', { name: 'Providers & Models' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Provider secret' }));
+  expect((screen.getByLabelText('Credential source') as HTMLSelectElement).value).toBe('retain');
+  expect(screen.queryByText(/Source revision changed/)).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull();
+  // Exactly one write, and reopening replays nothing.
+  expect(writes(s)).toHaveLength(1);
+});
+
+it('S1-16 an acknowledgement from the retired authority settles its own transaction and never reaches the replacement', async () => {
+  const s = cfg3Client(commitsProvider);
+  const { ui, host, release } = await heldSecretSave(s);
+  const submitting = settingsTransactionStores(s.client);
+  expect(submitting).toHaveLength(1);
+  ui.unmount();
+  // The App Server authority is replaced while the acknowledgement is in
+  // flight, so the reopened Settings owns a different transaction identity.
+  s.state.authorityRevision = (s.state.authorityRevision ?? 0) + 1;
+  render(<Settings client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={host} />);
+  await screen.findByText(/Revision: /);
+  const replacement = settingsTransactionStores(s.client).filter(store => !submitting.includes(store));
+  expect(replacement).toHaveLength(1);
+  await release();
+  // The old authority's acknowledgement settles the old authority's
+  // transaction; the replacement's transaction state stays untouched.
+  await waitFor(() => expect(JSON.stringify(submitting[0].retainedState())).toContain('"committed"'));
+  expect(replacement[0].retainedState()).toEqual([]);
+  expect(JSON.stringify(replacement[0].retainedState())).not.toContain(SECRET_SENTINEL);
+  expect(JSON.stringify(submitting[0].retainedState())).not.toContain(SECRET_SENTINEL);
+  expect(writes(s)).toHaveLength(1);
 });
