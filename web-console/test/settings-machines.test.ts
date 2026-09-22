@@ -353,6 +353,10 @@ it('R04 a definitive acknowledgement settles its transaction after the presentat
   // The Settings dialog closes while the acknowledgement is in flight.
   actor.send({ type: 'DETACH' });
   expect(actor.getSnapshot().matches({ authority: 'suspended' })).toBe(true);
+  // The observation is demoted to stale presentation data; the transaction is
+  // retained in full.
+  expect(actor.getSnapshot().context.observation).toBeUndefined();
+  expect(actor.getSnapshot().context.staleObservation?.user.revision).toBe('r1');
   const readsBefore = scripted.reads.length;
   scripted.writes[0].resolve({ acknowledgement: projection('r2') });
   await flush();
@@ -360,9 +364,13 @@ it('R04 a definitive acknowledgement settles its transaction after the presentat
   // detached lifetime issues no read of its own.
   expect(unitOf(actor).getSnapshot().context.submitted?.committed).toBe('r2');
   expect(scripted.reads).toHaveLength(readsBefore);
-  // Reattaching observes it, and the transaction settles exactly once.
+  // Reattaching observes it, and the transaction settles exactly once. The
+  // fresh observation every new attachment owes and the commit's post-commit
+  // read are the same single read.
   actor.send({ type: 'ATTACH' });
   await flush();
+  expect(scripted.reads).toHaveLength(readsBefore + 1);
+  expect(actor.getSnapshot().context.observation).toBeUndefined();
   scripted.reads.at(-1)!.resolve(projection('r2'));
   await flush();
   expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
@@ -395,6 +403,307 @@ it('R05 an authority replacement leaves the old acknowledgement settling only it
   expect(newActor.getSnapshot().context.observation?.user.revision).toBe('fresh');
   expect(newActor.getSnapshot().context.message).toBe('');
   expect(replacement.writes).toHaveLength(0);
+});
+
+// ── 4b. Presentation attachment revalidates the observation ─────────────────
+//
+// Presentation lifetime, observation lifetime, editing transaction lifetime,
+// native mutation lifetime, App Server authority lifetime and connection
+// generation lifetime are six separate facts. `DETACH` retains editing
+// transactions; `ATTACH` revalidates authoritative observation. The retained
+// observation is stale presentation data: keeping it for presentation is never
+// declaring it the fresh authority of a newly attached presentation.
+
+it('R19 reopening rereads even without publication', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  expect(actor.getSnapshot().context.observation?.user.revision).toBe('r1');
+  actor.send({ type: 'DETACH' });
+  // The observation is demoted to stale presentation data: retained for
+  // presentation, but no longer authority.
+  const detached = actor.getSnapshot();
+  expect(detached.context.observation).toBeUndefined();
+  expect(detached.context.staleObservation?.user.revision).toBe('r1');
+  // External authority becomes r2 with no publication change, no generation
+  // change and no commit obligation — exactly the case where r1 used to stay
+  // on screen as if it were current.
+  actor.send({ type: 'ATTACH' });
+  await flush();
+  // The new attachment owes one fresh authoritative read, and the old r1 is
+  // not silently treated as fresh authority while it is in flight: nothing is
+  // read twice, and nothing may be submitted against the demoted value.
+  expect(scripted.reads).toHaveLength(2);
+  const attaching = actor.getSnapshot();
+  expect(attaching.matches({ authority: { attached: 'reading' } })).toBe(true);
+  expect(attaching.context.observation).toBeUndefined();
+  submit(actor, 'r1');
+  await flush();
+  expect(scripted.writes).toHaveLength(0);
+  scripted.reads[1].resolve(projection('r2'));
+  await flush();
+  const snapshot = actor.getSnapshot();
+  expect(snapshot.context.observation?.user.revision).toBe('r2');
+  expect(snapshot.context.staleObservation).toBeUndefined();
+  // Exactly two reads occurred, and nothing polls.
+  expect(scripted.reads).toHaveLength(2);
+});
+
+it('R20 reopening preserves a dirty draft and pinned base', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  const authored = unitOf(actor).getSnapshot();
+  expect(authored.context.draft).toEqual({ value: ['read'] });
+  expect(authored.context.base).toBe('r1');
+  actor.send({ type: 'DETACH' });
+  actor.send({ type: 'ATTACH' });
+  await flush();
+  scripted.reads.at(-1)!.resolve(projection('r2'));
+  await flush();
+  const unit = unitOf(actor).getSnapshot();
+  // The draft survives the presentation bounce and is not recreated from the
+  // new native value.
+  expect(unit.context.draft).toEqual({ value: ['read'] });
+  expect(unit.matches({ intent: 'dirty' })).toBe(true);
+  // The pinned CAS base remains r1 while the unit's observed revision advances
+  // to r2, so the transaction now requires review/conflict handling.
+  expect(unit.context.base).toBe('r1');
+  expect(unit.context.observed).toBe('r2');
+  expect(unit.matches({ base: 'pinned' })).toBe(true);
+  // Nothing is submitted automatically, and the next submission is fenced on
+  // exactly the pinned base rather than on the new authority revision.
+  expect(scripted.writes).toHaveLength(0);
+  submit(actor, 'r2');
+  await flush();
+  expect(scripted.writes).toHaveLength(1);
+  expect(scripted.writes[0].expected).toBe('r1');
+});
+
+it('R21 reopening after a read failure retries the observation', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  // An independent write failure first, then the read failure.
+  submit(actor, 'r1');
+  await flush();
+  scripted.writes[0].reject(new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: 'r1', actual: 'r-external' } }));
+  await flush();
+  expect(actor.getSnapshot().context.writeError).toContain('Source changed');
+  scripted.reads.at(-1)!.reject(new Error('read unavailable'));
+  await flush();
+  expect(actor.getSnapshot().context.readError).toContain('read unavailable');
+  actor.send({ type: 'DETACH' });
+  actor.send({ type: 'ATTACH' });
+  await flush();
+  // Reattachment initiates a fresh authoritative read even though a previous
+  // observation is retained.
+  expect(scripted.reads).toHaveLength(3);
+  scripted.reads[2].resolve(projection('r2'));
+  await flush();
+  const snapshot = actor.getSnapshot();
+  // The successful read clears only the read failure it answers…
+  expect(snapshot.context.readError).toBe('');
+  // …the independent write failure is untouched…
+  expect(snapshot.context.writeError).toContain('Source changed');
+  // …and the observation is authoritative again.
+  expect(snapshot.context.observation?.user.revision).toBe('r2');
+  expect(snapshot.matches({ authority: { attached: 'idle' } })).toBe(true);
+  expect(snapshot.matches({ mutation: 'conflicted' })).toBe(true);
+});
+
+// ── 4c. Attachment validation composes with every standing obligation ───────
+//
+// The attachment's validation read is one obligation among the ones already
+// standing, and they all coalesce through the single read owner. There is no
+// second convergence worker, no parallel refresh mechanism and no replayed
+// write.
+
+it('R22 reopening with an unobserved commit coalesces validation and post-commit into one read', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  actor.send({ type: 'DETACH' });
+  // The definitive commit lands while nothing is presented.
+  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  await flush();
+  expect(actor.getSnapshot().context.unobservedCommit).toEqual({ identity: toolsIdentity });
+  actor.send({ type: 'ATTACH' });
+  await flush();
+  // The new attachment's validation and the commit's post-commit read are the
+  // same single authoritative read.
+  expect(scripted.reads).toHaveLength(2);
+  scripted.reads[1].resolve(projection('r2'));
+  await flush();
+  expect(actor.getSnapshot().context.observation?.user.revision).toBe('r2');
+  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expect(actor.getSnapshot().matches({ mutation: 'idle' })).toBe(true);
+  // Nothing duplicates, replays or polls: one write ever, two reads ever.
+  expect(scripted.reads).toHaveLength(2);
+  expect(scripted.writes).toHaveLength(1);
+});
+
+it('R22 reopening with a newer publication coalesces validation and publication into one read', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port, { 'source:user': userApplication('1') });
+  await flush();
+  scripted.reads[0].resolve(projection('r1', userApplication('1')));
+  await flush();
+  actor.send({ type: 'DETACH' });
+  // A newer native publication arrives while nothing is presented.
+  reconnect(actor, 1, { 'source:user': userApplication('2') });
+  actor.send({ type: 'ATTACH' });
+  await flush();
+  // One read answers both the new attachment and the publication.
+  expect(scripted.reads).toHaveLength(2);
+  scripted.reads[1].resolve(projection('r2', userApplication('2')));
+  await flush();
+  expect(actor.getSnapshot().context.observation?.user.revision).toBe('r2');
+  expect(scripted.reads).toHaveLength(2);
+});
+
+it('R22 reopening during a Workspace write keeps its reserved reread as the fresh observation', async () => {
+  const scripted = scriptedPort(true);
+  const actor = settingsActor(scripted.port, undefined, true);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  expect(actor.getSnapshot().matches({ authority: { attached: 'awaitingWrite' } })).toBe(true);
+  actor.send({ type: 'DETACH' });
+  actor.send({ type: 'ATTACH' });
+  await flush();
+  // The write reserved the read order at its initiation; the presentation
+  // bounce restores that reservation instead of starting a competing read.
+  expect(scripted.reads).toHaveLength(1);
+  expect(actor.getSnapshot().matches({ authority: { attached: 'awaitingWrite' } })).toBe(true);
+  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: { status: 'observed', projection: projection('r2') } });
+  await flush();
+  // The write's own reread is the new attachment's fresh authoritative
+  // observation, and it settles the committed transaction exactly once.
+  const snapshot = actor.getSnapshot();
+  expect(snapshot.context.observation?.user.revision).toBe('r2');
+  expect(snapshot.context.staleObservation).toBeUndefined();
+  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expect(snapshot.matches({ mutation: 'idle' })).toBe(true);
+  expect(scripted.reads).toHaveLength(1);
+  expect(scripted.writes).toHaveLength(1);
+});
+
+it('R22 a commit landing during the reattach read supersedes it into one post-commit read', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  actor.send({ type: 'DETACH' });
+  actor.send({ type: 'ATTACH' });
+  await flush();
+  expect(scripted.reads).toHaveLength(2);
+  // The validation read is in flight when the acknowledgement lands. It
+  // predates the commit, so the post-commit read the commit forces supersedes
+  // it rather than letting it discharge the commit's observation obligation.
+  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  await flush();
+  expect(scripted.reads).toHaveLength(3);
+  // The superseded read can never publish, whatever it carries and whenever it
+  // settles.
+  scripted.reads[1].resolve(projection('stale'));
+  await flush();
+  expect(actor.getSnapshot().context.observation).toBeUndefined();
+  scripted.reads[2].resolve(projection('r2'));
+  await flush();
+  const snapshot = actor.getSnapshot();
+  expect(snapshot.context.observation?.user.revision).toBe('r2');
+  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expect(snapshot.matches({ mutation: 'idle' })).toBe(true);
+  expect(scripted.writes).toHaveLength(1);
+});
+
+// ── 4d. Reattachment around connection-generation replacement ───────────────
+
+it.each(['the old-generation read resolves first', 'the old-generation read resolves last'] as const)(
+  'R23 an old-generation read never publishes into the reattached presentation, when %s', async order => {
+    const scripted = scriptedPort();
+    const actor = settingsActor(scripted.port);
+    await flush();
+    scripted.reads[0].resolve(projection('r1'));
+    await flush();
+    // A same-generation read is issued and left outstanding across the close.
+    actor.send({ type: 'REFRESH' });
+    await flush();
+    expect(scripted.reads).toHaveLength(2);
+    actor.send({ type: 'DETACH' });
+    // The connection generation is replaced while nothing is presented, which
+    // retires the old generation's observation outright — not even stale
+    // presentation data survives into the new generation.
+    reconnect(actor, 2);
+    const retired = actor.getSnapshot();
+    expect(retired.context.observation).toBeUndefined();
+    expect(retired.context.staleObservation).toBeUndefined();
+    // The new generation's presentation attachment obtains its own observation
+    // from nothing.
+    actor.send({ type: 'ATTACH' });
+    await flush();
+    expect(scripted.reads).toHaveLength(3);
+    const stale = scripted.reads[1], fresh = scripted.reads[2];
+    if (order === 'the old-generation read resolves first') {
+      stale.resolve(projection('old-generation'));
+      await flush();
+      expect(actor.getSnapshot().context.observation).toBeUndefined();
+      fresh.resolve(projection('new-generation'));
+    } else {
+      fresh.resolve(projection('new-generation'));
+      await flush();
+      expect(actor.getSnapshot().context.observation?.user.revision).toBe('new-generation');
+      stale.resolve(projection('old-generation'));
+    }
+    await flush();
+    const snapshot = actor.getSnapshot();
+    expect(snapshot.context.observation?.user.revision).toBe('new-generation');
+    expect(snapshot.context.readError).toBe('');
+    expect(snapshot.context.message).toBe('');
+    expect(scripted.reads).toHaveLength(3);
+  });
+
+it('R23 a late failure of an old-generation read cannot populate the read failure', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  expect(scripted.reads).toHaveLength(1);
+  actor.send({ type: 'DETACH' });
+  reconnect(actor, 2);
+  actor.send({ type: 'ATTACH' });
+  await flush();
+  expect(scripted.reads).toHaveLength(2);
+  // The generation-1 read fails after the new generation's presentation is
+  // already attached: its failure belongs to the retired lifetime.
+  scripted.reads[0].reject(new Error('old-generation read failed'));
+  await flush();
+  expect(actor.getSnapshot().context.readError).toBe('');
+  expect(actor.getSnapshot().context.observation).toBeUndefined();
+  scripted.reads[1].resolve(projection('new-generation'));
+  await flush();
+  const snapshot = actor.getSnapshot();
+  expect(snapshot.context.observation?.user.revision).toBe('new-generation');
+  expect(snapshot.context.readError).toBe('');
 });
 
 // ── 6./7./8. Per-unit CAS transactions ──────────────────────────────────────
@@ -616,6 +925,9 @@ it('R13 a successful observation clears the read failure and preserves the indep
 });
 
 // ── 13b. Application versions are scoped to one connection generation ───────
+//
+// (These two continue the Session R12/R13 series; the R19-R23 presentation
+// attachment regressions live in section 4b below.)
 
 /** A Session actor whose reads are released explicitly by the test. */
 function scriptedSession() {
@@ -628,7 +940,7 @@ function scriptedSession() {
 }
 const otherCandidate = { identity: { input_revision: 'input-9', attempt: '9' }, expected_binding: '2', impact: 'prefix_changed' as const };
 
-it('R19 a new connection generation establishes its own application-version baseline', async () => {
+it('R13b a new connection generation establishes its own application-version baseline', async () => {
   const { actor, reads } = scriptedSession();
   actor.send({ type: 'REFRESH' });
   await flush();
@@ -652,7 +964,7 @@ it('R19 a new connection generation establishes its own application-version base
   expect(snapshot.matches({ observation: 'ready' })).toBe(true);
 });
 
-it('R19 an obsolete result of the same connection generation still cannot regress the observation', async () => {
+it('R13c an obsolete result of the same connection generation still cannot regress the observation', async () => {
   const { actor, reads } = scriptedSession();
   actor.send({ type: 'TRANSPORT', connection: 'connected', generation: 2 });
   await flush();

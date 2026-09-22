@@ -26,9 +26,18 @@ export interface SettingsTargetContext {
   /** Native per-scope application publications, exactly as the client mirrors
    * them. A level, never an edge. */
   publications: Record<string, ConfigurationApplication> | undefined;
-  /** The latest adopted authoritative projection. Only authoritative reads
-   * reach it: a write acknowledgement is not a projection. */
+  /** The latest adopted authoritative projection of the *current* presentation
+   * attachment and connection generation. Only authoritative reads reach it: a
+   * write acknowledgement is not a projection. This field being present is
+   * exactly what "authoritative observation established" means, so it is
+   * written only by `adoptProjection` and demoted at every lifetime boundary. */
   observation?: SourceSettings;
+  /** The last observation, demoted when the presentation attachment or the
+   * connection generation that established it ended. Stale presentation data
+   * only: no guard, action or convergence decision reads it. Retaining the last
+   * observation for presentation is never declaring it the fresh authority of a
+   * newly attached presentation. */
+  staleObservation?: SourceSettings;
   /** Owned by the `authority` region alone. A successful read clears only this;
    * it never erases a write, conflict or application failure. */
   readError: string;
@@ -84,7 +93,9 @@ export type SettingsTargetEvent =
  * Level, not edge: until this target's own projection carries at least the
  * version published for its scope, the obligation stands — an acknowledgement
  * or an older projection landing in between can neither discharge nor cancel
- * it. With no projection at all, any start owes the first authoritative read. */
+ * it. With no current projection at all — which is the state every `ATTACH`
+ * establishes, because it demotes the previous observation to stale
+ * presentation data — any start owes the first authoritative read. */
 function publicationObligation(context: SettingsTargetContext): bigint | undefined {
   const held = context.observation;
   if (!held) return 0n;
@@ -145,7 +156,11 @@ function unitRevision(projection: SourceSettings, selector: RevisionSelector): s
  *   such a late acknowledgement may never do is publish its generation's
  *   observation into the new one.
  * - *presentation* — `ATTACH` / `DETACH`. A detached presentation reads
- *   nothing; a mutation already in flight still settles. */
+ *   nothing; a mutation already in flight still settles. `DETACH` retains
+ *   editing transactions; `ATTACH` revalidates authoritative observation: the
+ *   previous observation is demoted to stale presentation data, so every new
+ *   presentation attachment must establish a fresh authoritative read before
+ *   any observation is current again. */
 export const settingsTargetMachine = setup({
   types: {
     context: {} as SettingsTargetContext,
@@ -164,17 +179,24 @@ export const settingsTargetMachine = setup({
   },
   guards: {
     /** Level-triggered: a publication this projection has not reached, a
-     * definitive commit no post-commit read has observed, or no projection at
-     * all. Never a timer and never a poll. */
+     * definitive commit no post-commit read has observed, or no current
+     * projection at all — which is how every `ATTACH` establishes the one fresh
+     * authoritative read its presentation attachment owes. Never a timer and
+     * never a poll. */
     owesRead: ({ context }) => context.connection === 'connected'
       && (context.unobservedCommit !== undefined || publicationObligation(context) !== undefined),
-    /** The publication half of the obligation alone. A write holding the read
-     * order open is only superseded by a read that a *newer native
-     * publication* owes — never by the commit obligation of its own
-     * acknowledgement, which is exactly what its reread is about to answer. */
-    owesPublicationRead: ({ context }) => context.connection === 'connected' && publicationObligation(context) !== undefined,
+    /** The publication half of the obligation alone — and exactly it. A write
+     * holding the read order open is only superseded by a read that a *newer
+     * native publication* owes: never by the commit obligation of its own
+     * acknowledgement, and never by the bare "no current projection" first-read
+     * obligation a reattached presentation carries — both of which the
+     * reserved reread is exactly about to answer. */
+    owesPublicationRead: ({ context }) => context.connection === 'connected'
+      && context.observation !== undefined && publicationObligation(context) !== undefined,
     /** Native authority is the only gate on authoring. The browser may submit
-     * only against an observed authoritative projection of a live connection. */
+     * only against an observed authoritative projection of a live connection —
+     * and only against the observation of the current presentation attachment,
+     * never the one demoted to stale presentation data. */
     canSubmit: ({ context }) => context.connection === 'connected' && !context.readError && context.observation !== undefined,
     /** No authoritative read of this target can be made at all right now. The
      * Product Host is an independent transport, so a Workspace write may commit
@@ -199,6 +221,10 @@ export const settingsTargetMachine = setup({
     /** A Workspace write performs its own authoritative reread, so that write
      * reserves the read order at its initiation. A User write owns no reread. */
     portOwnsReread: ({ context }) => context.port.ownsReread,
+    /** The write-owned read reservation is still open: a Workspace mutation is
+     * in flight and its own reread will come. A presentation bounce must not
+     * steal that reserved read order with a competing read. */
+    readReservationOpen: ({ context }) => context.port.ownsReread && context.submission !== undefined,
     generationChanged: ({ context, event }) => event.type === 'TRANSPORT' && event.generation !== context.generation,
     isConflict: ({ event }) => classifyWriteFailure((event as unknown as { error: unknown }).error) === 'conflict',
     isUncertain: ({ event }) => classifyWriteFailure((event as unknown as { error: unknown }).error) === 'uncertain',
@@ -219,10 +245,24 @@ export const settingsTargetMachine = setup({
      * post-commit read obligation of a mutation that already crossed the native
      * submission boundary: clearing it would strand that commit's classification
      * on a lifetime that no longer reads, so the new generation's own
-     * authoritative read inherits the obligation and settles it instead. */
+     * authoritative read inherits the obligation and settles it instead. The
+     * previous generation's projection is retired outright — not even kept as
+     * stale presentation data — because an observation belongs to exactly one
+     * connection generation. */
     retireObservation: assign({
-      observation: () => undefined, readError: () => '', writeError: () => '', message: () => '',
+      observation: () => undefined, staleObservation: () => undefined,
+      readError: () => '', writeError: () => '', message: () => '',
       chasing: () => undefined,
+    }),
+    /** The observation's authority ends with the presentation attachment that
+     * established it. The value is demoted to stale presentation data, not
+     * discarded: retaining the last observation for presentation is not
+     * declaring it the fresh authority of the next attachment. What `ATTACH`
+     * establishes is a fresh authoritative read obligation; what it must never
+     * do is discard an editing transaction. */
+    demoteObservation: assign({
+      observation: () => undefined,
+      staleObservation: ({ context }) => context.observation ?? context.staleObservation,
     }),
     recordChasing: assign({ chasing: ({ context }) => publicationObligation(context) }),
     reportStaleApplication: assign({
@@ -254,11 +294,13 @@ export const settingsTargetMachine = setup({
      * a Workspace write owns — and only from a state that still owns the read
      * order. Adopting broadcasts the exact revision each live transaction is
      * settled by, so an acknowledged mutation retires even when the editor, or
-     * the whole dialog, that submitted it is gone. */
+     * the whole dialog, that submitted it is gone. Adopting also drops the
+     * demoted stale copy: once a fresh observation exists, nothing presents
+     * the old one. */
     adoptProjection: enqueueActions(({ context, event, enqueue }) => {
       const projection = (event as unknown as { output?: SourceSettings; projection?: SourceSettings }).output
         ?? (event as unknown as { projection: SourceSettings }).projection;
-      enqueue.assign({ observation: () => projection, readError: () => '' });
+      enqueue.assign({ observation: () => projection, readError: () => '', staleObservation: () => undefined });
       for (const unit of Object.values(context.units)) {
         const revision = unitRevision(projection, unit.getSnapshot().context.selector);
         if (revision !== undefined) enqueue.sendTo(unit, { type: 'OBSERVED', revision });
@@ -387,12 +429,30 @@ export const settingsTargetMachine = setup({
   states: {
     authority: {
       initial: 'suspended',
-      on: { DETACH: '.suspended' },
+      on: {
+        // Every `ATTACH` is one new presentation attachment and owes exactly
+        // one fresh authoritative observation. It demotes the previous
+        // observation to stale presentation data, and the transition re-enters
+        // `attached` from whatever state is active, so the standing "no current
+        // projection" obligation starts the validation read through the single
+        // read owner, coalesced with any publication or commit obligation
+        // already outstanding. The one reattachment that must not start a
+        // competing read is one that lands in the middle of a Workspace write:
+        // that write reserved the read order at its initiation, and the
+        // reservation — like the mutation and its settlement — outlives the
+        // presentation.
+        ATTACH: [
+          { guard: 'readReservationOpen', target: '.attached.awaitingWrite', actions: 'demoteObservation' },
+          { target: '.attached', actions: 'demoteObservation' },
+        ],
+        DETACH: { target: '.suspended', actions: 'demoteObservation' },
+      },
       states: {
         /** No presentation is attached. A detached lifetime reads nothing — it
          * neither polls nor keeps a background read alive — while a mutation
-         * already in flight still settles. */
-        suspended: { on: { ATTACH: 'attached' } },
+         * already in flight still settles. Editing transactions, dirty drafts,
+         * pinned CAS bases and submitted mutation state are all retained. */
+        suspended: {},
 
         /** The observation lifetime of exactly one connection generation.
          *
@@ -447,7 +507,10 @@ export const settingsTargetMachine = setup({
              * that write is initiated. Any authoritative read started afterwards
              * leaves this state, and the Host's reread is then silently
              * superseded however late it arrives — it neither replaces a newer
-             * projection nor publishes a failure the newer read has retired. */
+             * projection nor publishes a failure the newer read has retired.
+             * The reservation survives `DETACH` / `ATTACH`: a reattachment while
+             * the write is in flight rejoins this state, and the write's own
+             * reread becomes the fresh observation of the new attachment. */
             awaitingWrite: {
               always: { guard: 'owesPublicationRead', target: 'reading' },
               on: {
@@ -483,7 +546,6 @@ export const settingsTargetMachine = setup({
               on: {
                 'COMMIT.PENDING': { actions: 'classifyUnobservedCommit' },
                 TRIGGER: 'idle',
-                ATTACH: 'idle',
                 REFRESH: 'reading',
                 'READ.FORCE': 'reading',
               },

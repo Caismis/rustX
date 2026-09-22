@@ -61,7 +61,13 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
   const { actor, transport } = useSettingsTarget(client, target, host);
   const scope: SourceScope = settingsTargetScope(target);
   const [section, setSection] = useState<Section>(initialSection ?? 'overview');
-  const source = useSelector(actor, snapshot => snapshot.context.observation);
+  // The fresh authoritative observation, and the last one demoted to stale
+  // presentation data by a presentation or generation boundary. Rendering the
+  // stale value keeps the presentation continuous across a dialog reopen; it is
+  // never treated as current — the machine owes a fresh read on every ATTACH,
+  // and authoring stays closed until that read is adopted.
+  const observed = useSelector(actor, snapshot => snapshot.context.observation);
+  const source = useSelector(actor, snapshot => snapshot.context.observation ?? snapshot.context.staleObservation);
   const readError = useSelector(actor, snapshot => snapshot.context.readError);
   const writeError = useSelector(actor, snapshot => snapshot.context.writeError);
   const message = useSelector(actor, snapshot => snapshot.context.message);
@@ -72,12 +78,12 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
   const selected = source?.[scope];
   const models = Object.keys(source?.resolved?.models ?? source?.user.authored?.models ?? {});
   const roots = [source?.user_resource_root ? source.user_resource_root + '/skills' : '', source?.workspace_resource_root ? source.workspace_resource_root + '/skills' : ''];
-  const lifecycle = settingsLifecycle({ connection: transport.connection, hasSource: !!source, targetValid, readError });
+  const lifecycle = settingsLifecycle({ connection: transport.connection, hasSource: !!observed, targetValid, readError });
   // A section change remounts the editor subtree so its local picker state does
   // not leak across sections. Editing transactions are deliberately not part of
   // that subtree, so they survive the remount.
   const editorKey = `${transport.endpoint ?? ''}|${transport.authorityRevision ?? 0}|${settingsTargetKey(target)}:${section}`;
-  const editor = selected && <fieldset disabled={busy || !targetValid || transport.connection !== 'connected'} className={css.editor}>
+  const editor = selected && <fieldset disabled={busy || !targetValid || !observed || transport.connection !== 'connected'} className={css.editor}>
     {section === 'catalog' && <CatalogEditor source={source!} scope={scope} revision={selected.revision} />}
     {(section === 'general' || section === 'policies') && <RuntimeEditor document={selected.authored ?? {}} resolved={source!.resolved} scope={scope} revision={selected.revision} policyOnly={section === 'policies'} processPolicyImpacts={source!.process_policy_impacts} />}
     {section.startsWith('root-') && <RootEditor document={selected.authored ?? {}} resolved={source!.resolved} scope={scope} revision={selected.revision} section={section as RootSection} models={models} skillRoots={roots} />}

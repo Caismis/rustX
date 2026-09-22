@@ -460,7 +460,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "b7413703c27486a9fd5fb241c34f7f33e5bf94042dde9a6a8aac7bd6ac6d3253"
+      "local_sha256": "d85a361e2d2d8600674048512e89cf54eb93e66458a8dcfd385585ecf3edb559"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",

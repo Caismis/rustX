@@ -42,7 +42,7 @@ Machines never touch a client, a socket or a Product Host: they invoke a
 lets a machine test drive the real transition graph with deferred promises
 instead of timers, and it keeps transports out of machine context.
 
-### Actor ownership and the three lifetimes
+### Actor ownership and the explicit lifetimes
 
 ```text
 ConfigurationSystem(client)                    keyed by (endpoint, authority revision)
@@ -65,7 +65,22 @@ React Settings dialog ──ATTACH/DETACH──▶ an existing target actor
   unmount and cannot reach them.
 - **Presentation lifetime** — `ATTACH` / `DETACH`. A detached presentation reads
   nothing and converges nothing; it neither polls nor keeps a background read
-  alive. A mutation already in flight still settles.
+  alive. A mutation already in flight still settles. The invariant of the
+  boundary is exactly:
+
+  ```text
+  DETACH retains editing transactions.
+  ATTACH revalidates authoritative observation.
+  ```
+
+- **Observation lifetime** — an authoritative observation belongs to exactly
+  one presentation attachment and one connection generation. `DETACH` (and
+  `ATTACH` itself) demotes it to stale presentation data; a replaced generation
+  retires it outright. An observation retained for stale presentation purposes
+  is never accepted as fresh authority for the new attachment: every new
+  Settings presentation attachment must establish a fresh authoritative
+  observation for that exact target and the current connection generation
+  before any observation is current again.
 - **Connection lifetime** — a new `generation` retires this lifetime's
   observation and presentation state, and deliberately keeps its transactions:
   a reconnect is not a reason to lose a draft or a pinned CAS base.
@@ -76,9 +91,9 @@ Two genuinely independent facts, therefore two parallel regions (plus a small
 `maintenance` region for the explicit native rescan):
 
 ```text
-authority   suspended → idle ⇄ reading → settling → idle | blocked
-                         ↑                                   ↑
-                         └── awaitingWrite ──────────────────┘
+authority   suspended ──ATTACH──▶ idle ⇄ reading → settling → idle | blocked
+                                    ↑                                   ↑
+                                    └── awaitingWrite ──────────────────┘
 mutation    idle → submitting → observing → idle
                              ↘ conflicted | rejected | uncertain
 ```
@@ -87,6 +102,16 @@ Important events: `ATTACH`, `DETACH`, `TRANSPORT`, `REFRESH`, `RECONCILE`,
 `UNIT.EDIT`, `UNIT.SUBMIT`, `UNIT.REVIEW`, `UNIT.DISCARD`, `UNIT.RETIRED`,
 `READ.FORCE`, `READ.ADOPT`, `READ.REREAD_FAILED`, `WRITE.STARTED`,
 `COMMIT.OBSERVED`, `TRIGGER`.
+
+`ATTACH` is the one semantic attachment event and the machine owns all of its
+consequences: it demotes the previous observation to stale presentation data
+and re-enters `attached`, so the standing "no current projection" obligation
+performs exactly one fresh authoritative read through the single read owner —
+coalesced with any publication or commit obligation already outstanding. A
+reattachment that lands while a Workspace write is in flight rejoins
+`awaitingWrite` instead of starting a competing read: that write reserved the
+read order at its initiation, and its own reread is the new attachment's fresh
+authoritative observation.
 
 ### The per-unit transaction machine
 
@@ -409,7 +434,11 @@ that state, and the Host's reread is then silently superseded however late it
 arrives — in both outcomes, so a superseded reread failure is not published as
 this presentation's read failure either. The commit's own observation obligation
 never ejects `awaitingWrite`: that obligation is precisely what the reread is
-about to answer.
+about to answer — and neither does a reattachment's validation read: the
+reservation, like the mutation and its settlement, survives the presentation
+bounce, so `ATTACH` while a Workspace write is in flight rejoins
+`awaitingWrite` and the write's own reread becomes the fresh authoritative
+observation of the new attachment.
 
 Convergence is level-triggered and has no loop, worker, timer or poll:
 `idle` takes an eventless transition to `reading` whenever an obligation is
@@ -425,8 +454,10 @@ The saved notice is reported at the definitive acknowledgement, because that is
 when the commit became a fact; the projection, the read outcome and the native
 application remain separate facts reported separately.
 
-**Presentation lifetime is not mutation lifetime.** `DETACH` suspends reading,
-convergence and every presentation fact. It does not fence a definitive native
+**Presentation lifetime is not mutation lifetime.** `DETACH` retains editing
+transactions — dirty drafts, clean Remove intent, pinned CAS bases and submitted
+mutation state — while suspending reading, convergence and every presentation
+fact. It does not fence a definitive native
 `sourceWrite` acknowledgement: the write is invoked by the target actor, not by
 the dialog, so it completes and is recorded on the transaction that submitted it
 even when the editor, or the whole Settings dialog, unmounted first. A

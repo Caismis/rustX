@@ -95,7 +95,10 @@ and top-level Settings navigation. React subscribes and submits intent. Those
 actors are addressed by `(endpoint, authority revision, subject)`, so a Settings
 dialog closing is a detach — never a cancelled native commit and never a
 discarded editing transaction — and replacing the App Server authority retires
-the old lifetime without letting it publish into its replacement. XState
+the old lifetime without letting it publish into its replacement. Detach
+retains editing transactions; attach revalidates authoritative observation: the
+retained observation is stale presentation data and is never accepted as fresh
+authority for a newly attached presentation. XState
 orchestrates browser behaviour only; the native App Server remains the authority
 for every value, conflict, application and adoption decision.
 
@@ -104,6 +107,8 @@ is in flight, and starting a newer one stops the older read actor, so a
 superseded response has no completion path at all. The reread a Workspace write
 owns is reserved by the state the write enters, and is silently superseded — in
 success and in failure alike — by any read a newer native publication owes.
+The reservation, like the mutation and its settlement, survives a Settings
+close and reopen.
 
 Authored source state and effective resolution state are two independent
 dimensions, not one state machine. "This Workspace authors no override" and "the
