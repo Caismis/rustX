@@ -7396,6 +7396,12 @@ tree, an observer that sees a `sessions` tree re-checks the namespace and
 accepts a concurrently initialized new-format root instead of refusing it as a
 legacy layout.
 
+The measurement evidence for this contract keeps three layers separate: rustX
+logical owner operations, `SQLite`/library-internal filesystem work, and
+physical device I/O. The operation counters are named logical requests, not
+syscall counts; see the [Issue #387 validation
+doc](issue-387-validation.md#three-evidence-layers-that-must-not-be-conflated).
+
 ### Bounded native projections
 
 The native owner, not TypeScript rendering, enforces the projection bounds.

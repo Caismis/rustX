@@ -672,8 +672,8 @@ async fn stage_profile_real_create_pipeline() {
         "catalog_snapshot_ns": per_create(times.catalog_snapshot_ns),
         "reserve_ns": per_create(times.reserve_ns),
         "allocation_dir_ns": per_create(times.allocation_dir_ns),
-        "sqlite_open_ns": per_create(times.sqlite_open_ns),
-        "schema_and_seed_ns": per_create(times.schema_and_seed_ns),
+        "sqlite_bootstrap_ns": per_create(times.sqlite_bootstrap_ns),
+        "lineage_initialize_ns": per_create(times.lineage_initialize_ns),
         "catalog_document_clone_ns": per_create(times.catalog_document_clone_ns),
         "catalog_serialize_ns": per_create(times.catalog_serialize_ns),
         "temp_write_ns": per_create(times.temp_write_ns),
@@ -683,6 +683,7 @@ async fn stage_profile_real_create_pipeline() {
         "measured_total_ns": total_ns,
         "exclusive_sum_ns": exclusive_ns,
         "unattributed_ns": total_ns.saturating_sub(exclusive_ns),
+        "stage_boundaries": "sqlite_bootstrap_ns = SqliteConversationStore::open (connection open+configure+schema create/validate+identity bind); lineage_initialize_ns = initialize_lineage(seed)",
         "note": "exclusive leaf stages only; inclusive prepare/publish are not summed",
     });
     println!("STAGE_PROFILE {}", serde_json::to_string(&report).unwrap());

@@ -203,6 +203,11 @@ product-root directory fsync                              namespace entry durabl
 product-root ancestry fsync (ProductRoot::create)         root entry durable
 ```
 
+The barrier list names logical durability operations (one marker `sync_all`
+request and one directory `sync_all` request per entry the barrier visits). It
+is not a syscall budget: `SQLite`/library-internal filesystem work and physical
+device I/O are separate evidence layers and are not claimed by these names.
+
 A later caller re-establishes the product-root barrier whenever it observes the
 namespace, so an initializer that created the directory and then failed or
 died before the barrier, a failed barrier that left visible residue, and a

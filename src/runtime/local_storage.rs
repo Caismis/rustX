@@ -54,83 +54,165 @@ pub fn conversation_legacy_layout_probe_count() -> u64 {
     LEGACY_LAYOUT_PROBES.load(Ordering::Relaxed)
 }
 
-/// Diagnostics-grade create-path filesystem-operation counters (Issue #387).
+/// Diagnostics-grade rustX-owner logical-operation counters (Issue #387).
 ///
 /// These counters exist so the benchmark and deterministic tests can report
-/// and compare the real filesystem work the create path performs. They are
-/// relaxed-atomic diagnostics only: no production decision reads them, and a
-/// lost increment cannot change storage semantics. The counts are logical
-/// syscall invocations, not physical device I/O and not byte counts (see
-/// [`FsOperationCounts::catalog_logical_bytes_written`]).
-pub mod fs_operations {
+/// and compare the *logical* filesystem operations the create path requests
+/// from its owning rustX components. They are relaxed-atomic diagnostics only:
+/// no production decision reads them, and a lost increment cannot change
+/// storage semantics.
+///
+/// What the counters mean:
+///
+/// - Each counter is incremented **once per logical operation requested by a
+///   named rustX owner**, at the call site that owns the operation. The name of
+///   the counter states the request, not the OS primitive.
+/// - They are **not syscall counts**. One request may correspond to zero, one
+///   or many OS syscalls: `fs::create_dir_all` may create several directories
+///   or none, and a `write_all` may issue several `write(2)` calls. The
+///   benchmark must not derive per-create syscall totals from these values.
+/// - They deliberately **exclude library-internal work**. In particular,
+///   `SqliteConversationStore::open` is counted once as a rustX open request;
+///   every filesystem operation `SQLite` issues internally (journal, schema,
+///   identity binding, its own fsyncs and directory work) is outside these
+///   counters. The same applies to any future embedded store.
+/// - They are **not physical device I/O**. Page cache, filesystem
+///   compression, journaling and device scheduling are not visible here, and
+///   `catalog_logical_bytes_written` is a payload size, not a device-byte
+///   count.
+/// - They are **not a complete inventory of the create path**. Operations
+///   whose owner does not call a recorder (for example the once-per-root
+///   `sessions/` directory setup or catalog-root `create_dir_all` no-op
+///   requests) are intentionally absent; the benchmark documents them as
+///   excluded rather than inferring them from a neighbouring counter.
+pub mod logical_operations {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    static CREATE_OPEN: AtomicU64 = AtomicU64::new(0);
-    static MKDIR: AtomicU64 = AtomicU64::new(0);
-    static WRITE: AtomicU64 = AtomicU64::new(0);
-    static FSYNC: AtomicU64 = AtomicU64::new(0);
-    static RENAME: AtomicU64 = AtomicU64::new(0);
-    static DIR_FSYNC: AtomicU64 = AtomicU64::new(0);
+    // Reservation owner: the local-storage product root.
+    static RESERVATION_MARKER_CREATE: AtomicU64 = AtomicU64::new(0);
+    static RESERVATION_MARKER_WRITE: AtomicU64 = AtomicU64::new(0);
+    static RESERVATION_MARKER_FILE_SYNC: AtomicU64 = AtomicU64::new(0);
+    static RESERVATION_NAMESPACE_MKDIR: AtomicU64 = AtomicU64::new(0);
+    static RESERVATION_NAMESPACE_DIR_SYNC: AtomicU64 = AtomicU64::new(0);
+
+    // Session allocation owner.
+    static SESSION_ALLOCATION_MKDIR: AtomicU64 = AtomicU64::new(0);
+
+    // Conversation allocation owner (root Session preparation and child path).
+    static CONVERSATION_ALLOCATION_MKDIR: AtomicU64 = AtomicU64::new(0);
+
+    // SQLite store open request at the rustX API boundary.
+    static SQLITE_STORE_OPEN_REQUEST: AtomicU64 = AtomicU64::new(0);
+
+    // Catalog commit owner.
+    static CATALOG_TEMP_OPEN: AtomicU64 = AtomicU64::new(0);
+    static CATALOG_PAYLOAD_WRITE: AtomicU64 = AtomicU64::new(0);
+    static CATALOG_FILE_SYNC: AtomicU64 = AtomicU64::new(0);
+    static CATALOG_RENAME: AtomicU64 = AtomicU64::new(0);
+    static CATALOG_DIRECTORY_SYNC: AtomicU64 = AtomicU64::new(0);
     static CATALOG_LOGICAL_BYTES_WRITTEN: AtomicU64 = AtomicU64::new(0);
 
-    /// A point-in-time snapshot of the create-path operation counters.
+    /// A point-in-time snapshot of the rustX logical-operation counters.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-    pub struct FsOperationCounts {
-        /// `open`/`openat` calls that may create a file (`O_CREAT`).
-        pub create_open: u64,
-        /// `mkdir`/`mkdirat` calls.
-        pub mkdir: u64,
-        /// `write` calls.
-        pub write: u64,
-        /// `fsync` calls on a regular file.
-        pub fsync: u64,
-        /// `rename`/`renameat` calls.
-        pub rename: u64,
-        /// `fsync` calls on a directory.
-        pub dir_fsync: u64,
-        /// Sum of the logical payload bytes supplied to the catalog write
-        /// operation. This is the bytes handed to `write`, not physical device
-        /// bytes and not a sampled file length.
+    pub struct LogicalOperationCounts {
+        /// Exclusive create-new requests for one reservation marker.
+        pub reservation_marker_create: u64,
+        /// Payload-write requests for one reservation marker.
+        pub reservation_marker_write: u64,
+        /// `sync_all` requests on a reservation marker file.
+        pub reservation_marker_file_sync: u64,
+        /// Directory-creation requests for the reservation namespace.
+        pub reservation_namespace_mkdir: u64,
+        /// Directory-sync requests for the product-root / reservation-namespace
+        /// durability barriers, one per ancestor the barrier visits.
+        pub reservation_namespace_dir_sync: u64,
+        /// Session allocation directory-creation requests.
+        pub session_allocation_mkdir: u64,
+        /// Conversation allocation directory-creation requests: the
+        /// `create_dir_all` of the parent chain plus the exclusive `create_dir`
+        /// of the leaf. A request may create zero or more physical directories.
+        pub conversation_allocation_mkdir: u64,
+        /// `SqliteConversationStore::open` requests at the rustX boundary.
+        /// SQLite-internal filesystem work is **not** counted.
+        pub sqlite_store_open_request: u64,
+        /// Temp-file open requests for the catalog commit.
+        pub catalog_temp_open: u64,
+        /// Catalog payload write requests.
+        pub catalog_payload_write: u64,
+        /// `sync_all` requests on the catalog temp file.
+        pub catalog_file_sync: u64,
+        /// Catalog visibility rename requests.
+        pub catalog_rename: u64,
+        /// Catalog directory-sync requests, one per ancestor the commit visits.
+        pub catalog_directory_sync: u64,
+        /// Logical payload bytes supplied to the catalog write request. This is
+        /// the bytes handed to the write, not physical device bytes and not a
+        /// sampled file length.
         pub catalog_logical_bytes_written: u64,
     }
 
     /// The current counter snapshot.
     #[must_use]
-    pub fn snapshot() -> FsOperationCounts {
-        FsOperationCounts {
-            create_open: CREATE_OPEN.load(Ordering::Relaxed),
-            mkdir: MKDIR.load(Ordering::Relaxed),
-            write: WRITE.load(Ordering::Relaxed),
-            fsync: FSYNC.load(Ordering::Relaxed),
-            rename: RENAME.load(Ordering::Relaxed),
-            dir_fsync: DIR_FSYNC.load(Ordering::Relaxed),
+    pub fn snapshot() -> LogicalOperationCounts {
+        LogicalOperationCounts {
+            reservation_marker_create: RESERVATION_MARKER_CREATE.load(Ordering::Relaxed),
+            reservation_marker_write: RESERVATION_MARKER_WRITE.load(Ordering::Relaxed),
+            reservation_marker_file_sync: RESERVATION_MARKER_FILE_SYNC.load(Ordering::Relaxed),
+            reservation_namespace_mkdir: RESERVATION_NAMESPACE_MKDIR.load(Ordering::Relaxed),
+            reservation_namespace_dir_sync: RESERVATION_NAMESPACE_DIR_SYNC.load(Ordering::Relaxed),
+            session_allocation_mkdir: SESSION_ALLOCATION_MKDIR.load(Ordering::Relaxed),
+            conversation_allocation_mkdir: CONVERSATION_ALLOCATION_MKDIR.load(Ordering::Relaxed),
+            sqlite_store_open_request: SQLITE_STORE_OPEN_REQUEST.load(Ordering::Relaxed),
+            catalog_temp_open: CATALOG_TEMP_OPEN.load(Ordering::Relaxed),
+            catalog_payload_write: CATALOG_PAYLOAD_WRITE.load(Ordering::Relaxed),
+            catalog_file_sync: CATALOG_FILE_SYNC.load(Ordering::Relaxed),
+            catalog_rename: CATALOG_RENAME.load(Ordering::Relaxed),
+            catalog_directory_sync: CATALOG_DIRECTORY_SYNC.load(Ordering::Relaxed),
             catalog_logical_bytes_written: CATALOG_LOGICAL_BYTES_WRITTEN.load(Ordering::Relaxed),
         }
     }
 
-    pub(crate) fn record_create_open() {
-        CREATE_OPEN.fetch_add(1, Ordering::Relaxed);
+    pub(crate) fn record_reservation_marker_create() {
+        RESERVATION_MARKER_CREATE.fetch_add(1, Ordering::Relaxed);
     }
-    pub(crate) fn record_mkdir() {
-        MKDIR.fetch_add(1, Ordering::Relaxed);
+    pub(crate) fn record_reservation_marker_write() {
+        RESERVATION_MARKER_WRITE.fetch_add(1, Ordering::Relaxed);
     }
-    pub(crate) fn record_write() {
-        WRITE.fetch_add(1, Ordering::Relaxed);
+    pub(crate) fn record_reservation_marker_file_sync() {
+        RESERVATION_MARKER_FILE_SYNC.fetch_add(1, Ordering::Relaxed);
     }
-    pub(crate) fn record_fsync() {
-        FSYNC.fetch_add(1, Ordering::Relaxed);
+    pub(crate) fn record_reservation_namespace_mkdir() {
+        RESERVATION_NAMESPACE_MKDIR.fetch_add(1, Ordering::Relaxed);
     }
-    pub(crate) fn record_rename() {
-        RENAME.fetch_add(1, Ordering::Relaxed);
+    pub(crate) fn record_reservation_namespace_dir_sync() {
+        RESERVATION_NAMESPACE_DIR_SYNC.fetch_add(1, Ordering::Relaxed);
     }
-    pub(crate) fn record_dir_fsync() {
-        DIR_FSYNC.fetch_add(1, Ordering::Relaxed);
+    pub(crate) fn record_session_allocation_mkdir() {
+        SESSION_ALLOCATION_MKDIR.fetch_add(1, Ordering::Relaxed);
     }
-    /// Record one catalog `write` and the logical payload bytes it supplied.
-    pub(crate) fn record_catalog_write(bytes: usize) {
-        WRITE.fetch_add(1, Ordering::Relaxed);
+    pub(crate) fn record_conversation_allocation_mkdir() {
+        CONVERSATION_ALLOCATION_MKDIR.fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn record_sqlite_store_open_request() {
+        SQLITE_STORE_OPEN_REQUEST.fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn record_catalog_temp_open() {
+        CATALOG_TEMP_OPEN.fetch_add(1, Ordering::Relaxed);
+    }
+    /// Record one catalog payload write request and the logical bytes it supplied.
+    pub(crate) fn record_catalog_payload_write(bytes: usize) {
+        CATALOG_PAYLOAD_WRITE.fetch_add(1, Ordering::Relaxed);
         CATALOG_LOGICAL_BYTES_WRITTEN
             .fetch_add(u64::try_from(bytes).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+    pub(crate) fn record_catalog_file_sync() {
+        CATALOG_FILE_SYNC.fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn record_catalog_rename() {
+        CATALOG_RENAME.fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn record_catalog_directory_sync() {
+        CATALOG_DIRECTORY_SYNC.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -204,7 +286,7 @@ fn reservation_namespace_root_barrier(root: &Path) -> io::Result<()> {
             ));
         }
     }
-    fs_operations::record_dir_fsync();
+    logical_operations::record_reservation_namespace_dir_sync();
     File::open(root)?.sync_all()
 }
 
@@ -213,7 +295,7 @@ fn reservation_namespace_root_barrier(root: &Path) -> io::Result<()> {
 /// the root would not prove that a newly created parent survives a crash.
 fn sync_directory_ancestry(path: &Path) -> io::Result<()> {
     for directory in path.ancestors() {
-        fs_operations::record_dir_fsync();
+        logical_operations::record_reservation_namespace_dir_sync();
         File::open(directory)?.sync_all()?;
     }
     Ok(())
@@ -346,7 +428,7 @@ impl ProductRoot {
             }
             return Err(unsupported_layout_error());
         }
-        fs_operations::record_mkdir();
+        logical_operations::record_reservation_namespace_mkdir();
         match std::fs::create_dir(&namespace) {
             Ok(()) => {}
             // A concurrent initializer won the same exclusive directory creation.
@@ -395,7 +477,7 @@ impl ProductRoot {
     ) -> io::Result<ConversationReservation> {
         let namespace = self.ensure_reservation_namespace()?;
         let marker = self.confined(&namespace.join(conversation.as_str()))?;
-        fs_operations::record_create_open();
+        logical_operations::record_reservation_marker_create();
         let mut file = match OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -409,14 +491,14 @@ impl ProductRoot {
             }
             Err(error) => return Err(error),
         };
-        fs_operations::record_write();
+        logical_operations::record_reservation_marker_write();
         file.write_all(conversation.as_str().as_bytes())?;
-        fs_operations::record_fsync();
+        logical_operations::record_reservation_marker_file_sync();
         file.sync_all()?;
         drop(file);
         // Persist the marker's directory entry in the namespace before
         // reporting durable reservation success.
-        fs_operations::record_dir_fsync();
+        logical_operations::record_reservation_namespace_dir_sync();
         File::open(&namespace)?.sync_all()?;
         CONVERSATION_RESERVATIONS.fetch_add(1, Ordering::Relaxed);
         Ok(ConversationReservation)

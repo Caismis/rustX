@@ -86,13 +86,21 @@ pub(crate) mod create_profile {
     use std::time::{Duration, Instant};
 
     /// Exclusive wall time per pipeline stage, in nanoseconds.
+    ///
+    /// Stage names track the **real** implementation boundaries. In
+    /// particular, [`Self::sqlite_bootstrap_ns`] covers the whole
+    /// `SqliteConversationStore::open` call, which already performs connection
+    /// open, connection configuration, schema creation-or-validation and
+    /// Conversation identity binding. [`Self::lineage_initialize_ns`] covers
+    /// only the separate `initialize_lineage(seed)` call. The two stages are
+    /// not "connection open" and "schema + seed".
     #[derive(Debug, Default, Clone, Copy)]
     pub(crate) struct StageTimes {
         pub(crate) catalog_snapshot_ns: u64,
         pub(crate) reserve_ns: u64,
         pub(crate) allocation_dir_ns: u64,
-        pub(crate) sqlite_open_ns: u64,
-        pub(crate) schema_and_seed_ns: u64,
+        pub(crate) sqlite_bootstrap_ns: u64,
+        pub(crate) lineage_initialize_ns: u64,
         pub(crate) catalog_document_clone_ns: u64,
         pub(crate) catalog_serialize_ns: u64,
         pub(crate) temp_write_ns: u64,
@@ -111,8 +119,8 @@ pub(crate) mod create_profile {
             self.catalog_snapshot_ns
                 .saturating_add(self.reserve_ns)
                 .saturating_add(self.allocation_dir_ns)
-                .saturating_add(self.sqlite_open_ns)
-                .saturating_add(self.schema_and_seed_ns)
+                .saturating_add(self.sqlite_bootstrap_ns)
+                .saturating_add(self.lineage_initialize_ns)
                 .saturating_add(self.catalog_document_clone_ns)
                 .saturating_add(self.catalog_serialize_ns)
                 .saturating_add(self.temp_write_ns)
@@ -127,8 +135,8 @@ pub(crate) mod create_profile {
         catalog_snapshot_ns: 0,
         reserve_ns: 0,
         allocation_dir_ns: 0,
-        sqlite_open_ns: 0,
-        schema_and_seed_ns: 0,
+        sqlite_bootstrap_ns: 0,
+        lineage_initialize_ns: 0,
         catalog_document_clone_ns: 0,
         catalog_serialize_ns: 0,
         temp_write_ns: 0,
@@ -1191,6 +1199,7 @@ impl SessionCatalog {
                 path: product.root().join("conversation-reservations"),
                 detail: error.to_string(),
             })?;
+        crate::runtime::local_storage::logical_operations::record_session_allocation_mkdir();
         fs::create_dir(root.join(session_id.as_str())).map_err(|error| SessionError::Catalog {
             detail: format!("cannot reserve Session identity: {error}"),
         })?;
@@ -1986,6 +1995,7 @@ impl SessionCatalog {
     ) -> Result<PreparedLineage, SessionError> {
         self.reject_pending_identity(&session_id, &node_id, &conversation_id)?;
         self.validate_new_session_identity(&session_id, &node_id, &conversation_id)?;
+        crate::runtime::local_storage::logical_operations::record_session_allocation_mkdir();
         fs::create_dir(self.root.join(session_id.as_str())).map_err(|error| {
             SessionError::Catalog {
                 detail: format!("cannot reserve Session identity: {error}"),
@@ -2110,13 +2120,13 @@ impl SessionCatalog {
     ) -> std::io::Result<()> {
         product.confined(allocation)?;
         Self::check_allocation_live(product, allocation)?;
-        crate::runtime::local_storage::fs_operations::record_mkdir();
+        crate::runtime::local_storage::logical_operations::record_conversation_allocation_mkdir();
         fs::create_dir_all(
             allocation
                 .parent()
                 .ok_or_else(|| std::io::Error::other("Conversation directory has no parent"))?,
         )?;
-        crate::runtime::local_storage::fs_operations::record_mkdir();
+        crate::runtime::local_storage::logical_operations::record_conversation_allocation_mkdir();
         fs::create_dir(allocation)
     }
     fn allocate_ids(&self) -> Result<(SessionId, SessionNodeId, ConversationId), SessionError> {
@@ -3124,9 +3134,9 @@ fn initialize_database(
             path: parent.to_path_buf(),
             detail: error.to_string(),
         })?;
-    crate::runtime::local_storage::fs_operations::record_create_open();
+    crate::runtime::local_storage::logical_operations::record_sqlite_store_open_request();
     let store = profile_stage!(
-        |times: &mut create_profile::StageTimes| &mut times.sqlite_open_ns,
+        |times: &mut create_profile::StageTimes| &mut times.sqlite_bootstrap_ns,
         SqliteConversationStore::open(conversation_id.clone(), path)
     )
     .map_err(SessionError::Store)?;
@@ -3135,7 +3145,7 @@ fn initialize_database(
     // carryover source, belongs exclusively to the source conversation and is
     // initialized as NULL in this new destination store.
     profile_stage!(
-        |times: &mut create_profile::StageTimes| &mut times.schema_and_seed_ns,
+        |times: &mut create_profile::StageTimes| &mut times.lineage_initialize_ns,
         store
             .with_lifecycle(std::sync::Arc::new(access))
             .initialize_lineage(seed)
@@ -3159,7 +3169,7 @@ fn atomic_write(
         detail: error.to_string(),
     })?;
     let temporary = path.with_extension("json.tmp");
-    crate::runtime::local_storage::fs_operations::record_create_open();
+    crate::runtime::local_storage::logical_operations::record_catalog_temp_open();
     let mut file = profile_stage!(
         |times: &mut create_profile::StageTimes| &mut times.temp_write_ns,
         OpenOptions::new()
@@ -3183,8 +3193,8 @@ fn atomic_write(
         path: temporary.clone(),
         detail: error.to_string(),
     })?;
-    crate::runtime::local_storage::fs_operations::record_catalog_write(bytes.len());
-    crate::runtime::local_storage::fs_operations::record_fsync();
+    crate::runtime::local_storage::logical_operations::record_catalog_payload_write(bytes.len());
+    crate::runtime::local_storage::logical_operations::record_catalog_file_sync();
     profile_stage!(
         |times: &mut create_profile::StageTimes| &mut times.file_fsync_ns,
         file.sync_all()
@@ -3202,7 +3212,7 @@ fn atomic_write(
             detail: "deterministic fault before catalog visibility rename".to_owned(),
         });
     }
-    crate::runtime::local_storage::fs_operations::record_rename();
+    crate::runtime::local_storage::logical_operations::record_catalog_rename();
     profile_stage!(
         |times: &mut create_profile::StageTimes| &mut times.rename_ns,
         fs::rename(&temporary, path)
@@ -3238,7 +3248,7 @@ fn atomic_write(
 // catalog's immediate parent would not prove that a newly created parent survives.
 fn sync_directory_ancestry(path: &Path) -> std::io::Result<()> {
     for directory in path.ancestors() {
-        crate::runtime::local_storage::fs_operations::record_dir_fsync();
+        crate::runtime::local_storage::logical_operations::record_catalog_directory_sync();
         File::open(directory)?.sync_all()?;
     }
     Ok(())

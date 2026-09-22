@@ -8,10 +8,30 @@
 //! `SessionController::create_session`.
 //!
 //! The ONLY revision-specific code is in the marked bodies of
-//! [`reservation_counters`] and [`fs_operation_counters`]: the head reads the
-//! storage owner's reservation, legacy-layout-probe and filesystem-operation
-//! counters; the baseline copy returns `(None, None)` and `FsCounts::default()`.
-//! Everything else uses only APIs that exist at the base revision.
+//! [`reservation_counters`] and [`logical_operation_counters`]: the head reads
+//! the storage owner's reservation, legacy-layout-probe and logical-operation
+//! counters; the baseline copy returns `(None, None)` and `None`. A base run
+//! therefore reports the logical counters as `null` (not instrumented), never
+//! as measured zeros. Everything else uses only APIs that exist at the base
+//! revision.
+//!
+//! ## What the operation counters mean (and do not)
+//!
+//! The counters are **rustX logical owner operations**, not syscall counts.
+//! Each is incremented once per operation *requested* by a named rustX owner at
+//! its call site. One request may map to zero, one or many OS syscalls (for
+//! example `create_dir_all` or `write_all`), and **SQLite-internal filesystem
+//! work is not observed at all** except for the single rustX
+//! `SqliteConversationStore::open` request. Physical device I/O (page cache,
+//! filesystem compression, device scheduling) is not measurable from these
+//! counters. Scripts reading this report must keep the three evidence layers
+//! separate:
+//!
+//! 1. rustX logical owner operations (this report's `logical_*` fields);
+//! 2. `SQLite` / library-internal filesystem work (excluded; only the open
+//!    request is counted);
+//! 3. physical device I/O (excluded; needs an external process/filesystem
+//!    boundary such as a block-device trace).
 //!
 //! Run:
 //! ```text
@@ -87,29 +107,68 @@ fn reservation_counters() -> (Option<u64>, Option<u64>) {
     // === END REVISION-SPECIFIC BODY ===
 }
 
-/// Benchmark-local snapshot of the create-path filesystem operation counters.
+/// Benchmark-local snapshot of the rustX logical owner-operation counters.
 /// Defined here (not imported) so the same source compiles against the base,
-/// which has no such counters.
+/// which has no such counters. Every field is one rustX operation *request*,
+/// never a syscall count and never a byte of physical device I/O.
 #[derive(Debug, Default, Clone, Copy)]
-struct FsCounts {
-    create_open: u64,
-    mkdir: u64,
-    write: u64,
-    fsync: u64,
-    rename: u64,
-    dir_fsync: u64,
+struct LogicalCounts {
+    reservation_marker_create: u64,
+    reservation_marker_write: u64,
+    reservation_marker_file_sync: u64,
+    reservation_namespace_mkdir: u64,
+    reservation_namespace_dir_sync: u64,
+    session_allocation_mkdir: u64,
+    conversation_allocation_mkdir: u64,
+    sqlite_store_open_request: u64,
+    catalog_temp_open: u64,
+    catalog_payload_write: u64,
+    catalog_file_sync: u64,
+    catalog_rename: u64,
+    catalog_directory_sync: u64,
     catalog_logical_bytes_written: u64,
 }
 
-impl FsCounts {
+impl LogicalCounts {
     fn delta(self, before: Self) -> Self {
         Self {
-            create_open: self.create_open.saturating_sub(before.create_open),
-            mkdir: self.mkdir.saturating_sub(before.mkdir),
-            write: self.write.saturating_sub(before.write),
-            fsync: self.fsync.saturating_sub(before.fsync),
-            rename: self.rename.saturating_sub(before.rename),
-            dir_fsync: self.dir_fsync.saturating_sub(before.dir_fsync),
+            reservation_marker_create: self
+                .reservation_marker_create
+                .saturating_sub(before.reservation_marker_create),
+            reservation_marker_write: self
+                .reservation_marker_write
+                .saturating_sub(before.reservation_marker_write),
+            reservation_marker_file_sync: self
+                .reservation_marker_file_sync
+                .saturating_sub(before.reservation_marker_file_sync),
+            reservation_namespace_mkdir: self
+                .reservation_namespace_mkdir
+                .saturating_sub(before.reservation_namespace_mkdir),
+            reservation_namespace_dir_sync: self
+                .reservation_namespace_dir_sync
+                .saturating_sub(before.reservation_namespace_dir_sync),
+            session_allocation_mkdir: self
+                .session_allocation_mkdir
+                .saturating_sub(before.session_allocation_mkdir),
+            conversation_allocation_mkdir: self
+                .conversation_allocation_mkdir
+                .saturating_sub(before.conversation_allocation_mkdir),
+            sqlite_store_open_request: self
+                .sqlite_store_open_request
+                .saturating_sub(before.sqlite_store_open_request),
+            catalog_temp_open: self
+                .catalog_temp_open
+                .saturating_sub(before.catalog_temp_open),
+            catalog_payload_write: self
+                .catalog_payload_write
+                .saturating_sub(before.catalog_payload_write),
+            catalog_file_sync: self
+                .catalog_file_sync
+                .saturating_sub(before.catalog_file_sync),
+            catalog_rename: self.catalog_rename.saturating_sub(before.catalog_rename),
+            catalog_directory_sync: self
+                .catalog_directory_sync
+                .saturating_sub(before.catalog_directory_sync),
             catalog_logical_bytes_written: self
                 .catalog_logical_bytes_written
                 .saturating_sub(before.catalog_logical_bytes_written),
@@ -117,22 +176,31 @@ impl FsCounts {
     }
 }
 
-/// Revision-specific create-path filesystem-operation counters.
+/// Revision-specific rustX logical owner-operation counters.
 ///
 /// REVISION-SPECIFIC BODY — at base 0083f64d replace the marked body with
-/// `FsCounts::default()`.
-fn fs_operation_counters() -> FsCounts {
-    // === BEGIN REVISION-SPECIFIC BODY (replace with `FsCounts::default()` at base 0083f64d) ===
-    let snapshot = rustx::runtime::local_storage::fs_operations::snapshot();
-    FsCounts {
-        create_open: snapshot.create_open,
-        mkdir: snapshot.mkdir,
-        write: snapshot.write,
-        fsync: snapshot.fsync,
-        rename: snapshot.rename,
-        dir_fsync: snapshot.dir_fsync,
+/// `None` (the base has no such counters). The `Option` is required so the base
+/// can report "not instrumented" as `null`; clippy cannot see the base stub.
+#[allow(clippy::unnecessary_wraps)]
+fn logical_operation_counters() -> Option<LogicalCounts> {
+    // === BEGIN REVISION-SPECIFIC BODY (replace with `None` at base 0083f64d) ===
+    let snapshot = rustx::runtime::local_storage::logical_operations::snapshot();
+    Some(LogicalCounts {
+        reservation_marker_create: snapshot.reservation_marker_create,
+        reservation_marker_write: snapshot.reservation_marker_write,
+        reservation_marker_file_sync: snapshot.reservation_marker_file_sync,
+        reservation_namespace_mkdir: snapshot.reservation_namespace_mkdir,
+        reservation_namespace_dir_sync: snapshot.reservation_namespace_dir_sync,
+        session_allocation_mkdir: snapshot.session_allocation_mkdir,
+        conversation_allocation_mkdir: snapshot.conversation_allocation_mkdir,
+        sqlite_store_open_request: snapshot.sqlite_store_open_request,
+        catalog_temp_open: snapshot.catalog_temp_open,
+        catalog_payload_write: snapshot.catalog_payload_write,
+        catalog_file_sync: snapshot.catalog_file_sync,
+        catalog_rename: snapshot.catalog_rename,
+        catalog_directory_sync: snapshot.catalog_directory_sync,
         catalog_logical_bytes_written: snapshot.catalog_logical_bytes_written,
-    }
+    })
     // === END REVISION-SPECIFIC BODY ===
 }
 
@@ -226,17 +294,28 @@ struct CreateResult {
     store_opens_during_creates: u64,
     reservation_count_during_creates: Option<u64>,
     legacy_layout_probes_during_creates: Option<u64>,
-    /// Create-path filesystem operation deltas over the timed loop. Logical
-    /// syscall counts, not physical device I/O.
-    fs_create_open_during_creates: u64,
-    fs_mkdir_during_creates: u64,
-    fs_write_during_creates: u64,
-    fs_fsync_during_creates: u64,
-    fs_rename_during_creates: u64,
-    fs_dir_fsync_during_creates: u64,
-    /// Logical payload bytes supplied to the catalog write operation during
+    /// rustX logical owner-operation deltas over the timed loop. Each is one
+    /// requested operation, NOT a syscall count and NOT physical device I/O.
+    /// `null` means the revision has no such counters (base), never a measured
+    /// zero.
+    logical_reservation_marker_create: Option<u64>,
+    logical_reservation_marker_write: Option<u64>,
+    logical_reservation_marker_file_sync: Option<u64>,
+    logical_reservation_namespace_mkdir: Option<u64>,
+    logical_reservation_namespace_dir_sync: Option<u64>,
+    logical_session_allocation_mkdir: Option<u64>,
+    logical_conversation_allocation_mkdir: Option<u64>,
+    /// rustX `SqliteConversationStore::open` requests. SQLite-internal
+    /// filesystem work is excluded from every counter in this report.
+    logical_sqlite_store_open_request: Option<u64>,
+    logical_catalog_temp_open: Option<u64>,
+    logical_catalog_payload_write: Option<u64>,
+    logical_catalog_file_sync: Option<u64>,
+    logical_catalog_rename: Option<u64>,
+    logical_catalog_directory_sync: Option<u64>,
+    /// Logical payload bytes supplied to the catalog write request during
     /// the timed loop. Not a sampled file length and not physical device bytes.
-    catalog_logical_bytes_written_during_creates: u64,
+    logical_catalog_bytes_written: Option<u64>,
     catalog_bytes_final: u64,
 }
 
@@ -278,7 +357,7 @@ async fn run(params: &Params) -> Result<CreateResult, String> {
     let cpu_before = cpu_seconds(&units);
     let opens_before = conversation_store_open_count();
     let (reservations_before, probes_before) = reservation_counters();
-    let fs_before = fs_operation_counters();
+    let logical_before = logical_operation_counters();
     let started = Instant::now();
     for _ in 0..params.creates {
         controller
@@ -290,7 +369,9 @@ async fn run(params: &Params) -> Result<CreateResult, String> {
     let cpu = cpu_seconds(&units) - cpu_before;
     let opens = conversation_store_open_count() - opens_before;
     let (reservations_after, probes_after) = reservation_counters();
-    let fs = fs_operation_counters().delta(fs_before);
+    let logical = logical_operation_counters()
+        .zip(logical_before)
+        .map(|(after, before)| after.delta(before));
     let existing_observed_end = count_sessions(&controller).await?;
     #[allow(clippy::cast_precision_loss)]
     let creates = params.creates as f64;
@@ -310,13 +391,20 @@ async fn run(params: &Params) -> Result<CreateResult, String> {
         legacy_layout_probes_during_creates: probes_after
             .zip(probes_before)
             .map(|(after, before)| after.saturating_sub(before)),
-        fs_create_open_during_creates: fs.create_open,
-        fs_mkdir_during_creates: fs.mkdir,
-        fs_write_during_creates: fs.write,
-        fs_fsync_during_creates: fs.fsync,
-        fs_rename_during_creates: fs.rename,
-        fs_dir_fsync_during_creates: fs.dir_fsync,
-        catalog_logical_bytes_written_during_creates: fs.catalog_logical_bytes_written,
+        logical_reservation_marker_create: logical.map(|l| l.reservation_marker_create),
+        logical_reservation_marker_write: logical.map(|l| l.reservation_marker_write),
+        logical_reservation_marker_file_sync: logical.map(|l| l.reservation_marker_file_sync),
+        logical_reservation_namespace_mkdir: logical.map(|l| l.reservation_namespace_mkdir),
+        logical_reservation_namespace_dir_sync: logical.map(|l| l.reservation_namespace_dir_sync),
+        logical_session_allocation_mkdir: logical.map(|l| l.session_allocation_mkdir),
+        logical_conversation_allocation_mkdir: logical.map(|l| l.conversation_allocation_mkdir),
+        logical_sqlite_store_open_request: logical.map(|l| l.sqlite_store_open_request),
+        logical_catalog_temp_open: logical.map(|l| l.catalog_temp_open),
+        logical_catalog_payload_write: logical.map(|l| l.catalog_payload_write),
+        logical_catalog_file_sync: logical.map(|l| l.catalog_file_sync),
+        logical_catalog_rename: logical.map(|l| l.catalog_rename),
+        logical_catalog_directory_sync: logical.map(|l| l.catalog_directory_sync),
+        logical_catalog_bytes_written: logical.map(|l| l.catalog_logical_bytes_written),
         catalog_bytes_final: catalog_len(&params.root),
     })
 }
@@ -332,8 +420,11 @@ async fn main() -> Result<(), String> {
             "cpu_source": "/proc/self/stat utime+stime (clock ticks) over getconf CLK_TCK, delta over the timed loop",
             "rss_source": "/proc/self/statm resident pages x getconf PAGE_SIZE (== VmRSS), point-in-time samples",
             "store_opens_source": "rustx::durable::conversation_store_open_count() delta over the timed loop",
-            "catalog_bytes_note": "catalog_logical_bytes_written_during_creates is the logical payload supplied to the catalog write operation, not a sampled file length and not physical device bytes",
-            "fs_ops_note": "create-path filesystem operation counts are logical syscall invocations over the timed loop, not physical device I/O",
+            "catalog_bytes_note": "logical_catalog_bytes_written is the logical payload supplied to the catalog write request, not a sampled file length and not physical device bytes",
+            "logical_operations_note": "every logical_* field is one rustX owner operation request over the timed loop, NOT a syscall count; create_dir_all/write_all may map to zero or many syscalls. null means the revision has no such counters, never a measured zero",
+            "excluded_library_io_note": "SQLite-internal filesystem work (journal, schema, identity binding, internal fsyncs) is NOT observed; only logical_sqlite_store_open_request (one rustX SqliteConversationStore::open call) is counted",
+            "excluded_device_io_note": "physical device I/O is NOT measured by these counters; it requires an external process/block-device boundary",
+            "excluded_owner_note": "the once-per-root sessions/ directory setup and catalog-root create_dir_all no-op requests are not instrumented and are excluded",
             "population_note": "the timed batch runs against existing_sessions_observed_start, +1, ... existing_sessions_observed_end; it is not N independent fixed-N creates",
             "count_source": "authoritative metadata-only Session list paginated to exhaustion; never opens a ConversationStore",
         },

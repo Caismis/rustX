@@ -113,6 +113,12 @@ pub struct SessionController {
     // Allocation of the one process runtime owner, not ownership of its registry.
     pub(crate) runtime_owner: Arc<std::sync::OnceLock<()>>,
     pub(crate) preparation: Arc<tokio::sync::Mutex<()>>,
+    /// Test-only wait observer for the preparation owner. It is notified when a
+    /// task's preparation-lock future is polled and returns `Pending`, i.e. the
+    /// task is provably registered as a waiter on the mutex. It carries no
+    /// production state and cannot change scheduling.
+    #[cfg(test)]
+    pub(crate) create_preparation_wait: Arc<tokio::sync::Notify>,
     #[cfg(test)]
     create_gate: Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
     #[cfg(test)]
@@ -247,6 +253,8 @@ impl SessionController {
             configuration_bindings: Arc::default(),
             runtime_owner: Arc::default(),
             preparation: Arc::new(tokio::sync::Mutex::new(())),
+            #[cfg(test)]
+            create_preparation_wait: Arc::new(tokio::sync::Notify::new()),
             #[cfg(test)]
             create_gate: Arc::new(std::sync::Mutex::new(None)),
             #[cfg(test)]
@@ -420,7 +428,7 @@ impl SessionController {
         }
         // Blocking preparation outlives a cancelled async caller. Transfer the
         // allocator guard into that work and retain it through publication.
-        let preparation = self.preparation.clone().lock_owned().await;
+        let preparation = self.acquire_preparation().await;
         // The real controller snapshots (clones) the whole Catalog document
         // before preparation. Instrument that clone so the stage profile does
         // not bypass it and later claim catalog cloning was measured.
@@ -475,6 +483,29 @@ impl SessionController {
             durability_diagnostic,
         })
     }
+    /// Acquire the preparation owner. In test builds, notify the wait observer
+    /// exactly when this task's lock future is polled and returns `Pending`,
+    /// which is the deterministic "this task is registered as a waiter on the
+    /// preparation mutex" boundary. The production path is unchanged.
+    async fn acquire_preparation(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        #[cfg(test)]
+        {
+            let mut lock = std::pin::pin!(self.preparation.clone().lock_owned());
+            std::future::poll_fn(|context| match lock.as_mut().poll(context) {
+                std::task::Poll::Ready(guard) => std::task::Poll::Ready(guard),
+                std::task::Poll::Pending => {
+                    self.create_preparation_wait.notify_one();
+                    std::task::Poll::Pending
+                }
+            })
+            .await
+        }
+        #[cfg(not(test))]
+        {
+            self.preparation.clone().lock_owned().await
+        }
+    }
+
     /// Resolve identity and retain existing native destructive exclusion.
     /// No runtime is composed. #287 owns residency and single-writer admission.
     /// # Errors
@@ -1308,13 +1339,18 @@ mod tests {
         );
         assert_eq!(controller.read_session(&b.id).await.unwrap(), b);
     }
-    /// R04: two distinct Session create requests genuinely overlap. The
-    /// controller's preparation owner serializes preparation by design, so the
-    /// regression parks the first request *inside* preparation (holding the
-    /// preparation reservation) and proves the second request is already in
-    /// flight and blocked on it; releasing the gate lets both publish. Both
-    /// Sessions, identities and destinations survive, so a stale
-    /// whole-document Catalog replacement would be detected.
+    /// R04: two distinct Session create requests genuinely overlap at the
+    /// actual synchronization boundary. The controller's preparation owner
+    /// serializes preparation by design, so the regression parks the first
+    /// request *inside* preparation (holding the preparation reservation), then
+    /// waits on a deterministic test-only signal that fires only after the
+    /// second request's preparation-lock future has been polled and returned
+    /// `Pending`. That makes the second request a registered waiter on the very
+    /// mutex the first request holds, not merely a spawned task that might be
+    /// scheduled after the first completes. Only then is the first released;
+    /// both publish through the generation-checked Catalog owner and both
+    /// distinct destinations remain complete, so a stale whole-document Catalog
+    /// replacement would be detected.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn r04_concurrent_distinct_session_creates_preserve_both_publications() {
         let root = tempfile::tempdir().unwrap();
@@ -1343,6 +1379,12 @@ mod tests {
             let path = root.path().to_path_buf();
             tokio::spawn(async move { controller.create_session(settings(&path)).await })
         };
+        // Deterministic overlap proof: `acquire_preparation` notifies this only
+        // after the second create's lock future has been polled and returned
+        // `Pending`, so the second request is registered as a waiter on the
+        // preparation mutex the first request still holds. No sleep, no
+        // `yield_now`, no timing assumption.
+        controller.create_preparation_wait.notified().await;
         drop(release);
         let a = first.await.unwrap().unwrap().session;
         let b = second.await.unwrap().unwrap().session;
