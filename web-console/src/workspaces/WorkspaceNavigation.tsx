@@ -23,7 +23,7 @@ export function sessionObservation(state: ClientView, id: string) {
   return product.label ?? '';
 }
 export function WorkspaceNavigation({ host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, creating, metadataChanged, wide, expand, createOpen, closeCreate, workspaceSettings }: {
-  workspaceSettings?: (id: string) => void;
+  workspaceSettings?: (id: string, label: string) => void;
   host: ProductHostWorkspaces; client: AppServerClient; state: ClientView; endpoint: string; navigation: NavigationEpoch;
   wide: boolean; expand: () => void; createOpen: boolean; closeCreate: () => void;
   creating: boolean; metadataChanged: (removed?: string) => void;

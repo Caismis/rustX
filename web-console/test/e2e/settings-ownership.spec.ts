@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, connectionAction, chooseWorkspace } from './shell-actions';
+import { connectRemote, connectionAction, chooseWorkspace, closeSettings, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
 
 test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorization and lost-write recovery', async ({ page }) => {
@@ -27,13 +27,18 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    const source = await remote.client.call('configuration/sourcesRead', { target: { kind: 'user' } }, 'source_settings');
    expect(source.projection.process_bindings?.max_connections).toBe(19);
    expect(source.projection.workspace).toBeNull();
-   await settings.getByLabel('Configuration owner').selectOption(a.id);
+   await closeSettings(page);
+   await openWorkspaceSettings(page, a.displayName);
    await settings.getByRole('button', { name: 'Tools', exact: true }).click();
    await settings.getByLabel('read', { exact: true }).check();
-   await settings.getByLabel('Configuration owner').selectOption(b.id);
+   await closeSettings(page);
+   await openWorkspaceSettings(page, b.displayName);
+   await settings.getByRole('button', { name: 'Tools', exact: true }).click();
    await expect(settings.getByLabel('read', { exact: true })).not.toBeChecked();
    await settings.getByLabel('write', { exact: true }).check();
-   await settings.getByLabel('Configuration owner').selectOption(a.id);
+   await closeSettings(page);
+   await openWorkspaceSettings(page, a.displayName);
+   await settings.getByRole('button', { name: 'Tools', exact: true }).click();
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
    await expect(settings.getByLabel('write', { exact: true })).not.toBeChecked();
    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
@@ -45,9 +50,11 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await expect(f.workspaceHost.host.configureWorkspace('unregistered', f.endpoint, { kind: 'read' })).rejects.toThrow('Unknown');
    await f.workspaceHost.host.removeWorkspace(a.id);
    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
-   await expect(settings.getByRole('alert')).toContainText('Unknown');
+   await expect(settings.getByRole('alert').filter({ hasText: /^WorkspaceHostError: Workspace Host: Error: Unknown/ })).toBeVisible();
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-   await settings.getByLabel('Configuration owner').selectOption('');
+   await closeSettings(page);
+   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+   await settings.getByRole('button', { name: 'Tools', exact: true }).click();
    await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeEnabled();
    const before = wire.requests.filter(row => row.method === 'configuration/sourceWrite').length;
    wire.loseNext('configuration/sourceWrite');

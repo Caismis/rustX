@@ -12,7 +12,7 @@ import css from './WorkspaceBrowser.module.css';
 /** Native adapters supply facts/gestures. This component owns only visual state. */
 export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, query, search, open, rename, fork, remove, closeView, closeAllViews,
   selectWorkspace, create, renameWorkspace, removeWorkspace, workspaceSettings, addWorkspace, refresh, previous, next, notices }: {
-  workspaceSettings?: (id: string) => void;
+  workspaceSettings?: (id: string, label: string) => void;
   wide: boolean; expand: () => void; groups: readonly GroupNode[]; sessions: readonly SessionNode[]; selected?: string;
   query: string; search: (text: string) => void; open: (id: string) => void; rename: (id: string, title: string) => void;
   closeView?: (id: string) => void;
@@ -47,7 +47,7 @@ export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, que
         <ProjectRowItem group={{ ...group, expanded: !collapsed.includes(group.key) }} t={t}
           onToggle={() => setCollapsed(value => value.includes(group.key) ? value.filter(id => id !== group.key) : [...value, group.key])}
           onSelect={() => group.workspaceId && selectWorkspace(group.workspaceId)} onCreate={() => group.workspaceId && create(group.workspaceId)}
-          actions={group.workspaceId ? { settings: workspaceSettings ? () => workspaceSettings(group.workspaceId!) : undefined, rename: () => renameWorkspace(group.workspaceId!, group.label), delete: () => removeWorkspace(group.workspaceId!, group.label) } : undefined} />
+          actions={group.workspaceId ? { settings: workspaceSettings ? () => workspaceSettings(group.workspaceId!, group.label) : undefined, rename: () => renameWorkspace(group.workspaceId!, group.label), delete: () => removeWorkspace(group.workspaceId!, group.label) } : undefined} />
         {!collapsed.includes(group.key) && group.sessions.map(row)}
       </div>)}
       {!sessions.length && <p className={css.empty}>{query ? 'No matching Sessions' : 'No Sessions yet'}</p>}

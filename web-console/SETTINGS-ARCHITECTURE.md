@@ -5,6 +5,35 @@ overlays, identity, provenance, CAS, serialization, publication and execution.
 The browser separates User/Workspace source authoring from Session selection and
 adoption. No Session is an authority for source reads, writes or rescans.
 
+## Entry and target ownership
+
+The global Settings entry opens **User Settings** directly against the User source.
+The exact Workspace object action opens **Workspace Settings — <workspace>**, bound
+to that Product-Host-authorized Workspace for the whole lifetime of the Settings
+instance. There is no ordinary `Configuration owner` selector and no second editor
+tree: both entries share the same shell and editors. Session focus changes never
+retarget an open editor. A Workspace that becomes unregistered or unauthorized, or
+whose Product Host/endpoint authority changes, is fenced by the target/authority/
+connection epoch and read ordering; its draft and error are retained rather than
+redirected to User or another Workspace. Opening either entry allocates no hidden
+Session, resident runtime, MCP connection or Python environment.
+
+## Presentation projection
+
+`app/settings/projection.ts` is a pure adapter over the generated protocol. It
+projects the authoritative effective value, authored membership and explicit
+presence, native provenance/origin, native availability/diagnostics and per-unit
+application observations. It never recomputes inheritance (`workspace.foo ?? user.foo`)
+and never materializes a native default into an authored draft. Absent override,
+`false`, `[]`, `{}`, explicit values, invalid and unavailable are distinct states;
+unavailable is not empty, false or a client fallback. `UnitForm` renders the native
+effective value plus a provenance-appropriate inherited/default label for a
+Workspace with no override, and `Override`/`Use global default` create or remove the
+exact native semantic unit through CAS without copying the User value. Settings
+surface states (`connecting`/`loading`/`ready`/`stale`/`failed`) and change behavior
+(`Applies immediately`/`Requires App Server restart`) are likewise projected rather
+than inferred.
+
 ## Composition
 
 `presentation/settings/SettingsRoot` remains the sole modal/navigation owner.
@@ -18,10 +47,12 @@ rustX-authored presentation seats, with no protocol imports or persistence.
 composes runtime, catalog, Root, MCP and named-Agent adapters with the resource
 inventory. `UnitForm` owns one native mutation's editable intent. The target-keyed
 `SettingsDrafts` map retains only modified drafts and their exact base revisions
-while navigating targets/sections/identities. Identity includes endpoint and client
-authority, not source revision or focused Session. Base revision is independent.
-No draft, credential, configuration or runtime snapshot goes into browser storage.
-Clean forms follow authoritative source updates; dirty forms require review.
+while navigating targets/sections/identities. Identity includes endpoint, client
+authority and the exact Settings target (`user` or `workspace:<id>`), not source
+revision or focused Session. Base revision is independent. Workspace A drafts never
+become Workspace B or User drafts. No draft, credential, configuration or runtime
+snapshot goes into browser storage. Clean forms follow authoritative source updates;
+dirty forms require review.
 
 Catalog identity suggestions can include published and authored identities. This
 is a union of names for input assistance, never a browser overlay or claim of
@@ -48,6 +79,15 @@ it with `{ mode: "session" }`. Rendering never materializes native defaults.
    Successful credential drafts are reconstructed from this projection.
 5. Save transfers application responsibility to the native coordinator. Independent
    complete units apply automatically; native context candidates await explicit adoption.
+
+A write acknowledgement is not an application observation. A committed save whose
+post-commit authoritative reread fails remains a committed save with uncertain
+read/application status: it is never shown as unsaved and never as blanket applied.
+Read errors, write errors, CAS conflicts, application failures and unavailable/stale
+observations are separate states, and a successful read clears only the read error it
+answers. The Advanced section projects per-unit native observations
+(Applied/Preparing/Failed/Restart pending) and native change behavior independently;
+no single global success state erases a pending adoption or a failed unit.
 
 Conflict preserves the draft and original revision. The user can inspect the
 current redacted unit and deliberately choose “Use reviewed revision” before
@@ -119,6 +159,10 @@ second configuration or runtime authority.
 
 Deleted `app/settings/Settings.module.css`; all Settings adapters share the
 presentation sheet. Removed the duplicate global `.activity-card` rules. The
-obsolete `app/Conversation.tsx` remains deleted after Goal reconciliation. No
+obsolete `app/Conversation.tsx` remains deleted after Goal reconciliation. Removed
+the ordinary `Configuration owner` selector and its catalog-driven target switching;
+the target is now an explicit immutable Settings prop and drafts are keyed by it.
+`app/settings/drafts.tsx` keeps only draft/context state; authored membership and
+provenance projection moved to the pure `app/settings/projection.ts`. No
 compatibility export, alternate Settings root, legacy mode or feature flag exists.
 Tests formerly addressing newline textareas now exercise structured identity rows.

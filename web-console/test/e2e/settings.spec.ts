@@ -1,5 +1,5 @@
 import { connectRemote } from './shell-actions';
-import { chooseWorkspace } from './shell-actions';
+import { chooseWorkspace, closeSettings, openWorkspaceSettings } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { startDogfood } from './dogfood-server';
@@ -19,7 +19,6 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     const saved = async () => { await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible(); };
-    await settings.getByLabel('Configuration owner').selectOption('');
     await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();
     await settings.getByLabel('New Provider identity').fill('acceptance');
     await settings.getByRole('button', { name: 'Add Provider', exact: true }).click();
@@ -36,7 +35,9 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await settings.getByRole('button', { name: 'Save Model independent', exact: true }).click(); await saved();
     await settings.getByRole('heading', { name: 'Providers & Models', exact: true }).scrollIntoViewIfNeeded();
     await settings.screenshot({ path: test.info().outputPath('cfg3-user-model.png') });
-    await settings.getByLabel('Configuration owner').selectOption({ label: 'Workspace A' });
+    await closeSettings(page);
+    await openWorkspaceSettings(page, 'Workspace A');
+    await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();
     await settings.getByLabel('New Model identity').fill('independent');
     await settings.getByRole('button', { name: 'Add Model', exact: true }).click();
     await expect(settings.getByLabel('Wire model identity')).toHaveValue('');

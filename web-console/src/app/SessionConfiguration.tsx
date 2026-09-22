@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import type { ConfigurationApplication } from '../../../protocol/app-server/v17';
 import { isOutcomeUncertain, type AppServerClient, type SessionView } from '../client/app-server';
 import { Button } from '../presentation/primitives/Button';
+import { observedResult, observedUnitLabel, observedUnits, unitApplication } from './settings/projection';
 
 /** Mutation acknowledgements never clear pending observations. */
-export function SessionConfiguration({ client, view }: { client: AppServerClient; view: SessionView }) {
+export function SessionConfiguration({ client, view, openOwningSettings }: { client: AppServerClient; view: SessionView; openOwningSettings?: (scope: string) => void }) {
   const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const [application, setApplication] = useState<ConfigurationApplication>();
   const [known, setKnown] = useState(false), [error, setError] = useState(''), [busy, setBusy] = useState(false);
@@ -35,17 +36,23 @@ export function SessionConfiguration({ client, view }: { client: AppServerClient
       if (submitting.current === at) submitting.current = undefined;
     }
   };
-  const units = application ? [application.units.capabilities, application.units.instructions, application.units.provider] : [];
-  const preparing = units.some(unit => unit?.status === 'preparing'), failed = units.some(unit => unit?.status === 'failed');
-  if (known && !candidate && !preparing && !failed) return null;
+  // Per-unit native observations. Independent units may simultaneously be
+  // preparing, failed or already applied; none of them is flattened into one
+  // global success state or into Session adoption.
+  const observations = observedUnits.map(unit => ({ unit, result: observedResult(unitApplication(application, unit)) })).filter(row => row.result.state !== 'unavailable');
+  const preparing = observations.filter(row => row.result.state === 'preparing');
+  const failed = observations.filter(row => row.result.state === 'failed');
+  if (known && !candidate && !preparing.length && !failed.length) return null;
   return <section aria-label="Session configuration" role="status">
     {!known && <p>Configuration status unavailable. Retaining the last observation.</p>}
-    {preparing && <p>Preparing configuration…</p>}
+    {preparing.length > 0 && <><p>Preparing configuration…</p><ul>{preparing.map(row => <li key={row.unit}>{observedUnitLabel(row.unit)}: preparing</li>)}</ul></>}
     {candidate && <><p>Prepared configuration is waiting for this Session.</p>
       {application?.eligibility.status === 'busy' && <p>Session work must settle before adoption.</p>}
       {application?.eligibility.status === 'unavailable' && <p>Session configuration is unavailable for adoption.</p>}
       <Button disabled={!known || busy || transport.connection !== 'connected' || application?.eligibility.status !== 'eligible'} onClick={() => void adopt()}>Adopt configuration</Button></>}
-    {failed && <p>Some configuration preparation failed. Review the owning User or Workspace source in Settings and rescan.</p>}
+    {failed.length > 0 && <><p>Some configuration preparation failed. Review the owning User or Workspace source in Settings and rescan.</p>
+      <ul>{failed.map(row => <li key={row.unit}>{observedUnitLabel(row.unit)}: failed — {row.result.state === 'failed' ? row.result.diagnostic : ''}</li>)}</ul>
+      {application?.scope && openOwningSettings && <Button onClick={() => openOwningSettings(application.scope)}>Open owning source Settings</Button>}</>}
     {error && <p role="alert">{error}</p>}
   </section>;
 }

@@ -3,6 +3,7 @@ import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v17';
 import { Settings } from '../src/app/settings/Settings';
+import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
 import { cfg3Source } from './cfg3-data';
 import { Server } from './fixture';
@@ -37,7 +38,7 @@ async function open(native: Native) {
   s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: native.projection() }));
   s.handlers.set('configuration/sourceWrite', () => ({ type: 'source_settings', projection: native.projection() }));
   await s.connect();
-  render(<Settings client={s.client} />);
+  render(<Settings client={s.client} target={userSettingsTarget} />);
   await screen.findByText(new RegExp(`Revision: ${native.revision}`));
   fireEvent.click(screen.getByRole('button', { name: 'General' }));
   return s;
@@ -298,10 +299,9 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
     },
   };
   await s.connect();
-  render(<Settings client={s.client} host={host} />);
+  const ui = render(<Settings client={s.client} target={userSettingsTarget} host={host} />);
   await screen.findByText(/Revision: user-1/);
   fireEvent.click(screen.getByRole('button', { name: 'General' }));
-  await waitFor(() => expect(screen.getByRole('option', { name: 'Workspace A' })).toBeTruthy());
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
   fireEvent.change(screen.getByLabelText('max_connections'), { target: { value: '19' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save App Server policy' }));
@@ -312,7 +312,7 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(2));
   const staleRead = sent(s, 'configuration/sourcesRead')[1];
   // Replace the target before the held read or acknowledgement settles.
-  fireEvent.change(screen.getByLabelText('Configuration owner'), { target: { value: 'workspace-a' } });
+  ui.rerender(<Settings client={s.client} target={workspaceSettingsTarget('workspace-a', 'Workspace A')} host={host} />);
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(3));
   await deliver(s, sent(s, 'configuration/sourcesRead')[2]);
   await screen.findByText(/Revision: ws-1/);

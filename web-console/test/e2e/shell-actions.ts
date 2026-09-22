@@ -13,6 +13,14 @@ export async function chooseWorkspace(page: Page, label: string) {
   await page.getByRole('button', { name: 'New Session', exact: true }).first().click();
   await page.getByLabel('Choose Workspace').selectOption({ label });
 }
+/** Enter Workspace Settings from the exact Workspace object action. */
+export async function openWorkspaceSettings(page: Page, label: string) {
+  await closeSettings(page);
+  await page.getByRole('button', { name: `Select Workspace ${label}`, exact: true }).hover();
+  await page.getByRole('button', { name: `Workspace actions for ${label}`, exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Workspace settings', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Settings', exact: true })).toBeVisible();
+}
 export async function connectionAction(page: Page, action: 'Disconnect' | 'Reconnect') {
   const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
   const previous = await settings.isVisible() ? await settings.locator('[aria-current="page"]').innerText() : undefined;

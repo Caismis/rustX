@@ -2,7 +2,8 @@ import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { SourceMutation } from '../../../../protocol/app-server/v17';
 import { Switch } from '../../presentation/primitives/Switch';
 import { Button } from '../../presentation/primitives/Button';
-import { DraftContext, SourceContext, authoredUnit } from './drafts';
+import { DraftContext, SourceContext } from './drafts';
+import { provenanceLabel, unitFacts } from './projection';
 import css from '../../presentation/settings/SettingsContent.module.css';
 
 export type SaveSource = (mutation: SourceMutation, revision: string) => Promise<string | undefined>;
@@ -12,8 +13,11 @@ export function UnitForm<T>({ title, initial, revision, mutation, save, children
 }) {
   const drafts = useContext(DraftContext);
   const source = useContext(SourceContext);
-  const workspace = source?.target.kind === 'workspace';
-  const own = authoredUnit(source?.workspace?.authored, mutation(null));
+  const scope = source?.target.kind;
+  const unitMutation = mutation(null);
+  const facts = unitFacts(source, scope ?? 'user', unitMutation);
+  const workspace = scope === 'workspace';
+  const inheritance = workspace && unitMutation.kind === 'config';
   const identity = JSON.stringify(mutation(null));
   const cached = drafts?.get(identity);
   const [value, change] = useState<T>(() => cached ? cached.value as T : initial), [base, setBase] = useState(cached?.base ?? revision);
@@ -48,7 +52,14 @@ export function UnitForm<T>({ title, initial, revision, mutation, save, children
   const reviewNeeded = base !== revision && revision !== savedFrom.current;
   return <form aria-label={title} className={css.unit} onSubmit={e => { e.preventDefault(); void commit(); }}>
     <fieldset disabled={busy}><legend>{title}</legend>
-      {workspace && mutation(null).kind === 'config' && <><p>{own == null ? 'Inherited — no Workspace override' : 'Workspace override — empty selections remain explicit'}</p><details><summary>Native resolved preview (not Session adoption)</summary><pre>{JSON.stringify(authoredUnit(source?.resolved, mutation(null)), null, 2) ?? 'Unset'}</pre></details></>}
+      {inheritance && <>
+        {facts.presence === 'invalid'
+          ? <p role="alert">Authored source is invalid. {facts.diagnostic}</p>
+          : facts.presence === 'unavailable'
+            ? <p className={css.hint}>This Workspace source is unavailable. The native effective value below is the last observation.</p>
+            : <p className={css.hint}>{facts.presence === 'authored' ? 'Workspace override — empty selections remain explicit' : 'Inherited — no Workspace override'} · {provenanceLabel(facts.origin)}</p>}
+        <details><summary>Native resolved value (not Session adoption)</summary><pre>{JSON.stringify(facts.effective, null, 2) ?? 'Unset'}</pre></details></>}
+      {source && scope === 'user' && unitMutation.kind === 'config' && <p className={css.hint}>{facts.presence === 'invalid' ? `Authored source is invalid. ${facts.diagnostic ?? ''}` : facts.presence === 'authored' ? 'User authored value' : `Native default — no authored value · ${provenanceLabel(facts.origin)}`}</p>}
       {children(value, next => { committed.current = undefined; change(next); setDirty(true); setSaved(false); })}
       <details><summary>Source revision & replacement</summary><p className={css.hint}>Draft base revision: {base}<br />Current revision: {revision}</p><p>Save replaces this native semantic unit. Remove omits it from this scope. Empty selections remain explicit.</p></details>
       {reviewNeeded && <div className={css.review}><p role="status">Source revision changed. Your draft and original revision are preserved. Review the current source before replacing it.</p><details><summary>Review current authored unit (redacted)</summary><pre>{JSON.stringify(initial, null, 2)}</pre></details></div>}

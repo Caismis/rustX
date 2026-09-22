@@ -6,8 +6,13 @@ The [CFG3 reference](configuration.md) is the configuration contract.
 
 Global Settings edits User definitions with no Session required. Workspace Settings
 opens the exact registered Workspace through Product Host authorization without
-changing Session focus or creating a runtime. The selected authoring target remains
-stable when Session focus changes. Resolved source previews are read-only and are
+changing Session focus or creating a runtime. The entry owns the target for the
+whole lifetime of that Settings instance: the global entry is User authoring and
+the Workspace object action opens `Workspace Settings — <workspace>` for that
+exact authorized Workspace. There is no ordinary `Configuration owner` selector;
+a Session focus change never retargets an open editor, and a revoked or
+unregistered Workspace is fenced (its draft and error are retained) rather than
+redirected to User or another Workspace. Resolved source previews are read-only and are
 not the Session's adopted binding. The actual User pathname is displayed separately
 from fixed `~/rustx/.agents`.
 
@@ -27,14 +32,28 @@ the Session/default option intentionally removes the explicit Summary settings.
 General also edits the native Root identity and description semantic units.
 
 **Save** submits a native typed semantic-unit mutation with the exact source
-revision and transfers responsibility to native application. Conflicts preserve
+revision and transfers responsibility to native application. The browser keeps
+four distinct stages: local draft plus exact base revision, native semantic-unit
+mutation, committed acknowledgement, authoritative reread, and native per-unit
+application observation. A write acknowledgement is never an application
+observation, and a committed save followed by a failed reread is presented as
+“saved plus current read/application status uncertain”, not as unsaved. Read
+errors, write errors, CAS conflicts, application failures and unavailable/stale
+observations are reported separately; a successful read clears only the read
+error it answers. Connecting, loading, ready, stale and failed are distinct
+states rather than one “loading” label. Change behavior (“Applies immediately” /
+“Requires App Server restart”) is distinguished from the observed result
+(Applied / Preparing / Failed / Restart pending), and any “Active” statement is
+scoped to the native-confirmed unit rather than every Session. Conflicts preserve
 the draft. Settings renders simultaneous applied, preparing, failed/retry,
 process-restart state. The single **Adopt configuration** control lives below the
 focused Session title, outside Settings. It sends the inspected candidate and
 expected Session binding; native eligibility is advisory and the native admission
-gate revalidates both. Busy never cancels work or schedules automatic adoption.
-Diagnostics offers native rescan. Uncertain writes/adoption are repaired by
-rereading authority, never replayed. Reconnect rereads native state.
+gate revalidates both. Failed preparation offers owner-specific Settings
+navigation from the native source scope. Busy never cancels work or schedules
+automatic adoption. Diagnostics offers native rescan. Uncertain writes/adoption
+are repaired by rereading authority, never replayed. Reconnect rereads native
+state.
 
 Python, Skill and Workflow resource inventories do not imply full source editors.
 Full Workflow program, Skill-package and Python-source editing are outside this
@@ -56,10 +75,14 @@ These captures come from the real App Server/provider-emulator acceptance suite:
 
 [Settings architecture](../web-console/SETTINGS-ARCHITECTURE.md) describes the one
 Harness shell, grouped sections, Provider/Model drill-down, structured exact-identity
-rows, native resource cards and target-scoped unsaved drafts. General uses native
-source units; process settings are User-only and consume native hot/restart classification. Theme
-is an intentionally browser-local preference. Resource discovery never implies
-Root selection or native preparation.
+rows, native resource cards and target-scoped unsaved drafts. A pure presentation
+projection (`app/settings/projection.ts`) maps native facts — authoritative effective
+value, authored membership and explicit presence, native provenance/availability,
+and per-unit application observations — into display state without becoming
+authority: it never recomputes inheritance and never materializes a native default
+into a draft. General uses native source units; process settings are User-only and
+consume native hot/restart classification. Theme is an intentionally browser-local
+preference. Resource discovery never implies Root selection or native preparation.
 
 The current image references are under
 [`settings-presentation.spec.ts-snapshots`](../web-console/test/e2e/settings-presentation.spec.ts-snapshots).

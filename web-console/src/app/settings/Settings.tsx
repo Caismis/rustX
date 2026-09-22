@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { SourceSettings, SourceMutation, SourceScope, SourceTarget } from '../../../../protocol/app-server/v17';
+import type { SourceSettings, SourceMutation, SourceScope } from '../../../../protocol/app-server/v17';
 import { RpcFailure, isOutcomeUncertain, type AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { ResourceInventory } from './ResourceInventory';
@@ -15,7 +15,12 @@ import { DraftContext, SourceContext, type UnitDraft } from './drafts';
 import { SettingsPanel } from '../../presentation/settings/SettingsRoot';
 import type { ConnectionController } from '../../connection/controller';
 import { ConnectionSettings } from './ConnectionSettings';
-import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog, type WorkspaceConfigurationOperation } from '../../workspaces/host';
+import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceConfigurationOperation } from '../../workspaces/host';
+import {
+  applicationScope, changeBehavior, changeBehaviorLabel, observedResult, observedResultLabel, observedUnitLabel,
+  observedUnits, settingsLifecycle, settingsLifecycleLabel, settingsTargetKey, settingsTargetLabel, settingsTargetScope,
+  unitApplication, type SettingsTarget,
+} from './projection';
 
 const sections = [
   ['overview', 'Overview', 'General'], ['general', 'General', 'General'], ['catalog', 'Providers & Models', 'Models'],
@@ -28,15 +33,9 @@ const sections = [
 type Section = typeof sections[number][0] | 'appearance' | 'connection';
 const draftStores = new WeakMap<AppServerClient, Map<string, Map<string, UnitDraft>>>();
 interface SettingsProps {
-  client: AppServerClient; workspaceId?: string; host?: ProductHostWorkspaces; onClose?: () => void;
+  client: AppServerClient; target: SettingsTarget; host?: ProductHostWorkspaces; onClose?: () => void;
   theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void;
   connection?: ConnectionController; initialSection?: 'overview' | 'connection';
-}
-/** The native application scope this source target publishes under, exactly as
- * `SourceTarget::application_scope` names it. Application versions are u64
- * counters comparable only inside one scope, authority and connection lifetime. */
-function applicationScope(target: SourceTarget) {
-  return target.kind === 'user' ? 'source:user' : `source:workspace:${target.directory}`;
 }
 function sourceRevision(source: SourceSettings, mutation: SourceMutation) {
   const scope = source.target.kind;
@@ -44,14 +43,17 @@ function sourceRevision(source: SourceSettings, mutation: SourceMutation) {
   if (mutation.kind === 'mcp') return (scope === 'user' ? source.user_mcp : source.workspace_mcp)!.revision;
   return source.agents.find(agent => agent.scope === scope && agent.name === mutation.name)?.source.revision ?? source.absent_resource_revision;
 }
-export function Settings({ client, workspaceId: initialWorkspace, host, onClose = () => {}, theme = 'light', setTheme, connection, initialSection }: SettingsProps) {
+export function Settings({ client, target, host, onClose = () => {}, theme = 'light', setTheme, connection, initialSection }: SettingsProps) {
   const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
-  const [workspaceId, setWorkspaceId] = useState(initialWorkspace);
-  useEffect(() => { setWorkspaceId(initialWorkspace); }, [initialWorkspace]);
-  const [catalog, setCatalog] = useState<WorkspaceCatalog>();
+  const scope: SourceScope = settingsTargetScope(target);
+  const targetKey = settingsTargetKey(target);
   const [section, setSection] = useState<Section>(initialSection ?? 'overview');
   const [source, setSource] = useState<SourceSettings>();
-  const [error, setError] = useState(''), [message, setMessage] = useState(''), [busy, setBusy] = useState(false);
+  // Read and write outcomes are separate facts. A successful authoritative read
+  // clears only the read error it answers; it never erases a distinct write,
+  // conflict or application failure.
+  const [readError, setReadError] = useState(''), [writeError, setWriteError] = useState('');
+  const [message, setMessage] = useState(''), [busy, setBusy] = useState(false);
   const [targetValid, setTargetValid] = useState(false);
   // Separate facts, never one counter: `epoch` fences target, authority and
   // connection lifetime; `reads` orders authoritative reads; `accepted` counts
@@ -72,29 +74,32 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
   const publications = useRef(transport.configuration), commits = useRef(0), observedCommits = useRef(0);
   publications.current = transport.configuration;
   const endpoint = transport.endpoint ?? '';
-  const identity = JSON.stringify([endpoint, transport.authorityRevision, workspaceId ?? null]);
+  const identity = JSON.stringify([endpoint, transport.authorityRevision, targetKey]);
+  // Stable primitive dependency: a fresh target object literal must not restart
+  // the read/convergence lifetime on every parent render.
+  const workspaceTargetId = target.kind === 'workspace' ? target.id : undefined;
   let stores = draftStores.get(client);
   if (!stores) { stores = new Map(); draftStores.set(client, stores); }
   const draftKey = identity + ':' + section;
   let drafts = stores.get(draftKey);
   if (!drafts) { drafts = new Map(); stores.set(draftKey, drafts); }
   const request = useCallback(async (operation: WorkspaceConfigurationOperation) => {
-    if (workspaceId !== undefined) {
+    if (workspaceTargetId !== undefined) {
       if (!host?.configureWorkspace) throw new Error('Workspace Settings requires an authorized Product Host connection.');
-      return host.configureWorkspace(workspaceId, endpoint, operation);
+      return host.configureWorkspace(workspaceTargetId, endpoint, operation);
     }
-    const target = { kind: 'user' as const };
-    if (operation.kind === 'write') return (await client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
-    if (operation.kind === 'reconcile') await client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_application');
-    return (await client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection;
-  }, [client, endpoint, host, workspaceId]);
+    const nativeTarget = { kind: 'user' as const };
+    if (operation.kind === 'write') return (await client.request({ method: 'configuration/sourceWrite', params: { target: nativeTarget, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
+    if (operation.kind === 'reconcile') await client.request({ method: 'configuration/reconcile', params: { target: nativeTarget } }, 'configuration_application');
+    return (await client.request({ method: 'configuration/sourcesRead', params: { target: nativeTarget } }, 'source_settings')).projection;
+  }, [client, endpoint, host, workspaceTargetId]);
   /** Adopt one whole authoritative projection. Only `configuration/sourcesRead`
    * results reach here, ordered by `reads`: a source-write acknowledgement
    * confirms one authoring mutation and supplies its committed revision, but is
    * not an application observation and never replaces the read model. */
   const accept = useCallback((next: SourceSettings) => {
     observation.current = next; ++accepted.current;
-    setSource(next); setTargetValid(true);
+    setSource(next); setTargetValid(true); setReadError('');
   }, []);
   /** One authoritative read. Resolves true only when this read's own projection
    * was adopted; a newer outstanding read wins instead. An adopted read was
@@ -110,7 +115,7 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
       if (afterCommits > observedCommits.current) observedCommits.current = afterCommits;
       accept(next); return true;
     } catch (cause) {
-      if (at === epoch.current && read === reads.current && settled === accepted.current) { setError(String(cause)); setTargetValid(false); }
+      if (at === epoch.current && read === reads.current && settled === accepted.current) { setReadError(String(cause)); setTargetValid(false); }
       throw cause;
     } finally {
       if (at === epoch.current) --outstanding.current;
@@ -128,9 +133,9 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
   const obligation = useCallback(() => {
     const held = observation.current, published = publications.current ?? {};
     if (!held) return 0n;
-    const scope = applicationScope(held.target), publication = published[scope];
+    const scopeKey = applicationScope(held.target), publication = published[scopeKey];
     if (!publication) return undefined;
-    const settled = held.application?.scope === scope ? held.application.version : undefined;
+    const settled = held.application?.scope === scopeKey ? held.application.version : undefined;
     return settled === undefined || BigInt(settled) < BigInt(publication.version) ? BigInt(publication.version) : undefined;
   }, []);
   /** The single convergence worker for the current lifetime. Each pass observes
@@ -170,10 +175,10 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
         // The read was issued after `required` was published, so settling below
         // it is native evidence missing, not a reason to spin. Absent application
         // data is not measurable; a measurably stale application is reported.
-        const scope = applicationScope(observation.current!.target);
-        const settled = observation.current?.application?.scope === scope ? observation.current.application.version : undefined;
+        const scopeKey = applicationScope(observation.current!.target);
+        const settled = observation.current?.application?.scope === scopeKey ? observation.current.application.version : undefined;
         if (settled === undefined) break;
-        setError(`Native ${scope} published application version ${required}, but the authoritative read issued after it settled at ${settled}.`);
+        setWriteError(`Native ${scopeKey} published application version ${required}, but the authoritative read issued after it settled at ${settled}.`);
         break;
       }
     } catch { /* refresh already owns reporting this failure; a later publication, refresh or reconnect may retry. */ }
@@ -185,22 +190,17 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
     // observe the epoch change and release ownership.
     const resolve = settle.current; settle.current = undefined; resolve?.();
     commits.current = 0; observedCommits.current = 0;
-    setSource(undefined); setTargetValid(false); setBusy(false); setError(''); setMessage('');
+    setSource(undefined); setTargetValid(false); setBusy(false); setReadError(''); setWriteError(''); setMessage('');
     if (transport.connection === 'connected') void converge();
     return () => { ++epoch.current; };
   }, [identity, transport.generation, transport.connection, converge]);
-  useEffect(() => {
-    let current = true;
-    if (host) void host.listWorkspaces().then(value => { if (current) setCatalog(value); }).catch(() => { if (current) setCatalog(undefined); });
-    return () => { current = false; };
-  }, [host, identity]);
   // Native source publications observed on this connection. `owed` is a level,
   // not an edge: until this target's own projection carries at least the version
   // published for its scope, the observation obligation stands — an older
   // acknowledgement landing in between cannot discharge or cancel it.
-  const publicationsList = Object.entries(transport.configuration ?? {}).filter(([scope]) => scope.startsWith('source:'));
-  const observed = publicationsList.map(([scope, value]) => `${scope}=${value.version}`).join(' ');
-  const published = source && publicationsList.find(([scope]) => scope === applicationScope(source.target))?.[1].version;
+  const publicationsList = Object.entries(transport.configuration ?? {}).filter(([scopeKey]) => scopeKey.startsWith('source:'));
+  const observed = publicationsList.map(([scopeKey, value]) => `${scopeKey}=${value.version}`).join(' ');
+  const published = source && publicationsList.find(([scopeKey]) => scopeKey === applicationScope(source.target))?.[1].version;
   const settled = source?.application?.version;
   const owed = published !== undefined && (settled === undefined || BigInt(settled) < BigInt(published));
   useEffect(() => { if (observed) void converge(); }, [observed, converge]);
@@ -208,7 +208,7 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
   const save: SaveSource = async (mutation, expected_revision) => {
     if (writing.current === epoch.current || !targetValid || transport.connection !== 'connected') return undefined;
     const at = epoch.current;
-    writing.current = at; setBusy(true); setError(''); setMessage('');
+    writing.current = at; setBusy(true); setWriteError(''); setMessage('');
     try {
       const next = await request({ kind: 'write', expected_revision, mutation });
       if (at !== epoch.current) return undefined;
@@ -232,15 +232,15 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
       if (at !== epoch.current) return undefined;
       const conflict = (cause instanceof RpcFailure && cause.error.data?.kind === 'source_conflict') || (cause instanceof WorkspaceHostError && cause.kind === 'source_conflict');
       const uncertain = isOutcomeUncertain(cause) || (cause instanceof WorkspaceHostError && cause.uncertain);
-      setError(conflict ? 'Source changed. Your draft and base revision are preserved.' : uncertain ? 'Save outcome uncertain. Rereading authority without replaying the write.' : String(cause));
+      setWriteError(conflict ? 'Source changed. Your draft and base revision are preserved.' : uncertain ? 'Save outcome uncertain. Rereading authority without replaying the write.' : String(cause));
       try { await refresh(); } catch { /* Keep draft and invalid target until an authoritative read succeeds. */ }
       return undefined;
     } finally { if (writing.current === at) writing.current = undefined; if (at === epoch.current) setBusy(false); }
   };
-  const scope: SourceScope = workspaceId === undefined ? 'user' : 'workspace';
   const selected = source?.[scope];
   const models = Object.keys(source?.resolved?.models ?? source?.user.authored?.models ?? {});
   const roots = [source?.user_resource_root ? source.user_resource_root + '/skills' : '', source?.workspace_resource_root ? source.workspace_resource_root + '/skills' : ''];
+  const lifecycle = settingsLifecycle({ connection: transport.connection, hasSource: !!source, targetValid, readError });
   const editor = selected && <fieldset disabled={busy || !targetValid || transport.connection !== 'connected'} className={css.editor}>
     {section === 'catalog' && <CatalogEditor document={selected.authored ?? {}} scope={scope} revision={selected.revision} save={save} />}
     {(section === 'general' || section === 'policies') && <RuntimeEditor document={selected.authored ?? {}} scope={scope} revision={selected.revision} save={save} policyOnly={section === 'policies'} processPolicyImpacts={source!.process_policy_impacts} />}
@@ -253,15 +253,13 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
     {section === 'connection' && connection ? <ConnectionSettings connection={connection} client={client} /> : section === 'appearance' ?
       <section><h2>Appearance</h2><label>Theme<select aria-label="Theme" value={theme} onChange={event => setTheme?.(event.target.value as 'light' | 'dark')}><option value="light">Light</option><option value="dark">Dark</option></select></label></section> :
       <section className={css.settings} aria-label="Settings" aria-busy={busy}>
-        <h2>{scope === 'user' ? 'User Settings' : 'Workspace Settings'}</h2>
-        <label>Configuration owner<select aria-label="Configuration owner" value={workspaceId ?? ''} disabled={busy} onChange={event => setWorkspaceId(event.target.value || undefined)}>
-          <option value="">User</option>
-          {workspaceId && !catalog?.workspaces.some(row => row.id === workspaceId) && <option value={workspaceId}>Unavailable Workspace</option>}
-          {catalog?.endpoint === endpoint && catalog.workspaces.map(row => <option key={row.id} value={row.id}>{row.displayName}</option>)}
-        </select></label>
+        <h2>{settingsTargetLabel(target)}</h2>
+        {scope === 'workspace' && <p className={css.hint}>Bound to this exact authorized Workspace. Session focus never retargets this editor.</p>}
+        <p role="status" data-lifecycle={lifecycle}>{settingsLifecycleLabel(lifecycle)}</p>
         <Button disabled={busy || transport.connection !== 'connected'} onClick={() => void refresh().catch(() => {})}>Read current sources</Button>
-        {error && <p role="alert">{error}</p>}{message && <p role="status">{message}</p>}
-        {!source && <p role="status">Loading source authority…</p>}
+        {readError && <p role="alert">Source read failed. {readError}</p>}
+        {writeError && <p role="alert">{writeError}</p>}
+        {message && <p role="status">{message}</p>}
         {selected && <p>{selected.path} · Revision: {selected.revision}</p>}
         {selected?.diagnostic && <p role="alert">{selected.diagnostic}</p>}
         {source?.prospective_diagnostic && <p role="status">{source.prospective_diagnostic}</p>}
@@ -275,12 +273,23 @@ export function Settings({ client, workspaceId: initialWorkspace, host, onClose 
         </div></DraftContext></SourceContext>
         {section === 'overview' && <p>Definitions and defaults belong to this source. Session selections and explicit adoption belong to each Session.</p>}
         {section === 'advanced' && source && <>
+          <h3>Application observation</h3>
+          <ul>{observedUnits.map(unit => {
+            const result = observedResult(unitApplication(source.application, unit));
+            return <li key={unit}>{observedUnitLabel(unit)}: <strong>{observedResultLabel(result)}</strong>
+              {result.state === 'failed' && <> — {result.diagnostic}</>}
+              {result.state === 'ready' && <> — cache impact {result.impact}</>}
+            </li>;
+          })}</ul>
+          <p>Applied, Preparing, Failed and Restart pending are native observations of this exact source scope. They are never Session adoption and never one global success state.</p>
+          <h3>Change behavior</h3>
+          <ul>{Object.keys(source.process_policy_impacts).map(key => <li key={key}>{key}: {changeBehaviorLabel(changeBehavior(source.process_policy_impacts, key))}</li>)}</ul>
           <h3>Process bindings</h3><pre>{JSON.stringify(source.process_bindings, null, 2)}</pre>
           {source.application?.units.process_bindings?.status === 'process_restart' && <p role="status">Saved desired values differ from the current process binding. Restart required.</p>}
           {source.application?.units.process_bindings?.status === 'applied' && <p role="status">Saved process policy is active.</p>}
           <details><summary>Resolved preview — source resolution only</summary><pre>{JSON.stringify({ resolved: source.resolved, provenance: source.provenance }, null, 2)}</pre></details>
           <details><summary>Source and application diagnostics</summary><pre>{JSON.stringify(source, null, 2)}</pre></details>
-          <Button disabled={busy || !targetValid} onClick={() => { const at = epoch.current; void request({ kind: 'reconcile' }).then(() => { if (at === epoch.current) return refresh(); }).catch(cause => { if (at === epoch.current) setError(String(cause)); }); }}>Rescan configuration files</Button>
+          <Button disabled={busy || !targetValid} onClick={() => { const at = epoch.current; void request({ kind: 'reconcile' }).then(() => { if (at === epoch.current) return refresh(); }).catch(cause => { if (at === epoch.current) setWriteError(String(cause)); }); }}>Rescan configuration files</Button>
         </>}
       </section>}
   </SettingsPanel>;

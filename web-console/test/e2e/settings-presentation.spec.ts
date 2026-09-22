@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { closeSettings, openWorkspaceSettings } from './shell-actions';
 test('native Settings reference cards, inventories, keyboard scopes and narrow theme', async ({ page }) => {
  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
  await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z')); await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -10,7 +11,9 @@ test('native Settings reference cards, inventories, keyboard scopes and narrow t
  await expect(settings.getByText(/Revision: user-1/)).toBeVisible();
  await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();
  await expect(settings).toHaveScreenshot('settings-user-catalog-light.png');
- await settings.getByLabel('Configuration owner').selectOption({ label: 'Workspace A' });
+ await closeSettings(page);
+ await openWorkspaceSettings(page, 'Workspace A');
+ await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();
  await settings.getByRole('button', { name: 'Edit Model main' }).click();
  await expect(settings).toHaveScreenshot('settings-model-editor-light.png');
  await settings.getByRole('button', { name: 'Plugins', exact: true }).click(); await expect(settings.getByRole('switch', { name: 'Enable goal' })).toBeChecked();
@@ -28,6 +31,11 @@ test('native Settings reference cards, inventories, keyboard scopes and narrow t
  await expect(settings.getByLabel('Description', { exact: true })).toBeVisible();
  await expect(page).toHaveScreenshot('settings-agent-narrow-dark.png');
  expect(await settings.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+ await page.keyboard.press('Escape'); await expect(settings).toHaveCount(0);
+ // The global entry restores focus to its own trigger; the Workspace entry is
+ // opened from the exact Workspace object action instead.
+ await page.getByRole('button', { name: 'Settings', exact: true }).click();
+ await expect(settings).toBeVisible();
  await page.keyboard.press('Escape'); await expect(settings).toHaveCount(0);
  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeFocused();
  await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

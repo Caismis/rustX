@@ -1,5 +1,5 @@
 import { connectRemote } from './shell-actions';
-import { chooseWorkspace } from './shell-actions';
+import { chooseWorkspace, closeSettings, openWorkspaceSettings } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { appendFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,7 +21,6 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
     await expect(settings).toContainText(fixture.settings);
-    await settings.getByLabel('Configuration owner').selectOption('');
     await settings.getByRole('button', { name: 'MCP', exact: true }).click();
     await settings.getByLabel('New MCP identity').fill('local-fixture');
     await settings.getByRole('button', { name: 'Add MCP', exact: true }).click();
@@ -35,7 +34,9 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     expect(existsSync(join(fixture.directory, 'mcp-started'))).toBe(false);
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     expect(existsSync(join(fixture.directory, 'mcp-started'))).toBe(false);
-    await settings.getByLabel('Configuration owner').selectOption({ label: 'Workspace A' });
+    await closeSettings(page);
+    await openWorkspaceSettings(page, 'Workspace A');
+    await settings.getByRole('button', { name: 'MCP', exact: true }).click();
     await settings.getByLabel('New MCP identity').fill('local-fixture');
     await settings.getByRole('button', { name: 'Add MCP', exact: true }).click();
     await expect(settings.getByLabel('MCP command')).toHaveValue('');

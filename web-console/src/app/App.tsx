@@ -42,6 +42,7 @@ import { Menu } from '../presentation/primitives/Menu';
 import { deriveSessionProductState } from '../bindings/session-product';
 import { SessionStatus } from './SessionStatus';
 import { SessionConfiguration } from './SessionConfiguration';
+import { userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from './settings/projection';
 
 const PREFERENCES = 'rustx-console-view-v2';
 function readPreferences(): { endpoint?: string; openViews: string[] } {
@@ -58,7 +59,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const selection = useSyncExternalStore(connection.subscribe, connection.getSnapshot);
   const [createOpen, setCreateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState<'overview' | 'connection'>();
-  const [settingsWorkspace, setSettingsWorkspace] = useState<string>();
+  const [settingsTarget, setSettingsTarget] = useState<SettingsTarget>();
   const [sessionSettingsOpen, setSessionSettingsOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
@@ -194,6 +195,20 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       finally { if (generation === client.getSnapshot().generation) setCreating(undefined); }
     });
   };
+  // Owner-specific Settings navigation from native Session facts. A User-scope
+  // failure opens User authoring; a Workspace-scope failure opens only the exact
+  // registered Workspace. An unresolvable Workspace is never rerouted to User.
+  const openOwningSettings = (scope: string) => {
+    if (scope === 'source:user') { setSettingsTarget(userSettingsTarget); setSettingsOpen('overview'); return; }
+    const directory = scope.startsWith('source:workspace:') ? scope.slice('source:workspace:'.length) : '';
+    if (!directory) return;
+    run(async () => {
+      const catalog = await workspaceHost.listWorkspaces();
+      const row = catalog.workspaces.find(workspace => workspace.location === directory || workspace.displayPath === directory);
+      if (!row) { setError('The owning Workspace is not registered by this Product Host.'); return; }
+      setSettingsTarget(workspaceSettingsTarget(row.id, row.displayName)); setSettingsOpen('overview');
+    });
+  };
   const deletePreview = (id: string) => run(async () => {
     const generation = client.getSnapshot().generation;
     const result = await client.request({ method: 'session/deletePreview', params: { session_id: id } }, 'deletion');
@@ -205,15 +220,15 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     panels={[]}
     browser={(wide, expand) => <WorkspaceNavigation key={state.authorityRevision ?? 0} wide={wide} expand={expand} createOpen={createOpen} closeCreate={() => setCreateOpen(false)} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       creating={creating === state.generation} metadataChanged={removed => { if (selected) focusSession(selected, { preserveDraft: true }); else if (removed) setFocus(value => value.workspaceId === removed ? {} : value); }}
-      workspaceSettings={id => { setSettingsWorkspace(id); setSettingsOpen('overview'); }} workspace={workspace} selected={selected} selectWorkspace={id => { navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({ workspaceId: id, generation: state.generation }); }}
+      workspaceSettings={(id, label) => { setSettingsTarget(workspaceSettingsTarget(id, label)); setSettingsOpen('overview'); }} workspace={workspace} selected={selected} selectWorkspace={id => { navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({ workspaceId: id, generation: state.generation }); }}
       openSession={open} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={createInWorkspace} deleteSession={deletePreview}
       forkSession={id => open(id, () => {
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
       })} />}
-    settings={wide => <SettingsTrigger wide={wide} onClick={() => { setSettingsWorkspace(undefined); setSettingsOpen('overview'); }} />} />}
+    settings={wide => <SettingsTrigger wide={wide} onClick={() => { setSettingsTarget(userSettingsTarget); setSettingsOpen('overview'); }} />} />}
     rightOpen={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} rightPanel={geometry => <RightPanel {...geometry} open={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} close={() => { setInspectorOpen(false); setArtifactPreview(undefined); }} title={artifactPreview && artifactPreview.resources === artifacts ? 'Artifact preview' : 'Developer inspector'}>{artifactPreview && artifactPreview.resources === artifacts ? <ArtifactPreview key={artifactPreview.artifact.id} artifact={artifactPreview.artifact} resources={artifacts!} /> : <Inspector log={client.log} state={state} view={view} />}</RightPanel>}
     overlay={<>
-      {settingsOpen && <Settings initialSection={settingsOpen} connection={connection} client={client} workspaceId={settingsWorkspace} host={workspaceHost} onClose={() => setSettingsOpen(undefined)} theme={theme} setTheme={setTheme} />}
+      {settingsOpen && <Settings initialSection={settingsOpen} connection={connection} client={client} target={settingsTarget ?? userSettingsTarget} host={workspaceHost} onClose={() => setSettingsOpen(undefined)} theme={theme} setTheme={setTheme} />}
     </>}>
     {!view && <header className="console-header"><strong>rustX</strong><Button aria-label="Toggle Inspector" onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></header>}
     {!connected && !view && <section className="notice" aria-label="Connection recovery"><p>{selection.busy ? 'Connecting…' : 'Unable to connect to rustX'}</p>
@@ -256,7 +271,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
           onSelect={id => { setSessionMenuOpen(false); if (id === 'settings') setSessionSettingsOpen(value => !value); else if (id === 'tree') invokeCommand({ id: 'tree' }); else if (id === 'export') run(() => client.exportSession(view.id)); }} />
           <Button aria-label="Toggle Inspector" aria-expanded={inspectorOpen} onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></div>
       </div>
-      <SessionConfiguration key={`${state.authorityRevision}:${view.id}`} client={client} view={view} />
+      <SessionConfiguration key={`${state.authorityRevision}:${view.id}`} client={client} view={view} openOwningSettings={openOwningSettings} />
       {sessionSettingsOpen && <section aria-label="Session settings"><p>Workspace: {view.settings?.cwd ?? 'Unavailable'}</p><AgentControls key={`settings:${view.id}`} client={client} view={view} /><Button onClick={() => setSessionSettingsOpen(false)}>Close Session settings</Button></section>}
       <div className={agentCss.tabs} role="tablist" aria-label="Conversation view" onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <Button className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? 'Chat' : 'Trajectory'}</Button>)}</div>
       </header>

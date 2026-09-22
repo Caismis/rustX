@@ -1,7 +1,7 @@
 import { connectRemote } from './shell-actions';
 import { closeSessionView } from './shell-actions';
 import { showInspector } from './shell-actions';
-import { chooseWorkspace, connectionAction, closeSettings } from './shell-actions';
+import { chooseWorkspace, connectionAction, closeSettings, openWorkspaceSettings } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
@@ -48,13 +48,13 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
-    await settings.getByLabel('Configuration owner').selectOption({ label: 'Workspace A' });
+    await closeSettings(page);
+    await openWorkspaceSettings(page, 'Workspace A');
     await settings.getByRole('button', { name: 'Default model', exact: true }).click();
     await settings.getByRole('combobox', { name: 'Model', exact: true }).selectOption('fixture/second-model');
     await settings.getByRole('button', { name: 'Save Root model', exact: true }).click();
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     await expect(settings.getByRole('button', { name: /Adopt/ })).toHaveCount(0);
-    await settings.getByLabel('Configuration owner').selectOption({ label: 'Workspace A' });
     await settings.getByRole('button', { name: 'Default model', exact: true }).click();
     await settings.getByRole('button', { name: 'Remove Root model', exact: true }).click();
     await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();

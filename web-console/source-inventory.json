@@ -438,6 +438,7 @@
         "./RuntimeEditor",
         "./controls",
         "./drafts",
+        "./projection",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -454,7 +455,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "b890de791d16da783c01b4f03185a4a5ff562e865d033ee9b20dbe0004c2c074"
+      "local_sha256": "7e8a794284e7b478080cf408bf7d7173c9908a6fb52d8fbae365e3d2dfafc52e"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -2213,7 +2214,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "0d7743cf301880c92f8b22efbb5a990b7b34e02ffb5fcc62e6338cf0e04e848e",
+      "local_sha256": "eead0e67f268c801edb5c7587cc49debd879d22ab82a1917bafad92ec0b43253",
       "classification": "B"
     },
     {
@@ -2261,7 +2262,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "6d15043460a4a739289c76eec6e1cbdc05d639cf3adeff1166a880bd52b9b0c4"
+      "local_sha256": "39916e9bf466e333975bb09dc1e9d18ed3a0e416dfbfc0451dc9c388a821ae34"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
