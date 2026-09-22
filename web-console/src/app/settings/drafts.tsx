@@ -31,11 +31,11 @@ export interface UnitEditState {
   /** The exact CAS base revision the next mutation is fenced on. */
   base: string;
   /** True once `base` is pinned by an edit or a mutation attempt. While pinned,
-   * an observed revision never advances `base`; only Discard or the explicit
-   * reviewed-revision gesture moves it. */
+   * an observed revision never advances `base` on its own; only a confirmed
+   * commit, Discard, or the explicit reviewed-revision gesture moves it. */
   pinned: boolean;
-  /** Monotonic browser-intent generation. Every edit/discard bumps it so an
-   * older submitted mutation can never retire a newer intent. */
+  /** Monotonic browser-intent generation. Every edit bumps it so an older
+   * submitted mutation can never retire a newer intent. */
   generation: number;
   /** The last submitted mutation whose authoritative projection has not been
    * observed yet. It is the only thing settlement may retire. */
