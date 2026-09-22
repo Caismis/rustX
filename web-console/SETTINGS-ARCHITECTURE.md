@@ -72,6 +72,16 @@ identity for a Session application — and is never a source owner.
 `applicationOwners` reads the native `sources` projection instead, so no code
 parses a scope string, guesses from a Session `cwd` or rebuilds source ownership.
 
+Settings navigation itself is linearized by one epoch owned by the product shell
+(`App.tsx`), and every user action that changes Settings navigation passes
+through it: open User Settings, open an exact Workspace, open an owning
+Workspace, open Connection Settings — including the disconnected recovery
+"Show details" gesture — close Settings, and authority replacement. Owner lookup
+(`listWorkspaces`) is asynchronous *preparation*, never standing authority to
+commit navigation later: it may publish a target or an error only while its own
+epoch and App Server authority are still current. There is exactly one such
+epoch; no surface keeps a private one.
+
 Settings surface states (`connecting`/`loading`/`ready`/`stale`/`failed`) and
 change behavior (`Applies immediately`/`Requires App Server restart`) are likewise
 projected rather than inferred.
@@ -222,10 +232,38 @@ objects remain distinct generated values. No recursive merge or config-file
 serialization is implemented in TypeScript.
 
 Lost Save/adoption replies and reconnect cause authoritative rereads, never replay.
-Connection/target epochs fence obsolete work, and a read sequence prevents an
-older overlapping read from replacing a newer observation or a write acknowledgement.
-Both success and rejection commit only within the same epoch and read sequence,
-including explicit refresh failures. One Session adoption attempt's terminal
+
+**Authoritative read ordering.** Every authoritative source read of a Settings
+lifetime — effect/startup read, explicit refresh, convergence read, save recovery
+read and Workspace write-owned reread alike — reserves the next read identity
+when it is *initiated*, and may publish presentation state (a projection, a read
+failure, a commit observation) only while it still owns the current read sequence
+of the current epoch. Ordering is therefore by reservation, never by delivery and
+never by what has already been accepted: once a newer authoritative read has been
+initiated, an older read or write-owned reread is superseded and silent, whatever
+order the responses arrive in, and a superseded reread discharges no commit
+observation — that obligation stays with the single level-triggered convergence
+owner until an authoritative current read observes it. A save whose write-owned
+reread was superseded waits for the read that superseded it to settle before
+reporting the saved notice — the notice is truthful only against the projection
+the current authoritative read carries, exactly as the User path already
+requires — and it waits on that outstanding read rather than racing it with a
+redundant read of its own. Both success and rejection commit only within the same
+epoch and read sequence, including explicit refresh failures.
+
+**Presentation lifetime is not mutation lifetime.** The Settings epoch fences
+projection adoption, UI messages, current target validity, read errors, rendering
+and convergence ownership. It does not fence a definitive native `sourceWrite`
+acknowledgement: that is a durable fact about the transaction store which
+submitted the mutation, and it is returned to that store even when the editor,
+or the whole Settings dialog, unmounted first. Presentation retirement may stop
+an old operation from updating the current UI, but never reinterprets a
+definitive commit as a failed submission — which would strand an already
+committed secret-bearing draft and a stale CAS base in the transaction store.
+The store is keyed by endpoint, authority and target identity, so an
+acknowledgement settles exactly its own transaction and never reaches a
+replacement authority or a different target. An outcome that is genuinely
+uncertain keeps the existing authoritative-reread-only recovery, with no replay. One Session adoption attempt's terminal
 cleanup owns only that attempt's own state: it releases the in-flight guard and
 clears `busy` independently of the authoritative reread it then issues, and only
 within its own lifetime, so neither a failed reread nor a superseded lifetime's
