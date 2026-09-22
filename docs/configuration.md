@@ -89,7 +89,7 @@ The current document version is `schema_version = 9`.
 | `tool_deadline_policy` | Tool hard deadline and optional idle-liveness window |
 | `native_tools` | Global per-Native-Tool invocation policies |
 | `mcp_tool_policies` | Global per-MCP-source invocation policies |
-| `environment` | Literal Tool environment, keyed by variable |
+| `environment` | Literal Tool environment, keyed by variable; projections carry the identities only |
 | `subagents` | Runtime-global child capacity |
 | `app_server` | User-only process policy; changes require restart |
 
@@ -221,7 +221,11 @@ Root-only Goal pursuit. No dynamic plugin loading, hook API or marketplace exist
 idle window but cannot extend a hard deadline.
 
 `subagents.max_concurrent` is global child capacity, not a Root delegation
-allowlist. `environment` maps variable names to literal strings.
+allowlist. `environment` maps variable names to literal strings in the authored
+document. Those literals are secrets on the same terms as a Provider credential:
+every projection that leaves native authority carries the identities alone, so a
+client can discover, attribute and override an environment variable without ever
+reading its value.
 
 Each `native_tools.<read|write|edit|glob|grep|bash>` object and each
 `mcp_tool_policies.<source>` object has `execution` (`foreground_only`,

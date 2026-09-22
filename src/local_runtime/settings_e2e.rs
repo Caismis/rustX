@@ -1,6 +1,7 @@
 //! Native CFG3 source authoring and complete generation publication contracts.
 use super::configuration::settings::{ConfigMutation, SettingsError, SourceMutation};
 use super::launch::{HostEnvironment, LaunchRequest};
+use std::collections::BTreeMap;
 
 fn fixture() -> (tempfile::TempDir, HostEnvironment, LaunchRequest) {
     let root = tempfile::tempdir().unwrap();
@@ -136,4 +137,117 @@ fn rustx_target(
     crate::local_runtime::configuration::settings::SourceTarget::Workspace {
         directory: directory.to_path_buf(),
     }
+}
+
+/// A literal Tool environment value is a secret on the same terms as a Provider
+/// credential: native authority keeps it, and no projection that leaves native
+/// authority may carry it. The identity itself stays reachable so a higher
+/// scope can discover it, label its provenance and author an override without
+/// ever reading the lower-authority literal.
+#[test]
+fn s1_environment_literals_never_leave_native_authority() {
+    const SENTINEL: &str = "S1-SECRET-SENTINEL";
+    let (_root, host, request) = fixture();
+    let (manager, input) = request.session_input(&host).unwrap();
+    let user = crate::local_runtime::configuration::settings::SourceTarget::User;
+    let before = manager.read_source_settings(&user).unwrap();
+    let saved = manager
+        .write_source_settings(
+            &user,
+            &before.user.revision,
+            SourceMutation::Config {
+                mutation: ConfigMutation::Environment {
+                    name: "SECRET_ENV".into(),
+                    authored: Some(SENTINEL.into()),
+                },
+            },
+        )
+        .unwrap();
+    // Native authority really holds the literal: the authored document on disk
+    // is unredacted, which is what the running Tool environment resolves from.
+    let document = std::fs::read_to_string(&saved.user.path).unwrap();
+    assert!(
+        document.contains(SENTINEL),
+        "native authoring keeps the value"
+    );
+
+    // Every projection of that document is identity-only. Both scopes are
+    // checked, because a Workspace reads the same User document as `resolved`.
+    for projection in [
+        saved.clone(),
+        manager.read_source_settings(&user).unwrap(),
+        manager
+            .read_source_settings(&rustx_target(&input.cwd))
+            .unwrap(),
+    ] {
+        let wire = serde_json::to_string(&projection).unwrap();
+        assert!(
+            !wire.contains(SENTINEL),
+            "environment literal reached the wire: {wire}"
+        );
+        assert!(
+            !wire.contains("SECRET_SENTINEL"),
+            "Provider literal credential reached the wire: {wire}"
+        );
+        assert!(
+            wire.contains("SECRET_ENV"),
+            "the environment identity must stay discoverable: {wire}"
+        );
+        assert_eq!(
+            projection.user.authored.as_ref().unwrap().environment,
+            Some(vec!["SECRET_ENV".to_string()]),
+            "the authoring scope projects the identity it owns, never its value"
+        );
+        assert_eq!(
+            projection.resolved.as_ref().unwrap().environment,
+            Some(vec!["SECRET_ENV".to_string()]),
+            "native resolution projects the effective identity, never its value"
+        );
+    }
+}
+
+/// The MCP projection redacts literal `env`/`headers` on the same contract, and
+/// names the identities it retained. This is the pattern the environment
+/// projection above follows; asserting it here keeps the two from diverging.
+#[test]
+fn s1_mcp_literal_environment_and_headers_stay_redacted() {
+    const SENTINEL: &str = "S1-MCP-SENTINEL";
+    let (_root, host, request) = fixture();
+    let (manager, _input) = request.session_input(&host).unwrap();
+    let user = crate::local_runtime::configuration::settings::SourceTarget::User;
+    let before = manager.read_source_settings(&user).unwrap();
+    let definition = super::authoring::McpAuthoring {
+        sensitive_env: None,
+        sensitive_headers: None,
+        transport_type: Some(super::config::McpTransportType::Stdio),
+        url: None,
+        headers: BTreeMap::new(),
+        command: Some("server".into()),
+        args: Vec::new(),
+        env: BTreeMap::from([("TOKEN".to_string(), SENTINEL.to_string())]),
+        cwd: None,
+    };
+    let saved = manager
+        .write_source_settings(
+            &user,
+            &before.user_mcp.revision,
+            SourceMutation::Mcp {
+                id: crate::runtime::identity::McpServerId::new("probe"),
+                authored: Some(crate::local_runtime::configuration::settings::McpWrite {
+                    definition,
+                    retained_env: Vec::new(),
+                    retained_headers: Vec::new(),
+                }),
+            },
+        )
+        .unwrap();
+    let wire = serde_json::to_string(&saved).unwrap();
+    assert!(
+        !wire.contains(SENTINEL),
+        "MCP literal environment reached the wire: {wire}"
+    );
+    let view = &saved.user_mcp.authored.as_ref().unwrap()
+        [&crate::runtime::identity::McpServerId::new("probe")];
+    assert!(view.definition.env.is_empty());
+    assert_eq!(view.retained_env, vec!["TOKEN".to_string()]);
 }

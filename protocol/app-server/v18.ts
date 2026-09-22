@@ -8570,9 +8570,14 @@ export interface RuntimeLayer {
     [k: string]: InvocationPolicyDocument;
   } | null;
   native_tools?: NativeToolsLayer | null;
-  environment?: {
-    [k: string]: string;
-  } | null;
+  /**
+   * Tool environment entries. Native authoring holds the literal values
+   * ([`AuthoredEnvironment`]); every projection that leaves native authority
+   * holds the identities alone ([`EnvironmentIdentities`]), because a
+   * literal Tool environment value is a secret on the same terms as a
+   * Provider credential.
+   */
+  environment?: string[] | null;
   subagents?: SubagentsLayer | null;
 }
 export interface ProviderView {

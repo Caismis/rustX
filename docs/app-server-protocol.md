@@ -932,6 +932,16 @@ document through it, so no truthful per-unit owner exists to publish.
 [Configuration](configuration.md) defines the native source model and
 [Web Settings](web-settings.md) documents its projection. User and Workspace
 read/write operations return exact revisions and redacted structured documents.
+Redaction is a property of the projected type, not of a call site: a Provider
+credential projects as `CredentialSourceView` (kind, and an environment variable
+name), an MCP definition's literal `env`/`headers` are cleared and replaced by
+`retained_env`/`retained_headers` identities, and `RuntimeLayer.environment`
+projects as a list of authored identities (`string[]`) rather than a map of
+literal values. `SourceSettings.user`, `SourceSettings.workspace`,
+`SourceSettings.resolved` and `EffectiveConfiguration.document` are all the same
+redacted document view, so no source projection can carry a literal Tool
+environment value, and an override is authored by supplying a new value rather
+than by reading a lower owner's value back.
 Protocol v18 uses one `SourceTarget`: `{kind:"user"}` or
 `{kind:"workspace",directory:"/canonical/native/context"}`. Source read, write and
 reconcile have no Session parameter; mutations carry no second scope authority.

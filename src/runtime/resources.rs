@@ -103,9 +103,7 @@ pub struct RuntimeConfiguration {
     pub resource_definitions: Vec<crate::runtime::capability_inspection::ResourceDefinition>,
     pub resource_diagnostics: Vec<crate::runtime::capability_inspection::ResourceDiagnostic>,
     pub source_revisions: std::collections::BTreeMap<PathBuf, String>,
-    pub effective: crate::local_runtime::authoring::RuntimeLayer<
-        crate::local_runtime::configuration::settings::ProviderView,
-    >,
+    pub effective: crate::local_runtime::configuration::settings::SourceDocumentView,
     pub config: Arc<crate::local_runtime::config::CurrentRuntimeConfig>,
     pub models: crate::model::invocation::ModelBindingRegistry,
     pub provenance: std::collections::BTreeMap<String, crate::local_runtime::configuration::Origin>,
@@ -226,11 +224,9 @@ impl RuntimeResourceSnapshot {
             .effective
             .models
             .clone_from(&capture.effective.models);
-        configuration.effective.providers = capture
-            .effective
-            .clone()
-            .map_providers(Into::into)
-            .providers;
+        configuration.effective.providers =
+            crate::local_runtime::configuration::settings::redact(capture.effective.clone())
+                .providers;
         // The capture may itself be composed (C1+I2); carry its diagnostic
         // baseline, never substitute the newest authored source manifest.
         configuration
@@ -767,7 +763,8 @@ impl PreparedRuntimeResourceData {
             configuration
                 .component_revisions
                 .clone_from(&capture.component_revisions);
-            configuration.effective = capture.effective.clone().map_providers(Into::into);
+            configuration.effective =
+                crate::local_runtime::configuration::settings::redact(capture.effective.clone());
             configuration.provenance.clone_from(&capture.provenance);
             configuration
                 .source_revisions
