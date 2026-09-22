@@ -25,8 +25,22 @@ export interface SessionConfigurationContext {
   port: SessionConfigurationPort;
   connection: ConnectionState;
   generation: number;
-  /** The latest native application observed for this Session. */
+  /** The native application observed for this Session *in the current
+   * connection generation*, and the only value the monotonic version
+   * comparison ever runs against.
+   *
+   * A native application version is a runtime counter of one App Server
+   * process. It is monotonic inside the generation that produced it and means
+   * nothing across a restart — generation 2's version 3 is not older than
+   * generation 1's version 100. The comparison is therefore scoped by
+   * construction: a generation change empties this field, so the first
+   * authoritative observation of the new generation has nothing to be compared
+   * against and simply becomes that generation's baseline. */
   application?: ConfigurationApplication;
+  /** The last observation of an earlier connection generation, retained as
+   * explicitly stale presentation data alone. It is never a comparison
+   * baseline and never becomes authoritative again. */
+  staleApplication?: ConfigurationApplication;
   /** Owned by the `observation` region alone. */
   readError: string;
   /** Owned by the `adoption` region alone. A successful authoritative read
@@ -50,7 +64,15 @@ export type SessionConfigurationEvent =
  *
  * Adoption stays explicit and native-gated: there is no auto-adopt, no
  * adopt-when-idle queue, no automatic retry and no replay after an unknown
- * outcome — an unknown outcome causes an authoritative reread only. */
+ * outcome — an unknown outcome causes an authoritative reread only.
+ *
+ * Read ordering inside one generation is structural: a `REFRESH` re-enters
+ * `loading`, which stops the read already in flight, so a superseded read can
+ * publish neither a projection nor a failure. Across generations the *values*
+ * need the same care, because a native application version is a per-process
+ * runtime counter: a generation change retires the held observation into
+ * explicitly stale presentation data, so the first observation of the new
+ * generation is never compared against a counter from a different process. */
 export const sessionConfigurationMachine = setup({
   types: {
     context: {} as SessionConfigurationContext,
@@ -71,14 +93,28 @@ export const sessionConfigurationMachine = setup({
       connection: ({ context, event }) => event.type === 'TRANSPORT' ? event.connection : context.connection,
       generation: ({ context, event }) => event.type === 'TRANSPORT' ? event.generation : context.generation,
     }),
-    /** Adopt one native observation. A native application version is monotonic
-     * inside one scope, so an older projection never regresses a newer one. */
+    /** A replaced connection generation ends the application-version domain the
+     * held observation belongs to. What that generation observed stays
+     * available only as stale presentation data, and is out of the comparison
+     * from this moment on. */
+    retireObservation: assign({
+      staleApplication: ({ context }) => context.application ?? context.staleApplication,
+      application: () => undefined,
+      // The read failure answered a read of the generation that ended with it.
+      // Where an adoption attempt stands is a mutation fact and survives.
+      readError: () => '',
+    }),
+    /** Adopt one native observation. Inside one connection generation a native
+     * application version is monotonic, so an obsolete result never regresses a
+     * newer one. Across generations there is nothing to compare at all, and
+     * this observation establishes the new generation's baseline. */
     adoptObservation: assign({
       application: ({ context, event }) => {
         const next = (event as unknown as { output: ConfigurationApplication | null }).output ?? undefined;
         if (context.application && next && BigInt(context.application.version) > BigInt(next.version)) return context.application;
         return next;
       },
+      staleApplication: () => undefined,
       readError: () => '',
     }),
     recordReadFailure: assign({ readError: ({ event }) => String((event as unknown as { error: unknown }).error) }),
@@ -147,7 +183,7 @@ export const sessionConfigurationMachine = setup({
   },
   on: {
     TRANSPORT: [
-      { guard: 'generationChanged', actions: ['applyTransport', raise({ type: 'REFRESH' })] },
+      { guard: 'generationChanged', actions: ['applyTransport', 'retireObservation', raise({ type: 'REFRESH' })] },
       { actions: 'applyTransport' },
     ],
   },

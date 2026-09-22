@@ -101,6 +101,94 @@ it('R01 a superseded read cannot publish a read failure either', async () => {
   expect(actor.getSnapshot().context.observation?.user.revision).toBe('B');
 });
 
+// ── 1b. Connection-generation ownership of observations ─────────────────────
+//
+// An observation belongs to exactly one connection generation. Once a newer
+// generation is current, nothing the older one started — a read, a read
+// failure, a Workspace-owned reread — may become authoritative for it. The
+// mutation that was already submitted keeps its own transaction lifetime.
+
+const reconnect = (actor: ReturnType<typeof settingsActor>, generation: number, publications?: Record<string, ConfigurationApplication>) =>
+  actor.send({ type: 'TRANSPORT', connection: 'connected', generation, publications });
+
+it.each(['A resolves first', 'A resolves last'] as const)('R16 a read of a replaced connection generation never becomes authoritative, when %s', async order => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  expect(scripted.reads).toHaveLength(1);
+  // Generation 2 replaces the observation lifetime generation 1 owned, and
+  // obtains its own authoritative observation from nothing.
+  reconnect(actor, 2);
+  await flush();
+  expect(scripted.reads).toHaveLength(2);
+  const [a, b] = scripted.reads;
+  if (order === 'A resolves first') { a.resolve(projection('old-generation')); await flush(); b.resolve(projection('new-generation')); }
+  else { b.resolve(projection('new-generation')); await flush(); a.resolve(projection('old-generation')); }
+  await flush();
+  const snapshot = actor.getSnapshot();
+  expect(snapshot.context.observation?.user.revision).toBe('new-generation');
+  expect(snapshot.context.readError).toBe('');
+  expect(snapshot.context.message).toBe('');
+});
+
+it('R16 a read failure of a replaced connection generation never populates the read failure', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  reconnect(actor, 2);
+  await flush();
+  expect(scripted.reads).toHaveLength(2);
+  scripted.reads[0].reject(new Error('obsolete generation read failed'));
+  scripted.reads[1].resolve(projection('new-generation'));
+  await flush();
+  const snapshot = actor.getSnapshot();
+  expect(snapshot.context.readError).toBe('');
+  expect(snapshot.context.observation?.user.revision).toBe('new-generation');
+});
+
+it.each(['observed', 'failed'] as const)('R17 a Workspace reread of a replaced generation settles its own transaction and publishes nothing, when the reread %s', async outcome => {
+  const scripted = scriptedPort(true);
+  const actor = settingsActor(scripted.port, undefined, true);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  // The Workspace write reserves the read order at its initiation…
+  expect(actor.getSnapshot().matches({ authority: { attached: 'awaitingWrite' } })).toBe(true);
+  // …but that reservation belongs to the generation that made it. Generation 2
+  // leaves it and starts its own authoritative read.
+  reconnect(actor, 2);
+  await flush();
+  expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
+  expect(scripted.reads).toHaveLength(2);
+  scripted.writes[0].resolve({
+    acknowledgement: projection('r2'),
+    reread: outcome === 'observed'
+      ? { status: 'observed', projection: projection('obsolete-reread') }
+      : { status: 'failed', error: new Error('obsolete reread failed') },
+  });
+  await flush();
+  // The mutation crossed the native submission boundary before the generation
+  // changed, so it still records its definitive commit on its own transaction.
+  expect(unitOf(actor).getSnapshot().context.submitted?.committed).toBe('r2');
+  // What it may not do is publish its generation's observation into the new one.
+  expect(actor.getSnapshot().context.observation).toBeUndefined();
+  expect(actor.getSnapshot().context.readError).toBe('');
+  // Only the new generation's own read is authoritative for it, and it
+  // discharges the commit's observation obligation exactly once.
+  scripted.reads[1].resolve(projection('r2'));
+  await flush();
+  const snapshot = actor.getSnapshot();
+  expect(snapshot.context.observation?.user.revision).toBe('r2');
+  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expect(snapshot.matches({ mutation: 'idle' })).toBe(true);
+  expect(snapshot.context.message).toContain('Source saved');
+  expect(scripted.writes).toHaveLength(1);
+  expect(scripted.reads).toHaveLength(2);
+});
+
 // ── 2. A successful read clears only the read failure it answers ────────────
 
 it('R02 a later successful read clears the read failure and nothing else', async () => {
@@ -147,8 +235,107 @@ it('R03 a committed write whose reread fails stays committed with an uncertain o
   expect(snapshot.context.message).toContain('Source saved');
   // The observation, and only the observation, is uncertain.
   expect(snapshot.context.readError).toContain('Saved, but the authoritative reread failed');
-  expect(snapshot.matches({ authority: 'blocked' })).toBe(true);
+  expect(snapshot.matches({ authority: { attached: 'blocked' } })).toBe(true);
   expect(snapshot.context.writeError).toBe('');
+  expect(scripted.writes).toHaveLength(1);
+});
+
+// ── 3b. A definitive commit always reaches a terminal classification ────────
+//
+// Once a definitive commit exists it is classified exactly once under the
+// evidence available: observed if an authoritative projection can be had,
+// committed-but-unobserved if none can. The read failure and the
+// acknowledgement may arrive in either order and must converge to the same
+// semantic result, with no replay, no second read and no polling.
+
+it.each([
+  ['the superseding read fails first', 'failed'],
+  ['the write settles first', 'failed'],
+  ['the superseding read fails first', 'observed'],
+  ['the write settles first', 'observed'],
+] as const)('R18 a commit whose superseding read fails settles as committed-but-unobserved, when %s and its own reread %s', async (order, reread) => {
+  const scripted = scriptedPort(true);
+  const actor = settingsActor(scripted.port, { 'source:user': userApplication('1') }, true);
+  await flush();
+  scripted.reads[0].resolve(projection('r1', userApplication('1')));
+  await flush();
+  expect(scripted.reads).toHaveLength(1);
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  expect(actor.getSnapshot().matches({ authority: { attached: 'awaitingWrite' } })).toBe(true);
+  // A new native publication owes a read that takes presentation authority
+  // away from the Workspace write's own reread.
+  reconnect(actor, 1, { 'source:user': userApplication('2') });
+  await flush();
+  expect(scripted.reads).toHaveLength(2);
+  expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
+  const failRead = () => scripted.reads[1].reject(new Error('superseding read failed'));
+  const settleWrite = () => scripted.writes[0].resolve({
+    acknowledgement: projection('r2'),
+    reread: reread === 'observed'
+      ? { status: 'observed', projection: projection('obsolete-reread') }
+      : { status: 'failed', error: new Error('obsolete reread failed') },
+  });
+  if (order === 'the superseding read fails first') { failRead(); await flush(); settleWrite(); }
+  else { settleWrite(); await flush(); failRead(); }
+  await flush();
+  const snapshot = actor.getSnapshot();
+  // Terminal in either delivery order: never left waiting in `observing`.
+  expect(snapshot.matches({ mutation: 'unobserved' })).toBe(true);
+  // The save is definitively committed, and says so truthfully.
+  expect(snapshot.context.message).toContain('Source saved');
+  expect(unitOf(actor).getSnapshot().matches({ mutation: 'acknowledged' })).toBe(true);
+  expect(unitOf(actor).getSnapshot().context.submitted?.committed).toBe('r2');
+  expect(snapshot.context.writeError).toBe('');
+  // The observation, and only the observation, is uncertain — reported by the
+  // read that owned the order, never by the superseded reread.
+  expect(snapshot.matches({ authority: { attached: 'blocked' } })).toBe(true);
+  expect(snapshot.context.readError).toContain('superseding read failed');
+  expect(snapshot.context.readError).not.toContain('Saved, but the authoritative reread failed');
+  expect(snapshot.context.observation?.user.revision).toBe('r1');
+  // Exactly one write ever left the browser, and nothing retries or polls.
+  expect(scripted.writes).toHaveLength(1);
+  expect(scripted.reads).toHaveLength(2);
+});
+
+it('R18 a Product Host commit that lands while the connection is down settles, and the reconnect observes it', async () => {
+  const scripted = scriptedPort(true);
+  const actor = settingsActor(scripted.port, undefined, true);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  // The App Server connection is lost, which is always a new generation. The
+  // Product Host is an independent transport and the write is still in flight.
+  actor.send({ type: 'TRANSPORT', connection: 'stale', generation: 2, publications: undefined });
+  await flush();
+  expect(scripted.reads).toHaveLength(1);
+  expect(actor.getSnapshot().matches({ authority: { attached: 'blocked' } })).toBe(true);
+  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: { status: 'observed', projection: projection('obsolete-reread') } });
+  await flush();
+  // The commit is definitive and classified under the evidence available —
+  // which is none — rather than left waiting for an unrelated future event.
+  const disconnected = actor.getSnapshot();
+  expect(disconnected.matches({ mutation: 'unobserved' })).toBe(true);
+  expect(disconnected.context.message).toContain('Source saved');
+  expect(unitOf(actor).getSnapshot().context.submitted?.committed).toBe('r2');
+  expect(disconnected.context.observation).toBeUndefined();
+  expect(scripted.reads).toHaveLength(1);
+  // Losing the connection is what bumps the generation; coming back up
+  // publishes `connected` on that same generation. Its own authoritative read
+  // is the only thing that may observe the commit.
+  reconnect(actor, 2);
+  await flush();
+  expect(scripted.reads).toHaveLength(2);
+  scripted.reads[1].resolve(projection('r2'));
+  await flush();
+  const reconnected = actor.getSnapshot();
+  expect(reconnected.context.observation?.user.revision).toBe('r2');
+  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expect(reconnected.matches({ mutation: 'idle' })).toBe(true);
   expect(scripted.writes).toHaveLength(1);
 });
 
@@ -331,7 +518,7 @@ it('R10 a newer publication cannot be discharged by an older projection', async 
   await flush();
   expect(scripted.reads).toHaveLength(2);
   expect(actor.getSnapshot().context.writeError).toContain('published application version 5');
-  expect(actor.getSnapshot().matches({ authority: 'blocked' })).toBe(true);
+  expect(actor.getSnapshot().matches({ authority: { attached: 'blocked' } })).toBe(true);
 });
 
 // ── 11. Unknown write outcome ───────────────────────────────────────────────
@@ -426,6 +613,62 @@ it('R13 a successful observation clears the read failure and preserves the indep
   expect(actor.getSnapshot().context.readError).toBe('');
   expect(actor.getSnapshot().matches({ observation: 'ready' })).toBe(true);
   expect(actor.getSnapshot().context.adoptionError).toContain('Conflict');
+});
+
+// ── 13b. Application versions are scoped to one connection generation ───────
+
+/** A Session actor whose reads are released explicitly by the test. */
+function scriptedSession() {
+  const reads: ReturnType<typeof deferred<ConfigurationApplication | null>>[] = [];
+  const actor = sessionActor({
+    read: () => { const gate = deferred<ConfigurationApplication | null>(); reads.push(gate); return gate.promise; },
+    adopt: async () => {},
+  });
+  return { actor, reads };
+}
+const otherCandidate = { identity: { input_revision: 'input-9', attempt: '9' }, expected_binding: '2', impact: 'prefix_changed' as const };
+
+it('R19 a new connection generation establishes its own application-version baseline', async () => {
+  const { actor, reads } = scriptedSession();
+  actor.send({ type: 'REFRESH' });
+  await flush();
+  reads[0].resolve({ ...cfg3SourceApplication(), version: '100', candidate });
+  await flush();
+  expect(actor.getSnapshot().context.application?.version).toBe('100');
+  // The App Server restarts. Application versions are a runtime counter of one
+  // process, so generation 2's version 3 is not "older" than generation 1's 100
+  // — there is no comparison to make across the boundary at all.
+  actor.send({ type: 'TRANSPORT', connection: 'connected', generation: 2 });
+  await flush();
+  expect(reads).toHaveLength(2);
+  expect(actor.getSnapshot().context.application).toBeUndefined();
+  expect(actor.getSnapshot().context.staleApplication?.version).toBe('100');
+  reads[1].resolve({ ...cfg3SourceApplication(), version: '3', candidate: otherCandidate });
+  await flush();
+  const snapshot = actor.getSnapshot();
+  expect(snapshot.context.application?.version).toBe('3');
+  expect(snapshot.context.application?.candidate).toEqual(otherCandidate);
+  expect(snapshot.context.staleApplication).toBeUndefined();
+  expect(snapshot.matches({ observation: 'ready' })).toBe(true);
+});
+
+it('R19 an obsolete result of the same connection generation still cannot regress the observation', async () => {
+  const { actor, reads } = scriptedSession();
+  actor.send({ type: 'TRANSPORT', connection: 'connected', generation: 2 });
+  await flush();
+  reads[0].resolve({ ...cfg3SourceApplication(), version: '3', candidate: otherCandidate });
+  await flush();
+  expect(actor.getSnapshot().context.application?.version).toBe('3');
+  // Same generation, same application-version domain: version 2 is genuinely
+  // older and never replaces version 3.
+  actor.send({ type: 'REFRESH' });
+  await flush();
+  reads[1].resolve({ ...cfg3SourceApplication(), version: '2', candidate });
+  await flush();
+  const snapshot = actor.getSnapshot();
+  expect(snapshot.context.application?.version).toBe('3');
+  expect(snapshot.context.application?.candidate).toEqual(otherCandidate);
+  expect(snapshot.matches({ observation: 'ready' })).toBe(true);
 });
 
 // ── 14./15. Settings navigation ─────────────────────────────────────────────

@@ -70,6 +70,13 @@ export type SettingsTargetEvent =
   | { type: 'WRITE.STARTED' }
   | { type: 'COMMIT.OBSERVED' }
   | { type: 'COMMIT.UNOBSERVED' }
+  /** A definitive commit now awaits an authoritative observation. Raised by the
+   * `mutation` region at the moment the acknowledgement is recorded, so the
+   * `authority` region classifies it from whatever state it is actually in
+   * rather than from the state it happened to be in earlier. */
+  | { type: 'COMMIT.PENDING' }
+  /** This connection generation has been replaced. */
+  | { type: 'GENERATION.REPLACED' }
   | { type: 'TRIGGER' };
 
 /** The outstanding native publication obligation of this target's scope.
@@ -119,15 +126,24 @@ function unitRevision(projection: SourceSettings, selector: RevisionSelector): s
  * - `mutation` owns the one source mutation this presentation may have in
  *   flight, and records where it ended up.
  *
- * The three lifetimes this actor sits between are explicit:
+ * The lifetimes this actor sits between are explicit, and deliberately nested
+ * rather than collapsed:
  *
  * - *App Server authority* — the actor is created per (endpoint, authority
  *   revision, target) and retired when that authority is replaced, so an old
  *   lifetime can never publish into its replacement.
+ * - *connection generation* — inside one authority, `authority.attached` is
+ *   entered by exactly one generation and re-entered by its replacement. An
+ *   observation belongs to the generation that acquired it: once a newer
+ *   generation is current, no read, read failure, Workspace-owned reread or
+ *   convergence comparison from the older one can become authoritative, because
+ *   the state that owned them has been left and their actor stopped.
  * - *transaction* — the per-unit actors in `units` live for the whole authority
- *   lifetime, so a definitive acknowledgement settles the exact transaction
- *   that submitted it even after its editor, or the whole Settings dialog, is
- *   gone.
+ *   lifetime, *across* generation changes, so a definitive acknowledgement
+ *   settles the exact transaction that submitted it even after its editor, the
+ *   whole Settings dialog, or the connection it was submitted on is gone. What
+ *   such a late acknowledgement may never do is publish its generation's
+ *   observation into the new one.
  * - *presentation* — `ATTACH` / `DETACH`. A detached presentation reads
  *   nothing; a mutation already in flight still settles. */
 export const settingsTargetMachine = setup({
@@ -160,6 +176,11 @@ export const settingsTargetMachine = setup({
     /** Native authority is the only gate on authoring. The browser may submit
      * only against an observed authoritative projection of a live connection. */
     canSubmit: ({ context }) => context.connection === 'connected' && !context.readError && context.observation !== undefined,
+    /** No authoritative read of this target can be made at all right now. The
+     * Product Host is an independent transport, so a Workspace write may commit
+     * definitively while this connection is down — and then the evidence
+     * available for that commit's observation is exactly none. */
+    cannotObserve: ({ context }) => context.connection !== 'connected',
     convergenceSatisfied: ({ context }) => publicationObligation(context) === undefined,
     /** A newer publication arrived while the read was in flight: it is still
      * owed and drives exactly one more bounded read. */
@@ -188,12 +209,20 @@ export const settingsTargetMachine = setup({
       generation: ({ context, event }) => event.type === 'TRANSPORT' ? event.generation : context.generation,
       publications: ({ context, event }) => event.type === 'TRANSPORT' ? event.publications : context.publications,
     }),
-    /** A new connection generation retires this lifetime's observation and its
-     * presentation state. Editing transactions belong to the authority
-     * lifetime, not to the connection, and deliberately survive. */
+    /** A new connection generation retires everything the previous generation
+     * observed: its projection, the read failure that answered it, the
+     * convergence target it was chasing and the notices it published. They are
+     * all scoped to the generation that acquired them.
+     *
+     * Two things are deliberately not. Editing transactions belong to the
+     * authority lifetime, not to the connection. And `unobservedCommit` is the
+     * post-commit read obligation of a mutation that already crossed the native
+     * submission boundary: clearing it would strand that commit's classification
+     * on a lifetime that no longer reads, so the new generation's own
+     * authoritative read inherits the obligation and settles it instead. */
     retireObservation: assign({
       observation: () => undefined, readError: () => '', writeError: () => '', message: () => '',
-      chasing: () => undefined, unobservedCommit: () => undefined,
+      chasing: () => undefined,
     }),
     recordChasing: assign({ chasing: ({ context }) => publicationObligation(context) }),
     reportStaleApplication: assign({
@@ -205,6 +234,17 @@ export const settingsTargetMachine = setup({
     recordReadFailure: assign({ readError: ({ event }) => String((event as unknown as { error?: unknown }).error) }),
     recordRereadFailure: assign({
       readError: ({ event }) => `Saved, but the authoritative reread failed. Application status is uncertain. ${String((event as unknown as { error: unknown }).error)}`,
+    }),
+    /** A definitive commit that the authoritative read of this generation cannot
+     * observe is exactly "committed, observation uncertain".
+     *
+     * It is announced from the one state that knows the authoritative read is
+     * unavailable, and from that state alone — on entry when the commit was
+     * already recorded, and on `COMMIT.PENDING` when it is recorded afterwards.
+     * That is what makes the two delivery orders converge: neither the read
+     * failure nor the acknowledgement has to arrive first. */
+    classifyUnobservedCommit: enqueueActions(({ context, enqueue }) => {
+      if (context.unobservedCommit) enqueue.raise({ type: 'COMMIT.UNOBSERVED' });
     }),
 
     /** The one commit point at which an authoritative projection becomes this
@@ -352,74 +392,102 @@ export const settingsTargetMachine = setup({
         /** No presentation is attached. A detached lifetime reads nothing — it
          * neither polls nor keeps a background read alive — while a mutation
          * already in flight still settles. */
-        suspended: { on: { ATTACH: 'idle' } },
-        idle: {
-          always: { guard: 'owesRead', target: 'reading' },
-          on: {
-            REFRESH: 'reading',
-            'READ.FORCE': 'reading',
-            'WRITE.STARTED': { guard: 'portOwnsReread', target: 'awaitingWrite' },
-          },
-        },
-        /** Exactly one authoritative read is in flight. Starting another read
-         * re-enters this state, which stops the older read actor: a superseded
-         * read is cancelled, not compared, so it can never publish a
-         * projection, a read failure or a commit observation. */
-        reading: {
-          entry: 'recordChasing',
-          invoke: {
-            src: 'readSource',
-            input: ({ context }) => ({ port: context.port }),
-            onDone: { target: 'settling', actions: 'adoptProjection' },
-            onError: { target: 'blocked', actions: 'recordReadFailure' },
-          },
-          on: {
-            REFRESH: { target: 'reading', reenter: true },
-            'READ.FORCE': { target: 'reading', reenter: true },
-            'WRITE.STARTED': { guard: 'portOwnsReread', target: 'awaitingWrite' },
-            // A reread that no longer owns the read order is silent, in both
-            // outcomes: the newer read in flight owns this presentation, and
-            // the commit's own observation obligation stays with it.
-          },
-        },
-        /** The reread a Workspace write owns is reserved here, at the moment
-         * that write is initiated. Any authoritative read started afterwards
-         * leaves this state, and the Host's reread is then silently superseded
-         * however late it arrives — it neither replaces a newer projection nor
-         * publishes a failure the newer read has already retired. */
-        awaitingWrite: {
-          always: { guard: 'owesPublicationRead', target: 'reading' },
-          on: {
-            'READ.ADOPT': { target: 'settling', actions: 'adoptProjection' },
-            'READ.REREAD_FAILED': { target: 'blocked', actions: 'recordRereadFailure' },
-            REFRESH: 'reading',
-            'READ.FORCE': 'reading',
-          },
-        },
-        /** The convergence decision point: does the projection just adopted
-         * discharge the obligation that started this read? */
-        settling: {
-          always: [
-            { guard: 'convergenceSatisfied', target: 'idle' },
-            { guard: 'convergenceAdvanced', target: 'idle' },
-            { guard: 'applicationUnmeasurable', target: 'blocked' },
-            { target: 'blocked', actions: 'reportStaleApplication' },
-          ],
-        },
-        /** A read failed, or native reported a measurably stale application.
-         * The obligation stands, but nothing retries on its own: a later
-         * publication, reconnect, reattach or explicit refresh drives it. */
-        blocked: {
-          // A definitive commit whose post-commit read cannot land is exactly
-          // "committed, observation uncertain", and is announced once as such.
-          entry: enqueueActions(({ context, enqueue }) => {
-            if (context.unobservedCommit) enqueue.raise({ type: 'COMMIT.UNOBSERVED' });
-          }),
-          on: {
-            TRIGGER: 'idle',
-            ATTACH: 'idle',
-            REFRESH: 'reading',
-            'READ.FORCE': 'reading',
+        suspended: { on: { ATTACH: 'attached' } },
+
+        /** The observation lifetime of exactly one connection generation.
+         *
+         * Every authoritative read of this target, every read failure, every
+         * convergence decision and the projection they produce live inside this
+         * state, and the state belongs to the generation that entered it. A new
+         * generation re-enters it, which stops the read actor invoked under the
+         * old generation and abandons the state that generation had reached. An
+         * old read therefore has no completion path, an old read failure has
+         * nothing to populate, and an old Workspace-owned reread arrives at a
+         * state that does not accept it — structurally, with no comparison
+         * anywhere. */
+        attached: {
+          initial: 'idle',
+          on: { 'GENERATION.REPLACED': { target: 'attached', reenter: true } },
+          states: {
+            idle: {
+              always: [
+                { guard: 'owesRead', target: 'reading' },
+                // Nothing can be read at all: that is the unobservable state,
+                // not an idle one, and a definitive commit is classified there.
+                { guard: 'cannotObserve', target: 'blocked' },
+              ],
+              on: {
+                REFRESH: 'reading',
+                'READ.FORCE': 'reading',
+                'WRITE.STARTED': { guard: 'portOwnsReread', target: 'awaitingWrite' },
+              },
+            },
+            /** Exactly one authoritative read is in flight. Starting another
+             * read re-enters this state, which stops the older read actor: a
+             * superseded read is cancelled, not compared, so it can never
+             * publish a projection, a read failure or a commit observation. */
+            reading: {
+              entry: 'recordChasing',
+              invoke: {
+                src: 'readSource',
+                input: ({ context }) => ({ port: context.port }),
+                onDone: { target: 'settling', actions: 'adoptProjection' },
+                onError: { target: 'blocked', actions: 'recordReadFailure' },
+              },
+              on: {
+                REFRESH: { target: 'reading', reenter: true },
+                'READ.FORCE': { target: 'reading', reenter: true },
+                'WRITE.STARTED': { guard: 'portOwnsReread', target: 'awaitingWrite' },
+                // A reread that no longer owns the read order is silent, in both
+                // outcomes: the newer read in flight owns this presentation, and
+                // the commit's own observation obligation stays with it.
+              },
+            },
+            /** The reread a Workspace write owns is reserved here, at the moment
+             * that write is initiated. Any authoritative read started afterwards
+             * leaves this state, and the Host's reread is then silently
+             * superseded however late it arrives — it neither replaces a newer
+             * projection nor publishes a failure the newer read has retired. */
+            awaitingWrite: {
+              always: { guard: 'owesPublicationRead', target: 'reading' },
+              on: {
+                'READ.ADOPT': { target: 'settling', actions: 'adoptProjection' },
+                'READ.REREAD_FAILED': { target: 'blocked', actions: 'recordRereadFailure' },
+                REFRESH: 'reading',
+                'READ.FORCE': 'reading',
+              },
+            },
+            /** The convergence decision point: does the projection just adopted
+             * discharge the obligation that started this read? */
+            settling: {
+              always: [
+                { guard: 'convergenceSatisfied', target: 'idle' },
+                { guard: 'convergenceAdvanced', target: 'idle' },
+                { guard: 'applicationUnmeasurable', target: 'blocked' },
+                { target: 'blocked', actions: 'reportStaleApplication' },
+              ],
+            },
+            /** No authoritative observation is available: a read failed, native
+             * reported a measurably stale application, or this connection
+             * cannot read at all. The obligation stands, but nothing retries on
+             * its own: a later publication, reconnect, reattach or explicit
+             * refresh drives it.
+             *
+             * This is also the one state that knows an authoritative
+             * observation is currently unavailable, so it is where a definitive
+             * commit is classified as committed-but-unobserved — on entry if the
+             * commit is already recorded, and on `COMMIT.PENDING` if it is
+             * recorded while this state is already active. */
+            blocked: {
+              entry: 'classifyUnobservedCommit',
+              on: {
+                'COMMIT.PENDING': { actions: 'classifyUnobservedCommit' },
+                TRIGGER: 'idle',
+                ATTACH: 'idle',
+                REFRESH: 'reading',
+                'READ.FORCE': 'reading',
+              },
+            },
           },
         },
       },
@@ -440,9 +508,16 @@ export const settingsTargetMachine = setup({
               expected: context.submission!.expected,
               mutation: (event as Extract<SettingsTargetEvent, { type: 'UNIT.SUBMIT' }>).mutation,
             }),
+            // A write that owns a reread offers it to the authority region and
+            // then announces the commit. The reread is only *offered*: the
+            // region adopts it if it still owns the read order and ignores it
+            // otherwise, and `COMMIT.PENDING` is what makes the commit reach a
+            // terminal classification in the second case. A write that owns no
+            // reread forces its own post-commit read instead, which is itself
+            // the classification path, so it announces nothing.
             onDone: [
-              { guard: 'rereadObserved', target: 'observing', actions: ['recordAcknowledgement', 'adoptOwnedReread'] },
-              { guard: 'rereadFailed', target: 'observing', actions: ['recordAcknowledgement', 'reportOwnedRereadFailure'] },
+              { guard: 'rereadObserved', target: 'observing', actions: ['recordAcknowledgement', 'adoptOwnedReread', raise({ type: 'COMMIT.PENDING' })] },
+              { guard: 'rereadFailed', target: 'observing', actions: ['recordAcknowledgement', 'reportOwnedRereadFailure', raise({ type: 'COMMIT.PENDING' })] },
               { target: 'observing', actions: ['recordAcknowledgement', raise({ type: 'READ.FORCE' })] },
             ],
             onError: [
@@ -495,7 +570,10 @@ export const settingsTargetMachine = setup({
   },
   on: {
     TRANSPORT: [
-      { guard: 'generationChanged', actions: ['applyTransport', 'retireObservation', raise({ type: 'TRIGGER' })] },
+      // A replaced connection generation is not a trigger to re-read the old
+      // observation lifetime: it ends that lifetime and starts a new one, which
+      // obtains its own authoritative observation from nothing.
+      { guard: 'generationChanged', actions: ['applyTransport', 'retireObservation', raise({ type: 'GENERATION.REPLACED' })] },
       { actions: ['applyTransport', raise({ type: 'TRIGGER' })] },
     ],
     'UNIT.EDIT': { actions: ['ensureUnit', 'forwardEdit'] },

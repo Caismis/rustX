@@ -16,7 +16,11 @@ import { applicationOwners, observedResult, observedUnitLabel, observedUnits, op
  * `session/adoptConfiguration` revalidates it natively. */
 export function SessionConfiguration({ client, view, openOwningSettings }: { client: AppServerClient; view: SessionView; openOwningSettings?: (owner: SourceTarget) => void }) {
   const { actor, transport } = useSessionConfiguration(client, view.id);
-  const application = useSelector(actor, snapshot => snapshot.context.application);
+  // The current generation's observation, or — while a replaced generation's
+  // successor has not observed yet — the previous one as explicitly stale
+  // presentation data. `known` is what says which of the two this is; the
+  // retained value is never a comparison baseline for the new generation.
+  const application = useSelector(actor, snapshot => snapshot.context.application ?? snapshot.context.staleApplication);
   const readError = useSelector(actor, snapshot => snapshot.context.readError);
   const adoptionError = useSelector(actor, snapshot => snapshot.context.adoptionError);
   const known = useSelector(actor, snapshot => snapshot.matches({ observation: 'ready' }));
