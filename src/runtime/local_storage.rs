@@ -6,7 +6,6 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The private local-root namespace that records Conversation identity
 /// consumption (Issue #387).
@@ -18,40 +17,84 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// enumerable by any domain caller.
 const CONVERSATION_RESERVATION_NAMESPACE: &str = "conversation-reservations";
 
-/// Process-wide count of successful Conversation identity reservations.
-/// Diagnostics-grade, mirroring `durable::conversation_store_open_count`:
-/// benchmarks and regressions read a delta, never a semantic decision.
-static CONVERSATION_RESERVATIONS: AtomicU64 = AtomicU64::new(0);
+/// Issue #387 measurement-only counters, compiled only for test builds or the
+/// explicit non-default `issue-387-profile` feature.
+///
+/// These counters are benchmark/test evidence, never production observability:
+/// no production decision reads them, and no ordinary build pays an atomic
+/// increment on the reservation, allocation or catalog-commit path. When the
+/// feature is disabled the recorder functions below are zero-cost no-ops, so
+/// the hot path is unchanged.
+#[cfg(any(test, feature = "issue-387-profile"))]
+mod issue_387_profile {
+    use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Process-wide count of exclusive-create conflicts observed by the
-/// reservation primitive. A conflict means the identity was already consumed.
-static CONVERSATION_RESERVATION_CONFLICTS: AtomicU64 = AtomicU64::new(0);
+    /// Successful Conversation identity reservations in this process.
+    static CONVERSATION_RESERVATIONS: AtomicU64 = AtomicU64::new(0);
+    /// Exclusive-create conflicts observed by the reservation primitive.
+    static CONVERSATION_RESERVATION_CONFLICTS: AtomicU64 = AtomicU64::new(0);
+    /// Legacy-layout probes performed by the storage owner.
+    static LEGACY_LAYOUT_PROBES: AtomicU64 = AtomicU64::new(0);
 
-/// Process-wide count of legacy-layout probes performed by the storage owner
-/// (Issue #387). A reservation on a root whose reservation namespace already
-/// exists must perform zero of these; the counter exists so a regression can
-/// prove the storage owner never inspects an existing `sessions/` tree to
-/// establish identity uniqueness.
-static LEGACY_LAYOUT_PROBES: AtomicU64 = AtomicU64::new(0);
+    pub(super) fn record_reservation() {
+        CONVERSATION_RESERVATIONS.fetch_add(1, Ordering::Relaxed);
+    }
+    pub(super) fn record_conflict() {
+        CONVERSATION_RESERVATION_CONFLICTS.fetch_add(1, Ordering::Relaxed);
+    }
+    pub(super) fn record_legacy_layout_probe() {
+        LEGACY_LAYOUT_PROBES.fetch_add(1, Ordering::Relaxed);
+    }
+    #[must_use]
+    pub(super) fn reservation_count() -> u64 {
+        CONVERSATION_RESERVATIONS.load(Ordering::Relaxed)
+    }
+    #[must_use]
+    pub(super) fn conflict_count() -> u64 {
+        CONVERSATION_RESERVATION_CONFLICTS.load(Ordering::Relaxed)
+    }
+    #[must_use]
+    pub(super) fn legacy_layout_probe_count() -> u64 {
+        LEGACY_LAYOUT_PROBES.load(Ordering::Relaxed)
+    }
+}
+
+/// Ordinary production build: no Issue #387 measurement counter exists and the
+/// recorders are zero-cost no-ops, so the create / allocation / catalog-commit
+/// hot path performs no measurement atomic increment.
+#[cfg(not(any(test, feature = "issue-387-profile")))]
+mod issue_387_profile {
+    #[inline(always)]
+    pub(super) fn record_reservation() {}
+    #[inline(always)]
+    pub(super) fn record_conflict() {}
+    #[inline(always)]
+    pub(super) fn record_legacy_layout_probe() {}
+}
 
 /// The number of Conversation identities this process has reserved.
+///
+/// Available only in test builds or under the `issue-387-profile` feature; an
+/// ordinary production build carries no reservation counter.
+#[cfg(any(test, feature = "issue-387-profile"))]
 #[must_use]
 pub fn conversation_reservation_count() -> u64 {
-    CONVERSATION_RESERVATIONS.load(Ordering::Relaxed)
+    issue_387_profile::reservation_count()
 }
 
 /// The number of exclusive-create conflicts this process has observed while
 /// reserving a Conversation identity.
+#[cfg(any(test, feature = "issue-387-profile"))]
 #[must_use]
 pub fn conversation_reservation_conflict_count() -> u64 {
-    CONVERSATION_RESERVATION_CONFLICTS.load(Ordering::Relaxed)
+    issue_387_profile::conflict_count()
 }
 
-/// The number of legacy-layout probes performed by the storage owner. See
-/// [`LEGACY_LAYOUT_PROBES`].
+/// The number of legacy-layout probes performed by the storage owner.
+#[cfg(any(test, feature = "issue-387-profile"))]
 #[must_use]
 pub fn conversation_legacy_layout_probe_count() -> u64 {
-    LEGACY_LAYOUT_PROBES.load(Ordering::Relaxed)
+    issue_387_profile::legacy_layout_probe_count()
 }
 
 /// Diagnostics-grade rustX-owner logical-operation counters (Issue #387).
@@ -85,6 +128,10 @@ pub fn conversation_legacy_layout_probe_count() -> u64 {
 ///   `sessions/` directory setup or catalog-root `create_dir_all` no-op
 ///   requests) are intentionally absent; the benchmark documents them as
 ///   excluded rather than inferring them from a neighbouring counter.
+///
+/// Compiled only for test builds or under the `issue-387-profile` feature; see
+/// the no-op variant below for ordinary production builds.
+#[cfg(any(test, feature = "issue-387-profile"))]
 pub mod logical_operations {
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -214,6 +261,40 @@ pub mod logical_operations {
     pub(crate) fn record_catalog_directory_sync() {
         CATALOG_DIRECTORY_SYNC.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// Ordinary production build: every logical-operation recorder compiles to a
+/// no-op, so the create / allocation / catalog-commit hot path performs no
+/// Issue #387 measurement atomic increment. The benchmark is compiled with
+/// `--features issue-387-profile` when these counters are required.
+#[cfg(not(any(test, feature = "issue-387-profile")))]
+pub mod logical_operations {
+    #[inline(always)]
+    pub(crate) fn record_reservation_marker_create() {}
+    #[inline(always)]
+    pub(crate) fn record_reservation_marker_write() {}
+    #[inline(always)]
+    pub(crate) fn record_reservation_marker_file_sync() {}
+    #[inline(always)]
+    pub(crate) fn record_reservation_namespace_mkdir() {}
+    #[inline(always)]
+    pub(crate) fn record_reservation_namespace_dir_sync() {}
+    #[inline(always)]
+    pub(crate) fn record_session_allocation_mkdir() {}
+    #[inline(always)]
+    pub(crate) fn record_conversation_allocation_mkdir() {}
+    #[inline(always)]
+    pub(crate) fn record_sqlite_store_open_request() {}
+    #[inline(always)]
+    pub(crate) fn record_catalog_temp_open() {}
+    #[inline(always)]
+    pub(crate) fn record_catalog_payload_write(_bytes: usize) {}
+    #[inline(always)]
+    pub(crate) fn record_catalog_file_sync() {}
+    #[inline(always)]
+    pub(crate) fn record_catalog_rename() {}
+    #[inline(always)]
+    pub(crate) fn record_catalog_directory_sync() {}
 }
 
 // Test-only hooks for the namespace-initialization durability contract.
@@ -392,10 +473,10 @@ impl ProductRoot {
     /// Probe for the one legacy marker that matters: an existing `sessions`
     /// tree. This is the only place the storage owner inspects the old
     /// allocation root, it is reached only while the reservation namespace is
-    /// absent, and it increments [`LEGACY_LAYOUT_PROBES`] so the reservation
-    /// path's zero-inspection contract is measurable.
+    /// absent, and it records a legacy-layout probe (test/profiling builds
+    /// only) so the reservation path's zero-inspection contract is measurable.
     fn probe_legacy_sessions(&self) -> io::Result<bool> {
-        LEGACY_LAYOUT_PROBES.fetch_add(1, Ordering::Relaxed);
+        issue_387_profile::record_legacy_layout_probe();
         match std::fs::symlink_metadata(self.root.join("sessions")) {
             Ok(_) => Ok(true),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -486,7 +567,7 @@ impl ProductRoot {
         {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                CONVERSATION_RESERVATION_CONFLICTS.fetch_add(1, Ordering::Relaxed);
+                issue_387_profile::record_conflict();
                 return Err(error);
             }
             Err(error) => return Err(error),
@@ -500,7 +581,7 @@ impl ProductRoot {
         // reporting durable reservation success.
         logical_operations::record_reservation_namespace_dir_sync();
         File::open(&namespace)?.sync_all()?;
-        CONVERSATION_RESERVATIONS.fetch_add(1, Ordering::Relaxed);
+        issue_387_profile::record_reservation();
         Ok(ConversationReservation)
     }
     #[must_use]

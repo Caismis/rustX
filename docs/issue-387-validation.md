@@ -15,9 +15,14 @@ directly measured from what is inferred from source structure.
   worktree `../rustX-issue-387`.
 - The final PR head SHA is the pushed commit of that branch; see PR #390.
 - Base measurements below were taken from an isolated worktree detached at the
-  exact base SHA with the *same* corrected benchmark source (only the two
-  marked revision-specific counter bodies stubbed), so the workload, durability
-  semantics and harness are identical.
+  exact base SHA with the *same* benchmark source. On the base revision the
+  non-default `issue-387-profile` feature does not exist, so the two
+  revision-specific counter bodies compile to `Option::None` (`null`), never a
+  measured zero; the workload, durability semantics and harness are otherwise
+  identical.
+- The head benchmark build explicitly enables `--features issue-387-profile`
+  so the measurement-only counters exist; an ordinary head build carries no
+  Issue #387 measurement atomic (see the reproducible commands).
 
 ## Environment
 
@@ -38,10 +43,12 @@ directly measured from what is inferred from source structure.
 fsyncs the catalog's parent directory and every ancestor
 (`sync_directory_ancestry`), so each create performs roughly one directory sync
 request per path component. On btrfs these are real and dominate wall time; on
-a shallow `tmpfs` root they are effectively free. The numbers below are
-measured on btrfs so the directory-sync and Catalog-byte evidence is physical.
-Earlier measurements taken against a shallow or memory-backed root are
-superseded and are not reproduced here.
+a shallow `tmpfs` root they are effectively free. Release end-to-end timing was
+measured on btrfs so the filesystem's durability cost participates in wall/CPU
+time. The logical directory-sync counters and Catalog payload-byte counters
+below are still logical rustX-owner measurements, not physical device-I/O
+measurements. Earlier measurements taken against a shallow or memory-backed
+root are superseded and are not reproduced here.
 
 ## Three evidence layers that must not be conflated
 
@@ -72,8 +79,10 @@ requests.
 ## Reproducible commands
 
 ```text
-# Create scaling and the 150-create resource workload (absolute roots required)
-cargo build --release --example session_create_benchmark
+# Create scaling and the 150-create resource workload (absolute roots required).
+# The Issue #387 counters are compiled only under the non-default
+# `issue-387-profile` feature; without it every counter-derived field is null.
+cargo build --release --features issue-387-profile --example session_create_benchmark
 ./target/release/examples/session_create_benchmark \
     --root <abs>/create-<1|10|100|1000> --existing <n> --creates 30 \
     --json /tmp/create-<n>.json
@@ -91,44 +100,70 @@ RUSTX_387_PROFILE_EXISTING=100 cargo test --lib --all-features \
     'stage_profile_real_create_pipeline' -- --ignored --nocapture
 ```
 
-The create benchmark compiles against both revisions. Its two
-revision-specific bodies are `reservation_counters` (head reads the
-storage-owner counters; base returns `(None, None)`) and
-`logical_operation_counters` (head reads the logical-operation counters; base
-returns `None`, so a base run reports every `logical_*` field as `null`, never
-as a measured zero). Workload, durability and publication semantics are
-identical on both sides.
+The create benchmark compiles against both revisions. On the head, the
+measurement-only counters are compiled only under the non-default
+`issue-387-profile` feature (test builds enable them through `cfg(test)`); an
+ordinary production build compiles every recorder to a no-op and carries no
+measurement atomic increment. Its two revision-specific bodies are
+`reservation_counters` (head reads the storage-owner counters; base returns
+`(None, None)`) and `logical_operation_counters` (head reads the
+logical-operation counters; base returns `None`, so a base run reports every
+`logical_*` field as `null`, never as a measured zero). Workload, durability
+and publication semantics are identical on both sides.
+
+### Profiling boundary and default-build proof
+
+The Issue #387 counters live behind the non-default `issue-387-profile`
+feature (`#[cfg(any(test, feature = "issue-387-profile"))]`). In an ordinary
+build the counter statics do not exist and every recorder is an
+`#[inline(always)]` no-op. Emitting LLVM IR for the release library with and
+without the feature shows the boundary directly:
+
+- default `cargo rustc --release --lib -- --emit=llvm-ir`: 0
+  `issue_387_profile` symbols and 0 `logical_operations` symbols;
+- `--features issue-387-profile`: 9 `issue_387_profile` symbols, 50
+  `logical_operations` symbols, and 23 additional `atomicrmw` instructions
+  (9,139 vs 9,116) attributable to the measurement counters.
+
+A default production build therefore performs no Issue #387 measurement atomic
+increment; only the benchmark or a test build opts in.
 
 ## Create scaling (30 creates per point, fresh root, release, btrfs)
 
-Each point was measured **three times**; the table reports the median, with the
-observed range in parentheses. The batch grows its own fixture, so the timed
-operations run against `start, start+1, ... end`, not a fixed population, and
-the authoritative observed population is paginated to exhaustion (never a page
-length capped at 32).
+Points 1, 10 and 100 were measured **three times**; the 1000 point was measured
+**five times** because its wall-time spread is the widest. The table reports
+the median, with the full observed range in parentheses. The batch grows its
+own fixture, so the timed operations run against `start, start+1, ... end`, not
+a fixed population, and the authoritative observed population is paginated to
+exhaustion (never a page length capped at 32).
 
 | Existing (`start..end`) | Base wall µs (range) | Head wall µs (range) | Base CPU µs (range) | Head CPU µs (range) |
 | --- | --- | --- | --- | --- |
-| 1 (`1..31`) | 86,311 (81,912–87,824) | 110,794 (108,610–160,559) | 25,333 (23,333–26,333) | 40,000 (38,333–44,000) |
-| 10 (`10..40`) | 89,083 (83,373–89,421) | 109,697 (105,749–173,670) | 26,333 (25,333–27,000) | 40,667 (39,333–44,000) |
-| 100 (`100..130`) | 90,546 (88,901–118,760) | 104,040 (96,911–114,956) | 28,667 (27,667–30,333) | 38,667 (37,667–40,000) |
-| 1000 (`1000..1030`) | 124,474 (120,676–129,935) | 120,098 (113,594–200,143) | 59,667 (58,000–61,000) | 50,000 (48,333–52,333) |
+| 1 (`1..31`) | 83,722 (82,103–84,177) | 110,835 (107,420–113,658) | 23,000 (22,667–23,333) | 38,667 (38,333–39,667) |
+| 10 (`10..40`) | 85,224 (84,915–86,944) | 110,619 (104,289–114,927) | 24,333 (24,333–25,333) | 39,333 (33,333–42,667) |
+| 100 (`100..130`) | 87,739 (87,729–90,174) | 113,207 (110,098–118,073) | 27,333 (26,000–28,000) | 43,000 (41,333–45,333) |
+| 1000 (`1000..1030`) | 130,022 (121,490–134,810) | 278,193 (113,745–483,561) | 60,000 (58,000–61,667) | 78,000 (48,333–112,333) |
 
 Every create opens exactly one `ConversationStore` (to seed the new
 Conversation) on both sides; the head reserves exactly 30 identities with
 **zero** legacy-layout probes at every point. The head's per-create CPU is
-consistently higher at low population by roughly the added reservation
-durability barrier (the reservation-specific stage is flat; see the stage
-profile), and at 1000 the removed allocation scan makes head marginally faster
-than base. The individual run range shows the host is noisy; only the
-1000-point ordering is stable across all three runs.
+consistently higher than base by roughly the added reservation durability
+barrier (the reservation-specific stage itself is flat; see the stage profile).
+At 1000 the head's wall median is materially higher than base and its range is
+very wide (`113,745–483,561` µs); this run does **not** support a head speedup.
+The added per-reservation directory sync over a namespace that already holds
+~1000 markers is a plausible contributing cost (inferred from the source
+structure; the logical counter records two directory-sync requests per
+reservation), but the host and btrfs are noisy and this is not a controlled
+attribution. The base's 1000-point range is tight, so the head penalty is not
+merely base noise.
 
-### Head rustX logical owner operations (deterministic; 30-create batch)
+### Head rustX logical owner operations (deterministic except Catalog bytes; 30-create batch)
 
 These are logical requests, **not** syscall counts, and **not** physical device
-I/O. Values are identical across the three repetitions because every operation
-is deterministic; `logical_catalog_bytes_written` is the only field that varies
-with Catalog content.
+I/O. All fields are identical across the repetitions except
+`logical_catalog_bytes_written`, which varies with Catalog content (random
+Session ids change the serialized size).
 
 | Logical operation | 30-create total | Per create |
 | --- | --- | --- |
@@ -147,12 +182,12 @@ with Catalog content.
 | catalog directory-sync requests (one per path ancestor) | 300 | 10 |
 | catalog logical bytes written | grows with Catalog | see below |
 
-`logical_catalog_bytes_written` per 30-create batch, by population:
-≈429,785 (1), ≈661,095 (10), ≈2,974,140 (100), ≈26,171,505 (1000). That is the
-only per-create payload proportional to Catalog size (≈14 KB → ≈872 KB per
-create from 1 to 1000 existing Sessions). The reservation path's own logical
-operations are constants independent of the population, and the removed
-Session-directory scan emits no counter at all.
+`logical_catalog_bytes_written` per 30-create batch, by population (median of
+the runs): 434,240 (1), 667,980 (10), 3,005,325 (100), 26,445,690 (1000). That
+is the only per-create payload proportional to Catalog size (≈14 KB → ≈881 KB
+per create from 1 to 1000 existing Sessions). The reservation path's own
+logical operations are constants independent of the population, and the
+removed Session-directory scan emits no counter at all.
 
 The catalog directory-sync request count is path-depth dependent (10 ancestors
 for the measured roots); it is a count of ancestors visited by
@@ -165,27 +200,30 @@ Median of five runs.
 
 | Metric | Base | Head |
 | --- | --- | --- |
-| Wall µs / create | 88,735 | 116,032 |
-| Process CPU µs / create | 26,933 | 43,000 |
+| Wall µs / create | 87,595 (86,850–233,102) | 108,164 (103,825–115,160) |
+| Process CPU µs / create | 26,400 (26,200–28,933) | 39,733 (37,467–42,867) |
 | `ConversationStore` opens | 150 | 150 |
 | Reservation count | not instrumented | 150 |
 | Legacy-layout probes | not instrumented | 0 |
-| Logical Catalog bytes written | not instrumented | ≈9.86 MB |
+| Logical Catalog bytes written | not instrumented | 9,940,681 |
 | Reservation marker create / write / file sync | not instrumented | 150 / 150 / 150 |
 | Session / Conversation allocation mkdir requests | not instrumented | 150 / 300 |
 | SQLite open requests | not instrumented | 150 |
 | Catalog directory-sync requests | not instrumented | 1,500 |
-| RSS before / after (point-in-time, median) | 6,934,528 / 11,153,408 | 6,852,608 / 11,124,736 |
+| RSS before / after (point-in-time, median) | 6,803,456 / 11,026,432 | 6,930,432 / 11,104,256 |
 
 RSS is a point-in-time sample, not peak RSS. The base's `logical_*` fields are
-`null` because the base has no such counters; they are not measured zeros.
+`null` because the base has no such counters; they are not measured zeros. The
+base wall range includes one 233 ms outlier on the same noisy host; the head's
+range is tight at this population.
 
 ## List/search regression (#386 preserved)
 
 Head, 256 Sessions, 50 reps per workload: **0** `ConversationStore` opens for
 first/middle/last page, Session-id search, name search, and preview search.
-Head wall ms per workload: 4.98 / 5.06 / 5.06 / 5.92 / 6.19 / 5.17.
-Prepared clone/fork publication still carries the frozen-seed preview
+Head wall ms per workload: 5.25 / 5.38 / 5.59 / 6.58 / 6.86 / 5.75
+(first page, middle page, last page, Session-id search, name search, preview
+search). Prepared clone/fork publication still carries the frozen-seed preview
 (`r13_list_and_search_open_zero_stores_and_clone_keeps_preview`).
 
 ## Instrumented exclusive stage profile (debug test build, 50 creates, tmpfs)
@@ -210,20 +248,20 @@ Microseconds per create:
 
 | Stage (exclusive) | 0 existing | 100 existing |
 | --- | --- | --- |
-| Catalog snapshot clone (controller) | 15.2 | 71.7 |
-| reserve identity (incl. root barrier) | 39.0 | 41.1 |
-| allocation directory (incl. Catalog read) | 1,485.3 | 7,002.3 |
-| `SQLite` bootstrap/open (conn+config+schema+identity bind) | 4,624.7 | 4,656.1 |
-| lineage initialization/seed (`initialize_lineage`) | 203.7 | 210.6 |
-| Catalog document clone (publication) | 17.0 | 81.4 |
-| catalog serialize | 590.6 | 2,816.6 |
-| temp write | 19.0 | 36.7 |
-| file sync | 0.4 | 0.6 |
-| rename | 9.5 | 15.3 |
-| directory sync (ancestry) | 9.7 | 12.6 |
-| **measured total** | **10,210.9** | **29,787.4** |
-| **exclusive sum** | **7,014.2** | **14,944.9** |
-| **unattributed remainder** | **3,196.7** | **14,842.4** |
+| Catalog snapshot clone (controller) | 14.7 | 69.4 |
+| reserve identity (incl. root barrier) | 35.0 | 41.0 |
+| allocation directory (incl. Catalog read) | 1,347.2 | 6,981.7 |
+| `SQLite` bootstrap/open (conn+config+schema+identity bind) | 3,904.7 | 4,624.8 |
+| lineage initialization/seed (`initialize_lineage`) | 178.1 | 203.5 |
+| Catalog document clone (publication) | 20.0 | 82.4 |
+| catalog serialize | 590.6 | 2,828.3 |
+| temp write | 16.6 | 33.7 |
+| file sync | 0.4 | 0.5 |
+| rename | 8.2 | 14.7 |
+| directory sync (ancestry) | 9.3 | 11.6 |
+| **measured total** | **9,141.3** | **29,717.9** |
+| **exclusive sum** | **6,124.7** | **14,891.5** |
+| **unattributed remainder** | **3,016.6** | **14,826.5** |
 
 The unattributed remainder is dominated by Catalog work that is not a named
 leaf stage: `create_conversation_allocation`'s `check_allocation_live` reads
@@ -345,11 +383,12 @@ perturb.
 
 Directly measured on the real release pipeline:
 
-- the reservation primitive is flat and small (≈40 µs per create in the debug
-  profile, and 30 reservations with 0 layout probes at every scale);
+- the reservation primitive is flat and small (≈35–41 µs per create in the
+  debug profile, and 30 reservations with 0 layout probes at every scale);
 - Catalog-size-dependent work grows: the logical Catalog payload written per
-  create rises from ≈14 KB to ≈872 KB from 1 to 1000 existing Sessions, and
-  head CPU per create rises from ≈40 ms to ≈50 ms over that range;
+  create rises from ≈14 KB to ≈881 KB from 1 to 1000 existing Sessions, and
+  head CPU per create median rises from ≈39 ms to ≈78 ms over that range (with
+  a wide 1000-point range);
 - in the debug stage profile, `allocation directory` (which includes
   `check_allocation_live`'s whole-`catalog.json` read), `catalog serialize`,
   the controller Catalog snapshot clone and the publication-time
@@ -362,23 +401,27 @@ walk.
 
 Conclusion: the corrected evidence **does** show that Catalog-size-dependent
 whole-document work (read, clone, serialize, validate, write/rename/sync)
-dominates create cost at scale, while the reservation primitive no longer does.
-The reservation's added durability barrier keeps head CPU per create higher
-than base at low population, and the removed Session-directory scan makes head
-marginally faster than base only at 1000. A later, separately scoped issue to
-replace whole-file Catalog publication with bounded transactional persistence
-is therefore **supported by measurement**. This delivery does not implement it,
-does not preselect Catalog `SQLite`, and keeps the current `catalog.json` + one
-`conversation.sqlite` topology. The physical directory-sync cost of the
-durability contract is also visible and would be addressed by such an issue
-only if a shallow-root or batched-ancestry strategy is part of its scope.
+dominates create cost at scale. It also shows that the reservation's added
+durability barrier keeps head CPU and wall time higher than base at every
+population, and the 1000-point head median is material (no head speedup is
+claimed). The extra per-reservation directory sync over a namespace that
+already holds ~1000 markers is a plausible contributing cost, inferred from the
+source structure rather than isolated by experiment, because the host and btrfs
+are noisy. A later, separately scoped issue to replace whole-file Catalog
+publication with bounded transactional persistence is therefore **supported by
+measurement**. This delivery does not implement it, does not preselect Catalog
+`SQLite`, and keeps the current `catalog.json` + one `conversation.sqlite`
+topology. The logical directory-sync request count of the durability contract
+is also visible and would be addressed by such an issue only if a shallow-root
+or batched-ancestry strategy is part of its scope.
 
 ## Limitations
 
-- The host is noisy; scaling wall/CPU are medians of three runs with the range
-  shown, and the per-run range at 1000 spans ≈114–200 ms per create. The
-  deterministic logical-operation counts and the Catalog logical bytes are the
-  stable evidence; the wall/CPU tables are indicative.
+- The host is noisy; scaling wall/CPU are medians of three runs for 1/10/100
+  and five runs for 1000, with the range shown. The per-run head range at 1000
+  spans ≈114–484 ms per create, so the 1000-point wall/CPU is indicative only.
+  The deterministic logical-operation counts and the Catalog logical bytes are
+  the stable evidence.
 - The stage profile is debug/tmpfs and excludes release/device effects by
   construction; it attributes exclusive leaf stages only and leaves the
   `commit` re-read and `validate_document` walk in the unattributed remainder.

@@ -14,6 +14,12 @@ publish = false
 
 [features]
 mcp-fixture = ["rmcp/server", "rmcp/transport-io", "rmcp/transport-streamable-http-server"]
+# Issue #387 measurement-only counters (reservation / conflict / legacy-layout
+# probe and the rustX logical owner-operation counters). Non-default: ordinary
+# production builds compile the recorders to no-ops and carry no measurement
+# atomic increment. Enable explicitly for the Session-create benchmark:
+#   cargo build --release --features issue-387-profile --example session_create_benchmark
+issue-387-profile = []
 
 [lib]
 name = "rustx"

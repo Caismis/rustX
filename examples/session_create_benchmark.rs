@@ -35,10 +35,18 @@
 //!
 //! Run:
 //! ```text
-//! cargo run --release --example session_create_benchmark -- \
+//! cargo build --release --features issue-387-profile --example session_create_benchmark
+//! ./target/release/examples/session_create_benchmark \
 //!     --root /tmp/rustx-create --existing 100 --creates 30 \
 //!     --json /tmp/rustx-create.json
 //! ```
+//!
+//! The Issue #387 counters are measurement-only and live behind the
+//! non-default `issue-387-profile` feature, so ordinary builds pay no
+//! production counter overhead. Without the feature the benchmark still builds
+//! and runs but reports every counter-derived field as `null` ("not
+//! instrumented"); it never reports a fake measured zero. Build with the
+//! feature to measure them.
 //!
 //! Scaling runs use a fresh `--root` per point and record the *actual*
 //! starting Session count, paginated to exhaustion. A timed batch grows its
@@ -98,6 +106,11 @@ fn parse_args() -> Result<Params, String> {
 ///
 /// - head (#387): read the reservation and legacy-layout-probe counters;
 /// - base 0083f64d: replace the body with `(None, None)`.
+///
+/// The counters are compiled only under the non-default `issue-387-profile`
+/// feature (or test builds). Without it this reports `(None, None)` honestly
+/// rather than a fake measured zero.
+#[cfg(feature = "issue-387-profile")]
 fn reservation_counters() -> (Option<u64>, Option<u64>) {
     // === BEGIN REVISION-SPECIFIC BODY (replace with `(None, None)` at base 0083f64d) ===
     (
@@ -105,6 +118,11 @@ fn reservation_counters() -> (Option<u64>, Option<u64>) {
         Some(rustx::runtime::local_storage::conversation_legacy_layout_probe_count()),
     )
     // === END REVISION-SPECIFIC BODY ===
+}
+
+#[cfg(not(feature = "issue-387-profile"))]
+fn reservation_counters() -> (Option<u64>, Option<u64>) {
+    (None, None)
 }
 
 /// Benchmark-local snapshot of the rustX logical owner-operation counters.
@@ -181,6 +199,11 @@ impl LogicalCounts {
 /// REVISION-SPECIFIC BODY — at base 0083f64d replace the marked body with
 /// `None` (the base has no such counters). The `Option` is required so the base
 /// can report "not instrumented" as `null`; clippy cannot see the base stub.
+///
+/// The counters are compiled only under the non-default `issue-387-profile`
+/// feature (or test builds). Without it this reports `None` honestly rather
+/// than a fake measured zero.
+#[cfg(feature = "issue-387-profile")]
 #[allow(clippy::unnecessary_wraps)]
 fn logical_operation_counters() -> Option<LogicalCounts> {
     // === BEGIN REVISION-SPECIFIC BODY (replace with `None` at base 0083f64d) ===
@@ -202,6 +225,11 @@ fn logical_operation_counters() -> Option<LogicalCounts> {
         catalog_logical_bytes_written: snapshot.catalog_logical_bytes_written,
     })
     // === END REVISION-SPECIFIC BODY ===
+}
+
+#[cfg(not(feature = "issue-387-profile"))]
+fn logical_operation_counters() -> Option<LogicalCounts> {
+    None
 }
 
 struct SystemUnits {
