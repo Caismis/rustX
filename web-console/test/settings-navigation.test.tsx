@@ -142,3 +142,38 @@ it('navigation success: a delayed successful lookup is fenced by a newer navigat
   expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
   expect(screen.queryByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeNull();
 });
+
+/** Reach the disconnected recovery surface with an owner lookup still in
+ * flight. Leaving the Session view and losing the transport are not Settings
+ * navigation decisions, so neither of them fences the lookup — only the
+ * "Show details" gesture does. */
+async function recoveryWithStaleLookup() {
+  const { startLookup } = await mountOwnerFailure();
+  const held = startLookup();
+  fireEvent.click(screen.getByRole('button', { name: 'View options' }));
+  await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Close all views' })); });
+  await act(async () => { await server.client.disconnect(); });
+  fireEvent.click(await screen.findByRole('button', { name: 'Show details' }));
+  expect(screen.getByRole('button', { name: 'Connection' }).getAttribute('aria-current')).toBe('page');
+  return held;
+}
+
+it('navigation E: recovery Show details fences a delayed successful owner lookup', async () => {
+  const held = await recoveryWithStaleLookup();
+  await release(held, true);
+  // Connection Settings remains the selected Settings surface, and the late
+  // success can neither retarget it to the owning Workspace nor reopen it.
+  expect(screen.getByRole('button', { name: 'Connection' }).getAttribute('aria-current')).toBe('page');
+  fireEvent.click(screen.getByRole('button', { name: 'Overview' }));
+  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
+  expect(screen.queryByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeNull();
+});
+
+it('navigation E: recovery Show details fences a stale owner-lookup failure', async () => {
+  const held = await recoveryWithStaleLookup();
+  await release(held);
+  expect(screen.getByRole('button', { name: 'Connection' }).getAttribute('aria-current')).toBe('page');
+  expect(screen.queryByText(/stale owner lookup failed/)).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Overview' }));
+  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
+});
