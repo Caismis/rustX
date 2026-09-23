@@ -3,7 +3,7 @@ import type { AppServerClient, ClientView } from '../../../client/app-server';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
 import { settingsTargetKey, type SettingsTarget } from '../projection';
 import { createConfigurationPort } from './port';
-import { adoptionInFlight, createSessionConfigurationPort, sessionConfigurationMachine } from './session-configuration';
+import { adoptionInFlight, createSessionConfigurationPort, sessionConfigurationMachine, sessionTransport } from './session-configuration';
 import { mutationInFlight, settingsTargetMachine } from './settings-target';
 
 export type SettingsTargetActor = Actor<typeof settingsTargetMachine>;
@@ -50,12 +50,13 @@ function authorityLifetime(transport: ClientView): string {
  *
  * Ownership is therefore explicit and keyed, never ambient: every actor is
  * addressed by (endpoint, authority revision, subject). The system owns every
- * actor's lifetime: it observes the client's authority and retires a replaced
- * authority's lifetime at that replacement itself, and it releases an actor
+ * actor's lifetime and its view of the transport: it observes the client, and
+ * at each client publication it retires a replaced authority's lifetime and
+ * delivers the current transport to every live actor. It releases an actor
  * retained only for a transaction in flight by observing that transaction's
  * terminal state — never by polling, and never by waiting for some later,
- * unrelated lifetime change or actor lookup. The actors own their transaction
- * state and know nothing of the system. */
+ * unrelated lifetime change, actor lookup or presentation render. The actors
+ * own their transaction state and know nothing of the system. */
 export class ConfigurationSystem {
   /** The current authority lifetime's target actors, keyed by target. Kept for
    * that whole lifetime, so drafts, pinned CAS bases and in-flight settlement
@@ -80,31 +81,49 @@ export class ConfigurationSystem {
   /** The App Server authority lifetime every live actor belongs to. */
   private lifetime: string;
 
-  /** The system observes the client's authority itself, so an authority
-   * replacement retires the old lifetime at the replacement's own publication:
-   * nothing of the old authority waits for some later actor lookup to discover
-   * that its authority has ended, and no old actor survives into the
-   * replacement to start new work through the live client. The system lives
-   * exactly as long as its client (see `configurationSystem`), so the
-   * subscription is never released. */
+  /** The system observes its client itself, through exactly one subscription
+   * that lives as long as the client (see `configurationSystem`).
+   *
+   * An authority replacement retires the old lifetime at the replacement's own
+   * publication: nothing of the old authority waits for some later actor
+   * lookup to discover that its authority has ended, and no old actor survives
+   * into the replacement to start new work through the live client.
+   *
+   * Every live actor of the current lifetime is then told the transport at
+   * that same publication — attached or not, held by a presentation or not. A
+   * connection generation replacement, a reconnect reaching `connected`, a
+   * native publication and a Session snapshot change are therefore facts the
+   * actors observe directly, and whatever read they owe starts from their own
+   * transition graph, never from a presentation happening to render. */
   constructor(private readonly client: AppServerClient) {
     this.lifetime = authorityLifetime(client.getSnapshot());
-    client.subscribe(() => this.observeAuthority());
+    client.subscribe(() => this.observeClient());
   }
 
-  /** A connection generation replacement inside one authority is not an
-   * authority replacement: it is the actors' own generation fencing to handle,
-   * and it retires nothing here. */
-  private observeAuthority() {
+  private observeClient() {
     const lifetime = authorityLifetime(this.client.getSnapshot());
-    if (this.lifetime === lifetime) return;
-    this.lifetime = lifetime;
-    for (const actor of this.targets.values()) this.retireTarget(actor);
-    this.targets.clear();
-    // A Session actor owns no durable browser intent, so a replaced authority
-    // ends it at once — an adoption still in flight included, whose late
-    // response then has no completion path at all.
-    for (const [key, entry] of this.sessions) this.dropSession(key, entry);
+    if (this.lifetime !== lifetime) {
+      this.lifetime = lifetime;
+      for (const actor of this.targets.values()) this.retireTarget(actor);
+      this.targets.clear();
+      // A Session actor owns no durable browser intent, so a replaced authority
+      // ends it at once — an adoption still in flight included, whose late
+      // response then has no completion path at all.
+      for (const [key, entry] of this.sessions) this.dropSession(key, entry);
+    }
+    // A connection generation replacement inside one authority is not an
+    // authority replacement: it retires nothing here, and is the actors' own
+    // generation fencing to handle. Retired targets belong to a replaced
+    // authority and are told nothing of the live transport.
+    //
+    // Each delivery reads the client's current snapshot rather than the one
+    // this publication started from, so even a publication nested inside a
+    // delivery can never leave a later actor holding an older transport.
+    for (const actor of this.targets.values()) {
+      const current = this.client.getSnapshot();
+      actor.send({ type: 'TRANSPORT', connection: current.connection, generation: current.generation, publications: current.configuration });
+    }
+    for (const [sessionId, entry] of this.sessions) entry.actor.send({ type: 'TRANSPORT', ...sessionTransport(this.client.getSnapshot(), sessionId) });
   }
 
   /** Retire one target actor of a replaced authority.
@@ -159,7 +178,7 @@ export class ConfigurationSystem {
     const existing = this.sessions.get(key);
     if (existing) return existing.actor;
     const actor = createActor(sessionConfigurationMachine, {
-      input: { port: createSessionConfigurationPort(this.client, sessionId), connection: transport.connection, generation: transport.generation },
+      input: { port: createSessionConfigurationPort(this.client, sessionId), ...sessionTransport(transport, sessionId) },
     });
     this.sessions.set(key, { actor, holders: 0 });
     actor.start();

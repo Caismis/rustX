@@ -29,12 +29,12 @@ it('C09 Workspace A/B drafts survive navigation and Session focus without retarg
 });
 
 it('C09 external source revision notification preserves dirty draft and original CAS', async () => {
- const s = cfg3Client(); const ui = render(<SettingsSurface client={s.client} target={userSettingsTarget}/>);
+ const s = cfg3Client(); render(<SettingsSurface client={s.client} target={userSettingsTarget}/>);
  await screen.findByText(/Revision: user-1/); fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
  fireEvent.click(screen.getByLabelText('read')); s.source.user.revision = 'external';
- s.client.getSnapshot = () => state;
- const state = { ...s.state, configuration: { 'source:user': { ...cfg3Application(), scope: 'source:user', version: '9' } } };
- ui.rerender(<SettingsSurface client={s.client} target={userSettingsTarget}/>);
+ // The native publication reaches the Settings actor at the client publication
+ // itself; no presentation render is involved.
+ act(() => s.publish({ configuration: { 'source:user': { ...cfg3Application(), scope: 'source:user', version: '9' } } }));
  await screen.findByText(/Revision: external/);
  expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
@@ -230,12 +230,10 @@ it('keeps contributor default intent unspecified when enabling the closed Agent 
 });
 
 it('reconnect rereads native sources without replaying a dirty draft', async () => {
-  const subject = cfg3Client(); const ui = render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={subject.host ??= cfg3Host(subject)} />);
+  const subject = cfg3Client(); render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={subject.host ??= cfg3Host(subject)} />);
   await screen.findByText(/Revision: workspace-1/); fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
   fireEvent.click(screen.getByLabelText('read'));
-  const snapshot = { ...subject.state, generation: 2 };
-  subject.client.getSnapshot = () => snapshot;
-  ui.rerender(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={subject.host ??= cfg3Host(subject)} />);
+  act(() => subject.publish({ generation: 2 }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead')).toHaveLength(2));
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
   expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true);
@@ -332,14 +330,11 @@ it.each([
   const subject = cfg3Client(async op => {
     if (op.method === 'configuration/sourcesRead' && ++reads === 2) return pending;
   });
-  const ui = render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={subject.host ??= cfg3Host(subject)} />);
+  render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={subject.host ??= cfg3Host(subject)} />);
   await screen.findByText(/Revision: workspace-1/);
   fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
-  if (readKind === 'effect') {
-    const snapshot = { ...subject.state, generation: 2 };
-    subject.client.getSnapshot = () => snapshot;
-    ui.rerender(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={subject.host ??= cfg3Host(subject)} />);
-  } else fireEvent.click(screen.getByRole('button', { name: 'Read current sources' }));
+  if (readKind === 'effect') act(() => subject.publish({ generation: 2 }));
+  else fireEvent.click(screen.getByRole('button', { name: 'Read current sources' }));
   await waitFor(() => expect(reads).toBe(2));
   if (successor === 'refresh') {
     subject.source.workspace!.revision = 'new-authority';

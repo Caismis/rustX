@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useSelector } from '@xstate/react';
-import type { AppServerClient, ClientView } from '../../../client/app-server';
+import type { AppServerClient } from '../../../client/app-server';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
 import { settingsTargetKey, type SettingsTarget } from '../projection';
 import { configurationSystem, type SessionConfigurationActor, type SettingsTargetActor } from './system';
@@ -16,18 +16,14 @@ export function useSettingsActor(): SettingsTargetActor {
   return actor;
 }
 
-/** A stable key for the native application publications, so the machine is told
- * about a publication exactly when one really changed — never once per render
- * and never once per unrelated client event. */
-function publicationKey(transport: ClientView): string {
-  return Object.entries(transport.configuration ?? {}).map(([scope, value]) => `${scope}=${value.version}`).join(' ');
-}
-
 /** Bind one Settings presentation to the authority actor of its exact target.
  *
  * The actor is addressed by (endpoint, authority revision, target) and outlives
  * this component: closing Settings detaches the presentation; it never cancels
- * a native mutation and never discards an editing transaction. */
+ * a native mutation and never discards an editing transaction. The presentation
+ * attachment is the only thing this binding tells the actor: the transport is
+ * delivered to it by its `ConfigurationSystem`, so no read, reconnect or
+ * convergence ever depends on this component rendering. */
 export function useSettingsTarget(client: AppServerClient, target: SettingsTarget, host: ProductHostWorkspaces | undefined) {
   const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
   // The Product Host object identity is a presentation detail that may change
@@ -47,15 +43,14 @@ export function useSettingsTarget(client: AppServerClient, target: SettingsTarge
     // leaves no presentation attachment to end.
     return () => { if (actor.getSnapshot().status === 'active') actor.send({ type: 'DETACH' }); };
   }, [actor]);
-  const publications = publicationKey(transport);
-  const connection = transport.connection, generation = transport.generation, configuration = transport.configuration;
-  useEffect(() => {
-    actor.send({ type: 'TRANSPORT', connection, generation, publications: configuration });
-  }, [actor, connection, generation, publications, configuration]);
   return { actor, transport };
 }
 
-/** Bind one Session configuration presentation to its Session's actor. */
+/** Bind one Session configuration presentation to its Session's actor.
+ *
+ * A presentation holds the actor and nothing more. Observation — including the
+ * read a reconnected generation owes — is driven by the transport the
+ * `ConfigurationSystem` delivers, never by this component's effects. */
 export function useSessionConfiguration(client: AppServerClient, sessionId: string) {
   const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const lifetime = `${transport.endpoint ?? ''}|${transport.authorityRevision ?? 0}|${sessionId}`;
@@ -65,9 +60,6 @@ export function useSessionConfiguration(client: AppServerClient, sessionId: stri
     system.retainSession(actor);
     return () => system.releaseSession(actor);
   }, [client, actor]);
-  useEffect(() => {
-    actor.send({ type: 'TRANSPORT', connection: transport.connection, generation: transport.generation });
-  }, [actor, transport.connection, transport.generation]);
   return { actor, transport };
 }
 

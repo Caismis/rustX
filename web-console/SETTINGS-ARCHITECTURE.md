@@ -51,8 +51,20 @@ ConfigurationSystem(client)                    keyed by (endpoint, authority rev
   │     └── unitTransaction: <semantic unit>    │ one per unit touched in this lifetime
   └── sessionConfiguration: <session>          ─┘ reference counted by its presentation
 
+client publication ──(authority, TRANSPORT)──▶ every live actor of the current lifetime
 React Settings dialog ──ATTACH/DETACH──▶ an existing target actor
+React Session region  ──retain/release, ADOPT──▶ its Session actor
 ```
+
+The `ConfigurationSystem` is also the one owner of transport delivery. At every
+client publication it first retires a replaced authority, then tells every live
+actor of the current lifetime the transport — connection state, connection
+generation, native publications and, for a Session actor, that Session's
+authoritative snapshot — whether or not a presentation is attached or holds it.
+Retired actors of a replaced authority are told nothing. No React effect
+forwards transport, so no read, reconnect recovery or convergence ever depends on
+a component rendering; each machine ignores a delivery that changes nothing it
+observes, so an unrelated publication never retries a failed read.
 
 - **App Server authority lifetime** — `(endpoint, authorityRevision)`. The
   `ConfigurationSystem` subscribes to its client and observes this key itself,
@@ -237,9 +249,54 @@ remains until a new submission.
 ### The Session configuration machine
 
 ```text
-observation  idle → loading.{requested | adoptionReread} → ready | unavailable
+observation  offline ⇄ connected.{loading.{owed | adoptionReread} → ready | failed}
 adoption     idle → submitting → idle | rejected | uncertain
 ```
+
+The observation region is the transport/read obligation, expressed as states:
+
+```text
+offline                     the transport cannot read: nothing reads, nothing polls,
+                            nothing is authoritative; triggers are absorbed
+connected.loading           exactly one authoritative read in flight
+connected.ready             the current connected span's authoritative observation
+connected.failed            a read of this connected span failed; the next trigger retries
+context.staleApplication    an ended span's observation, stale presentation data only
+```
+
+A connected span is one connected stretch of one connection generation.
+`connected` is only ever entered from `offline`, which holds no current
+observation, so entering it *is* the one read that span owes — its initial state
+is `loading`. The invariants are exactly:
+
+```text
+A new connection generation never reads until it is connected.
+Once connected, an unobserved generation owes exactly one authoritative
+Session-configuration read, independent of React or Session attachment.
+```
+
+Replacing the generation (or losing the ability to read) ends the span at that
+transition: its observation becomes stale presentation data, its read failure is
+cleared, and its read in flight is stopped, so an old-generation reply can
+publish neither an application nor a read failure. Inside one connected span a
+native publication for the Session, a Session snapshot change or an explicit
+`REFRESH` re-enters `loading`, which stops the read in flight: one read owner,
+and a superseded read has no completion path. A trigger delivered while
+`offline` — or together with the transition into `connected` — is answered by
+the span's owed read, never by a second one. Nothing polls.
+
+The span-ending transition is deliberately not `reenter`: a re-entering
+transition from a region to its own descendant takes the machine root as its
+domain and would re-enter the `adoption` region too, resetting an adoption in
+flight.
+
+An adoption is submitted on one connection generation. That generation's
+replacement ends it as an unknown outcome at once — its reply can no longer
+arrive on the replaced connection — and stops the invoked request, so no late
+reply of the old connection can settle it. The new span's owed read is the
+authoritative reread it needs; the adoption is never replayed. `ADOPT` is
+accepted only against the current span's authoritative observation;
+`session/adoptConfiguration` still revalidates it natively.
 
 Observation and adoption are two regions over two separate context fields
 (`readError`, `adoptionError`). Neither region can assign the other's field, so a
@@ -247,9 +304,10 @@ successful read structurally cannot clear an adoption rejection, and an adoption
 response structurally cannot clear a read failure.
 
 One adoption transaction spans both regions, and the `adoptionInFlight` tag names
-that span: `adoption.submitting`, then `observation.loading.adoptionReread` — the
-authoritative reread the native response owes. The transaction's terminal point
-is that reread settling, or a newer read superseding it. Session actors are
+that span: `adoption.submitting`, then `observation.connected.loading.adoptionReread` —
+the authoritative reread the native response owes. The transaction's terminal
+point is that reread settling, a newer read superseding it, or its connected span
+ending. Session actors are
 reference counted by their presentations; when the last holder leaves, the
 `ConfigurationSystem` stops and removes the actor at once, or — while the
 adoption transaction is in flight — subscribes and does so exactly at its

@@ -315,7 +315,7 @@ it.each(['before', 'after'] as const)('S1-09 an uncertain save stays uncertain w
   const held = new Promise<never>((_, reject) => { fail = () => reject(new OutcomeUncertain()); });
   held.catch(() => {});
   const s = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite') return held; });
-  const ui = render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
+  render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
   await screen.findByText(/Revision: user-1/); fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
   fireEvent.click(screen.getByLabelText('read'));
   fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
@@ -325,8 +325,7 @@ it.each(['before', 'after'] as const)('S1-09 an uncertain save stays uncertain w
   // observation lifetime. The browser never learns whether the write landed.
   const replace = async () => {
     const reads = sourcesReads(s).length;
-    s.state.generation = 2;
-    ui.rerender(<SettingsSurface client={s.client} target={userSettingsTarget} />);
+    act(() => s.publish({ generation: 2 }));
     await waitFor(() => expect(sourcesReads(s).length).toBeGreaterThan(reads));
     await screen.findByText(/Revision: user-1/);
   };

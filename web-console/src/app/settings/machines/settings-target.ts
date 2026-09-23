@@ -300,6 +300,12 @@ export const settingsTargetMachine = setup({
      * write alone is never enough: its reservation may already be revoked. */
     holdsRereadReservation: ({ context }) => context.rereadReservation !== undefined,
     generationChanged: ({ context, event }) => event.type === 'TRANSPORT' && event.generation !== context.generation,
+    /** Inside one generation, the connection state or the native publications
+     * changed. The configuration system delivers every client publication, and
+     * one that changes neither is not an observation trigger: it must never
+     * retry a read that already failed. */
+    transportChanged: ({ context, event }) => event.type === 'TRANSPORT'
+      && (event.connection !== context.connection || event.publications !== context.publications),
     isConflict: ({ event }) => classifyWriteFailure((event as unknown as { error: unknown }).error) === 'conflict',
     /** The read being adopted was issued before the definitive commit recorded
      * since, so it may have been served before that commit landed natively. */
@@ -806,7 +812,7 @@ export const settingsTargetMachine = setup({
       // Its write-owned reread reservation ends with it, whether or not a
       // presentation is attached to witness the replacement.
       { guard: 'generationChanged', actions: ['applyTransport', 'retireObservation', 'revokeRereadReservation', raise({ type: 'GENERATION.REPLACED' })] },
-      { actions: ['applyTransport', raise({ type: 'TRIGGER' })] },
+      { guard: 'transportChanged', actions: ['applyTransport', raise({ type: 'TRIGGER' })] },
     ],
     'UNIT.EDIT': { actions: ['ensureUnit', 'forwardEdit'] },
     'UNIT.REVIEW': { actions: 'forwardReview' },

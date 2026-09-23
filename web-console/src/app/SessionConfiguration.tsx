@@ -1,9 +1,9 @@
-import { useEffect } from 'react';
 import { useSelector } from '@xstate/react';
 import type { SourceTarget } from '../../../protocol/app-server/v18';
 import type { AppServerClient, SessionView } from '../client/app-server';
 import { Button } from '../presentation/primitives/Button';
 import { useSessionConfiguration } from './settings/machines/react';
+import { applicationKnown } from './settings/machines/session-configuration';
 import { applicationOwners, observedResult, observedUnitLabel, observedUnits, openOwnerLabel, sourceTargetKey, unitApplication } from './settings/projection';
 
 /** The Session-owned configuration region.
@@ -13,24 +13,23 @@ import { applicationOwners, observedResult, observedUnitLabel, observedUnits, op
  * and nothing else, and an adoption response clears no read failure, because
  * neither region can write the other's field. Mutation acknowledgements never
  * clear pending observations, and this component is never the adoption gate:
- * `session/adoptConfiguration` revalidates it natively. */
+ * `session/adoptConfiguration` revalidates it natively.
+ *
+ * This component issues no read. Native publications, Session snapshot changes
+ * and reconnects are transport facts the actor observes from its configuration
+ * system, so a Session observation recovers after a reconnect whether or not
+ * this presentation renders, and whether or not the Session is attached. */
 export function SessionConfiguration({ client, view, openOwningSettings }: { client: AppServerClient; view: SessionView; openOwningSettings?: (owner: SourceTarget) => void }) {
   const { actor, transport } = useSessionConfiguration(client, view.id);
-  // The current generation's observation, or — while a replaced generation's
-  // successor has not observed yet — the previous one as explicitly stale
+  // The current connected span's observation, or — while no span has observed
+  // since the last one ended — that span's observation as explicitly stale
   // presentation data. `known` is what says which of the two this is; the
-  // retained value is never a comparison baseline for the new generation.
+  // retained value is never a comparison baseline for a later span.
   const application = useSelector(actor, snapshot => snapshot.context.application ?? snapshot.context.staleApplication);
   const readError = useSelector(actor, snapshot => snapshot.context.readError);
   const adoptionError = useSelector(actor, snapshot => snapshot.context.adoptionError);
-  const known = useSelector(actor, snapshot => snapshot.matches({ observation: 'ready' }));
+  const known = useSelector(actor, applicationKnown);
   const busy = useSelector(actor, snapshot => snapshot.matches({ adoption: 'submitting' }));
-  // Native publication and Session snapshot changes are observation triggers,
-  // never adoption triggers. The actor owns read ordering: a refresh supersedes
-  // the read in flight by stopping it.
-  const version = transport.configuration?.[view.id]?.version;
-  const snapshot = view.snapshot;
-  useEffect(() => { actor.send({ type: 'REFRESH' }); }, [actor, version, snapshot]);
   const candidate = application?.candidate;
   // Per-unit native observations. Independent units may simultaneously be
   // preparing, failed or already applied; none of them is flattened into one
