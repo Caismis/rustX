@@ -3,7 +3,7 @@ import { createActor, type InspectionEvent } from 'xstate';
 import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v18';
 import { mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
 import { requiresReview } from '../src/app/settings/machines/unit-transaction';
-import { sessionConfigurationMachine, type SessionConfigurationPort } from '../src/app/settings/machines/session-configuration';
+import { adoptionInFlight, sessionConfigurationMachine, type SessionConfigurationPort } from '../src/app/settings/machines/session-configuration';
 import { settingsNavigationMachine, type OwnerResolution } from '../src/app/settings/machines/navigation';
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
 import { ConfigurationSystem } from '../src/app/settings/machines/system';
@@ -1519,22 +1519,41 @@ it('R13c an obsolete result of the same connection generation still cannot regre
 // polling, and never by waiting for some later, unrelated lifetime change.
 
 /** An App Server client whose every request is released explicitly by the
- * test, and whose App Server authority the test replaces. */
+ * test, and whose App Server authority and connection generation the test
+ * replaces. Like the real client, each replacement publishes a new snapshot
+ * and synchronously notifies every subscriber, so the configuration system
+ * observes it at that publication — the test never has to look an actor up to
+ * make a lifetime change visible. Every request records the authority it was
+ * issued under. */
 function scriptedClient() {
-  const view = {
+  let view: ClientView = {
     endpoint: 'ws://native.invalid', authorityRevision: 1, connection: 'connected', generation: 1,
     sessions: [], views: {}, uncertain: [], interactionOperations: {},
-  } satisfies ClientView;
-  const requests: { method: string; resolve: (value: unknown) => void; reject: (reason?: unknown) => void }[] = [];
+  };
+  const listeners = new Set<() => void>();
+  const publish = (patch: Partial<ClientView>) => {
+    view = { ...view, ...patch };
+    for (const listener of listeners) listener();
+  };
+  const requests: { method: string; authority?: number; resolve: (value: unknown) => void; reject: (reason?: unknown) => void }[] = [];
   const client = {
     getSnapshot: () => view,
-    subscribe: () => () => {},
-    request: ({ method }: { method: string }) => { const gate = deferred<unknown>(); requests.push({ method, ...gate }); return gate.promise; },
+    subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    request: ({ method }: { method: string }) => {
+      const gate = deferred<unknown>();
+      requests.push({ method, authority: view.authorityRevision, ...gate });
+      return gate.promise;
+    },
   } as unknown as AppServerClient;
   return {
     system: new ConfigurationSystem(client),
     pending: (method: string) => requests.filter(request => request.method === method),
-    replaceAuthority: () => { view.authorityRevision += 1; },
+    /** Every request issued under one exact authority revision. */
+    issuedUnder: (authority: number) => requests.filter(request => request.authority === authority).map(request => request.method),
+    subscribers: () => listeners.size,
+    replaceAuthority: () => publish({ authorityRevision: (view.authorityRevision ?? 0) + 1 }),
+    replaceGeneration: () => publish({ generation: view.generation + 1 }),
+    transport: () => view,
   };
 }
 
@@ -1556,32 +1575,39 @@ async function observedTarget(native: ReturnType<typeof scriptedClient>) {
   return actor;
 }
 
-it('R26 an authority replacement stops and drops a target with no native mutation in flight, its dirty secret-bearing draft with it', async () => {
+it('R26 the authority replacement itself stops and drops a target with no native mutation in flight, its dirty secret-bearing draft with it', async () => {
   const native = scriptedClient();
   const old = await observedTarget(native);
   const oldUnit = old.getSnapshot().context.units[providerIdentity];
   // The unsaved literal credential is the live editing draft of the old authority.
   const [oldOwner] = native.system.transactionOwners();
   expect(retainedBy(native.system)).toContain(PROVIDER_SECRET);
+  // Settings is closed: nothing holds the target but the system.
+  old.send({ type: 'DETACH' });
   native.replaceAuthority();
-  const replacement = native.system.settingsTarget(userSettingsTarget, () => undefined);
-  expect(replacement).not.toBe(old);
-  // Nothing of the old authority crossed the native submission boundary, so
-  // nothing of it may outlive the replacement: it is stopped at the
-  // replacement itself, its transactions with it.
+  // Linearization point: the authority publication. No actor is looked up, no
+  // Settings is opened and no promise turn is drained before these assertions,
+  // so they hold only if the transition itself retired the old lifetime.
+  // Nothing of it crossed the native submission boundary, so nothing of it may
+  // outlive the replacement: it is stopped, its transactions with it.
   expect(old.getSnapshot().status).toBe('stopped');
   expect(oldUnit.getSnapshot().status).toBe('stopped');
   // The old transaction owner is unreachable, and the secret-bearing draft is
-  // neither retained nor migrated into the replacement.
-  const owners = native.system.transactionOwners();
-  expect(owners).toHaveLength(1);
-  expect(owners).not.toContain(oldOwner);
-  expect(retainedBy(native.system)).toBe('[[]]');
+  // retained nowhere.
+  expect(native.system.transactionOwners()).toHaveLength(0);
+  expect(native.system.transactionOwners()).not.toContain(oldOwner);
+  expect(retainedBy(native.system)).not.toContain(PROVIDER_SECRET);
+  // A later lookup finds a replacement that starts from nothing: the draft is
+  // never migrated.
+  const replacement = native.system.settingsTarget(userSettingsTarget, () => undefined);
+  expect(replacement).not.toBe(old);
   expect(replacement.getSnapshot().context.units).toEqual({});
+  expect(retainedBy(native.system)).toBe('[[]]');
   expect(native.pending('configuration/sourceWrite')).toHaveLength(0);
+  expect(native.issuedUnder(2)).toEqual([]);
 });
 
-it.each(['acknowledged', 'conflicted'] as const)('R26 an authority replacement retains a target with a native mutation in flight only until that mutation settles, when it is %s', async outcome => {
+it.each(['acknowledged', 'conflicted', 'rejected', 'uncertain'] as const)('R26 an authority replacement retains a target with a native mutation in flight only until that mutation settles, when it is %s', async outcome => {
   const native = scriptedClient();
   const old = await observedTarget(native);
   const commits = { count: 0 };
@@ -1592,21 +1618,19 @@ it.each(['acknowledged', 'conflicted'] as const)('R26 an authority replacement r
   const oldUnit = old.getSnapshot().context.units[providerIdentity];
   const [oldOwner] = native.system.transactionOwners();
   native.replaceAuthority();
-  const replacement = native.system.settingsTarget(userSettingsTarget, () => undefined);
-  // The mutation already crossed the native submission boundary: the old
-  // lifetime is retained, detached, for exactly that settlement.
+  // Linearization point: the authority publication, with no replacement actor
+  // requested. The mutation already crossed the native submission boundary, so
+  // the old lifetime is retained — detached and inert — for exactly that
+  // settlement and nothing else.
   expect(old.getSnapshot().status).toBe('active');
   expect(old.getSnapshot().matches({ authority: 'suspended' })).toBe(true);
   expect(old.getSnapshot().matches({ mutation: 'submitting' })).toBe(true);
-  expect(native.system.transactionOwners()).toHaveLength(2);
-  expect(native.system.transactionOwners()[0]).toBe(oldOwner);
-  replacement.send({ type: 'ATTACH' });
-  await flush();
-  native.pending('configuration/sourcesRead')[1].resolve({ projection: projection('fresh') });
-  await flush();
+  expect(native.system.transactionOwners()).toEqual([oldOwner]);
   const write = native.pending('configuration/sourceWrite')[0];
   if (outcome === 'acknowledged') write.resolve({ projection: projection('r2') });
-  else write.reject(new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: 'r1', actual: 'r-external' } }));
+  else if (outcome === 'conflicted') write.reject(new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: 'r1', actual: 'r-external' } }));
+  else if (outcome === 'rejected') write.reject(new RpcFailure({ code: -32602, message: 'Invalid provider' }));
+  else write.reject(new OutcomeUncertain());
   await flush();
   // The old outcome settles the exact transaction that submitted it…
   if (outcome === 'acknowledged') {
@@ -1617,24 +1641,42 @@ it.each(['acknowledged', 'conflicted'] as const)('R26 an authority replacement r
     expect(oldUnit.getSnapshot().matches({ mutation: 'unconfirmed' })).toBe(true);
     expect(commits.count).toBe(0);
   }
-  expect(old.getSnapshot().matches({ mutation: outcome === 'acknowledged' ? 'observing' : 'conflicted' })).toBe(true);
+  expect(mutationOutcome(old.getSnapshot()).kind).toBe({ acknowledged: 'committed', conflicted: 'conflict', rejected: 'rejected', uncertain: 'uncertain' }[outcome]);
   // …and that settlement is the retained lifetime's terminal point: the system
-  // stops and drops it at once, with no further authority replacement.
+  // stops and drops it at once, with no lookup and no further replacement.
   expect(old.getSnapshot().status).toBe('stopped');
   expect(oldUnit.getSnapshot().status).toBe('stopped');
-  expect(native.system.transactionOwners()).toHaveLength(1);
-  expect(native.system.transactionOwners()).not.toContain(oldOwner);
+  expect(native.system.transactionOwners()).toHaveLength(0);
   expect(retainedBy(native.system)).not.toContain(PROVIDER_SECRET);
-  // The detached old lifetime issued no read of its own while settling, and
-  // the replacement stayed isolated from it throughout.
-  expect(native.pending('configuration/sourcesRead')).toHaveLength(2);
-  const isolated = replacement.getSnapshot();
+  // The mutation left the browser exactly once, and the settling old lifetime
+  // issued nothing at all — no post-commit read, no unknown-outcome reread —
+  // through the replacement authority.
+  expect(native.pending('configuration/sourceWrite')).toHaveLength(1);
+  expect(native.pending('configuration/sourcesRead')).toHaveLength(1);
+  expect(native.issuedUnder(2)).toEqual([]);
+  // A replacement looked up afterwards is isolated from the old outcome.
+  const isolated = native.system.settingsTarget(userSettingsTarget, () => undefined).getSnapshot();
   expect(isolated.context.units).toEqual({});
-  expect(isolated.context.observation?.user.revision).toBe('fresh');
   expect(mutationOutcome(isolated)).toEqual({ kind: 'none' });
   expect(isolated.context.rejection).toBeUndefined();
-  // The mutation left the browser exactly once.
-  expect(native.pending('configuration/sourceWrite')).toHaveLength(1);
+});
+
+it('R26 the configuration system observes its client through exactly one subscription, and an unchanged authority retires nothing', async () => {
+  const native = scriptedClient();
+  expect(native.subscribers()).toBe(1);
+  const target = await observedTarget(native);
+  const session = native.system.sessionConfiguration('session-1');
+  // Publications that leave (endpoint, authorityRevision) unchanged are not
+  // lifetime changes.
+  native.replaceGeneration();
+  expect(target.getSnapshot().status).toBe('active');
+  expect(session.getSnapshot().status).toBe('active');
+  expect(native.system.settingsTarget(userSettingsTarget, () => undefined)).toBe(target);
+  expect(native.system.sessionConfiguration('session-1')).toBe(session);
+  native.replaceAuthority();
+  expect(target.getSnapshot().status).toBe('stopped');
+  expect(session.getSnapshot().status).toBe('stopped');
+  expect(native.subscribers()).toBe(1);
 });
 
 /** A Session actor of the current authority, held by one presentation, observed
@@ -1713,6 +1755,98 @@ it.each(['stays attached', 'leaves again'] as const)('R27 a presentation that at
   expect(actor.getSnapshot().status).toBe('stopped');
   expect(native.system.sessionConfiguration('session-1')).not.toBe(actor);
   expect(native.pending('session/adoptConfiguration')).toHaveLength(1);
+});
+
+it.each([
+  ['accepted', 'released'],
+  ['uncertain', 'released'],
+  ['rejected', 'released'],
+  ['accepted', 'held'],
+  ['answered, its reread pending,', 'released'],
+] as const)('R30 an authority replacement stops a Session actor at once, and its late %s adoption response starts nothing through the replacement, when the actor is %s', async (adoption, holder) => {
+  const native = scriptedClient();
+  const actor = await adoptingSession(native);
+  if (adoption === 'answered, its reread pending,') {
+    native.pending('session/adoptConfiguration')[0].resolve({});
+    await flush();
+    expect(actor.getSnapshot().matches({ observation: { loading: 'adoptionReread' } })).toBe(true);
+  }
+  // The last presentation leaves: the actor is alive only because its adoption
+  // transaction is in flight.
+  if (holder === 'released') native.system.releaseSession(actor);
+  expect(actor.getSnapshot().status).toBe('active');
+  expect(adoptionInFlight(actor.getSnapshot())).toBe(true);
+  const reads = native.pending('session/configuration').length;
+  native.replaceAuthority();
+  // Linearization point: the authority publication, with no replacement Session
+  // actor requested. The old Session actor is stopped at once, and with it the
+  // invoked adoption and reread actors.
+  expect(actor.getSnapshot().status).toBe('stopped');
+  // The obsolete authority answers late. A stopped actor has no completion path
+  // for it: no `ADOPTION.REREAD`, so no `session/configuration`, and never an
+  // adoption replay — nothing at all is issued through the replacement.
+  if (adoption === 'accepted') native.pending('session/adoptConfiguration')[0].resolve({});
+  else if (adoption === 'uncertain') native.pending('session/adoptConfiguration')[0].reject(new OutcomeUncertain());
+  else if (adoption === 'rejected') native.pending('session/adoptConfiguration')[0].reject(new Error('NotReady'));
+  else native.pending('session/configuration').at(-1)!.resolve({ application: cfg3SourceApplication() });
+  await flush();
+  expect(native.pending('session/configuration')).toHaveLength(reads);
+  expect(native.pending('session/adoptConfiguration')).toHaveLength(1);
+  expect(native.issuedUnder(2)).toEqual([]);
+  // A presentation leaving afterwards finds nothing left to release.
+  if (holder === 'held') native.system.releaseSession(actor);
+  const replacement = native.system.sessionConfiguration('session-1');
+  expect(replacement).not.toBe(actor);
+  expect(replacement.getSnapshot().matches({ adoption: 'idle', observation: 'idle' })).toBe(true);
+  expect(native.issuedUnder(2)).toEqual([]);
+});
+
+it('R31 a connection generation replacement inside one authority keeps every lifetime and retires only generation-scoped observation', async () => {
+  const native = scriptedClient();
+  const target = await observedTarget(native);
+  const unit = target.getSnapshot().context.units[providerIdentity];
+  target.send({ type: 'UNIT.SUBMIT', identity: providerIdentity, selector: revisionSelector(providerMutation), revision: 'r1', mutation: providerMutation });
+  await flush();
+  const session = await adoptingSession(native);
+  native.system.releaseSession(session);
+  native.replaceGeneration();
+  // Same (endpoint, authorityRevision): the system replaces and detaches
+  // nothing. Authority, presentation and transaction lifetimes all survive.
+  expect(target.getSnapshot().status).toBe('active');
+  expect(target.getSnapshot().matches({ authority: 'attached', mutation: 'submitting' })).toBe(true);
+  expect(unit.getSnapshot().status).toBe('active');
+  expect(session.getSnapshot().status).toBe('active');
+  expect(native.system.settingsTarget(userSettingsTarget, () => undefined)).toBe(target);
+  expect(native.system.sessionConfiguration('session-1')).toBe(session);
+  // The actors' own generation fencing retires what the old generation
+  // observed, delivered exactly as a presentation delivers transport.
+  const { connection, generation, configuration } = native.transport();
+  target.send({ type: 'TRANSPORT', connection, generation, publications: configuration });
+  session.send({ type: 'TRANSPORT', connection, generation });
+  await flush();
+  expect(target.getSnapshot().context.observation).toBeUndefined();
+  expect(native.pending('configuration/sourcesRead')).toHaveLength(2);
+  expect(session.getSnapshot().context.application).toBeUndefined();
+  expect(session.getSnapshot().context.staleApplication).toBeDefined();
+  // The write submitted on the old generation still settles its exact
+  // transaction, and the actor stays live for its whole authority.
+  native.pending('configuration/sourceWrite')[0].resolve({ projection: projection('r2') });
+  await flush();
+  expect(unit.getSnapshot().matches({ mutation: 'acknowledged' })).toBe(true);
+  expect(unit.getSnapshot().context.submitted?.committed).toBe('r2');
+  expect(target.getSnapshot().status).toBe('active');
+  expect(native.system.transactionOwners()).toHaveLength(1);
+  // The released Session actor is still released by its adoption transaction's
+  // own terminal point, not by the generation change.
+  native.pending('session/adoptConfiguration')[0].resolve({});
+  await flush();
+  expect(session.getSnapshot().status).toBe('active');
+  native.pending('session/configuration').at(-1)!.resolve({ application: cfg3SourceApplication() });
+  await flush();
+  expect(session.getSnapshot().status).toBe('stopped');
+  expect(native.pending('configuration/sourceWrite')).toHaveLength(1);
+  expect(native.pending('session/adoptConfiguration')).toHaveLength(1);
+  expect(native.issuedUnder(2)).toEqual([]);
 });
 
 // ── 14./15. Settings navigation ─────────────────────────────────────────────

@@ -5,6 +5,7 @@ import { NavigationEpoch } from '../src/app/commands/native';
 import { createWorkspaceSession } from '../src/workspaces/navigation';
 import { sessionObservation } from '../src/workspaces/WorkspaceNavigation';
 import type { ProductHostWorkspaces, WorkspaceCatalog } from '../src/workspaces/host';
+import { configurationSystem } from '../src/app/settings/machines/system';
 import { Server, endpoint, snapshot } from './fixture';
 let server: Server;
 beforeEach(() => {
@@ -316,6 +317,10 @@ it('a newer Open is not swallowed by an obsolete authorization for the same Sess
 });
 
 it('repeated product remount, Session navigation and reconnect release every presentation subscription', async () => {
+  // The configuration actor system observes its client's authority for the
+  // client's whole lifetime. That is not a presentation subscription, so it is
+  // established before the ones this test counts.
+  configurationSystem(server.client);
   const subscribed = new Set<() => void>();
   const original = server.client.subscribe;
   vi.spyOn(server.client, 'subscribe').mockImplementation(listener => {

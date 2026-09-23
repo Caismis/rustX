@@ -54,9 +54,16 @@ ConfigurationSystem(client)                    keyed by (endpoint, authority rev
 React Settings dialog ──ATTACH/DETACH──▶ an existing target actor
 ```
 
-- **App Server authority lifetime** — `(endpoint, authorityRevision)`. Replacing
-  the authority retires every target actor of the old lifetime and starts the
-  replacement from nothing, so old state cannot leak into it. A target with no
+- **App Server authority lifetime** — `(endpoint, authorityRevision)`. The
+  `ConfigurationSystem` subscribes to its client and observes this key itself,
+  so the client publication that changes it is the retirement linearization
+  point: the old lifetime is retired as a direct consequence of that
+  transition, never by a later `settingsTarget()` / `sessionConfiguration()`
+  lookup, and no actor of it survives into the replacement to start new work
+  through the live client. A connection generation change inside one authority
+  is not a lifetime change and retires nothing here. Replacing the authority
+  retires every actor of the old lifetime and starts the replacement from
+  nothing, so old state cannot leak into it. A target with no
   native mutation in flight (`mutationInFlight`, the `mutation.submitting` span)
   is stopped and dropped at the replacement itself — an unsaved draft, including
   a Provider credential or a literal environment value, belongs to the authority
@@ -66,7 +73,11 @@ React Settings dialog ──ATTACH/DETACH──▶ an existing target actor
   acknowledgement or failure must still settle the exact transaction that
   submitted it, under its own old authority. The `ConfigurationSystem` observes
   that settlement through a subscription it owns and stops and drops the actor at
-  once — no poll, and no dependence on a later authority replacement.
+  once — no poll, and no dependence on a later authority replacement. A retired
+  target is suspended, so settling issues no read of either authority. Every
+  Session actor of the old lifetime is stopped at the replacement, an adoption
+  in flight included: its late response has no completion path, so it can
+  neither reread nor replay anything through the replacement.
 - **Transaction lifetime** — per-unit actors live for the whole authority
   lifetime. Closing Settings, changing section or switching target is a React
   unmount and cannot reach them.
@@ -203,7 +214,9 @@ reference counted by their presentations; when the last holder leaves, the
 `ConfigurationSystem` stops and removes the actor at once, or — while the
 adoption transaction is in flight — subscribes and does so exactly at its
 terminal point. A holder attaching before then cancels that subscription and
-keeps the actor alive.
+keeps the actor alive. Authority replacement overrides both: it stops every
+Session actor of the old lifetime at once, held or not, adoption in flight or
+not.
 
 ## Entry and target ownership
 

@@ -668,7 +668,7 @@ it('S1-16 an acknowledgement from the retired authority settles its own transact
   ui.unmount();
   // The App Server authority is replaced while the acknowledgement is in
   // flight, so the reopened Settings owns a different transaction identity.
-  s.state.authorityRevision = (s.state.authorityRevision ?? 0) + 1;
+  s.publish({ authorityRevision: (s.state.authorityRevision ?? 0) + 1 });
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={host} />);
   await screen.findByText(/Revision: /);
   const replacement = settingsTransactionOwners(s.client).filter(owner => !submitting.includes(owner));

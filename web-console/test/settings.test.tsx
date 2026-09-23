@@ -61,7 +61,7 @@ it.each(['target', 'connection'] as const)('C10 late response after %s replaceme
  const host = cfg3Host(s); const ui = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
  await waitFor(() => expect(reads).toBe(1)); const stale = structuredClone(s.source); stale.workspace!.revision = 'stale';
  s.source.workspace!.revision = 'fresh';
- if (invalidation === 'connection') { const state = { ...s.state, authorityRevision: 2 }; s.client.getSnapshot = () => state; }
+ if (invalidation === 'connection') act(() => s.publish({ authorityRevision: 2 }));
  ui.rerender(<SettingsSurface client={s.client} target={workspaceSettingsTarget(invalidation === 'target' ? 'B' : 'A', invalidation === 'target' ? 'B' : 'A')} host={host}/>);
  await screen.findByText(/Revision: fresh/);
  await act(async () => { release({ type: 'source_settings', projection: stale }); await pending; });

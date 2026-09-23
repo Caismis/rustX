@@ -95,7 +95,9 @@ and top-level Settings navigation. React subscribes and submits intent. Those
 actors are addressed by `(endpoint, authority revision, subject)`, so a Settings
 dialog closing is a detach — never a cancelled native commit and never a
 discarded editing transaction — and replacing the App Server authority retires
-the old lifetime without letting it publish into its replacement. Detach
+the old lifetime at that replacement itself, observed by the configuration actor
+system rather than discovered by a later actor lookup, without letting it
+publish into or issue work through its replacement. Detach
 retains editing transactions; attach revalidates authoritative observation: the
 retained observation is stale presentation data and is never accepted as fresh
 authority for a newly attached presentation. XState
