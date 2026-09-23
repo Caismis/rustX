@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { createActor, type InspectionEvent } from 'xstate';
 import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v18';
 import { mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
-import { requiresReview } from '../src/app/settings/machines/unit-transaction';
+import { discardable, requiresReview } from '../src/app/settings/machines/unit-transaction';
 import { adoptionInFlight, sessionConfigurationMachine, type SessionConfigurationPort } from '../src/app/settings/machines/session-configuration';
 import { settingsNavigationMachine, type OwnerResolution } from '../src/app/settings/machines/navigation';
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
@@ -1381,6 +1381,213 @@ it.each([
   }
   expect(scripted.writes).toHaveLength(1);
   expect(scripted.reads).toHaveLength(3);
+});
+
+// ── 11d. Discard abandons browser intent, never native transaction evidence ─
+//
+// "Discard draft" abandons exactly what the browser authored: a value draft, or
+// the reviewed base a clean Remove or a failed mutation pinned as intent. A
+// definitive commit is not a draft. Its committed revision, the observation it
+// still owes and any divergence that observation reveals survive the gesture,
+// and the transaction retires only once it owns nothing at all.
+
+/** Observe r1, author a draft and have native definitively commit it as r2,
+ * with the post-commit authoritative read still outstanding. */
+async function committedAwaitingObservation() {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  await flush();
+  expect(scripted.reads).toHaveLength(2);
+  return { scripted, actor };
+}
+
+it('R32 discarding during the post-commit observation keeps the commit, and the observation still reveals the divergence', async () => {
+  const { scripted, actor } = await committedAwaitingObservation();
+  let unit = unitOf(actor).getSnapshot();
+  expect(unit.matches({ mutation: { acknowledged: 'awaitingObservation' } })).toBe(true);
+  expect(unit.context.base).toBe('r2');
+  expect(unit.context.observed).toBe('r1');
+  // The confirmed draft is already gone; nothing left is browser intent.
+  expect(discardable(unit)).toBe(false);
+  actor.send({ type: 'UNIT.DISCARD', identity: toolsIdentity });
+  await flush();
+  unit = unitOf(actor).getSnapshot();
+  expect(unit.matches({ mutation: { acknowledged: 'awaitingObservation' } })).toBe(true);
+  expect(unit.context.submitted?.committed).toBe('r2');
+  expect(unit.context.base).toBe('r2');
+  // An external writer restores r1, and the post-commit read observes it.
+  scripted.reads[1].resolve(projection('r1'));
+  await flush();
+  unit = unitOf(actor).getSnapshot();
+  expect(unit.matches({ mutation: { acknowledged: 'diverged' } })).toBe(true);
+  expect(unit.context.submitted?.committed).toBe('r2');
+  expect(unit.context.base).toBe('r2');
+  expect(unit.context.observed).toBe('r1');
+  expect(requiresReview(unit)).toBe(true);
+  expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'saved', observed: true });
+  expect(scripted.writes).toHaveLength(1);
+  expect(scripted.reads).toHaveLength(2);
+});
+
+it('R32 discarding after a post-commit divergence keeps the commit and the review requirement', async () => {
+  const { scripted, actor } = await committedAwaitingObservation();
+  scripted.reads[1].resolve(projection('r1'));
+  await flush();
+  expect(unitOf(actor).getSnapshot().matches({ mutation: { acknowledged: 'diverged' } })).toBe(true);
+  actor.send({ type: 'UNIT.DISCARD', identity: toolsIdentity });
+  await flush();
+  let unit = unitOf(actor).getSnapshot();
+  expect(unit.matches({ mutation: { acknowledged: 'diverged' } })).toBe(true);
+  expect(unit.matches({ base: 'pinned' })).toBe(true);
+  expect(unit.context.submitted?.committed).toBe('r2');
+  expect(unit.context.base).toBe('r2');
+  expect(requiresReview(unit)).toBe(true);
+  // A newer draft authored over the divergence is intent, and discarding it
+  // abandons that draft alone: the divergence evidence is still there.
+  edit(actor, ['read', 'write'], 'r1');
+  expect(discardable(unitOf(actor).getSnapshot())).toBe(true);
+  actor.send({ type: 'UNIT.DISCARD', identity: toolsIdentity });
+  await flush();
+  unit = unitOf(actor).getSnapshot();
+  expect(unit.context.draft).toBeUndefined();
+  expect(unit.matches({ mutation: { acknowledged: 'diverged' } })).toBe(true);
+  expect(unit.context.base).toBe('r2');
+  expect(requiresReview(unit)).toBe(true);
+  // The next save is still fenced on the committed revision.
+  edit(actor, ['read', 'write'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  expect(scripted.writes).toHaveLength(2);
+  expect(scripted.writes[1].expected).toBe('r2');
+});
+
+it('R32 an ordinary dirty draft is discarded cleanly and the transaction retires', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  const unit = unitOf(actor).getSnapshot();
+  expect(unit.matches({ intent: 'dirty', base: 'pinned' })).toBe(true);
+  expect(discardable(unit)).toBe(true);
+  actor.send({ type: 'UNIT.DISCARD', identity: toolsIdentity });
+  await flush();
+  expect(unitOf(actor)).toBeUndefined();
+  expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'none' });
+  expect(scripted.writes).toHaveLength(0);
+  // A later edit starts a new transaction fenced on the current authority.
+  edit(actor, ['write'], 'r1');
+  expect(unitOf(actor).getSnapshot().context.base).toBe('r1');
+});
+
+it('R32 discarding a conflicted clean Remove abandons its pinned base without authoring a value', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  const remove: SourceMutation = { kind: 'config', mutation: { unit: 'native_tools', authored: null } };
+  submit(actor, 'r1', remove);
+  await flush();
+  scripted.writes[0].reject(conflict());
+  await flush();
+  scripted.reads.at(-1)!.resolve(projection('r-external'));
+  await flush();
+  let unit = unitOf(actor).getSnapshot();
+  expect(unit.matches({ intent: 'clean', base: 'pinned', mutation: 'unconfirmed' })).toBe(true);
+  expect(unit.context.base).toBe('r1');
+  expect(discardable(unit)).toBe(true);
+  // A removal is intent too; discarding it never manufactures a value draft.
+  const inspected: unknown[] = [];
+  unitOf(actor).subscribe(snapshot => inspected.push(snapshot.context.draft));
+  actor.send({ type: 'UNIT.DISCARD', identity: toolsIdentity });
+  await flush();
+  expect(inspected.every(draft => draft === undefined)).toBe(true);
+  expect(unitOf(actor)).toBeUndefined();
+  // The conflict notice described the discarded removal; it goes with it.
+  expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'none' });
+  // The next Remove is fenced on the revision the user now sees.
+  submit(actor, 'r-external', remove);
+  await flush();
+  expect(scripted.writes).toHaveLength(2);
+  expect(scripted.writes[1].expected).toBe('r-external');
+  unit = unitOf(actor).getSnapshot();
+  expect(unit.context.draft).toBeUndefined();
+});
+
+it.each(['conflict', 'rejected', 'uncertain'] as const)('R32 discarding the intent of a %s mutation keeps the outcome and the transaction mutually truthful', async failure => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  scripted.writes[0].reject(failures[failure].cause());
+  await flush();
+  scripted.reads.at(-1)!.resolve(projection('r-external'));
+  await flush();
+  expect(mutationOutcome(actor.getSnapshot())).toEqual(failures[failure].outcome);
+  let unit = unitOf(actor).getSnapshot();
+  expect(unit.context.draft).toEqual({ value: ['read'] });
+  expect(unit.context.base).toBe('r1');
+  expect(discardable(unit)).toBe(true);
+  // Discarding a different unit touches neither this outcome nor this intent.
+  actor.send({ type: 'UNIT.DISCARD', identity: JSON.stringify({ kind: 'config', mutation: { unit: 'runtime_identity', authored: null } }) });
+  await flush();
+  expect(mutationOutcome(actor.getSnapshot())).toEqual(failures[failure].outcome);
+  expect(unitOf(actor).getSnapshot().context.draft).toEqual({ value: ['read'] });
+  actor.send({ type: 'UNIT.DISCARD', identity: toolsIdentity });
+  await flush();
+  // The draft and the pinned base are gone, so nothing claims they are kept.
+  expect(unitOf(actor)).toBeUndefined();
+  if (failure === 'uncertain') {
+    // Native may have committed: discarding the intent never reinterprets an
+    // unknown outcome as a definite non-commit.
+    expect(actor.getSnapshot().matches({ mutation: 'uncertain' })).toBe(true);
+    expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'uncertain' });
+  } else {
+    // A definitive non-commit described only the intent just abandoned.
+    expect(actor.getSnapshot().matches({ mutation: 'idle' })).toBe(true);
+    expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'none' });
+    expect(actor.getSnapshot().context.rejection).toBeUndefined();
+  }
+  // Nothing is replayed, and the next edit fences on the current revision.
+  expect(scripted.writes).toHaveLength(1);
+  edit(actor, ['write'], 'r-external');
+  unit = unitOf(actor).getSnapshot();
+  expect(unit.context.base).toBe('r-external');
+  expect(requiresReview(unit)).toBe(false);
+});
+
+it('R32 a mutation in flight owns its intent, so a discard is not accepted until its outcome', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  expect(discardable(unitOf(actor).getSnapshot())).toBe(false);
+  actor.send({ type: 'UNIT.DISCARD', identity: toolsIdentity });
+  await flush();
+  const unit = unitOf(actor).getSnapshot();
+  expect(unit.matches({ mutation: 'submitting', intent: 'dirty', base: 'pinned' })).toBe(true);
+  scripted.writes[0].reject(conflict());
+  await flush();
+  // The conflict preserves exactly the intent that was submitted.
+  expect(unitOf(actor).getSnapshot().context.draft).toEqual({ value: ['read'] });
+  expect(unitOf(actor).getSnapshot().context.base).toBe('r1');
 });
 
 // ── 12./13. Session configuration ───────────────────────────────────────────

@@ -67,7 +67,7 @@ export interface SettingsTargetContext {
    * mutation, present exactly while `mutation.rejected` is active. Conflict and
    * unknown outcome carry no detail beyond their state. The outcome belongs to
    * the mutation, not to the connection generation it was observed on, so only
-   * a new submission replaces it. */
+   * a new submission, or discarding the intent it rejected, replaces it. */
   rejection?: string;
   /** Owned by the `maintenance` region: why the last explicit rescan failed. */
   maintenanceError: string;
@@ -86,6 +86,10 @@ export interface SettingsTargetContext {
    * it, its non-sensitive revision selector and the exact CAS revision it is
    * fenced on. Deliberately never the authored payload. */
   submission?: { identity: string; token: number; selector: RevisionSelector; expected: string };
+  /** The unit whose mutation the `mutation` region's current outcome is
+   * about. Set by the submission that produces the outcome, so discarding that
+   * unit's browser intent can retire a failed outcome that describes it. */
+  outcomeUnit?: string;
   /** The read order a Workspace write reserved for its own authoritative
    * reread, named by the token of the submission that reserved it.
    *
@@ -127,6 +131,9 @@ export type SettingsTargetEvent =
   | { type: 'UNIT.DISCARD'; identity: string }
   | { type: 'UNIT.SUBMIT'; identity: string; selector: RevisionSelector; revision: string; mutation: SourceMutation }
   | { type: 'UNIT.RETIRED'; identity: string }
+  /** Raised once `UNIT.DISCARD` has been forwarded to the unit, so the
+   * `mutation` region answers the same gesture from whatever state it is in. */
+  | { type: 'INTENT.DISCARDED'; identity: string }
   | { type: 'READ.FORCE' }
   | { type: 'READ.ADOPT'; projection: SourceSettings }
   | { type: 'READ.REREAD_FAILED'; error: unknown }
@@ -298,6 +305,8 @@ export const settingsTargetMachine = setup({
      * since, so it may have been served before that commit landed natively. */
     readPredatesCommit: stateIn({ authority: { attached: { reading: 'predatesCommit' } } }),
     isUncertain: ({ event }) => classifyWriteFailure((event as unknown as { error: unknown }).error) === 'uncertain',
+    /** The discarded unit is the one whose mutation the current outcome is about. */
+    discardsOutcomeUnit: ({ context, event }) => event.type === 'INTENT.DISCARDED' && event.identity === context.outcomeUnit,
   },
   actions: {
     applyTransport: assign({
@@ -460,6 +469,7 @@ export const settingsTargetMachine = setup({
       enqueue.assign({
         nextToken: () => token + 1,
         rejection: () => undefined,
+        outcomeUnit: () => request.identity,
         submission: () => ({ identity: request.identity, token, selector: request.selector, expected: unit.getSnapshot().context.base }),
       });
       enqueue.sendTo(unit, { type: 'SUBMIT', token });
@@ -506,6 +516,7 @@ export const settingsTargetMachine = setup({
       enqueue.assign({ submission: () => undefined, rereadReservation: () => undefined });
     }),
     recordRejection: assign({ rejection: ({ event }) => String((event as unknown as { error: unknown }).error) }),
+    forgetOutcome: assign({ rejection: () => undefined, outcomeUnit: () => undefined }),
   },
 }).createMachine({
   id: 'settingsTarget',
@@ -682,7 +693,8 @@ export const settingsTargetMachine = setup({
     /** The one source mutation this target may have in flight, and where it
      * ended up. Acknowledgement, authoritative observation, conflict, native
      * rejection and an unknown outcome are five separate facts, and each is a
-     * state of this region that only a new submission leaves: no connection
+     * state of this region that only a new submission leaves — or, for a
+     * definitive non-commit, discarding the intent it was about: no connection
      * generation, presentation attachment or read outcome rewrites it. */
     mutation: {
       initial: 'idle',
@@ -743,8 +755,27 @@ export const settingsTargetMachine = setup({
             'UNIT.SUBMIT': { guard: 'canSubmit', target: 'submitting', actions: ['ensureUnit', 'openSubmission'] },
           },
         },
-        conflicted: { on: { 'UNIT.SUBMIT': { guard: 'canSubmit', target: 'submitting', actions: ['ensureUnit', 'openSubmission'] } } },
-        rejected: { on: { 'UNIT.SUBMIT': { guard: 'canSubmit', target: 'submitting', actions: ['ensureUnit', 'openSubmission'] } } },
+        /** A conflict or a native rejection is a definitive non-commit whose
+         * only remaining subject is the browser intent it was submitted for:
+         * its draft and reviewed base, preserved for review. Discarding that
+         * unit's intent therefore retires the outcome in the same gesture, so
+         * the notice never claims a draft that no longer exists. */
+        conflicted: {
+          on: {
+            'UNIT.SUBMIT': { guard: 'canSubmit', target: 'submitting', actions: ['ensureUnit', 'openSubmission'] },
+            'INTENT.DISCARDED': { guard: 'discardsOutcomeUnit', target: 'idle', actions: 'forgetOutcome' },
+          },
+        },
+        rejected: {
+          on: {
+            'UNIT.SUBMIT': { guard: 'canSubmit', target: 'submitting', actions: ['ensureUnit', 'openSubmission'] },
+            'INTENT.DISCARDED': { guard: 'discardsOutcomeUnit', target: 'idle', actions: 'forgetOutcome' },
+          },
+        },
+        /** An unknown outcome is a fact about native, not about the browser
+         * intent: the write may have committed. Discarding the intent never
+         * turns it into "definitely not committed", so only a new submission
+         * leaves this state. */
         uncertain: { on: { 'UNIT.SUBMIT': { guard: 'canSubmit', target: 'submitting', actions: ['ensureUnit', 'openSubmission'] } } },
       },
     },
@@ -779,7 +810,7 @@ export const settingsTargetMachine = setup({
     ],
     'UNIT.EDIT': { actions: ['ensureUnit', 'forwardEdit'] },
     'UNIT.REVIEW': { actions: 'forwardReview' },
-    'UNIT.DISCARD': { actions: 'forwardDiscard' },
+    'UNIT.DISCARD': { actions: ['forwardDiscard', raise(({ event }) => ({ type: 'INTENT.DISCARDED' as const, identity: event.identity }))] },
     'UNIT.RETIRED': { actions: 'retireUnit' },
   },
 });

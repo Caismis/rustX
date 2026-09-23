@@ -194,6 +194,46 @@ observation of the committed revision still settles it. `requiresReview`
 answers the review question from these regions; React renders it and never
 reconstructs chronology from revision values.
 
+#### Discarding browser intent
+
+`DISCARD` abandons browser authoring intent and nothing else. What is
+discardable is exactly what `discardable` answers:
+
+```text
+intent.dirty                                  the value draft
+base.pinned outside mutation.acknowledged     a reviewed revision pinned as intent:
+                                              a clean Remove, or a draft's base
+                                              after a conflict, rejection or
+                                              unknown outcome
+```
+
+A definitive commit is not a draft. While `mutation.acknowledged` holds, the
+pinned base is the committed revision, and the transaction still owes that
+commit's post-commit observation (`awaitingObservation`) or carries the
+divergence that observation revealed (`diverged`). `DISCARD` drops a newer
+value draft authored over it, but the committed revision, the owed observation
+and the review requirement all survive: a discard during `awaitingObservation`
+followed by a post-commit read of the pre-save revision still ends
+`acknowledged.diverged` with `requiresReview`. While a mutation is
+`submitting`, the intent belongs to that mutation and the gesture is not
+accepted — the editor is disabled then as well.
+
+Retirement is derived, not triggered. After every discard the transaction
+retires (`UNIT.RETIRED`) only if it owns nothing: `intent.clean`,
+`base.following`, and no mutation in `submitting` or `acknowledged`.
+`UnitForm` offers `Discard draft` only while `discardable` holds, so no gesture
+named for a draft is ever presented against a commit.
+
+The target's `mutation` region answers the same gesture so that the outcome it
+presents and the transaction it describes stay mutually truthful. A conflict
+or a native rejection is a definitive non-commit whose only remaining subject
+is the preserved draft and base; discarding the intent of the unit it is about
+(`outcomeUnit`) retires that outcome to `idle` in the same gesture, so "Your
+draft and base revision are preserved" is never shown for a draft that is gone.
+An unknown outcome is a fact about native — the write may have committed — so
+discarding the intent never turns `uncertain` into a definite non-commit; it
+remains until a new submission.
+
 ### The Session configuration machine
 
 ```text
@@ -335,7 +375,8 @@ created only by an explicit `Override <unit>` action or by an unambiguous edit
 transition, both of which start from what the control already displays.
 `blank` is only the editing seed for a unit this scope has yet to author; it is
 never presented as an effective value. `Discard draft` returns to the inherited
-presentation rather than to a client-side empty default. A Provider editor
+presentation rather than to a client-side empty default, and is offered only
+while browser intent exists (see *Discarding browser intent*). A Provider editor
 declares itself non-inheritable, because a credential is never read back from a
 shadowed definition; the inherited definition is still reported, redacted.
 

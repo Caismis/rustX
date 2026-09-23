@@ -5,7 +5,7 @@ import { Switch } from '../../presentation/primitives/Switch';
 import { Button } from '../../presentation/primitives/Button';
 import { SourceContext } from './source-context';
 import { useSettingsActor, useUnitTransaction } from './machines/react';
-import { committed as unitCommitted, requiresReview } from './machines/unit-transaction';
+import { committed as unitCommitted, discardable, requiresReview } from './machines/unit-transaction';
 import { authoredStateLabel, effectiveStateLabel, provenanceLabel, revisionSelector, unitFacts } from './projection';
 import css from '../../presentation/settings/SettingsContent.module.css';
 
@@ -97,6 +97,12 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, childr
   // Whether the current source diverges from the CAS base is the transaction's
   // own fact: it alone knows whether a post-commit observation has completed.
   const reviewNeeded = !!snapshot && requiresReview(snapshot);
+  // Discard abandons browser authoring intent only. A definitive commit, and
+  // the observation and review it still owes, are never offered as a draft.
+  const intent = !!snapshot && discardable(snapshot);
+  const preserved = draft ? 'Your draft and original revision are preserved.'
+    : committed ? 'Your committed revision is no longer the current source.'
+      : 'Your removal and its original revision are preserved.';
   return <form aria-label={title} className={css.unit} onSubmit={e => { e.preventDefault(); submit(); }}>
     <fieldset disabled={busy}><legend>{title}</legend>
       {source && unitMutation.kind === 'config' && <>
@@ -111,11 +117,11 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, childr
       {redacted && <p className={css.hint}>The authored value is never projected to the browser. Saving replaces it with exactly what you enter here.</p>}
       {children(displayed, edit)}
       <details><summary>Source revision & replacement</summary><p className={css.hint}>Draft base revision: {base}<br />Current revision: {observed}</p><p>Save replaces this native semantic unit. Remove omits it from this scope. Empty selections remain explicit.</p></details>
-      {reviewNeeded && <div className={css.review}><p role="status">Source revision changed. Your draft and original revision are preserved. Review the current source before replacing it.</p><details><summary>Review current authored unit (redacted)</summary><pre>{redacted ? 'Authored value not projected' : JSON.stringify(authored, null, 2)}</pre></details></div>}
+      {reviewNeeded && <div className={css.review}><p role="status">Source revision changed. {preserved} Review the current source before replacing it.</p><details><summary>Review current authored unit (redacted)</summary><pre>{redacted ? 'Authored value not projected' : JSON.stringify(authored, null, 2)}</pre></details></div>}
       <div className={css.actions}><Button variant="primary" type="submit" disabled={!draft}>Save {title}</Button>
         {inheritance && !overriding && <Button type="button" title="Author this unit in this Workspace. Nothing is written until you save." onClick={() => edit(displayed)}>Override {title}</Button>}
         {removable && authoredPresent && <Button type="button" title={workspace ? 'Remove the unit this Workspace authors, through exact CAS. The native inherited value becomes effective.' : 'Remove the authored value through exact CAS'} onClick={() => submit(true)}>{workspace ? 'Use global default' : 'Remove'} {title}</Button>}
-        <Button type="button" onClick={() => actor.send({ type: 'UNIT.DISCARD', identity })}>Discard draft</Button>
+        {intent && <Button type="button" onClick={() => actor.send({ type: 'UNIT.DISCARD', identity })}>Discard draft</Button>}
         {reviewNeeded && <Button type="button" onClick={() => actor.send({ type: 'UNIT.REVIEW', identity })}>Use reviewed revision</Button>}
       </div>{committed && <p role="status">Saved. Native application proceeds automatically.</p>}
     </fieldset>

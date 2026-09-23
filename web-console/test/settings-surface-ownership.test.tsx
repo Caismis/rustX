@@ -202,6 +202,8 @@ it('S1-04 Discard returns to the inherited presentation without authoring anythi
   expect((form.getByLabelText('write') as HTMLInputElement).checked).toBe(false);
   expect(form.getByText(/Inherited — no Workspace override/)).toBeTruthy();
   expect((form.getByRole('button', { name: 'Save Native Tools' }) as HTMLButtonElement).disabled).toBe(true);
+  // Nothing browser-authored is left, so nothing is offered for discarding.
+  expect(form.queryByRole('button', { name: 'Discard draft' })).toBeNull();
   fireEvent.submit(screen.getByRole('form', { name: 'Native Tools' }));
   await waitFor(() => expect(sourcesReads(s).length).toBeGreaterThanOrEqual(1));
   expect(writes(s)).toHaveLength(0);

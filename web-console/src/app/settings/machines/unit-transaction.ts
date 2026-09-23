@@ -1,4 +1,4 @@
-import { assign, raise, sendParent, setup, type SnapshotFrom } from 'xstate';
+import { and, assign, not, raise, sendParent, setup, stateIn, type SnapshotFrom } from 'xstate';
 import type { RevisionSelector } from '../projection';
 
 /** The editing transaction of exactly one native semantic unit.
@@ -28,6 +28,18 @@ import type { RevisionSelector } from '../projection';
  * The actor is owned by the Settings target actor, not by the editor that
  * renders it, so section changes and editor remounts cannot lose a pinned base,
  * and an acknowledgement settles a transaction whose editor is already gone.
+ *
+ * `DISCARD` abandons browser authoring intent and nothing else: the value
+ * draft, and a base pinned as intent — the reviewed revision of a clean Remove
+ * or of a draft whose mutation did not commit. A definitive commit is not
+ * intent. While `mutation.acknowledged` holds, the base carries the committed
+ * revision and the transaction still owes that commit's authoritative
+ * observation and any divergence it reveals, so the pinned base, the committed
+ * revision and the review requirement all survive the gesture. While a
+ * mutation is in flight the intent belongs to it, and the gesture is not
+ * accepted. The actor announces its retirement only once it owns nothing at
+ * all — no intent, no pinned base and no commit left to observe — which is a
+ * fact about its regions, not about the event that led there.
  *
  * Memory only. Nothing here is persisted, merged with sources, or used as
  * runtime state. */
@@ -68,7 +80,10 @@ export type UnitTransactionEvent =
    * every definitive commit the owning target has recorded, so it is evidence
    * about this unit's commit rather than about the source before it. */
   | { type: 'OBSERVED'; revision: string; postCommit: boolean }
-  | { type: 'SETTLED' };
+  | { type: 'SETTLED' }
+  /** Internal: a discard has been applied to every region; retire if the
+   * transaction now owns nothing. */
+  | { type: 'RELEASE' };
 
 export const unitTransactionMachine = setup({
   types: {
@@ -93,6 +108,15 @@ export const unitTransactionMachine = setup({
     intentUnchanged: ({ context }) => context.submitted?.generation === context.generation,
     /** Nothing is left for this transaction to fence on. */
     nothingAuthored: ({ context }) => context.draft === undefined,
+    /** A submitted mutation owns the browser intent until its outcome. */
+    inFlight: stateIn({ mutation: 'submitting' }),
+    /** No mutation is in flight and no definitive commit still owes its
+     * observation or carries its divergence, so a pinned base is browser intent
+     * rather than the committed revision of a commit. */
+    noMutationObligation: and([not('inFlight'), not(stateIn({ mutation: 'acknowledged' }))]),
+    /** No browser intent, no pinned base and no native commit whose
+     * observation is still owed: the transaction owns nothing. */
+    ownsNothing: and([stateIn({ intent: 'clean' }), stateIn({ base: 'following' }), 'noMutationObligation']),
   },
   actions: {
     recordObservation: assign({ observed: ({ context, event }) => event.type === 'OBSERVED' ? event.revision : context.observed }),
@@ -131,6 +155,11 @@ export const unitTransactionMachine = setup({
     /** Does this browser hold a value override for the unit? */
     intent: {
       initial: 'clean',
+      on: {
+        // Every region answers the same discard in this microstep; the
+        // retirement decision is taken once they all have.
+        DISCARD: { guard: not('inFlight'), target: '.clean', actions: ['dropDraft', raise({ type: 'RELEASE' })] },
+      },
       states: {
         clean: { on: { EDIT: { target: 'dirty', actions: 'recordEdit' } } },
         dirty: {
@@ -164,6 +193,10 @@ export const unitTransactionMachine = setup({
             OBSERVED: { actions: 'recordObservation' },
             REVIEW: { actions: 'reviewObservation' },
             SETTLED: { guard: 'nothingAuthored', target: 'following', actions: 'followObservation' },
+            // Abandoning a pin that is browser intent follows native authority
+            // again. A committed revision awaiting its observation is not
+            // intent and stays.
+            DISCARD: { guard: 'noMutationObligation', target: 'following', actions: 'followObservation' },
           },
         },
       },
@@ -224,7 +257,7 @@ export const unitTransactionMachine = setup({
       },
     },
   },
-  on: { DISCARD: { actions: 'announceRetirement' } },
+  on: { RELEASE: { guard: 'ownsNothing', actions: 'announceRetirement' } },
 });
 
 export type UnitTransactionSnapshot = SnapshotFrom<typeof unitTransactionMachine>;
@@ -236,6 +269,15 @@ export type UnitTransactionSnapshot = SnapshotFrom<typeof unitTransactionMachine
 export function requiresReview(snapshot: UnitTransactionSnapshot): boolean {
   return snapshot.context.base !== snapshot.context.observed
     && !snapshot.matches({ mutation: { acknowledged: 'awaitingObservation' } });
+}
+
+/** Whether the transaction holds browser authoring intent that `DISCARD`
+ * would abandon: a value draft, or a base pinned as intent rather than as the
+ * committed revision of a definitive commit. */
+export function discardable(snapshot: UnitTransactionSnapshot): boolean {
+  if (snapshot.matches({ mutation: 'submitting' })) return false;
+  return snapshot.matches({ intent: 'dirty' })
+    || (snapshot.matches({ base: 'pinned' }) && !snapshot.matches({ mutation: 'acknowledged' }));
 }
 
 /** Whether the last submitted mutation is natively confirmed. */
