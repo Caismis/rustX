@@ -19,7 +19,7 @@ import {
   type CSSProperties,
 } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { TraceRecord } from '../../../../protocol/app-server/v17';
+import type { TraceRecord } from '../../../../protocol/app-server/v18';
 import type { TraceCache } from '../../client/trace';
 import { TRACE_LIMIT } from '../../client/trace';
 import { Button } from '../../presentation/primitives/Button';

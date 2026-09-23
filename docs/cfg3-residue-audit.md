@@ -35,7 +35,7 @@ Current documentation teaches only two fixed resource scopes, User < Workspace
 typed overlay, explicit Root capability selection, independent named profiles,
 default-off Plugins, Skill prompt visibility, inert discovery, Save versus Reload,
 one coherent publication, current-file cold composition, Session `cwd` plus optional
-model, and Conversation-owned UUIDv7 runtime storage. App Server is v17 and exposes
+model, and Conversation-owned UUIDv7 runtime storage. App Server is v18 and exposes
 `session/effectiveConfiguration`, `configuration/sourcesRead`,
 `configuration/sourceWrite`, and `configuration/reload`.
 

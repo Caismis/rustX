@@ -1,5 +1,23 @@
 # Harness presentation provenance — WEB-RESET-01
 
+## #391 Settings orchestration actors
+
+This change imports no new upstream source and repins nothing. The derived
+`Settings.tsx`, `CatalogEditor.tsx` and `Integrations.tsx` records carry reviewed
+local-hash and import-closure updates: their configuration orchestration moved to
+rustX-authored XState v5 machines under `app/settings/machines/`, and their
+`SaveSource` callback prop was removed. Those machines, the configuration actor
+system and the per-unit CAS transaction machine are rustX-authored; Harness
+supplies no equivalent, and no upstream hash, MIT header or license closure
+changes. The inventory gains no entry.
+
+`xstate` 5.33.2 and `@xstate/react` 6.1.0 are new pinned production
+dependencies; their license text is reproduced in the regenerated
+`public/THIRD-PARTY-NOTICES.txt`. Both run entirely locally: no Stately cloud or
+runtime service is contacted, and the XState v6 alpha is deliberately not used.
+
+Re-fetched upstream remains `ddefc45fbc7f8e46dd73185e68295696d1297887`.
+
 ## #372 server-resolved Trace relationships
 
 This change imports no new upstream source and repins nothing. The pinned

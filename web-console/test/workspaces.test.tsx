@@ -1,10 +1,11 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
 import { NavigationEpoch } from '../src/app/commands/native';
 import { createWorkspaceSession } from '../src/workspaces/navigation';
 import { sessionObservation } from '../src/workspaces/WorkspaceNavigation';
 import type { ProductHostWorkspaces, WorkspaceCatalog } from '../src/workspaces/host';
+import { configurationSystem } from '../src/app/settings/machines/system';
 import { Server, endpoint, snapshot } from './fixture';
 let server: Server;
 beforeEach(() => {
@@ -316,6 +317,10 @@ it('a newer Open is not swallowed by an obsolete authorization for the same Sess
 });
 
 it('repeated product remount, Session navigation and reconnect release every presentation subscription', async () => {
+  // The configuration actor system observes its client's authority for the
+  // client's whole lifetime. That is not a presentation subscription, so it is
+  // established before the ones this test counts.
+  configurationSystem(server.client);
   const subscribed = new Set<() => void>();
   const original = server.client.subscribe;
   vi.spyOn(server.client, 'subscribe').mockImplementation(listener => {
@@ -360,4 +365,109 @@ it('classification belongs to exactly the native summary page that requested it'
   expect(groupContaining()).toContain('Workspace B');
   expect(JSON.stringify(localStorage)).not.toContain('workspaceId');
   expect(methods()).toEqual(['initialize', 'session/list', 'session/list']);
+});
+
+// Blocking finding 2 — the whole real path: SessionConfiguration → App owner
+// navigation → the concrete Settings target. Nothing here mocks the callback or
+// inspects a fabricated `source:*` string.
+async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v18').SourceTarget[], host = hostFixture()) {
+  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
+  server.handlers.set('session/configuration', () => ({
+    type: 'session_configuration',
+    // A real Session application: `scope` is the Session identity the App
+    // Server read it under, and the authored owners are a separate fact.
+    application: { scope: 'A', sources: [...sources], version: '2', desired: { input_revision: 'input-1', attempt: '1' },
+      units: { capabilities: { status: 'failed', diagnostic: 'resource failed' } }, candidate: null, eligibility: { status: 'unavailable' } },
+  }));
+  await mount(host);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace A' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  await screen.findByText(/Some configuration preparation failed/);
+  return host;
+}
+
+it('S1-10 a Workspace-owned Session failure opens the exact Workspace Settings target', async () => {
+  await failedSessionConfiguration([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/A' })));
+  expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
+  // The concrete target is the registered Workspace, read through its own scope.
+  await waitFor(() => expect(server.requests.some(row => row.request.method === 'session/create')).toBe(false));
+  expect(screen.queryByLabelText('Configuration owner')).toBeNull();
+});
+
+it('S1-10 a User-owned Session failure opens User Settings', async () => {
+  await failedSessionConfiguration([{ kind: 'user' }]);
+  expect(screen.queryByRole('button', { name: /Open Workspace Settings/ })).toBeNull();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open User Settings' })));
+  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
+});
+
+it('S1-10 an unregistered owning Workspace reports an explicit error and never falls back to User Settings', async () => {
+  const host = hostFixture();
+  await failedSessionConfiguration([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/revoked' }], host);
+  const before = methods().length;
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/revoked' })));
+  expect(screen.getByRole('alert').textContent).toContain('/workspace/revoked is not registered by this Product Host');
+  // No Settings instance is opened at all, least of all User authoring.
+  expect(screen.queryByRole('heading', { name: 'User Settings' })).toBeNull();
+  expect(screen.queryByRole('heading', { name: /^Workspace Settings/ })).toBeNull();
+  // No hidden Workspace, Session or runtime is allocated to resolve it.
+  expect(host.adoptWorkspace).not.toHaveBeenCalled();
+  expect(methods().slice(before)).toEqual([]);
+});
+
+it('S1-10 Session focus changes never retarget an opened owning Settings editor', async () => {
+  await failedSessionConfiguration([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/A' })));
+  expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B' })));
+  expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
+});
+
+// Settings navigation is linearized by one App-owned epoch. A delayed owning
+// Workspace catalog lookup is preparation, never authority to override a newer
+// navigation decision.
+async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v18').SourceTarget[]) {
+  const host = await failedSessionConfiguration(sources);
+  const catalog = await host.listWorkspaces();
+  const gate = deferred<WorkspaceCatalog>();
+  host.listWorkspaces = vi.fn(() => gate.promise);
+  fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/A' }));
+  return { gate, catalog };
+}
+
+it('S1-10 a newer User Settings decision rejects a late owning Workspace lookup', async () => {
+  const { gate, catalog } = await pendingOwnershipLookup([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Settings' })));
+  await screen.findByRole('heading', { name: 'User Settings' });
+  await act(async () => { gate.resolve(catalog); });
+  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
+  expect(screen.queryByRole('heading', { name: /^Workspace Settings/ })).toBeNull();
+});
+
+it('S1-10 a newer Workspace B Settings decision rejects a late owning Workspace A lookup', async () => {
+  const { gate, catalog } = await pendingOwnershipLookup([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Workspace B' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace settings' })));
+  await screen.findByRole('heading', { name: 'Workspace Settings — Workspace B' });
+  await act(async () => { gate.resolve(catalog); });
+  expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace B' })).toBeTruthy();
+  expect(screen.queryByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeNull();
+});
+
+it('S1-10 closing Settings rejects a late owning Workspace lookup', async () => {
+  const { gate, catalog } = await pendingOwnershipLookup([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Settings' })));
+  await screen.findByRole('heading', { name: 'User Settings' });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Close Settings' })));
+  await act(async () => { gate.resolve(catalog); });
+  expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+});
+
+it('S1-10 an authority replacement rejects a late owning Workspace lookup', async () => {
+  const { gate, catalog } = await pendingOwnershipLookup([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
+  const before = server.client.getSnapshot();
+  vi.spyOn(server.client, 'getSnapshot').mockReturnValue({ ...before, authorityRevision: (before.authorityRevision ?? 0) + 1 });
+  await act(async () => { gate.resolve(catalog); });
+  expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
 });

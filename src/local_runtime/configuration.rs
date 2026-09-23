@@ -330,10 +330,10 @@ pub(crate) fn copy_unit_provenance(
     );
 }
 impl IndependentPolicy {
-    pub(crate) fn compose_execution_policy<P>(
+    pub(crate) fn compose_execution_policy<P, E>(
         &self,
         config: &mut CurrentRuntimeConfig,
-        effective: &mut RuntimeLayer<P>,
+        effective: &mut RuntimeLayer<P, E>,
         provenance: &mut BTreeMap<String, Origin>,
         revisions: &mut BTreeMap<application::ApplyUnit, String>,
     ) {
@@ -366,10 +366,10 @@ impl IndependentPolicy {
             );
         }
     }
-    pub(crate) fn compose_shared_capacity<P>(
+    pub(crate) fn compose_shared_capacity<P, E>(
         &self,
         config: &mut CurrentRuntimeConfig,
-        effective: &mut RuntimeLayer<P>,
+        effective: &mut RuntimeLayer<P, E>,
         provenance: &mut BTreeMap<String, Origin>,
         revisions: &mut BTreeMap<application::ApplyUnit, String>,
     ) {

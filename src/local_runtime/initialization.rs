@@ -157,7 +157,7 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 1], String> {
         .map_err(|_| "cannot encode catalog")?
         .into_bytes();
     let parsed = ModelCatalog::from_toml_slice(&bytes).map_err(|_| "invalid model declaration; check protocol, limits, capabilities, and compatibility fields")?;
-    let settings = super::authoring::RuntimeLayer {
+    let settings = super::authoring::RuntimeLayer::<_, super::authoring::AuthoredEnvironment> {
         providers: Some(catalog.providers),
         models: Some(catalog.models),
         agent: Some(super::authoring::AgentProfileLayer {

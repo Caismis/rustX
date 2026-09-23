@@ -1,6 +1,24 @@
 import { carrierFetch } from '../carrier/http.ts';
-import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v17.ts';
+import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v18.ts';
 export type WorkspaceConfigurationOperation = { kind: 'read' | 'reconcile' } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
+/** The separate authoritative read attempted after a confirmed write. It may
+ * succeed or fail without changing the fact that the write committed. */
+export type WorkspaceConfigurationReread =
+  | { status: 'observed'; projection: SourceSettings }
+  | { status: 'failed'; error: unknown };
+/** One confirmed native configuration mutation. The acknowledgement is exactly
+ * the fact that this mutation committed and the revision it committed at; it is
+ * never a projection, an application observation, or a read outcome. */
+export interface WorkspaceConfigurationCommit {
+  acknowledgement: SourceSettings;
+  reread: WorkspaceConfigurationReread;
+}
+/** A Workspace configuration operation outcome: acknowledgement and
+ * authoritative reread stay distinct facts for a write, so a failed reread can
+ * never be mistaken for an uncommitted write. */
+export type WorkspaceConfigurationResult =
+  | { kind: 'read' | 'reconcile'; projection: SourceSettings }
+  | { kind: 'write'; commit: WorkspaceConfigurationCommit };
 /** Product Host contract. No rustX trust, configuration, or Session ownership. */
 export interface ProductHostWorkspace { id: string; displayName: string; location: string; displayPath: string }
 export interface WorkspaceCatalog {
@@ -14,7 +32,7 @@ export class WorkspaceHostError extends Error {
   constructor(message: string, readonly kind?: string, readonly uncertain = false) { super(message); this.name = 'WorkspaceHostError'; }
 }
 export interface ProductHostWorkspaces {
-  configureWorkspace?(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<SourceSettings>;
+  configureWorkspace?(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult>;
   listWorkspaces(): Promise<WorkspaceCatalog>;
   adoptWorkspace(location: string): Promise<void>;
   renameWorkspace(id: string, displayName: string): Promise<void>;
@@ -41,7 +59,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     return response.json();
   }
   listWorkspaces = () => this.call<WorkspaceCatalog>('list');
-  configureWorkspace = (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => this.call<SourceSettings>('configuration', { id, endpoint, operation });
+  configureWorkspace = (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => this.call<WorkspaceConfigurationResult>('configuration', { id, endpoint, operation });
   adoptWorkspace = (location: string) => this.call<void>('adopt', { location });
   renameWorkspace = (id: string, displayName: string) => this.call<void>('rename', { id, displayName });
   reorderWorkspace = (id: string, before?: string) => this.call<void>('reorder', { id, before });

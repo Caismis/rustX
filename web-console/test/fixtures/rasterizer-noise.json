@@ -1,0 +1,230 @@
+[
+  {
+    "reference": "settings-agent-narrow-dark-linux.png",
+    "evidence": "CI Full Web conformance, runs 35682122820 and 35687448584 (identical actual images)",
+    "regions": [
+      {
+        "label": "bottom-left rounded corner edge",
+        "x": 27,
+        "y": 830,
+        "width": 9,
+        "height": 3,
+        "maxChangedPixels": 9,
+        "maxChannelDelta": 3
+      },
+      {
+        "label": "bottom-right rounded corner edge",
+        "x": 354,
+        "y": 830,
+        "width": 9,
+        "height": 3,
+        "maxChangedPixels": 8,
+        "maxChannelDelta": 3
+      }
+    ],
+    "pixels": [
+        [28,831,[51,51,53,255],[51,52,53,255]],
+        [29,831,[50,51,52,255],[50,51,53,255]],
+        [30,831,[51,51,53,255],[50,51,53,255]],
+        [31,831,[50,51,53,255],[51,52,54,255]],
+        [32,831,[50,51,53,255],[51,52,54,255]],
+        [33,831,[51,51,54,255],[53,54,56,255]],
+        [34,831,[51,52,55,255],[53,54,56,255]],
+        [355,831,[51,52,55,255],[53,54,56,255]],
+        [356,831,[51,51,54,255],[53,54,56,255]],
+        [357,831,[50,52,54,255],[51,52,54,255]],
+        [359,831,[52,52,54,255],[51,52,54,255]],
+        [360,831,[51,52,54,255],[52,52,54,255]],
+        [361,831,[52,52,55,255],[52,54,55,255]]
+    ]
+  },
+  {
+    "reference": "settings-inventory-light-linux.png",
+    "evidence": "Local pinned-container run (Podman), 2026-09-23",
+    "regions": [
+      {
+        "label": "navigation cog glyph 1",
+        "x": 25,
+        "y": 378,
+        "width": 15,
+        "height": 18,
+        "maxChangedPixels": 17,
+        "maxChannelDelta": 7
+      },
+      {
+        "label": "navigation cog glyph 2",
+        "x": 25,
+        "y": 422,
+        "width": 15,
+        "height": 18,
+        "maxChangedPixels": 17,
+        "maxChannelDelta": 7
+      },
+      {
+        "label": "navigation cog glyph 3",
+        "x": 25,
+        "y": 466,
+        "width": 15,
+        "height": 13,
+        "maxChangedPixels": 13,
+        "maxChannelDelta": 7
+      },
+      {
+        "label": "bottom-left rounded corner edge",
+        "x": 23,
+        "y": 798,
+        "width": 6,
+        "height": 2,
+        "maxChangedPixels": 6,
+        "maxChannelDelta": 7
+      }
+    ],
+    "pixels": [
+        [29,379,[253,253,253,255],[255,255,255,255]],
+        [34,379,[253,253,253,255],[255,255,255,255]],
+        [29,381,[20,22,26,255],[15,17,21,255]],
+        [30,382,[252,252,252,255],[255,255,255,255]],
+        [33,382,[252,252,252,255],[255,255,255,255]],
+        [38,384,[20,22,26,255],[15,17,21,255]],
+        [31,386,[249,249,249,255],[255,255,255,255]],
+        [26,389,[251,251,251,255],[255,255,255,255]],
+        [33,389,[248,248,248,255],[255,255,255,255]],
+        [37,389,[249,249,249,255],[255,255,255,255]],
+        [38,389,[21,23,27,255],[15,17,21,255]],
+        [30,391,[252,252,252,255],[255,255,255,255]],
+        [33,391,[252,252,252,255],[255,255,255,255]],
+        [29,394,[253,253,253,255],[255,255,255,255]],
+        [34,394,[253,253,253,255],[255,255,255,255]],
+        [29,423,[253,253,253,255],[255,255,255,255]],
+        [34,423,[253,253,253,255],[255,255,255,255]],
+        [29,425,[20,22,26,255],[15,17,21,255]],
+        [30,426,[252,252,252,255],[255,255,255,255]],
+        [33,426,[252,252,252,255],[255,255,255,255]],
+        [38,428,[20,22,26,255],[15,17,21,255]],
+        [31,430,[249,249,249,255],[255,255,255,255]],
+        [26,433,[251,251,251,255],[255,255,255,255]],
+        [33,433,[248,248,248,255],[255,255,255,255]],
+        [37,433,[249,249,249,255],[255,255,255,255]],
+        [38,433,[21,23,27,255],[15,17,21,255]],
+        [30,435,[252,252,252,255],[255,255,255,255]],
+        [33,435,[252,252,252,255],[255,255,255,255]],
+        [29,438,[253,253,253,255],[255,255,255,255]],
+        [34,438,[253,253,253,255],[255,255,255,255]],
+        [29,467,[253,253,253,255],[255,255,255,255]],
+        [34,467,[253,253,253,255],[255,255,255,255]],
+        [29,469,[20,22,26,255],[15,17,21,255]],
+        [30,470,[252,252,252,255],[255,255,255,255]],
+        [33,470,[252,252,252,255],[255,255,255,255]],
+        [38,472,[21,23,27,255],[15,17,21,255]],
+        [31,474,[249,249,249,255],[255,255,255,255]],
+        [26,477,[251,251,251,255],[255,255,255,255]],
+        [33,477,[248,248,248,255],[255,255,255,255]],
+        [37,477,[249,249,249,255],[255,255,255,255]],
+        [38,477,[21,23,27,255],[15,17,21,255]],
+        [24,799,[234,234,234,255],[227,227,227,255]],
+        [25,799,[241,241,241,255],[235,235,235,255]],
+        [26,799,[247,247,247,255],[241,241,241,255]],
+        [27,799,[255,255,255,255],[249,249,249,255]]
+    ]
+  },
+  {
+    "reference": "session-idle-light-linux.png",
+    "evidence": "Pinned-container investigation (PR #395 branch, 4/4 reproductions): the New Session button corner arc rasterizes 1-2 grey levels apart while a float-identical DOM probe against the base revision (button [14,74,252x38], radius 12px, identical stacking, styles and children) proves geometry exact; AA coverage only",
+    "regions": [
+      {
+        "label": "New Session button bottom-right corner arc",
+        "x": 262,
+        "y": 103,
+        "width": 5,
+        "height": 7,
+        "maxChangedPixels": 10,
+        "maxChannelDelta": 2
+      }
+    ],
+    "pixels": [
+        [265,104,[232,232,233,255],[231,231,232,255]],
+        [264,105,[236,236,236,255],[235,235,235,255]],
+        [265,105,[237,237,238,255],[236,236,237,255]],
+        [263,106,[254,254,254,255],[253,253,253,255]],
+        [265,106,[245,246,246,255],[243,244,244,255]],
+        [263,107,[237,237,237,255],[235,235,235,255]],
+        [263,108,[225,225,225,255],[224,225,225,255]],
+        [264,108,[245,246,247,255],[244,245,246,255]]
+    ]
+  },
+  {
+    "reference": "sidebar-other-uncertain-light-linux.png",
+    "evidence": "Pinned-container investigation (PR #395 branch, 4/4 reproductions): the New Session button corner arc rasterizes 1-2 grey levels apart while a float-identical DOM probe against the base revision (button [14,74,252x38], radius 12px, identical stacking, styles and children) proves geometry exact; AA coverage only",
+    "regions": [
+      {
+        "label": "New Session button bottom-right corner arc",
+        "x": 262,
+        "y": 103,
+        "width": 5,
+        "height": 7,
+        "maxChangedPixels": 10,
+        "maxChannelDelta": 2
+      }
+    ],
+    "pixels": [
+        [265,104,[232,232,233,255],[231,231,232,255]],
+        [264,105,[236,236,236,255],[235,235,235,255]],
+        [265,105,[237,237,238,255],[236,236,237,255]],
+        [263,106,[254,254,254,255],[253,253,253,255]],
+        [265,106,[245,246,246,255],[243,244,244,255]],
+        [263,107,[237,237,237,255],[235,235,235,255]],
+        [263,108,[225,225,225,255],[224,225,225,255]],
+        [264,108,[245,246,247,255],[244,245,246,255]]
+    ]
+  },
+  {
+    "reference": "session-queued-light-linux.png",
+    "evidence": "Pinned-container investigation (PR #395 branch): the New Session button corner arc rasterizes 1-2 grey levels apart while a float-identical DOM probe against the base revision (button [14,74,252x38], radius 12px, identical stacking, styles and children) proves geometry exact; AA coverage only, identical to the recorded session-idle noise",
+    "regions": [
+      {
+        "label": "New Session button bottom-right corner arc",
+        "x": 262,
+        "y": 103,
+        "width": 5,
+        "height": 7,
+        "maxChangedPixels": 10,
+        "maxChannelDelta": 2
+      }
+    ],
+    "pixels": [
+        [265,104,[232,232,233,255],[231,231,232,255]],
+        [264,105,[236,236,236,255],[235,235,235,255]],
+        [265,105,[237,237,238,255],[236,236,237,255]],
+        [263,106,[254,254,254,255],[253,253,253,255]],
+        [265,106,[245,246,246,255],[243,244,244,255]],
+        [263,107,[237,237,237,255],[235,235,235,255]],
+        [263,108,[225,225,225,255],[224,225,225,255]],
+        [264,108,[245,246,247,255],[244,245,246,255]]
+    ]
+  },
+  {
+    "reference": "session-stopping-light-linux.png",
+    "evidence": "Pinned-container investigation (PR #395 branch): the New Session button corner arc rasterizes 1-2 grey levels apart while a float-identical DOM probe against the base revision (button [14,74,252x38], radius 12px, identical stacking, styles and children) proves geometry exact; AA coverage only, identical to the recorded session-idle noise",
+    "regions": [
+      {
+        "label": "New Session button bottom-right corner arc",
+        "x": 262,
+        "y": 103,
+        "width": 5,
+        "height": 7,
+        "maxChangedPixels": 10,
+        "maxChannelDelta": 2
+      }
+    ],
+    "pixels": [
+        [265,104,[232,232,233,255],[231,231,232,255]],
+        [264,105,[236,236,236,255],[235,235,235,255]],
+        [265,105,[237,237,238,255],[236,236,237,255]],
+        [263,106,[254,254,254,255],[253,253,253,255]],
+        [265,106,[245,246,246,255],[243,244,244,255]],
+        [263,107,[237,237,237,255],[235,235,235,255]],
+        [263,108,[225,225,225,255],[224,225,225,255]],
+        [264,108,[245,246,247,255],[244,245,246,255]]
+    ]
+  }
+]

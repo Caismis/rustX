@@ -62,9 +62,26 @@ macro_rules! partial {
 }
 // Schemars derives concrete field schemas below; optional fields mean omission,
 // never a TOML null value.
+/// The authored environment map of one document: literal Tool environment
+/// values keyed by identity. It exists only inside native authority.
+pub type AuthoredEnvironment = BTreeMap<String, String>;
+/// The redacted wire projection of the same map: the identities a document
+/// authors, in native order, and never their literal values.
+///
+/// A literal Tool environment value is a secret-bearing authored payload on
+/// exactly the same terms as a Provider literal credential and an MCP literal
+/// `env`/`headers` entry. A presentation needs to know that an identity exists,
+/// which document authors it and what its provenance is; it never needs the
+/// lower-authority literal in order to author a new override. Projecting the
+/// identities alone makes the leak structurally impossible rather than a rule
+/// each surface has to remember.
+pub type EnvironmentIdentities = Vec<String>;
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields, bound(deserialize = "P: Deserialize<'de>"))]
-pub struct RuntimeLayer<P = crate::model::authoring::Provider> {
+#[serde(
+    deny_unknown_fields,
+    bound(deserialize = "P: Deserialize<'de>, E: Deserialize<'de>")
+)]
+pub struct RuntimeLayer<P = crate::model::authoring::Provider, E = AuthoredEnvironment> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub providers: Option<BTreeMap<String, P>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,12 +107,17 @@ pub struct RuntimeLayer<P = crate::model::authoring::Provider> {
         Option<BTreeMap<crate::runtime::identity::McpServerId, InvocationPolicyDocument>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_tools: Option<NativeToolsLayer>,
+    /// Tool environment entries. Native authoring holds the literal values
+    /// ([`AuthoredEnvironment`]); every projection that leaves native authority
+    /// holds the identities alone ([`EnvironmentIdentities`]), because a
+    /// literal Tool environment value is a secret on the same terms as a
+    /// Provider credential.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub environment: Option<BTreeMap<String, String>>,
+    pub environment: Option<E>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagents: Option<SubagentsLayer>,
 }
-impl<P> Default for RuntimeLayer<P> {
+impl<P, E> Default for RuntimeLayer<P, E> {
     fn default() -> Self {
         Self {
             providers: None,
@@ -115,13 +137,21 @@ impl<P> Default for RuntimeLayer<P> {
         }
     }
 }
-impl<P> RuntimeLayer<P> {
-    pub fn map_providers<Q>(self, mut project: impl FnMut(P) -> Q) -> RuntimeLayer<Q> {
+impl<P, E> RuntimeLayer<P, E> {
+    /// Project this layer into another representation of its two secret-bearing
+    /// members. Every wire projection goes through here, so the redaction of a
+    /// Provider credential and of an environment literal is one decision made
+    /// in one place rather than per call site.
+    pub fn project<Q, F>(
+        self,
+        mut provider: impl FnMut(P) -> Q,
+        environment: impl FnOnce(E) -> F,
+    ) -> RuntimeLayer<Q, F> {
         RuntimeLayer {
             providers: self.providers.map(|values| {
                 values
                     .into_iter()
-                    .map(|(id, value)| (id, project(value)))
+                    .map(|(id, value)| (id, provider(value)))
                     .collect()
             }),
             models: self.models,
@@ -135,7 +165,7 @@ impl<P> RuntimeLayer<P> {
             tool_deadline_policy: self.tool_deadline_policy,
             mcp_tool_policies: self.mcp_tool_policies,
             native_tools: self.native_tools,
-            environment: self.environment,
+            environment: self.environment.map(environment),
             subagents: self.subagents,
         }
     }

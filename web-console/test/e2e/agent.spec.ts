@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { expectStableScreenshot } from './screenshot';
 // Each reference owns a fresh context/page, including its renderer paint caches.
 for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'questionnaire', 'selectors']) test(`Harness Agent ${mode} reference uses native snapshots`, async ({ page }) => {
  const errors: string[] = [];
@@ -24,16 +25,16 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
      await page.getByRole('menuitem', { name: 'Reasoning profile' }).click();
      await expect(page.getByRole('menuitem', { name: 'deliberate' })).toBeVisible();
    }
-   await expect(page).toHaveScreenshot(`agent-${mode}-light.png`);
+   await expectStableScreenshot(page, `agent-${mode}-light.png`);
  if (mode === 'selectors') {
  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
  await page.getByRole('button', { name: 'Settings', exact: true }).click();
  await page.getByRole('button', { name: 'Appearance', exact: true }).click();
  await page.getByLabel('Theme', { exact: true }).selectOption('dark');
  await page.getByRole('button', { name: 'Close Settings' }).click();
- await expect(page).toHaveScreenshot('agent-dark-desktop.png');
+ await expectStableScreenshot(page, 'agent-dark-desktop.png');
  await page.setViewportSize({ width: 390, height: 844 });
- await expect(page).toHaveScreenshot('agent-dark-narrow.png');
+ await expectStableScreenshot(page, 'agent-dark-narrow.png');
  }
  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
  await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
@@ -103,7 +104,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     const input = page.getByRole('textbox', { name: 'Message', exact: true });
     const stack = page.locator('[data-composer-context-stack]');
     const primary = page.locator('[data-composer-primary]');
-    const shot = async (state: string) => expect(stack).toHaveScreenshot(`composer-${state}-${theme}-${width}.png`);
+    const shot = async (state: string) => expectStableScreenshot(stack, `composer-${state}-${theme}-${width}.png`);
     await expect(input).toBeVisible(); await expect(primary).toHaveCount(1);
     if (width === 1440) {
       await expect.poll(async () => {

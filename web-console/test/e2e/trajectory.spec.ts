@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { expectStableScreenshot } from './screenshot';
 
 for (const width of [1440, 390]) {
   test(`Harness-first Trajectory, native inspector and keyboard at ${width}px`, async ({ page }) => {
@@ -32,30 +33,30 @@ for (const width of [1440, 390]) {
       const row = ledger.locator(`[data-trace-id="${id}"]`);
       await expect(row.getByText(width === 390 ? short : full, { exact: true })).toBeVisible();
     }
-    await expect(page).toHaveScreenshot(`trajectory-${width}.png`);
+    await expectStableScreenshot(page, `trajectory-${width}.png`);
     const tool = ledger.locator('[data-trace-id="trace:5"]');
     await tool.focus();
     await page.keyboard.press('Enter');
     await expect(tool).toHaveAttribute('aria-selected', 'true');
     const inspector = page.getByRole('complementary', { name: 'Trace record inspector' });
     await expect(inspector.getByText('Review complete', { exact: true })).toBeVisible();
-    await expect(page).toHaveScreenshot(`trajectory-summary-${width}.png`);
+    await expectStableScreenshot(page, `trajectory-summary-${width}.png`);
     await inspector.getByRole('tab', { name: 'Code', exact: true }).click();
     await expect(inspector.getByRole('button', { name: 'Copy source' })).toBeVisible();
     await expect(inspector.getByText('git diff --stat', { exact: true })).toBeVisible();
-    await expect(page).toHaveScreenshot(`trajectory-code-${width}.png`);
+    await expectStableScreenshot(page, `trajectory-code-${width}.png`);
     await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
     await expect(inspector.getByRole('tree')).toContainText('/workspace/rustX');
     await inspector.getByRole('tab', { name: 'Result', exact: true }).click();
     await expect(inspector.getByRole('tree')).toContainText('insertions');
     await expect(inspector.getByText('Review complete', { exact: true })).toBeVisible();
-    await expect(page).toHaveScreenshot(`trajectory-result-${width}.png`);
+    await expectStableScreenshot(page, `trajectory-result-${width}.png`);
     await inspector.getByRole('tab', { name: 'Artifacts', exact: true }).click();
     await expect(inspector.getByText('review.md', { exact: true })).toBeVisible();
     await inspector.getByRole('button', { name: 'Close record' }).click();
     await page.getByRole('button', { name: 'Fold Attempts', exact: true }).click();
     await expect(ledger.getByText('git diff --stat', { exact: true })).toHaveCount(0);
-    await expect(page).toHaveScreenshot(`trajectory-folded-${width}.png`);
+    await expectStableScreenshot(page, `trajectory-folded-${width}.png`);
     await page.getByRole('textbox', { name: 'Search loaded Trace' }).fill('git diff');
     await expect(tool).toBeVisible();
     await page.getByRole('textbox', { name: 'Search loaded Trace' }).fill('');

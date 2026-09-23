@@ -7152,7 +7152,20 @@ export interface RuntimeClientSessionDeletePreview {
   owned_child_count: number;
 }
 export interface ConfigurationApplication {
+  /**
+   * The application-scope key. A Session application carries the Session
+   * identity here; a source application carries `SourceTarget::
+   * application_scope`. It is an application key, never a source owner.
+   */
   scope: string;
+  /**
+   * The authored source owners this application composes, lowest authority
+   * first. The User document always participates; a Workspace-rooted capture
+   * also names the exact canonical configuration directory it was taken
+   * from. This is the only fact that answers which authoring surface owns a
+   * configuration failure; it is never derived from `scope`.
+   */
+  sources: SourceTarget[];
   version: string;
   desired: ApplicationIdentity;
   units: {
@@ -8557,9 +8570,14 @@ export interface RuntimeLayer {
     [k: string]: InvocationPolicyDocument;
   } | null;
   native_tools?: NativeToolsLayer | null;
-  environment?: {
-    [k: string]: string;
-  } | null;
+  /**
+   * Tool environment entries. Native authoring holds the literal values
+   * ([`AuthoredEnvironment`]); every projection that leaves native authority
+   * holds the identities alone ([`EnvironmentIdentities`]), because a
+   * literal Tool environment value is a secret on the same terms as a
+   * Provider credential.
+   */
+  environment?: string[] | null;
   subagents?: SubagentsLayer | null;
 }
 export interface ProviderView {

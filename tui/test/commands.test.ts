@@ -1189,7 +1189,7 @@ describe("CommandDispatcher", () => {
       user_resource_root: "/ur", workspace_resource_root: "/wr", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, workspace_mcp: { path: "/wm", revision: "wm" }, agents: [],
     } });
     const reconcile = await nextRequest(h, "configuration/reconcile");
-    h.transport.respond(reconcile.id, { type: "configuration_application", application: { eligibility: { status: "unavailable" }, scope: h.session.sessionId, version: "2", desired: { input_revision: "u", attempt: "1" }, units: { execution_policy: { status: "applied" } } } });
+    h.transport.respond(reconcile.id, { type: "configuration_application", application: { eligibility: { status: "unavailable" }, scope: h.session.sessionId, sources: [{ kind: "user" }], version: "2", desired: { input_revision: "u", attempt: "1" }, units: { execution_policy: { status: "applied" } } } });
     const reread = await nextRequest(h, "configuration/sourcesRead", 1);
     h.transport.respond(reread.id, { type: "source_settings", projection: { target: { kind: "user" }, provenance: {}, process_policy_impacts: {}, absent_resource_revision: "absent", resource_revisions: {}, user: { path: "/user", revision: "u" }, user_resource_root: "/ur", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, agents: [] } });
     assert.equal((await operation).kind, "inspect");

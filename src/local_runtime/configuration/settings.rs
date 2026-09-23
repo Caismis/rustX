@@ -83,6 +83,23 @@ impl From<Provider> for ProviderView {
     }
 }
 
+/// The one redacted projection of an authored or resolved configuration
+/// document that ever leaves native authority.
+///
+/// Both secret-bearing members are replaced by identity-only facts: a Provider
+/// becomes its [`ProviderView`], and the environment map becomes the list of
+/// identities the document authors. Nothing outside this module may construct
+/// the projection from the authoring type except through [`redact`], so an
+/// added secret-bearing member has exactly one place to be redacted.
+pub type SourceDocumentView =
+    RuntimeLayer<ProviderView, crate::local_runtime::authoring::EnvironmentIdentities>;
+/// Project one authored document into its redacted wire view.
+pub fn redact<P: Into<ProviderView>>(
+    document: RuntimeLayer<P, crate::local_runtime::authoring::AuthoredEnvironment>,
+) -> SourceDocumentView {
+    document.project(Into::into, |environment| environment.into_keys().collect())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CredentialEdit {
@@ -139,10 +156,10 @@ pub struct SourceSettings {
     pub absent_resource_revision: String,
     pub resource_revisions: BTreeMap<PathBuf, String>,
     /// Read-only native source resolution; never a Session adopted binding.
-    pub resolved: Option<RuntimeLayer<ProviderView>>,
+    pub resolved: Option<SourceDocumentView>,
     pub provenance: BTreeMap<String, super::Origin>,
-    pub user: SourceView<RuntimeLayer<ProviderView>>,
-    pub workspace: Option<SourceView<RuntimeLayer<ProviderView>>>,
+    pub user: SourceView<SourceDocumentView>,
+    pub workspace: Option<SourceView<SourceDocumentView>>,
     pub user_resource_root: PathBuf,
     pub workspace_resource_root: Option<PathBuf>,
     pub runtime_root: PathBuf,
@@ -159,7 +176,7 @@ pub struct EffectiveConfiguration {
     pub adopted_binding: u64,
     pub source_revisions: BTreeMap<PathBuf, String>,
     pub generation: crate::runtime::identity::RuntimeResourceRevision,
-    pub document: RuntimeLayer<ProviderView>,
+    pub document: SourceDocumentView,
     pub root_agent: super::super::config::AgentProfileDocument,
     pub context: super::super::config::ContextPolicyDocument,
     pub model_timeout: super::super::config::ModelTimeoutPolicyDocument,
@@ -342,7 +359,7 @@ fn source_resolution_diagnostic(document: &RuntimeLayer) -> Option<String> {
     };
     validate().err()
 }
-fn view(path: PathBuf, bytes: Option<&[u8]>) -> SourceView<RuntimeLayer<ProviderView>> {
+fn view(path: PathBuf, bytes: Option<&[u8]>) -> SourceView<SourceDocumentView> {
     let parsed = parse(bytes);
     let diagnostic = parsed
         .as_ref()
@@ -352,12 +369,7 @@ fn view(path: PathBuf, bytes: Option<&[u8]>) -> SourceView<RuntimeLayer<Provider
         path,
         revision: revision(bytes),
         diagnostic,
-        authored: parsed.ok().map(|value| {
-            value.map_providers(|provider| ProviderView {
-                base_url: provider.base_url,
-                credential: provider.api_key.view(),
-            })
-        }),
+        authored: parsed.ok().map(redact),
     }
 }
 fn mcp_view(
@@ -640,13 +652,18 @@ fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
         base_url: String,
         api_key: String,
     }
-    let document = document.map_providers(|provider| PrivateProvider {
-        base_url: provider.base_url,
-        api_key: match provider.api_key {
-            CredentialSource::Literal(value) => value,
-            CredentialSource::Environment(name) => format!("${name}"),
+    // Encoding stays inside native authority, so the authored environment keeps
+    // its literal values here; only the wire projection redacts them.
+    let document = document.project(
+        |provider| PrivateProvider {
+            base_url: provider.base_url,
+            api_key: match provider.api_key {
+                CredentialSource::Literal(value) => value,
+                CredentialSource::Environment(name) => format!("${name}"),
+            },
         },
-    });
+        |environment| environment,
+    );
     toml::to_string_pretty(&document)
         .map(String::into_bytes)
         .map_err(|_| SettingsError::Invalid)
@@ -934,9 +951,7 @@ impl UserConfigManager {
             prospective_diagnostic,
             absent_resource_revision: revision(None),
             resource_revisions,
-            resolved: resolved
-                .ok()
-                .map(|document| document.map_providers(ProviderView::from)),
+            resolved: resolved.ok().map(redact),
             provenance,
             user_mcp: mcp_view(self.resource_root(&SourceTarget::User).join("mcp.toml"))?,
             workspace_mcp: target

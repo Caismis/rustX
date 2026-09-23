@@ -2,7 +2,7 @@ import { connectRemote } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { chooseWorkspace } from './shell-actions';
+import { chooseWorkspace, closeSettings, openWorkspaceSettings } from './shell-actions';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -38,7 +38,8 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
-    await settings.getByLabel('Configuration owner').selectOption({ label: 'Workspace A' });
+    await closeSettings(page);
+    await openWorkspaceSettings(page, 'Workspace A');
     for (const owner of ['Root', 'Agent'] as const) {
       await settings.getByRole('button', { name: owner === 'Root' ? 'Default model' : 'Agents', exact: true }).click();
       if (owner === 'Agent') await settings.getByRole('button', { name: 'Edit Agent optional', exact: true }).click();

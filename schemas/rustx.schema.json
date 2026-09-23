@@ -1156,6 +1156,7 @@
       "additionalProperties": {
         "type": "string"
       },
+      "description": "Tool environment entries. Native authoring holds the literal values\n([`AuthoredEnvironment`]); every projection that leaves native authority\nholds the identities alone ([`EnvironmentIdentities`]), because a\nliteral Tool environment value is a secret on the same terms as a\nProvider credential.",
       "type": [
         "object"
       ]

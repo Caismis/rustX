@@ -267,6 +267,15 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             application:
                 crate::local_runtime::configuration::application::ConfigurationApplication {
                     scope: "session-fixture".into(),
+                    // A Session application scope is a Session identity; its
+                    // authored owners are named separately and never parsed
+                    // out of that key.
+                    sources: vec![
+                        crate::local_runtime::configuration::settings::SourceTarget::User,
+                        crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                            directory: "/workspace/fixture".into(),
+                        },
+                    ],
                     version: EXACT,
                     desired:
                         crate::local_runtime::configuration::application::ApplicationIdentity {
@@ -604,9 +613,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v17.schema.json", "v17.ts"]);
+        assert_eq!(generations, ["v18.schema.json", "v18.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v17.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v18.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

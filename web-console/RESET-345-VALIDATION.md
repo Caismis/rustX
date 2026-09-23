@@ -91,10 +91,37 @@ TUI and Playwright test runner continue running on the Linux host.
   authority. Host networking lets Chromium reach the unchanged loopback fixtures;
   the Playwright server binds only to `127.0.0.1` on an ephemeral port. The wrapper
   removes its container on success, failure or interruption.
-- Comparison: **`threshold: 0`, `maxDiffPixels: 0`**, no retries. Normal runs use
-  `updateSnapshots: 'none'`, so even missing references fail instead of being
-  written. Direct host Playwright runs are rejected with the required command.
-  No screenshot-only fonts/CSS, skipped states or production theme changes.
+- Comparison (current): **exact pixel comparison with a reference-local
+  rasterizer-noise exception policy** (`test/screenshot-comparator.ts`), invoked
+  for every reference by the single helper `expectStableScreenshot`
+  (`test/e2e/screenshot.ts`), with no retries and no per-screenshot allowances.
+  Dimensions must match exactly and every RGBA byte must match exactly, unless
+  `test/fixtures/rasterizer-noise.json` registers bounded regions for that exact
+  reference — each with a measured changed-pixel budget and a measured raw
+  channel-delta bound derived from its recorded evidence pixels (the measured
+  noise peaks at 7 grey levels). A changed pixel outside every registered region
+  fails at any amplitude; the former global perceptual `threshold: 0.027` no
+  longer exists anywhere. `test/screenshot-comparison.test.ts` proves the
+  measured noise passes and that same-delta-outside-region, large-area +7,
+  whole-image shift, budget, delta, layout, missing-element and dimension
+  regressions all fail. Before any comparison, rendering must be proven
+  stable by two consecutive captures with identical decoded RGBA
+  (`test/screenshot-stability.ts`); the stable capture is then compared exactly
+  once, and a first capture that happens to equal the baseline is never
+  accepted on its own. Normal runs use `updateSnapshots: 'none'` and no
+  `RUSTX_SCREENSHOT_UPDATE`, so even missing references fail instead of being
+  written; `pnpm test:e2e:update` is the explicit baseline update and never
+  creates a noise allowance. Direct host Playwright runs are rejected with the
+  required command. No screenshot-only fonts/CSS, skipped states or production
+  theme changes.
+- Comparison (historical, #345 acceptance): **`threshold: 0`, `maxDiffPixels: 0`**.
+  The validation table below records runs under that original contract. Later
+  captures under the same pinned authority showed glyph and rounded-corner
+  anti-aliasing landing 1–7 grey levels apart with identical geometry, which a
+  zero colour threshold reports as a failure; a global-threshold era in between
+  (perceptual `threshold: 0.027`) was retired for classifying whole-image
+  low-amplitude regressions as identical, and the current contract replaces
+  both with exact comparison plus the explicit measured-noise manifest.
 
 Install the existing host prerequisites (Node 24, Corepack, Docker or Podman,
 Rust, uv and the repository's Python toolchain), then from the repository root:
@@ -109,8 +136,8 @@ corepack enable
 corepack install
 pnpm install --frozen-lockfile
 
-# Intentional update: builds, starts the pinned browser, then executes
-# playwright test shell.spec.ts foundation.spec.ts --update-snapshots
+# Intentional update: RUSTX_SCREENSHOT_UPDATE=1 over the whole pnpm test:e2e
+# suite, so every screenshot-bearing spec rewrites its stable captures
 pnpm test:e2e:update
 
 # Ordinary comparison: builds and runs ALL real-server and reference tests.
@@ -228,7 +255,7 @@ Correction validation (Node 24.20.0 / pnpm 11.13.1; browser authority above):
 | `pnpm build` | Passed; existing chunk-size advisory only |
 | `pnpm exec playwright install --with-deps chromium` | Passed in a disposable copy of the pinned image; 0 packages installed/upgraded. That container was discarded; baseline runs use pristine image instances, never apt-mutated state |
 | `CONTAINER_ENGINE=podman pnpm test:e2e:update` | Passed: 2 tests, all 10 references generated under the pinned authority |
-| `CONTAINER_ENGINE=podman pnpm test:e2e` | Passed: 17 tests, 1.3 minutes, no skips/retries; all 10 references compared with zero threshold/differing pixels |
+| `CONTAINER_ENGINE=podman pnpm test:e2e` | Passed: 17 tests, 1.3 minutes, no skips/retries; all 10 references compared with zero threshold/differing pixels (the original #345 contract) |
 | `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh shell.spec.ts foundation.spec.ts` | Passed: 2 tests in a second fresh container; all reference comparisons passed |
 | `pnpm exec playwright test --list` outside the wrapper | Rejected as intended with the pinned-environment command, before rendering |
 | `git diff --check` | Passed |

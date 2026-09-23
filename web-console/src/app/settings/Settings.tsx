@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { SourceSettings, SourceMutation, SourceScope, SourceTarget } from '../../../../protocol/app-server/v17';
-import { RpcFailure, isOutcomeUncertain, type AppServerClient } from '../../client/app-server';
+import { shallowEqual, useSelector } from '@xstate/react';
+import type { SourceScope } from '../../../../protocol/app-server/v18';
+import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { ResourceInventory } from './ResourceInventory';
 import { CatalogEditor } from './CatalogEditor';
@@ -9,278 +9,178 @@ import { AgentEditor } from './AgentEditor';
 import { Integrations } from './Integrations';
 import { RootEditor, type RootSection } from './RootEditor';
 import { RuntimeEditor } from './RuntimeEditor';
-import { UnitForm, type SaveSource } from './controls';
+import { UnitForm } from './controls';
 import css from '../../presentation/settings/SettingsContent.module.css';
-import { DraftContext, SourceContext, type UnitDraft } from './drafts';
+import { SourceContext } from './source-context';
+import { SettingsActorContext, useSettingsTarget } from './machines/react';
+import { mutationOutcome, type MutationOutcome } from './machines/settings-target';
+import type { SettingsSection } from './machines/navigation';
+import { configurationSystem, type TransactionOwner } from './machines/system';
 import { SettingsPanel } from '../../presentation/settings/SettingsRoot';
 import type { ConnectionController } from '../../connection/controller';
 import { ConnectionSettings } from './ConnectionSettings';
-import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog, type WorkspaceConfigurationOperation } from '../../workspaces/host';
+import type { ProductHostWorkspaces } from '../../workspaces/host';
+import {
+  catalogIdentities, changeBehavior, changeBehaviorLabel, configAuthoring, observedResult, observedResultLabel, observedUnitLabel,
+  observedUnits, settingsLifecycle, settingsLifecycleLabel, settingsTargetKey,
+  settingsTargetLabel, settingsTargetScope, unitApplication, type SettingsTarget,
+} from './projection';
 
-const sections = [
-  ['overview', 'Overview', 'General'], ['general', 'General', 'General'], ['catalog', 'Providers & Models', 'Models'],
-  ['root-model', 'Default model', 'Models'], ['policies', 'Tool Policies', 'Agents & Tools'],
-  ['root-tools', 'Tools', 'Agents & Tools'], ['root-skills', 'Skill access', 'Agents & Tools'],
-  ['root-plugins', 'Plugins', 'Agents & Tools'], ['root-agents', 'Agents & Workflows', 'Agents & Tools'],
-  ['agents', 'Agents', 'Agents & Tools'], ['mcp', 'MCP', 'Integrations'], ['python', 'Managed Python', 'Integrations'],
-  ['skills', 'Skills', 'Integrations'], ['workflows', 'Workflows', 'Integrations'], ['advanced', 'Server & source diagnostics', 'Advanced'],
-] as const;
-type Section = typeof sections[number][0] | 'appearance' | 'connection';
-const draftStores = new WeakMap<AppServerClient, Map<string, Map<string, UnitDraft>>>();
-interface SettingsProps {
-  client: AppServerClient; workspaceId?: string; host?: ProductHostWorkspaces; onClose?: () => void;
+/** The native document a section's editors mutate.
+ *
+ * - `config`: the scope's `rustx.toml`, through semantic-unit mutations;
+ * - `resources`: documents independent of `rustx.toml` — MCP, named Agent
+ *   resources and resource inventories — each governed by its own native state;
+ * - `none`: nothing is authored here.
+ *
+ * This is what lets the composition decide once, for a whole section, whether
+ * its structured editors can exist: no individual editor rediscovers it. */
+type SectionDocument = 'config' | 'resources' | 'none';
+const sections: readonly (readonly [SettingsSection, string, string, SectionDocument])[] = [
+  ['overview', 'Overview', 'General', 'none'], ['general', 'General', 'General', 'config'], ['catalog', 'Providers & Models', 'Models', 'config'],
+  ['root-model', 'Default model', 'Models', 'config'], ['policies', 'Tool Policies', 'Agents & Tools', 'config'],
+  ['root-tools', 'Tools', 'Agents & Tools', 'config'], ['root-skills', 'Skill access', 'Agents & Tools', 'config'],
+  ['root-plugins', 'Plugins', 'Agents & Tools', 'config'], ['root-agents', 'Agents & Workflows', 'Agents & Tools', 'config'],
+  ['agents', 'Agents', 'Agents & Tools', 'resources'], ['mcp', 'MCP', 'Integrations', 'resources'], ['python', 'Managed Python', 'Integrations', 'resources'],
+  ['skills', 'Skills', 'Integrations', 'resources'], ['workflows', 'Workflows', 'Integrations', 'resources'], ['advanced', 'Server & source diagnostics', 'Advanced', 'none'],
+];
+const sectionDocument = (section: SettingsSection): SectionDocument => sections.find(([id]) => id === section)?.[3] ?? 'none';
+
+export interface SettingsProps {
+  client: AppServerClient; target: SettingsTarget; host?: ProductHostWorkspaces; onClose?: () => void;
   theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void;
-  connection?: ConnectionController; initialSection?: 'overview' | 'connection';
+  connection?: ConnectionController;
+  /** The displayed surface and the selection intent, both owned by the
+   * Settings navigation machine. This component holds no section state. */
+  section: SettingsSection; onSelect: (section: SettingsSection) => void;
 }
-/** The native application scope this source target publishes under, exactly as
- * `SourceTarget::application_scope` names it. Application versions are u64
- * counters comparable only inside one scope, authority and connection lifetime. */
-function applicationScope(target: SourceTarget) {
-  return target.kind === 'user' ? 'source:user' : `source:workspace:${target.directory}`;
+
+/** The presentation of one mutation outcome. */
+function MutationNotice({ outcome }: { outcome: MutationOutcome }) {
+  switch (outcome.kind) {
+    case 'saved': return <p role="status">Source saved. Native coordination owns application.</p>;
+    case 'conflict': return <p role="alert">Source changed. Your draft and base revision are preserved.</p>;
+    case 'rejected': return <p role="alert">{outcome.detail}</p>;
+    case 'uncertain': return <p role="alert">Save outcome uncertain. Authority is reread; the write is never replayed. Review the current source before saving again.</p>;
+    default: return null;
+  }
 }
-function sourceRevision(source: SourceSettings, mutation: SourceMutation) {
-  const scope = source.target.kind;
-  if ((mutation.kind === 'config' || mutation.kind === 'repair_config')) return source[scope]!.revision;
-  if (mutation.kind === 'mcp') return (scope === 'user' ? source.user_mcp : source.workspace_mcp)!.revision;
-  return source.agents.find(agent => agent.scope === scope && agent.name === mutation.name)?.source.revision ?? source.absent_resource_revision;
+
+/** Test-only inspection of the live transaction owners of one client, for the
+ * regression that proves a confirmed commit leaves no secret-bearing authored
+ * payload reachable. Production code never reads it. */
+export function settingsTransactionOwners(client: AppServerClient): readonly TransactionOwner[] {
+  return configurationSystem(client).transactionOwners();
 }
-export function Settings({ client, workspaceId: initialWorkspace, host, onClose = () => {}, theme = 'light', setTheme, connection, initialSection }: SettingsProps) {
-  const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
-  const [workspaceId, setWorkspaceId] = useState(initialWorkspace);
-  useEffect(() => { setWorkspaceId(initialWorkspace); }, [initialWorkspace]);
-  const [catalog, setCatalog] = useState<WorkspaceCatalog>();
-  const [section, setSection] = useState<Section>(initialSection ?? 'overview');
-  const [source, setSource] = useState<SourceSettings>();
-  const [error, setError] = useState(''), [message, setMessage] = useState(''), [busy, setBusy] = useState(false);
-  const [targetValid, setTargetValid] = useState(false);
-  // Separate facts, never one counter: `epoch` fences target, authority and
-  // connection lifetime; `reads` orders authoritative reads; `accepted` counts
-  // adopted projections so a mutation acknowledgement never poses as read order.
-  const epoch = useRef(0), reads = useRef(0), accepted = useRef(0), writing = useRef<number | undefined>(undefined);
-  // Level-triggered observation state. `observation` is the latest accepted whole
-  // projection; `publications` mirrors the client's per-scope application map;
-  // `commits` counts acknowledged source writes whose committed revision no
-  // accepted projection has been read after yet; `converging` owns the single
-  // convergence worker by the epoch that started it.
-  const observation = useRef<SourceSettings | undefined>(undefined), converging = useRef<number | undefined>(undefined);
-  // `outstanding` counts authoritative reads whose response has not landed yet,
-  // so the owner can await the settlement of a read that superseded its own
-  // instead of racing it with a redundant read or releasing the obligation.
-  // `settle` is the resolver of that wait: a still-outstanding read wakes it
-  // when it lands, so the hand-off is event-driven, never a poll or timer.
-  const outstanding = useRef(0), settle = useRef<(() => void) | undefined>(undefined);
-  const publications = useRef(transport.configuration), commits = useRef(0), observedCommits = useRef(0);
-  publications.current = transport.configuration;
-  const endpoint = transport.endpoint ?? '';
-  const identity = JSON.stringify([endpoint, transport.authorityRevision, workspaceId ?? null]);
-  let stores = draftStores.get(client);
-  if (!stores) { stores = new Map(); draftStores.set(client, stores); }
-  const draftKey = identity + ':' + section;
-  let drafts = stores.get(draftKey);
-  if (!drafts) { drafts = new Map(); stores.set(draftKey, drafts); }
-  const request = useCallback(async (operation: WorkspaceConfigurationOperation) => {
-    if (workspaceId !== undefined) {
-      if (!host?.configureWorkspace) throw new Error('Workspace Settings requires an authorized Product Host connection.');
-      return host.configureWorkspace(workspaceId, endpoint, operation);
-    }
-    const target = { kind: 'user' as const };
-    if (operation.kind === 'write') return (await client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
-    if (operation.kind === 'reconcile') await client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_application');
-    return (await client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection;
-  }, [client, endpoint, host, workspaceId]);
-  /** Adopt one whole authoritative projection. Only `configuration/sourcesRead`
-   * results reach here, ordered by `reads`: a source-write acknowledgement
-   * confirms one authoring mutation and supplies its committed revision, but is
-   * not an application observation and never replaces the read model. */
-  const accept = useCallback((next: SourceSettings) => {
-    observation.current = next; ++accepted.current;
-    setSource(next); setTargetValid(true);
-  }, []);
-  /** One authoritative read. Resolves true only when this read's own projection
-   * was adopted; a newer outstanding read wins instead. An adopted read was
-   * issued after every commit acknowledged before it started, so it observes
-   * them. Read failures are reported only when no projection accepted meanwhile
-   * already answered them. */
-  const refresh = useCallback(async () => {
-    const at = epoch.current, read = ++reads.current, settled = accepted.current, afterCommits = commits.current;
-    ++outstanding.current;
-    try {
-      const next = await request({ kind: 'read' });
-      if (at !== epoch.current || read !== reads.current) return false;
-      if (afterCommits > observedCommits.current) observedCommits.current = afterCommits;
-      accept(next); return true;
-    } catch (cause) {
-      if (at === epoch.current && read === reads.current && settled === accepted.current) { setError(String(cause)); setTargetValid(false); }
-      throw cause;
-    } finally {
-      if (at === epoch.current) --outstanding.current;
-      // Wake an owner waiting on any read settlement, including a failed one:
-      // a superseded read is not evidence that the obligation was satisfied.
-      const resolve = settle.current; settle.current = undefined; resolve?.();
-    }
-  }, [accept, request]);
-  /** The outstanding publication obligation: an application version published
-   * for this target's scope that the accepted projection has not reached yet.
-   * Level, not edge — it survives reads, acknowledgements and worker restarts
-   * until an authoritative read carries at least that version for the scope.
-   * With no projection this lifetime, any start owes the first authoritative
-   * read (0n), which also retries a failed initial read on later triggers. */
-  const obligation = useCallback(() => {
-    const held = observation.current, published = publications.current ?? {};
-    if (!held) return 0n;
-    const scope = applicationScope(held.target), publication = published[scope];
-    if (!publication) return undefined;
-    const settled = held.application?.scope === scope ? held.application.version : undefined;
-    return settled === undefined || BigInt(settled) < BigInt(publication.version) ? BigInt(publication.version) : undefined;
-  }, []);
-  /** The single convergence worker for the current lifetime. Each pass observes
-   * one real outstanding obligation with one authoritative read, then
-   * re-evaluates the level: a publication that arrived while the read was
-   * outstanding is still owed and drives exactly one more bounded read. A newer
-   * one-shot read (explicit refresh, save recovery) may supersede the worker's
-   * read; because a superseded read is not a satisfied obligation, the owner
-   * keeps the work and waits for the superseding read to settle before
-   * re-evaluating, rather than exiting or racing it with a redundant read. It
-   * releases ownership only when no publication or acknowledgement obligation
-   * remains. No timers, no polling, no write replay. */
-  const converge = useCallback(async () => {
-    if (converging.current !== undefined) return;
-    const owner = epoch.current;
-    converging.current = owner;
-    try {
-      for (;;) {
-        // Wait out any authoritative read already in flight before evaluating:
-        // the owner must neither race a legitimate newer one-shot read with a
-        // redundant read of its own nor act on state that read is about to
-        // replace. Settlement (success or failure) wakes this wait; there is no
-        // polling, and an epoch change wakes it so a fenced owner can exit.
-        while (outstanding.current > 0 && epoch.current === owner) {
-          await new Promise<void>(resolve => { settle.current = resolve; });
-        }
-        const at = epoch.current, required = obligation();
-        if (required === undefined && commits.current === observedCommits.current) break;
-        const adopted = await refresh();
-        if (at !== epoch.current) break;
-        // A superseded read is not a satisfied obligation: re-evaluate the level
-        // under the same owner, waiting out the read that superseded it.
-        if (!adopted) continue;
-        if (required === undefined) continue;
-        const remaining = obligation();
-        if (remaining === undefined || remaining > required) continue;
-        // The read was issued after `required` was published, so settling below
-        // it is native evidence missing, not a reason to spin. Absent application
-        // data is not measurable; a measurably stale application is reported.
-        const scope = applicationScope(observation.current!.target);
-        const settled = observation.current?.application?.scope === scope ? observation.current.application.version : undefined;
-        if (settled === undefined) break;
-        setError(`Native ${scope} published application version ${required}, but the authoritative read issued after it settled at ${settled}.`);
-        break;
-      }
-    } catch { /* refresh already owns reporting this failure; a later publication, refresh or reconnect may retry. */ }
-    finally { if (converging.current === owner) converging.current = undefined; }
-  }, [refresh, obligation]);
-  useEffect(() => {
-    ++epoch.current; observation.current = undefined; converging.current = undefined; outstanding.current = 0;
-    // Wake any worker still awaiting a read from the previous lifetime so it can
-    // observe the epoch change and release ownership.
-    const resolve = settle.current; settle.current = undefined; resolve?.();
-    commits.current = 0; observedCommits.current = 0;
-    setSource(undefined); setTargetValid(false); setBusy(false); setError(''); setMessage('');
-    if (transport.connection === 'connected') void converge();
-    return () => { ++epoch.current; };
-  }, [identity, transport.generation, transport.connection, converge]);
-  useEffect(() => {
-    let current = true;
-    if (host) void host.listWorkspaces().then(value => { if (current) setCatalog(value); }).catch(() => { if (current) setCatalog(undefined); });
-    return () => { current = false; };
-  }, [host, identity]);
-  // Native source publications observed on this connection. `owed` is a level,
-  // not an edge: until this target's own projection carries at least the version
-  // published for its scope, the observation obligation stands — an older
-  // acknowledgement landing in between cannot discharge or cancel it.
-  const publicationsList = Object.entries(transport.configuration ?? {}).filter(([scope]) => scope.startsWith('source:'));
-  const observed = publicationsList.map(([scope, value]) => `${scope}=${value.version}`).join(' ');
-  const published = source && publicationsList.find(([scope]) => scope === applicationScope(source.target))?.[1].version;
-  const settled = source?.application?.version;
-  const owed = published !== undefined && (settled === undefined || BigInt(settled) < BigInt(published));
-  useEffect(() => { if (observed) void converge(); }, [observed, converge]);
-  useEffect(() => { if (owed) void converge(); }, [owed, settled, converge]);
-  const save: SaveSource = async (mutation, expected_revision) => {
-    if (writing.current === epoch.current || !targetValid || transport.connection !== 'connected') return undefined;
-    const at = epoch.current;
-    writing.current = at; setBusy(true); setError(''); setMessage('');
-    try {
-      const next = await request({ kind: 'write', expected_revision, mutation });
-      if (at !== epoch.current) return undefined;
-      // The acknowledgement confirms this one mutation and supplies its
-      // committed revision; it is not adopted as a projection. Success settles
-      // only after an authoritative read issued after this commit is adopted,
-      // so every draft's CAS base reads from a projection at least as current
-      // as the acknowledged write — never from the acknowledgement itself. A
-      // failed read does not undo the committed write: refresh already
-      // reported it and the outcome still stands.
-      const commit = ++commits.current;
-      const committed = sourceRevision(next, mutation);
-      while (at === epoch.current && observedCommits.current < commit) {
-        try { await refresh(); } catch { break; }
-      }
-      if (at !== epoch.current) return undefined;
-      setMessage('Source saved. Native coordination owns application.');
-      void converge();
-      return committed;
-    } catch (cause) {
-      if (at !== epoch.current) return undefined;
-      const conflict = (cause instanceof RpcFailure && cause.error.data?.kind === 'source_conflict') || (cause instanceof WorkspaceHostError && cause.kind === 'source_conflict');
-      const uncertain = isOutcomeUncertain(cause) || (cause instanceof WorkspaceHostError && cause.uncertain);
-      setError(conflict ? 'Source changed. Your draft and base revision are preserved.' : uncertain ? 'Save outcome uncertain. Rereading authority without replaying the write.' : String(cause));
-      try { await refresh(); } catch { /* Keep draft and invalid target until an authoritative read succeeds. */ }
-      return undefined;
-    } finally { if (writing.current === at) writing.current = undefined; if (at === epoch.current) setBusy(false); }
-  };
-  const scope: SourceScope = workspaceId === undefined ? 'user' : 'workspace';
+
+/** The Settings presentation of one exact configuration owner.
+ *
+ * This component owns no asynchronous configuration semantics at all. Target
+ * lifetime, authoritative read ordering, mutation submission, definitive
+ * acknowledgement, authoritative reread, per-unit CAS transactions and the
+ * single level-triggered convergence obligation all belong to the Settings
+ * authority actor this presentation attaches to. Opening, closing, changing
+ * section and switching target are presentation events; none of them cancels a
+ * native commit or discards an editing transaction. */
+export function Settings({ client, target, host, onClose = () => {}, theme = 'light', setTheme, connection, section, onSelect }: SettingsProps) {
+  const { actor, transport } = useSettingsTarget(client, target, host);
+  const scope: SourceScope = settingsTargetScope(target);
+  // The fresh authoritative observation, and the last one demoted to stale
+  // presentation data by a presentation or generation boundary. Rendering the
+  // stale value keeps the presentation continuous across a dialog reopen; it is
+  // never treated as current — the machine owes a fresh read on every ATTACH,
+  // and authoring stays closed until that read is adopted.
+  const observed = useSelector(actor, snapshot => snapshot.context.observation);
+  const source = useSelector(actor, snapshot => snapshot.context.observation ?? snapshot.context.staleObservation);
+  const readError = useSelector(actor, snapshot => snapshot.context.readError);
+  const convergenceError = useSelector(actor, snapshot => snapshot.context.convergenceError);
+  const maintenanceError = useSelector(actor, snapshot => snapshot.context.maintenanceError);
+  const outcome = useSelector(actor, mutationOutcome, shallowEqual);
+  const busy = useSelector(actor, snapshot => snapshot.matches({ mutation: 'submitting' }));
+  // A successful authoritative read clears only the read error it answers, so
+  // "this target is observable" is exactly "no read failure is outstanding".
+  const targetValid = !readError;
   const selected = source?.[scope];
-  const models = Object.keys(source?.resolved?.models ?? source?.user.authored?.models ?? {});
+  // Whether this scope's `rustx.toml` admits structured semantic-unit editing,
+  // decided once for every config-backed section. A malformed document admits
+  // exactly one mutation — `repair_config` — and no editor may advertise any
+  // other, while the independent resource documents keep their own authority.
+  const config = configAuthoring(source, scope);
+  const document = sectionDocument(section);
+  // One identity-discovery rule for every model selector, shared with the
+  // Providers & Models catalog: this scope's authored identities, plus the
+  // native effective ones for a Workspace when resolution produced them.
+  const models = catalogIdentities(source, scope, 'models');
   const roots = [source?.user_resource_root ? source.user_resource_root + '/skills' : '', source?.workspace_resource_root ? source.workspace_resource_root + '/skills' : ''];
-  const editor = selected && <fieldset disabled={busy || !targetValid || transport.connection !== 'connected'} className={css.editor}>
-    {section === 'catalog' && <CatalogEditor document={selected.authored ?? {}} scope={scope} revision={selected.revision} save={save} />}
-    {(section === 'general' || section === 'policies') && <RuntimeEditor document={selected.authored ?? {}} scope={scope} revision={selected.revision} save={save} policyOnly={section === 'policies'} processPolicyImpacts={source!.process_policy_impacts} />}
-    {section.startsWith('root-') && <RootEditor document={selected.authored ?? {}} scope={scope} revision={selected.revision} save={save} section={section as RootSection} models={models} skillRoots={roots} />}
-    {section === 'mcp' && <Integrations source={source!} scope={scope} save={save} />}
-    {section === 'agents' && <AgentEditor source={source!} scope={scope} models={models} save={save} />}
-    {['mcp', 'agents', 'python', 'skills', 'workflows'].includes(section) && source?.prospective_resources && <ResourceInventory resources={source.prospective_resources} family={section} scope={scope} />}
+  const lifecycle = settingsLifecycle({ connection: transport.connection, hasSource: !!observed, targetValid, readError });
+  // A section change remounts the editor subtree so its local picker state does
+  // not leak across sections. Editing transactions are deliberately not part of
+  // that subtree, so they survive the remount.
+  const editorKey = `${transport.endpoint ?? ''}|${transport.authorityRevision ?? 0}|${settingsTargetKey(target)}:${section}`;
+  // Authoring stays closed until the target holds a current authoritative
+  // observation. A mutation in flight does not close it: every other unit
+  // stays editable, and whether any unit may submit is the actor's one
+  // target-wide admission fact, which each unit form reads.
+  const editor = selected && <fieldset disabled={!targetValid || !observed || transport.connection !== 'connected'} className={css.editor}>
+    {document === 'config' && config.state === 'structured' && <>
+      {section === 'catalog' && <CatalogEditor source={source!} scope={scope} revision={config.revision} />}
+      {(section === 'general' || section === 'policies') && <RuntimeEditor document={config.document} resolved={source!.resolved} scope={scope} revision={config.revision} policyOnly={section === 'policies'} processPolicyImpacts={source!.process_policy_impacts} />}
+      {section.startsWith('root-') && <RootEditor document={config.document} resolved={source!.resolved} scope={scope} revision={config.revision} section={section as RootSection} models={models} skillRoots={roots} />}
+    </>}
+    {document === 'config' && config.state === 'malformed' && <p role="status">Structured editing is unavailable because {config.path} does not parse. Repair the source to edit it again.</p>}
+    {section === 'mcp' && <Integrations source={source!} scope={scope} />}
+    {section === 'agents' && <AgentEditor source={source!} scope={scope} models={models} />}
+    {document === 'resources' && source?.prospective_resources && <ResourceInventory resources={source.prospective_resources} family={section} scope={scope} />}
+    {/* The one mutation a malformed `rustx.toml` admits, fenced on its exact
+        current revision. It exists only while the document does not parse, and
+        never in a section that edits an independent document. */}
+    {config.state === 'malformed' && document !== 'resources' && <UnitForm title="Repair malformed source" blank="" revision={config.revision} removable={false}
+      mutation={replacement => ({ kind: 'repair_config', document: replacement ?? '' })}>
+      {(value, change) => <label>Replacement TOML<textarea value={value} onChange={event => change(event.target.value)} /></label>}
+    </UnitForm>}
   </fieldset>;
-  return <SettingsPanel rows={[{ id: 'appearance', label: 'Appearance' }, ...(connection ? [{ id: 'connection', label: 'Connection' }] : []), ...sections.map(([id, label, group]) => ({ id, label, group }))]} activeId={section} onSelect={id => setSection(id as Section)} onClose={onClose}>
+  return <SettingsPanel rows={[{ id: 'appearance', label: 'Appearance' }, ...(connection ? [{ id: 'connection', label: 'Connection' }] : []), ...sections.map(([id, label, group]) => ({ id, label, group }))]} activeId={section} onSelect={id => onSelect(id as SettingsSection)} onClose={onClose}>
     {section === 'connection' && connection ? <ConnectionSettings connection={connection} client={client} /> : section === 'appearance' ?
       <section><h2>Appearance</h2><label>Theme<select aria-label="Theme" value={theme} onChange={event => setTheme?.(event.target.value as 'light' | 'dark')}><option value="light">Light</option><option value="dark">Dark</option></select></label></section> :
       <section className={css.settings} aria-label="Settings" aria-busy={busy}>
-        <h2>{scope === 'user' ? 'User Settings' : 'Workspace Settings'}</h2>
-        <label>Configuration owner<select aria-label="Configuration owner" value={workspaceId ?? ''} disabled={busy} onChange={event => setWorkspaceId(event.target.value || undefined)}>
-          <option value="">User</option>
-          {workspaceId && !catalog?.workspaces.some(row => row.id === workspaceId) && <option value={workspaceId}>Unavailable Workspace</option>}
-          {catalog?.endpoint === endpoint && catalog.workspaces.map(row => <option key={row.id} value={row.id}>{row.displayName}</option>)}
-        </select></label>
-        <Button disabled={busy || transport.connection !== 'connected'} onClick={() => void refresh().catch(() => {})}>Read current sources</Button>
-        {error && <p role="alert">{error}</p>}{message && <p role="status">{message}</p>}
-        {!source && <p role="status">Loading source authority…</p>}
+        <h2>{settingsTargetLabel(target)}</h2>
+        {scope === 'workspace' && <p className={css.hint}>Bound to this exact authorized Workspace. Session focus never retargets this editor.</p>}
+        <p role="status" data-lifecycle={lifecycle}>{settingsLifecycleLabel(lifecycle)}</p>
+        <Button disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>Read current sources</Button>
+        {readError && <p role="alert">Source read failed. {readError}</p>}
+        {convergenceError && <p role="alert">{convergenceError}</p>}
+        <MutationNotice outcome={outcome} />
+        {maintenanceError && <p role="alert">{maintenanceError}</p>}
         {selected && <p>{selected.path} · Revision: {selected.revision}</p>}
         {selected?.diagnostic && <p role="alert">{selected.diagnostic}</p>}
         {source?.prospective_diagnostic && <p role="status">{source.prospective_diagnostic}</p>}
         {scope === 'workspace' && <p>Remove an override to reset to the global default. An explicit empty selection means none.</p>}
         <h3>{sections.find(([id]) => id === section)?.[1]}</h3>
-        <SourceContext value={source}><DraftContext value={drafts}><div key={draftKey}>{editor}
-          {selected?.diagnostic && !selected.authored && <UnitForm title="Repair malformed source" initial="" revision={selected.revision} save={save} removable={false}
-            mutation={document => ({ kind: 'repair_config', document: document ?? '' })}>
-            {(value, change) => <label>Replacement TOML<textarea value={value} onChange={event => change(event.target.value)} /></label>}
-          </UnitForm>}
-        </div></DraftContext></SourceContext>
+        <SettingsActorContext value={actor}><SourceContext value={source}><div key={editorKey}>{editor}</div></SourceContext></SettingsActorContext>
         {section === 'overview' && <p>Definitions and defaults belong to this source. Session selections and explicit adoption belong to each Session.</p>}
         {section === 'advanced' && source && <>
+          <h3>Application observation</h3>
+          <ul>{observedUnits.map(unit => {
+            const result = observedResult(unitApplication(source.application, unit));
+            return <li key={unit}>{observedUnitLabel(unit)}: <strong>{observedResultLabel(result)}</strong>
+              {result.state === 'failed' && <> — {result.diagnostic}</>}
+              {result.state === 'ready' && <> — cache impact {result.impact}</>}
+            </li>;
+          })}</ul>
+          <p>Applied, Preparing, Failed and Restart pending are native observations of this exact source scope. They are never Session adoption and never one global success state.</p>
+          <h3>Change behavior</h3>
+          <ul>{Object.keys(source.process_policy_impacts).map(key => <li key={key}>{key}: {changeBehaviorLabel(changeBehavior(source.process_policy_impacts, key))}</li>)}</ul>
           <h3>Process bindings</h3><pre>{JSON.stringify(source.process_bindings, null, 2)}</pre>
           {source.application?.units.process_bindings?.status === 'process_restart' && <p role="status">Saved desired values differ from the current process binding. Restart required.</p>}
           {source.application?.units.process_bindings?.status === 'applied' && <p role="status">Saved process policy is active.</p>}
+          {/* Both diagnostics render the native projection verbatim. That is
+              safe because the projection itself is redacted: Provider
+              credentials, MCP literal `env`/`headers` and literal Tool
+              environment values are identity-only on the wire, so there is no
+              secret here to hide. */}
           <details><summary>Resolved preview — source resolution only</summary><pre>{JSON.stringify({ resolved: source.resolved, provenance: source.provenance }, null, 2)}</pre></details>
           <details><summary>Source and application diagnostics</summary><pre>{JSON.stringify(source, null, 2)}</pre></details>
-          <Button disabled={busy || !targetValid} onClick={() => { const at = epoch.current; void request({ kind: 'reconcile' }).then(() => { if (at === epoch.current) return refresh(); }).catch(cause => { if (at === epoch.current) setError(String(cause)); }); }}>Rescan configuration files</Button>
+          <Button disabled={busy || !targetValid} onClick={() => actor.send({ type: 'RECONCILE' })}>Rescan configuration files</Button>
         </>}
       </section>}
   </SettingsPanel>;

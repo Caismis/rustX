@@ -166,7 +166,50 @@ Agent references; the real-server suite runs the same production entry path.
 
 Visual authority remains the digest-pinned Playwright 1.63.0 container. Use
 `pnpm --dir web-console test:e2e:update` only for reviewed baseline changes, then
-`pnpm --dir web-console test:e2e` with zero pixel tolerance. `CONTAINER_ENGINE=podman`
+`pnpm --dir web-console test:e2e`. Every reference is asserted through the one
+helper `expectStableScreenshot` (`test/e2e/screenshot.ts`), which captures under
+Playwright's own screenshot defaults, resolves the baseline with Playwright's
+`testInfo.snapshotPath(name, { kind: 'screenshot' })`, and hands the stable
+capture to the one comparator (`test/screenshot-comparator.ts`). A baseline is
+compared only against a capture proven stable by two consecutive
+render-equivalent captures (`test/screenshot-stability.ts`: same dimensions and
+every decoded RGBA byte identical, never PNG bytes and never the noise policy),
+within a bounded capture schedule. Equality with the baseline is never evidence
+of stability: there is no baseline-first fast path, the stable capture is
+compared exactly once, and a stable mismatch is never recaptured. A rendering
+that does not settle is its own failure — "Screenshot did not stabilize" with
+the last two captures and their diff attached — distinct from a regression.
+`test/screenshot-stability.test.ts` drives these decisions with exact capture
+sequences, no browser and no clock. Screenshots are exact product-output
+contracts: dimensions must match exactly and every RGBA byte of every pixel
+must match exactly. There is no global perceptual threshold anywhere; the
+former `threshold: 0.027` contract is gone. The only tolerance is the explicit
+exception manifest `test/fixtures/rasterizer-noise.json`: reference-local
+measured rasterizer noise (sidebar gear glyphs, the narrow Settings panel's
+rounded corners, the New Session button corner arc — at most 7 grey levels)
+grouped into bounded spatial regions,
+each with a changed-pixel budget and a raw channel-delta bound derived from its
+recorded evidence pixels. A changed pixel outside every registered region fails
+at any amplitude; a count or delta beyond a region's bounds fails; a reference
+without an entry is strict by default. Failures report the reference,
+dimensions, changed and outside-region counts, per-region budgets, the maximum
+observed channel delta and the first unexpected coordinates, and attach the
+actual and diff PNGs under `test-results/`. `test/screenshot-comparison.test.ts`
+holds the contract to the measured noise and to out-of-region, large-area,
+whole-image, budget, delta, layout, missing-element and dimension regressions.
+
+Baseline updates are an explicit intentional action. An intentional UI change
+is reviewed, then `pnpm --dir web-console test:e2e:update` — the whole browser
+suite under `RUSTX_SCREENSHOT_UPDATE=1`, so no screenshot-bearing spec can be
+left out — writes each stable capture as a strict new baseline (an unsettled
+rendering fails instead of becoming a baseline). An update never creates or
+widens a rasterizer-noise allowance (a reference that has registered evidence is
+flagged for re-measurement).
+Unexpected pixel variance in CI is investigated first, proven to be
+rasterizer-only against the recorded evidence, and only then recorded as
+narrowly bounded regions in the manifest. A screenshot failure is never
+answered by weakening the comparison — no global threshold exists to raise.
+`CONTAINER_ENGINE=podman`
 is the supported local engine selection when Docker is absent. Current composer
 references cover idle empty/draft, running Stop/Queue, attachments and the context
 stack in both themes at 1440px and 390px. Shell/Settings baselines also include the
@@ -190,8 +233,8 @@ file-only/no-preview completion, manual rename, and older-list/newer-summary fen
 `view.summary` remains a replaceable observation, not catalog membership authority.
 
 Product-surface baseline validation: 421 deterministic tests in 29 files; all 39 browser acceptance
-tests; 23 intentional snapshot/geometry update cases followed by normal zero-tolerance
-E2E. Keyboard acceptance now explicitly reaches Sidebar row actions/Close view and
+tests; 23 intentional snapshot/geometry update cases followed by normal E2E under the
+then zero-tolerance comparison. Keyboard acceptance now explicitly reaches Sidebar row actions/Close view and
 Inspector at all four widths. Reviewed rendered light/dark/narrow, native preview,
 manual name, empty Session, background work, scoped uncertainty, Inspector and deletion
 captures. Typecheck, production build, 104-source provenance/100-package notices,
