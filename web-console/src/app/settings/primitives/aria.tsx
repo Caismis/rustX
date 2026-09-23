@@ -1,10 +1,12 @@
-import { useId, useState, type Key, type ReactNode } from 'react';
+import { useId, useRef, useState, type Key, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import {
   Button as AriaButton, Dialog, Disclosure, DisclosurePanel, GridList, GridListItem, Heading, Input, Label,
   ListBox, ListBoxItem, Menu, MenuItem, MenuTrigger, Modal, ModalOverlay, Popover, SearchField, Select, SelectValue,
   Switch as AriaSwitch, Tab, TabList, TabPanel, Tabs,
 } from 'react-aria-components';
 import { Button } from '../../../presentation/primitives/Button';
+import { IconTrashOutline16 } from '../../../presentation/primitives/icons';
 import buttonCss from '../../../presentation/primitives/Button.module.css';
 import css from '../../../presentation/settings/SettingsWorkflow.module.css';
 
@@ -75,11 +77,13 @@ export function ResourceList({ label, rows, selected, onOpen, empty = 'No matchi
   return <GridList className={css.list} aria-label={label} selectionMode="single"
     selectedKeys={selected ? [selected] : []} onAction={key => onOpen(String(key))}>
     {rows.map(row => <GridListItem key={row.id} id={row.id} className={css.row} textValue={row.name} aria-label={row.name}>
+      {/* The identity and its contextual actions share the first line; the
+          native facts follow as secondary badges, then any detail. */}
       <div className={css.rowTop}>
         <span className={css.rowName}>{row.name}</span>
-        <span className={css.rowFacts}>{row.facts}</span>
         {!!row.actions?.length && <RowActions label={`Actions for ${row.name}`} actions={row.actions} />}
       </div>
+      <span className={css.rowFacts}>{row.facts}</span>
       {row.detail}
     </GridListItem>)}
   </GridList>;
@@ -122,39 +126,67 @@ export function Toggle({ label, checked, onChange, disabled = false }: {
   </div>;
 }
 
-/** A destructive confirmation.
+/** A confirmation of one native removal.
  *
  * `description` must describe the actual native consequence of the exact
  * mutation the confirmation submits and nothing else — never a guess about
  * running Attempts, live runtimes, existing Sessions or adopted bindings.
  *
+ * `tone` says which consequence that is. A `destructive` confirmation removes
+ * something that nothing replaces: it is an `alertdialog` whose trigger and
+ * confirm action carry the destructive color. A `restore` confirmation removes
+ * an override so that the inherited value applies again: it is an ordinary
+ * `dialog` with an ordinary primary action, and it never looks like deletion.
+ * The destructive trigger carries the existing trash glyph; its label, like
+ * every label, keeps full contrast.
+ *
  * This is a transient layer over the one Settings modal root, not a second
  * Settings tree: it mounts only while the confirmation is open, React Aria
- * contains focus inside it, and dismissing it restores focus to the trigger. */
-export function ConfirmAction({ label, title, description, confirm, onConfirm, disabled = false }: {
+ * contains focus inside it, and dismissing it restores focus to the trigger.
+ * Escape closes this topmost layer only. */
+export function ConfirmAction({ label, title, description, confirm, onConfirm, tone, disabled = false }: {
   label: string; title: string; description: ReactNode; confirm: string;
-  onConfirm: () => void; disabled?: boolean;
+  onConfirm: () => void; tone: 'destructive' | 'restore'; disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const titleId = useId();
-  return <>
-    <Button type="button" disabled={disabled} onClick={() => setOpen(true)}>{label}</Button>
-    <ModalOverlay className={css.confirmOverlay} isOpen={open} onOpenChange={setOpen} isDismissable>
+  const destructive = tone === 'destructive';
+  const seat = useRef<HTMLSpanElement>(null);
+  /** Closing hands focus straight back to the trigger. The layer is unmounted
+   * synchronously first, so its focus scope is gone and the trigger's focus is
+   * never contested; focus therefore never falls to `<body>`, where React
+   * Aria's restoration and the Settings scope's containment would otherwise
+   * race over the next animation frame to decide where it lands. */
+  const change = (next: boolean) => {
+    if (next) { setOpen(true); return; }
+    flushSync(() => setOpen(false));
+    seat.current?.querySelector<HTMLButtonElement>(':scope > button')?.focus();
+  };
+  return <span ref={seat} className={css.removal} data-tone={tone}>
+    <Button type="button" disabled={disabled} className={destructive ? css.dangerTrigger : undefined}
+      icon={destructive ? <IconTrashOutline16 /> : undefined} onClick={() => change(true)}>{label}</Button>
+    <ModalOverlay className={css.confirmOverlay} isOpen={open} onOpenChange={change} isDismissable>
       <Modal className={css.confirmModal}>
-        <Dialog className={css.confirmDialog} role="alertdialog" aria-labelledby={titleId}>
+        <Dialog className={css.confirmDialog} role={destructive ? 'alertdialog' : 'dialog'} aria-labelledby={titleId}>
           {({ close }) => <>
             <Heading slot="title" id={titleId}>{title}</Heading>
             {description}
             <div className={css.confirmActions}>
-              {/* The least destructive action takes initial focus. */}
-              <Button type="button" autoFocus onClick={close}>Cancel</Button>
-              <Button type="button" variant="primary" onClick={() => { onConfirm(); close(); }}>{confirm}</Button>
+              {/* The least destructive action takes initial focus. React
+                  Aria's Button focuses from an effect, after this layer's
+                  focus scope is registered as a child of the Settings scope;
+                  a native `autoFocus` fires during commit, before that, so the
+                  Settings scope would read it as focus escaping and take it
+                  back to the trigger. */}
+              <AriaButton autoFocus className={`${buttonCss.button} ${buttonCss.outline} ${buttonCss.md}`} onPress={close}>Cancel</AriaButton>
+              <AriaButton className={`${buttonCss.button} ${buttonCss.primary} ${buttonCss.md} ${destructive ? css.destructive : ''}`}
+                onPress={() => { onConfirm(); close(); }}>{confirm}</AriaButton>
             </div>
           </>}
         </Dialog>
       </Modal>
     </ModalOverlay>
-  </>;
+  </span>;
 }
 
 /** A secondary filter strip, used by the one Extensions resource surface. */

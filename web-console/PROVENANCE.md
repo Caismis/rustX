@@ -1,5 +1,58 @@
 # Harness presentation provenance — WEB-RESET-01
 
+## #393 Settings visual convergence, responsive UX and browser acceptance
+
+This change imports no new upstream source and repins nothing; the Harness pin
+remains `ddefc45fbc7f8e46dd73185e68295696d1297887`. Reviewed inventory updates
+only, each with a new local hash, import closure and a `#393` treatment note:
+
+- `presentation/primitives/Menu.tsx` and `Menu.module.css` move from class A to
+  B. The upstream Menu API, DOM, classes, keyboard walk, selection marker,
+  disabled rows, submenus, pointer grace and focus restoration are retained. Its
+  hand-written portal geometry — anchor and list measurement, viewport
+  clamping, capture-phase scroll and resize listeners and the hidden
+  measurement pass — is deleted and replaced by Floating UI, the one geometry
+  owner. The portaled list is marked as a React Aria top layer, stops Escape
+  before a containing React Aria modal, and announces its selected row.
+- `presentation/settings/SettingsRoot.tsx` and `SettingsRoot.module.css` keep
+  the Harness mask/panel/rail/content frame and classes. The viewport
+  media-query store, the horizontal tab orientation and the strip-scrolling tab
+  label are deleted; the narrow layout is a container query on the panel.
+- `presentation/settings/SettingsContent.module.css`, `app/settings/Settings.tsx`
+  and `app/settings/extensions/ExtensionDetail.tsx` carry the converged page
+  vocabulary.
+
+Rows, the section menu, the Session configuration banner
+(`presentation/agent/SessionConfiguration.module.css`) and every other new
+presentation in this change are rustX-authored and carry no DeepSeek header.
+Page glyphs come from the existing `presentation/primitives/icons` family; no
+icon package is added.
+
+New pinned dependencies, the only two this issue allows:
+
+- `@floating-ui/react-dom` 2.1.9 (MIT, Floating UI contributors), production,
+  with its install closure `@floating-ui/dom` 1.8.0, `@floating-ui/core` 1.8.0
+  and `@floating-ui/utils` 0.2.12 (all MIT). Their license texts are reproduced
+  in the regenerated `public/THIRD-PARTY-NOTICES.txt`.
+- `@axe-core/playwright` 4.13.0 (MPL-2.0) with `axe-core` 4.13.0 (MPL-2.0),
+  development only. They run inside the Playwright test process against
+  rendered test pages, are never bundled, never modified and never
+  redistributed with the Web Console, so they add no production notice.
+
+No Radix, second modal runtime, form layer, state or query library, design
+system or icon family is added. React Aria Components and TanStack Form keep
+exactly their #392 responsibilities.
+
+Reference products were inspected only, with no source, asset or text copied.
+Harness remains the visual family (the pinned commit above). ZCode documentation
+(<https://zcode.z.ai/cn/docs/configuration>, <https://zcode.z.ai/cn/docs/mcp-services>)
+informs the Provider → Model and resource list → detail structure with status
+and actions beside their object. Kimi Web documentation (`MoonshotAI/kimi-cli`
+`docs/en/reference/kimi-web.md` at `934b704a5eff1726623dd80db62907fbc1f7dd72`)
+informs restrained local feedback and progressive disclosure. None of their
+configuration precedence, account, billing, plugin runtime, Session or approval
+semantics is adopted.
+
 ## #392 Settings product pages and resource workflows
 
 This change imports no new upstream source and repins nothing; re-fetched
@@ -167,9 +220,9 @@ locally. Full paths and hashes are in the JSON; no compatibility export tree exi
 | `ui-primitives/src/markdown/MarkdownText.module.css` | `presentation/markdown/MarkdownText.module.css` | A |
 | `ui-primitives/src/markdown/CodeBlock.module.css` | `presentation/markdown/CodeBlock.module.css` | A |
 | `ui-theme/src/styles/shiki.css` | `presentation/theme/shiki.css` | A |
-| `ui-primitives/src/Menu.module.css` | `presentation/primitives/Menu.module.css` | A |
+| `ui-primitives/src/Menu.module.css` | `presentation/primitives/Menu.module.css` | B |
 | `ui-primitives/src/Modal.module.css` | `presentation/primitives/Modal.module.css` | A |
-| `ui-primitives/src/Menu.tsx` | `presentation/primitives/Menu.tsx` | A |
+| `ui-primitives/src/Menu.tsx` | `presentation/primitives/Menu.tsx` | B |
 | `ui-primitives/src/HoverCard.tsx` | `presentation/primitives/HoverCard.tsx` | A |
 | `ui-primitives/src/HoverCard.module.css` | `presentation/primitives/HoverCard.module.css` | A |
 | `ui-primitives/src/Tooltip.tsx` | `presentation/primitives/Tooltip.tsx` | A |
@@ -216,14 +269,16 @@ locally. Full paths and hashes are in the JSON; no compatibility export tree exi
   Session Delete opens native revision-checked preview, never a local archive.
   Additional labelled buttons expose row gestures to keyboard users.
 - Settings retains the mask/panel/navigation/content frame. Sections and bodies
-  are adapter seats for existing CFG3 editors. Narrow screens use a scrollable
-  horizontal section strip because CFG3 has more sections. No Settings Controller,
-  mirror, source cache or publication authority was imported.
+  are adapter seats for existing CFG3 editors. A narrow Settings panel replaces
+  the rail with a section menu (#393; the earlier horizontal section strip is
+  deleted). No Settings Controller, mirror, source cache or publication
+  authority was imported.
 - RightPanel keeps upstream normal/fullscreen panel geometry and transition;
   rustX Inspector supplies its header and scrolling body. No docking runtime,
   terminal/file authority or floating-window manager was included.
-- Menu retains portaled positioning, submenus, pointer grace and keyboard behavior;
-  autofocus waits for measured placement. Modal retains upstream DOM/chrome with
+- Menu retains portaled rendering, submenus, pointer grace and keyboard behavior;
+  its portal geometry is Floating UI's since #393, and autofocus waits for that
+  placement. Modal retains upstream DOM/chrome with
   focus restoration, nested-layer Escape/background isolation and bounded report
   scrolling. Clipboard uses the async browser API only.
 - Localization retains the required English workspace dictionary and parameter

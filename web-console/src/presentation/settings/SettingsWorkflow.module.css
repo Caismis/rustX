@@ -5,9 +5,9 @@
    Settings already uses. No Spectrum stylesheet is imported. */
 
 /* Primary page tabs — the six product pages in the panel's nav rail. React
-   Aria owns roving focus and arrow-key navigation; the cell geometry is the
-   existing `.navCell` geometry of the Harness Settings nav. */
-.pageTabs { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; padding-bottom: 20px; }
+   Aria owns roving focus and arrow-key navigation; the cell and list geometry
+   are SettingsRoot's `.navCell`/`.navList`, this adds the React Aria states. */
+.pageTabs { outline: none; }
 .pageTab {
   display: flex; align-items: center; gap: 8px; height: 40px; padding: 9px 16px 9px 12px;
   box-sizing: border-box; border: none; border-radius: 12px; background: transparent; cursor: pointer;
@@ -15,16 +15,15 @@
   outline: none;
 }
 .pageTab[data-hovered] { background: var(--dsw-specific-sidebar-nav-item-hover); }
-.pageTab[data-selected] { background: var(--dsw-specific-sidebar-nav-item-active); }
+.pageTab[data-selected] { background: var(--dsw-specific-sidebar-nav-item-active); font-weight: 500; }
 .pageTab[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: -2px; }
-.pageTabIcon { flex: none; }
 .pageTabLabel { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .pageTabPanel { outline: none; min-width: 0; }
 .pageTabPanel[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 4px; border-radius: 8px; }
 
 /* Secondary filter tabs — the Extensions All/MCP/Skills/... row. The capsule
    family already used by `.tabs` in SettingsContent. */
-.filterTabs { display: flex; gap: 4px; padding: 4px; border-radius: 20px; background: var(--dsw-alias-bg-module-platform); width: fit-content; max-width: 100%; overflow-x: auto; }
+.filterTabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 18px; background: var(--dsw-alias-bg-module-platform); width: fit-content; max-width: 100%; box-sizing: border-box; }
 .filterTab {
   border: 0; background: transparent; color: var(--dsw-alias-label-secondary); padding: 6px 14px;
   border-radius: 16px; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; outline: none;
@@ -36,21 +35,23 @@
 /* Resource list — Providers, Models and extension resources. Rows keep the
    existing outlined `.card` geometry; React Aria owns arrow-key navigation,
    typeahead and pointer/keyboard action parity. */
-.list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; outline: none; }
+.list { display: flex; flex-direction: column; gap: 8px; margin: 0; outline: none; }
 .row {
-  display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; min-width: 0;
-  border: .5px solid var(--dsw-alias-border-l4); border-radius: 16px; cursor: pointer; outline: none;
+  display: flex; flex-direction: column; justify-content: center; gap: 6px; min-height: 56px; box-sizing: border-box;
+  padding: 12px 16px; min-width: 0;
+  border: .5px solid var(--dsw-alias-border-l2); border-radius: 14px; cursor: pointer; outline: none;
   overflow-wrap: anywhere;
 }
 .row[data-hovered] { background: var(--dsw-alias-interactive-bg-hover); }
 .row[data-selected] { border-color: var(--dsw-alias-state-business-primary); }
 .row[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
-.rowTop { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-/* The identity keeps its own width; the facts wrap below it rather than
-   squeezing the name. */
-.rowName { font-size: 14px; font-weight: 500; flex: 1 0 auto; max-width: 100%; overflow-wrap: anywhere; }
-.rowFacts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.empty { color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; margin: 12px 0; }
+.rowTop { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+/* The identity takes the line beside its actions and wraps anywhere; the
+   facts are a secondary line of their own. */
+.rowName { font-size: 14px; line-height: 22px; font-weight: 500; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.rowFacts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.rowFacts:empty { display: none; }
+.empty { color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; margin: 0; padding: 16px; border: .5px dashed var(--dsw-alias-border-l3); border-radius: 14px; }
 
 /* Search field. */
 .search { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; font-size: 13px; color: var(--dsw-alias-label-secondary); }
@@ -66,7 +67,7 @@
 .select { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; font-size: 13px; color: var(--dsw-alias-label-secondary); }
 .selectTrigger {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  box-sizing: border-box; width: 100%; height: 36px; padding: 0 12px; font: inherit; font-size: 13px;
+  box-sizing: border-box; width: 100%; min-height: 36px; padding: 7px 12px; font: inherit; font-size: 13px; line-height: 20px;
   border: .5px solid var(--dsw-alias-border-l4); border-radius: 8px; cursor: pointer;
   background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); text-align: left; outline: none;
 }
@@ -96,26 +97,46 @@
 .disclosureButton[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; border-radius: 6px; }
 .disclosureMarker { flex: none; color: var(--dsw-alias-label-tertiary); font-size: 11px; }
 .disclosurePanel { padding: 0 0 8px; min-width: 0; }
+/* A collapsed panel is `hidden="until-found"`: laid out but empty, so it keeps
+   no padding either. */
+.disclosurePanel[hidden] { padding: 0; }
 
 /* Confirmation dialog — a transient layer over the one Settings modal root,
    never a second Settings tree. */
 .confirmOverlay { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; background: var(--dsw-alias-bg-mask-1); backdrop-filter: var(--dsw-mask-blur); }
-.confirmModal { max-width: min(440px, calc(100vw - 48px)); }
+.confirmModal { max-width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); display: flex; }
 .confirmDialog {
   box-sizing: border-box; padding: 20px 22px; border-radius: 20px; outline: none;
   background: var(--dsw-alias-bg-layer-2); box-shadow: var(--dsw-elevation-prominent);
   color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 22px;
+  max-height: 100%; overflow-y: auto; overflow-wrap: anywhere;
 }
 .confirmDialog h2 { margin: 0 0 10px; font-size: 16px; font-weight: 500; }
 .confirmDialog p { margin: 8px 0; }
 .confirmActions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; flex-wrap: wrap; }
+/* The confirm action of a real deletion carries the destructive color; the
+   confirm action that restores inheritance is an ordinary primary action. */
+/* Deepened from the state color so its label keeps AA contrast in both themes. */
+.confirmActions .destructive { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 88%, black); color: var(--dsw-alias-label-primary-foreground); }
+.confirmActions .destructive:hover:not(:disabled) { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 76%, black); }
+/* A deletion trigger is marked by its error-colored glyph; its label keeps
+   full contrast. */
+.removal .dangerTrigger > span:first-child { color: var(--dsw-alias-state-error-primary); }
+.confirmDialog button:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
 
 /* Detail workflows: the Provider -> Model and resource list -> detail paths. */
 .detail { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .detailHead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
 .detailHead h3 { margin: 0; flex: 1; min-width: 0; font-size: 16px; font-weight: 500; }
-.breadcrumb { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
-.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+/* The way back from a detail is always in reach: the row sticks to the top of
+   the one scrolling pane, on a wide panel and a narrow one alike. */
+.breadcrumb {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 0; padding: 4px 0 8px; font-size: 12px; color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-2); overflow-wrap: anywhere;
+}
+.breadcrumb > span { min-width: 0; }
+.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0; }
 .toolbar > *:first-child { flex: 1; min-width: 160px; }
 
 /* Switch row: label plus React Aria Switch, reusing the existing thumb art. */
@@ -135,7 +156,11 @@
 }
 .switch[data-selected] .switchTrack::after { transform: translateX(16px); }
 
-/* The page list lays out along its ARIA orientation, never along a separate
-   breakpoint, so arrow-key semantics and the visual axis cannot disagree. */
-.pageTabs[data-orientation="horizontal"] { flex-direction: row; overflow-x: auto; padding-bottom: 6px; }
-.pageTabs[data-orientation="horizontal"] .pageTab { flex: none; }
+/* Reduced motion: state changes are immediate. */
+@media (prefers-reduced-motion: reduce) {
+  .switchTrack, .switchTrack::after { transition: none; }
+}
+
+@container settings (max-width: 680px) {
+  .row { padding: 12px; }
+}

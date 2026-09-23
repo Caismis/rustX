@@ -98,5 +98,30 @@
         [263,108,[225,225,225,255],[224,225,225,255]],
         [264,108,[245,246,247,255],[244,245,246,255]]
     ]
+  },
+  {
+    "reference": "settings-provider-detail-mobile-dark-linux.png",
+    "evidence": "Pinned-container measurement (issue #393 branch, --repeat-each=8): 3/8 runs render the alternate state and 5/8 the reference, and the three alternate captures are identical to each other. Only the Settings panel's top-left rounded edge (panel at x=12, r24) differs, by 1-2 grey levels; every other pixel, including all text, geometry and the sticky back row, is identical; AA coverage only",
+    "regions": [
+      {
+        "label": "Settings panel top-left rounded edge",
+        "x": 12,
+        "y": 24,
+        "width": 2,
+        "height": 10,
+        "maxChangedPixels": 8,
+        "maxChannelDelta": 2
+      }
+    ],
+    "pixels": [
+        [12,24,[36,36,36,255],[34,34,34,255]],
+        [13,24,[45,45,46,255],[45,45,47,255]],
+        [12,25,[47,47,47,255],[45,45,45,255]],
+        [12,26,[52,52,52,255],[51,51,51,255]],
+        [12,28,[49,49,51,255],[50,50,51,255]],
+        [12,29,[47,47,48,255],[47,47,49,255]],
+        [12,30,[45,45,47,255],[45,45,46,255]],
+        [12,33,[44,44,46,255],[43,43,45,255]]
+    ]
   }
 ]

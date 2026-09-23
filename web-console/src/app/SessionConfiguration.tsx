@@ -1,7 +1,10 @@
 import { useSelector } from '@xstate/react';
 import type { SourceTarget } from '../../../protocol/app-server/v19';
 import type { AppServerClient, SessionView } from '../client/app-server';
+import type { ReactNode } from 'react';
 import { Button } from '../presentation/primitives/Button';
+import { StateDot, type StateDotState } from '../presentation/primitives/StateDot';
+import css from '../presentation/agent/SessionConfiguration.module.css';
 import { useSessionConfiguration } from './settings/machines/react';
 import { applicationKnown } from './settings/machines/session-configuration';
 import { applicationOwners, observedResult, observedUnitLabel, observedUnits, openOwnerLabel, sourceTargetKey, unitApplication } from './settings/projection';
@@ -38,24 +41,49 @@ export function SessionConfiguration({ client, view, openOwningSettings }: { cli
   const preparing = observations.filter(row => row.result.state === 'preparing');
   const failed = observations.filter(row => row.result.state === 'failed');
   if (known && !candidate && !preparing.length && !failed.length && !adoptionError) return null;
-  return <section aria-label="Session configuration" role="status">
-    {!known && <p>Configuration status unavailable. Retaining the last observation.</p>}
-    {preparing.length > 0 && <><p>Preparing configuration…</p><ul>{preparing.map(row => <li key={row.unit}>{observedUnitLabel(row.unit)}: preparing</li>)}</ul></>}
-    {candidate && <><p>Prepared configuration is waiting for this Session.</p>
-      {application?.eligibility.status === 'busy' && <p>Session work must settle before adoption.</p>}
-      {application?.eligibility.status === 'unavailable' && <p>Session configuration is unavailable for adoption.</p>}
-      <Button disabled={!known || busy || transport.connection !== 'connected' || application?.eligibility.status !== 'eligible'}
-        onClick={() => actor.send({ type: 'ADOPT', candidate })}>Adopt configuration</Button></>}
-    {failed.length > 0 && <><p>Some configuration preparation failed. Review the owning authored source in Settings and rescan.</p>
-      <ul>{failed.map(row => <li key={row.unit}>{observedUnitLabel(row.unit)}: failed — {row.result.state === 'failed' ? row.result.diagnostic : ''}</li>)}</ul>
-      {/* Native names the authored owners of this application; `scope` is the
-          Session identity and is never one of them. Each owner is offered
-          explicitly, so no ownership is parsed, guessed or defaulted here. */}
-      {openOwningSettings && applicationOwners(application).map(owner =>
-        <Button key={sourceTargetKey(owner)} onClick={() => openOwningSettings(owner)}>{openOwnerLabel(owner)}</Button>)}</>}
+  const eligibility = application?.eligibility.status;
+  // Presentation only: which line of the banner each native fact is. Nothing
+  // here decides eligibility, adoption, ownership or residency.
+  const owners = openOwningSettings ? applicationOwners(application) : [];
+  return <section aria-label="Session configuration" className={css.banner}>
+    {!known && <Line state="unavailable" text="Configuration status unavailable. Retaining the last observation." />}
+    {preparing.length > 0 && <Line state="preparing" text="Preparing configuration…"
+      detail={preparing.map(row => `${observedUnitLabel(row.unit)}: preparing`)} />}
+    {candidate && <Line state={eligibility === 'eligible' ? 'ready' : 'blocked'} text="Prepared configuration is waiting for this Session."
+      reason={eligibility === 'busy' ? 'Session work must settle before adoption.'
+        : eligibility === 'unavailable' ? 'Session configuration is unavailable for adoption.' : undefined}
+      actions={<Button size="sm" variant="primary" disabled={!known || busy || transport.connection !== 'connected' || eligibility !== 'eligible'}
+        onClick={() => actor.send({ type: 'ADOPT', candidate })}>Adopt configuration</Button>} />}
+    {failed.length > 0 && <Line state="failed" text="Some configuration preparation failed. Review the owning authored source in Settings and rescan."
+      detail={failed.map(row => `${observedUnitLabel(row.unit)}: failed — ${row.result.state === 'failed' ? row.result.diagnostic : ''}`)}
+      // Native names the authored owners of this application; `scope` is the
+      // Session identity and is never one of them. Each owner is offered
+      // explicitly, so no ownership is parsed, guessed or defaulted here.
+      actions={owners.length > 0 && owners.map(owner =>
+        <Button size="sm" variant="outline" key={sourceTargetKey(owner)} onClick={() => openOwningSettings!(owner)}>{openOwnerLabel(owner)}</Button>)} />}
     {/* Read failure and adoption failure are separate facts, reported
         separately; neither one clears or hides the other. */}
-    {readError && <p role="alert">{readError}</p>}
-    {adoptionError && <p role="alert">{adoptionError}</p>}
+    {readError && <p role="alert" className={css.alert}>{readError}</p>}
+    {adoptionError && <p role="alert" className={css.alert}>{adoptionError}</p>}
   </section>;
+}
+
+type LineState = 'unavailable' | 'preparing' | 'ready' | 'blocked' | 'failed';
+const dots: Record<LineState, StateDotState> = { unavailable: 'idle', preparing: 'ongoing', ready: 'done', blocked: 'warning', failed: 'error' };
+
+/** One native fact of the banner, on one compact horizontal line: its state,
+ * its text, the native reason or per-unit detail, and the action that belongs
+ * to exactly this fact. The state is always written out; the dot only repeats
+ * it. On a narrow Session the line wraps instead of truncating. */
+function Line({ state, text, reason, detail, actions }: {
+  state: LineState; text: string; reason?: string; detail?: readonly string[]; actions?: ReactNode;
+}) {
+  return <div className={css.line} data-state={state}>
+    <StateDot state={dots[state]} className={css.dot} />
+    <div className={css.text}>
+      <p role="status">{text}{reason && <> <span className={css.reason}>{reason}</span></>}</p>
+      {!!detail?.length && <ul className={css.detail}>{detail.map(item => <li key={item}>{item}</li>)}</ul>}
+    </div>
+    {actions && <div className={css.actions}>{actions}</div>}
+  </div>;
 }

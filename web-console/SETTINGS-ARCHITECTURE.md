@@ -717,7 +717,8 @@ revision settles it — with no replay and no second write.
 `presentation/settings/SettingsRoot` remains the sole modal/navigation owner. Its
 overlay, focus containment and restoration and its vertical page tabs are React
 Aria Components (`ModalOverlay`/`Modal`/`Dialog`/`Tabs`) styled by the retained
-Harness classes; the hand-written focus trap and portal it replaced are gone.
+Harness classes; the hand-written focus trap and portal it replaced are gone. It
+also owns the narrow section menu (see *Presentation (#393)*).
 `SettingsContent.module.css` adapts the pinned Harness Models editor and Plugin
 field/inventory vocabulary: outlined identity cards, filled editing modules,
 compact field rows, disclosures, diagnostics and narrow layouts. `Switch` is the
@@ -1015,16 +1016,14 @@ ever dispatched.
 **React Aria is interaction semantics only.** It is imported only by
 `primitives/aria.tsx` and `presentation/settings/SettingsRoot.tsx`. It owns
 keyboard navigation, roving focus, dialog focus containment and restoration,
-tab/grid/select/menu/disclosure/switch semantics. The page tabs take their
-orientation from the viewport (`narrowSettingsLayout`): a vertical rail answers
-ArrowUp/ArrowDown on a wide viewport, a horizontal strip answers
-ArrowLeft/ArrowRight on a narrow one, and the strip layout is styled from React
-Aria's `data-orientation`, so keyboard semantics and the visual axis are one
-decision. No Spectrum stylesheet is
+tab/grid/select/menu/disclosure/switch semantics. The page tabs are a vertical
+rail (ArrowUp/ArrowDown); on a narrow panel the rail is hidden and the section
+menu selects pages instead (see *Presentation (#393)*). No Spectrum stylesheet is
 loaded; every visual token is the existing `--dsw-*` family
-(`SettingsWorkflow.module.css`). Destructive confirmations are
-`ModalOverlay`+`Dialog role="alertdialog"` layers over the one Settings root,
-with initial focus on Cancel; the global WebUI modals are unchanged.
+(`SettingsWorkflow.module.css`). Removal confirmations are `ModalOverlay`+`Dialog`
+layers over the one Settings root — `role="alertdialog"` for a real deletion,
+`role="dialog"` for restoring inheritance — with initial focus on Cancel; the
+global WebUI modals are unchanged.
 
 **Removal semantics.** User Settings removes an authored definition
 (`data-removal="authored-removal"`, "Remove … from User configuration?").
@@ -1047,3 +1046,85 @@ with a separate diagnostics surface follows the Kimi Web reference docs
 `934b704a5eff1726623dd80db62907fbc1f7dd72`). Both were inspected only; no source,
 asset or text was copied, and neither product's configuration precedence,
 account or billing concepts were adopted.
+
+## Presentation (#393)
+
+#393 changes presentation only. No actor, transition, port, native DTO or
+protocol version changed; the machines above are the same owners of reads,
+mutations, settlement, fencing, navigation, observation and adoption.
+
+**One frame with explicit regions.** `SettingsPanel` is one grid: the page rail,
+a fixed header and one scrolling page pane. The header holds the owner label,
+the observation lifecycle and **Reload configuration**, so every page shares
+them and page changes never move or resize the frame (≈1000 px wide bounded by
+the viewport, `min(820 px, viewport − 48 px)` high, r24). The header lives
+outside React Aria `Tabs` on purpose: RAC renders a `Tabs` subtree a second time
+into a detached collection document to discover its tabs, and the header's
+section menu measures real DOM.
+
+**Responsive layout is CSS, not state.** The panel is a size container
+(`container: settings / inline-size`), and `@container settings (max-width:
+680px)` decides the narrow layout from the panel's own width: the rail is hidden
+and the header shows the section menu; content rules (field grids, rows, the
+header context) follow the same query. There is no media-query store, resize
+observer, breakpoint prop or machine state for it, and a narrow panel inside a
+wide window is narrow. Only the modal shell's own viewport bound stays on a
+media query. The deleted horizontal page strip, its `aria-orientation` styling
+and its strip-scrolling tab label have no replacement.
+
+**Section menu.** The narrow page selector is the shared rustX `Menu` (portaled,
+`autoFocus`), whose rows are the same six pages with the same glyphs; selecting a
+row sends the same `SELECT` the rail sends, the current row is marked with a
+check and `aria-current`, and the trigger names the current page. Its
+open/closed flag is the one transient state `SettingsPanel` holds.
+
+**Floating geometry is Floating UI's.** `Menu`'s portal placement, flip, shift,
+available size and anchor tracking are `@floating-ui/react-dom` (`offset`,
+`flip`, `shift`, `size`, `autoUpdate`, fixed strategy); `side`/`align` map to one
+placement and `getAnchorRect` is a virtual reference. There is no other
+positioning path. Inside a React Aria modal a portaled list is marked
+`data-react-aria-top-layer`, the attribute React Aria's modal focus containment,
+`ariaHideOutside` and interact-outside detection honour, and Escape on an open
+menu is stopped in the document capture phase so the modal never also sees it.
+Tooltip and HoverCard keep their existing geometry.
+
+**Modal mechanics stay React Aria's.** The nested-dialog and focus contracts
+pass in real Chromium on React Aria (`settings-presentation.spec.ts`), so no
+Radix Dialog or second modal runtime was added. Two focus defects of the nested
+confirmation were found in Chromium and fixed inside `ConfirmAction`:
+
+- its Cancel was focused by native `autoFocus` during commit, before the
+  confirmation's focus scope registered as a child of the Settings scope, so
+  the Settings scope took focus back; RAC `Button autoFocus` focuses from an
+  effect after registration;
+- closing it let focus fall to `<body>`, where React Aria's restoration and
+  the Settings scope's containment raced over the next animation frame
+  (occasionally landing on the Settings dialog or its first control — the
+  long-standing intermittent failure of the keyboard reachability test). The
+  layer now unmounts synchronously on close and hands focus straight back to
+  its trigger, so focus never reaches `<body>` and nothing is left to race.
+
+**Page vocabulary.** `SettingsContent.module.css` scopes one hierarchy to the
+Settings section (`.page`): page title and description, group headings,
+16 px-radius setting-row cards (≥ 56 px, 12 × 16 px padding) whose action row
+closes the card and sticks to the pane bottom while the card holds a draft,
+14 px-radius resource rows with the identity and its actions on one line and
+secondary badges below, and a designed pending state for a target with no
+projection. Toned badges, errors and alerts keep full-contrast text and carry
+state as border/marker color, so the words carry the meaning. A resource detail
+pins its back control to the top of the pane.
+
+**Session configuration banner.** `SessionConfiguration` renders the same
+predicates as before as compact lines — unavailable, preparing, ready, blocked,
+failed — each with its state in text, a `StateDot`, the native reason or per-unit
+detail and only its own actions; a container query moves actions below the text
+on a narrow Session. Status lines are `role="status"`, read and adoption
+failures `role="alert"`.
+
+**Browser acceptance.** `test/e2e/settings-presentation.spec.ts` drives the
+deterministic fixture through every primary page and the states above, asserting
+geometry, frame stability, clipped and unclipped horizontal overflow, focus,
+Escape ownership, touch, reduced motion and exact adoption requests, and runs
+axe (`@axe-core/playwright`, WCAG 2.1 A/AA tags, serious/critical as failures,
+no rule disabled) on each. `test/e2e/foundation.spec.ts` proves Floating UI
+placement, flip, shift, bounded height and anchor tracking on the shared Menu.

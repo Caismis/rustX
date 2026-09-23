@@ -1,4 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
+import type { ReactNode } from 'react';
 import { shallowEqual, useSelector } from '@xstate/react';
 import type { SourceScope } from '../../../../protocol/app-server/v19';
 import type { AppServerClient } from '../../client/app-server';
@@ -10,6 +11,10 @@ import { SettingsActorContext, useSettingsTarget } from './machines/react';
 import { mutationOutcome, type MutationOutcome } from './machines/settings-target';
 import { configurationSystem, type TransactionOwner } from './machines/system';
 import { SettingsPanel } from '../../presentation/settings/SettingsRoot';
+import {
+  IconAgentPresetOutline16, IconCodeOutline16, IconDataOutline16, IconPersonalizationOutline16,
+  IconPluginPinwheelOutline16, IconShieldOutline16,
+} from '../../presentation/primitives/icons';
 import type { ConnectionController } from '../../connection/controller';
 import { ConnectionSettings } from './ConnectionSettings';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
@@ -45,10 +50,22 @@ export interface SettingsProps {
  * unit's own save reports itself, next to the unit it is about. */
 function MutationNotice({ outcome }: { outcome: MutationOutcome }) {
   switch (outcome.kind) {
-    case 'uncertain': return <p role="alert">Save outcome uncertain. Authority is reread; the write is never replayed. Review the current source before saving again.</p>;
+    case 'uncertain': return <p role="alert" className={css.error}>Save outcome uncertain. Authority is reread; the write is never replayed. Review the current source before saving again.</p>;
     default: return null;
   }
 }
+
+/** Each primary page's glyph from the existing Harness icon family. They tell
+ * the pages apart at a glance; the page label stays the accessible name, so
+ * nothing depends on recognizing a glyph or a color. */
+const pageIcons: Record<SettingsPage, () => ReactNode> = {
+  general: () => <IconPersonalizationOutline16 />,
+  models: () => <IconDataOutline16 />,
+  agent: () => <IconAgentPresetOutline16 />,
+  tools: () => <IconShieldOutline16 />,
+  extensions: () => <IconPluginPinwheelOutline16 />,
+  advanced: () => <IconCodeOutline16 />,
+};
 
 /** Test-only inspection of the live transaction owners of one client, for the
  * regression that proves a confirmed commit leaves no secret-bearing authored
@@ -158,33 +175,40 @@ function SettingsDialog({ client, host, theme = 'light', setTheme, connection, n
     </UnitForm>}
   </fieldset>;
 
-  return <SettingsPanel pages={settingsPages(target).map(id => ({ id, label: settingsPageLabel(id) }))} activeId={current}
-    onSelect={id => navigation.send({ type: 'SELECT', page: id as SettingsPage })} onClose={() => navigation.send({ type: 'CLOSE' })}>
-    {/* The owner this dialog is bound to, and the state of its authoritative
-        observation, identify every page alike — including the client-owned
-        General page, which authors no native source but still belongs to one
-        Settings instance. The native source path, its revision and the raw
-        projections stay on Advanced. */}
-    <section className={css.settings} aria-label="Settings" aria-busy={busy}>
-      <h2>{settingsTargetLabel(target)}</h2>
+  const pages = settingsPages(target).map(id => ({ id, label: settingsPageLabel(id), icon: pageIcons[id]() }));
+  return <SettingsPanel pages={pages} activeId={current}
+    onSelect={id => navigation.send({ type: 'SELECT', page: id as SettingsPage })} onClose={() => navigation.send({ type: 'CLOSE' })}
+    // The owner this dialog is bound to, and the state of its authoritative
+    // observation, identify every page alike — including the client-owned
+    // General page, which authors no native source but still belongs to one
+    // Settings instance. They sit in the fixed header, with the authoritative
+    // reread of this target: a read, never a rescan — rediscovering
+    // configuration files is the separate native maintenance operation on
+    // Advanced. The native source path, its revision and the raw projections
+    // stay on Advanced.
+    context={<div className={css.context}>
+      <div className={css.contextTitle}>
+        <h2>{settingsTargetLabel(target)}</h2>
+        <p role="status" className={css.lifecycle} data-lifecycle={lifecycle}>{settingsLifecycleLabel(lifecycle)}</p>
+      </div>
+      <Button size="sm" variant="outline" disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>Reload configuration</Button>
+    </div>}>
+    <section className={`${css.settings} ${css.page}`} aria-label="Settings" aria-busy={busy}>
       {scope === 'workspace' && <p className={css.hint}>Bound to this exact authorized Workspace. Session focus never retargets this editor.</p>}
-      <p role="status" data-lifecycle={lifecycle}>{settingsLifecycleLabel(lifecycle)}</p>
-      {/* An authoritative read of this target, available on every page and
-          independent of whether a projection is currently held: a target with
-          no current observation is exactly the state that needs it most. It is
-          a read, never a rescan — rediscovering configuration files is the
-          separate native maintenance operation on Advanced. */}
-      <Button disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>Reload configuration</Button>
-      {readError && <p role="alert">Source read failed. {readError}</p>}
-      {convergenceError && <p role="alert">{convergenceError}</p>}
+      {/* Target-wide facts, each reported as itself: a read failure, a
+          convergence report, an unknown save outcome and a maintenance
+          failure are separate alerts, and none of them hides another. */}
+      {readError && <p role="alert" className={css.error}>Source read failed. {readError}</p>}
+      {convergenceError && <p role="alert" className={css.error}>{convergenceError}</p>}
       <MutationNotice outcome={outcome} />
-      {maintenanceError && <p role="alert">{maintenanceError}</p>}
+      {maintenanceError && <p role="alert" className={css.error}>{maintenanceError}</p>}
       {scope === 'workspace' && current !== 'general' && <p className={css.hint}>Use global default removes the unit this Workspace authors, so the global value applies again. It never removes the global definition.</p>}
       {current === 'general' ? <GeneralPage theme={theme} setTheme={setTheme} /> : connectionFocused
         ? <ConnectionSettings connection={connection} client={client} />
-        : <SettingsActorContext value={actor}><SourceContext value={source}>
-          <div key={editorKey}>{body}</div>
-        </SourceContext></SettingsActorContext>}
+        : !source ? <SourcePending lifecycle={lifecycle} />
+          : <SettingsActorContext value={actor}><SourceContext value={source}>
+            <div key={editorKey}>{body}</div>
+          </SourceContext></SettingsActorContext>}
       {connectionReachable && <p>
         <Button onClick={() => onFocus(connectionFocused ? undefined : connectionFocus)}>
           {connectionFocused ? 'Back to Advanced' : 'Connection'}
@@ -192,6 +216,16 @@ function SettingsDialog({ client, host, theme = 'light', setTheme, connection, n
       </p>}
     </section>
   </SettingsPanel>;
+}
+
+/** The page body before this target has any projection to present — not even
+ * a stale one. Loading, connecting and unavailable are different states, and
+ * none of them is shown as an empty configuration. */
+function SourcePending({ lifecycle }: { lifecycle: ReturnType<typeof settingsLifecycle> }) {
+  const text = lifecycle === 'failed' ? 'No configuration can be shown until the source is read. Reload configuration to try again.'
+    : lifecycle === 'connecting' ? 'Configuration is shown once the App Server connection is established.'
+      : 'Reading this source from the App Server. Nothing is shown until native answers.';
+  return <div className={css.pending} data-lifecycle={lifecycle} aria-busy={lifecycle === 'loading' || lifecycle === 'connecting'}><p>{text}</p></div>;
 }
 
 /** A document that does not parse is named with the native reason it failed,
@@ -204,6 +238,6 @@ function MalformedNotice({ config, diagnostic = true }: {
   if (config.state !== 'malformed') return null;
   return <>
     <p role="status">Structured editing is unavailable because {config.path} does not parse. Repair the source to edit it again.</p>
-    {diagnostic && <p role="alert">{config.diagnostic}</p>}
+    {diagnostic && <p role="alert" className={css.error}>{config.diagnostic}</p>}
   </>;
 }

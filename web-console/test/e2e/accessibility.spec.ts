@@ -1,14 +1,14 @@
 import { expect, test, type Locator } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
+import { selectedSettingsPage, settingsSectionMenu } from './shell-actions';
+
+const settingsPageOrder = ['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced'];
 
 for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and editor reachability at ${width}px`, async ({ page }) => {
   const fixture = await startDogfood();
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width, height: 900 });
-  // The page tabs are a vertical rail on a wide viewport and a horizontal strip
-  // on a narrow one; the next page is along that axis.
-  const nextPage = width <= 640 ? 'ArrowRight' : 'ArrowDown';
   await page.emulateMedia({ reducedMotion: 'reduce' });
   // Traverse real Tab order. A finite traversal detects focus traps.
   const tabTo = async (target: Locator) => {
@@ -18,15 +18,40 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     }
     throw new Error('Keyboard could not reach the requested control');
   };
+  const pageTab = (name: string) => page.getByRole('tablist', { name: 'Settings pages' }).getByRole('tab', { name, exact: true });
+  /** Select a Settings page from the keyboard alone, through whichever page
+   * selector the panel shows: the rail is one roving tab stop moved by
+   * ArrowUp/ArrowDown; the narrow section menu opens with Enter on its first
+   * row, walks with ArrowDown and settles with Enter, handing focus back to
+   * its trigger. */
+  const keyboardPage = async (name: string) => {
+    const menu = settingsSectionMenu(page);
+    if (await menu.isVisible()) {
+      await tabTo(menu); await page.keyboard.press('Enter');
+      const rows = page.getByRole('menu').getByRole('menuitem');
+      await expect(rows.first()).toBeFocused();
+      const target = page.getByRole('menu').getByRole('menuitem', { name, exact: true });
+      for (let step = 0; step < settingsPageOrder.length && !await target.evaluate(el => el === document.activeElement); step++) await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('Enter');
+      await expect(page.getByRole('menu')).toHaveCount(0);
+      await expect(menu).toHaveAccessibleName(`Settings page: ${name}`); await expect(menu).toBeFocused();
+      return;
+    }
+    const current = await selectedSettingsPage(page);
+    await tabTo(pageTab(current));
+    const steps = settingsPageOrder.indexOf(name) - settingsPageOrder.indexOf(current);
+    for (let step = 0; step < Math.abs(steps); step++) await page.keyboard.press(steps > 0 ? 'ArrowDown' : 'ArrowUp');
+    await expect(pageTab(name)).toHaveAttribute('aria-selected', 'true');
+  };
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await expect(page).toHaveTitle(/rustX/);
     await tabTo(page.getByRole('button', { name: 'Settings', exact: true })); await page.keyboard.press('Enter');
-    // Global Settings opens at General. The page tabs are one roving tab stop:
-    // End moves to the last page, Advanced, which holds Connection.
-    const pageTab = (name: string) => page.getByRole('tablist', { name: 'Settings pages' }).getByRole('tab', { name, exact: true });
-    await expect(pageTab('General')).toHaveAttribute('aria-selected', 'true');
-    await tabTo(pageTab('General')); await page.keyboard.press('End');
-    await expect(pageTab('Advanced')).toHaveAttribute('aria-selected', 'true');
+    // Global Settings opens at General. At 390 the panel is narrow and the
+    // section menu replaces the rail; every other width shows the rail.
+    await expect(settingsSectionMenu(page)).toBeVisible({ visible: width === 390 });
+    await expect(pageTab('General')).toBeVisible({ visible: width !== 390 });
+    expect(await selectedSettingsPage(page)).toBe('General');
+    await keyboardPage('Advanced');
     await tabTo(page.getByRole('button', { name: 'Connection', exact: true })); await page.keyboard.press('Enter');
     await tabTo(page.getByLabel('Connection mode')); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
     await tabTo(page.getByLabel('WebSocket endpoint')); await page.keyboard.press('ControlOrMeta+A'); await page.keyboard.type(fixture.endpoint);
@@ -66,9 +91,8 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await expect(page.getByRole('region', { name: 'Trajectory', exact: true })).toBeVisible();
     await tabTo(page.getByRole('button', { name: 'Settings', exact: true })); await page.keyboard.press('Enter');
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-    await expect(pageTab('General')).toHaveAttribute('aria-selected', 'true');
-    await tabTo(pageTab('General')); await page.keyboard.press(nextPage);
-    await expect(pageTab('Models')).toHaveAttribute('aria-selected', 'true');
+    expect(await selectedSettingsPage(page)).toBe('General');
+    await keyboardPage('Models');
     // A resource list is one grid: the row opens its detail with Enter.
     await tabTo(settings.getByRole('row', { name: 'fixture', exact: true })); await page.keyboard.press('Enter');
     const endpoint = settings.getByLabel('Endpoint', { exact: true });
@@ -96,11 +120,9 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await page.keyboard.press('Escape');
     await expect(confirmation).toHaveCount(0); await expect(remove).toBeFocused();
     await expect(endpoint).toHaveValue(/\/draft-only$/);
-    // Across pages: Models → Agent → Tools & Permissions → Extensions, then the
-    // extension-kind filter, all by arrow keys.
-    await tabTo(pageTab('Models'));
-    for (let step = 0; step < 3; step++) await page.keyboard.press(nextPage);
-    await expect(pageTab('Extensions')).toHaveAttribute('aria-selected', 'true');
+    // Across pages to Extensions, then the extension-kind filter, all from
+    // the keyboard.
+    await keyboardPage('Extensions');
     const filterTab = (name: string) => settings.getByRole('tablist', { name: 'Extension kinds' }).getByRole('tab', { name, exact: true });
     await tabTo(filterTab('All')); await page.keyboard.press('ArrowRight');
     await expect(filterTab('MCP')).toHaveAttribute('aria-selected', 'true');
@@ -116,54 +138,4 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await tabTo(page.getByRole('button', { name: 'Close Inspector', exact: true })); await page.keyboard.press('Enter');
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   } finally { await page.close(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
-});
-
-/** The Settings page tabs' ARIA orientation and their visual axis are one
- * decision: a vertical rail answers ArrowUp/ArrowDown, a horizontal strip
- * answers ArrowLeft/ArrowRight and ignores ArrowDown. */
-for (const layout of [
-  { name: 'desktop vertical rail', width: 1280, orientation: 'vertical', next: 'ArrowDown', previous: 'ArrowUp', inert: undefined },
-  { name: 'narrow horizontal strip', width: 390, orientation: 'horizontal', next: 'ArrowRight', previous: 'ArrowLeft', inert: 'ArrowDown' },
-] as const) test(`Settings page tabs follow the ${layout.name}`, async ({ page }) => {
-  const fixture = await startDogfood();
-  try {
-    await page.setViewportSize({ width: layout.width, height: 900 });
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    await routeWorkspaceHost(page, fixture); await page.goto('/'); await expect(page).toHaveTitle(/rustX/);
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const list = page.getByRole('tablist', { name: 'Settings pages' });
-    const pageTab = (name: string) => list.getByRole('tab', { name, exact: true });
-    await expect(list).toHaveAttribute('aria-orientation', layout.orientation);
-    // The visual axis is the announced one.
-    const general = (await pageTab('General').boundingBox())!, models = (await pageTab('Models').boundingBox())!;
-    if (layout.orientation === 'vertical') { expect(models.y).toBeGreaterThan(general.y); expect(models.x).toBe(general.x); }
-    else { expect(models.x).toBeGreaterThan(general.x); expect(models.y).toBe(general.y); }
-    await pageTab('General').focus();
-    if (layout.inert) {
-      await page.keyboard.press(layout.inert);
-      await expect(pageTab('General')).toHaveAttribute('aria-selected', 'true');
-      await expect(pageTab('General')).toBeFocused();
-    }
-    await page.keyboard.press(layout.next);
-    await expect(pageTab('Models')).toHaveAttribute('aria-selected', 'true');
-    await expect(pageTab('Models')).toBeFocused();
-    await page.keyboard.press(layout.previous);
-    await expect(pageTab('General')).toHaveAttribute('aria-selected', 'true');
-    if (layout.orientation === 'horizontal') {
-      // A selection that does not move focus into the strip — the recovery
-      // surface's Show details opens Advanced/Connection — still brings the
-      // selected page into the strip's view.
-      await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
-      await page.getByRole('button', { name: 'Show details', exact: true }).click();
-      await expect(pageTab('Advanced')).toHaveAttribute('aria-selected', 'true');
-      await expect(page.getByRole('region', { name: 'Connection Settings', exact: true })).toBeVisible();
-      const strip = await list.evaluate(el => ({ ...el.getBoundingClientRect().toJSON(), overflow: el.scrollWidth > el.clientWidth, scrolled: el.scrollLeft }));
-      const advanced = (await pageTab('Advanced').boundingBox())!;
-      expect(strip.overflow).toBe(true);
-      expect(strip.scrolled).toBeGreaterThan(0);
-      expect(advanced.x).toBeGreaterThanOrEqual(strip.left - 0.5);
-      expect(advanced.x + advanced.width).toBeLessThanOrEqual(strip.right + 0.5);
-      await expect(pageTab('Advanced')).not.toBeFocused();
-    }
-  } finally { await page.close(); await fixture.stop(false); }
 });

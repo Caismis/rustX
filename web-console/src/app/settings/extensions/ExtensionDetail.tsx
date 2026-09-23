@@ -91,9 +91,9 @@ function McpDefinition({ source, scope, name }: ExtensionDetailProps) {
   // document. Native parses it before every MCP mutation and offers no repair
   // mutation for it, so a document that does not parse admits no editing here.
   const mcp = documentAuthoring(catalog);
-  if (mcp.state === 'unavailable') return <p role="alert">Workspace source authority is unavailable.</p>;
+  if (mcp.state === 'unavailable') return <p role="alert" className={css.error}>Workspace source authority is unavailable.</p>;
   if (mcp.state === 'malformed') return <section aria-label="MCP definition"><h4>MCP definition</h4>
-    <p>{mcp.path}</p><p role="alert">{mcp.diagnostic}</p>
+    <p>{mcp.path}</p><p role="alert" className={css.error}>{mcp.diagnostic}</p>
     <p role="status">MCP editing is unavailable because this document does not parse. Correct the file, then rescan configuration files on Advanced.</p></section>;
   // Presence of an identity is the parsed document's own fact: native closes
   // the whole document above when it does not parse, so a present MCP identity
@@ -154,7 +154,7 @@ function AgentDefinition({ source, scope, name, models }: ExtensionDetailProps) 
   const current = source.agents.find(agent => agent.scope === scope && agent.name === name);
   return <section aria-label="Agent definition"><h4>Agent definition</h4>
     <p>Each named Agent is an independent complete profile. A Workspace definition replaces the whole same-name User one, invalid definitions included.</p>
-    {current?.source.diagnostic && <p role="alert">{current.source.diagnostic}</p>}
+    {current?.source.diagnostic && <p role="alert" className={css.error}>{current.source.diagnostic}</p>}
     <TypedUnitForm<AgentProfileDocument> key={`agent:${name}`} title={`Agent ${name}`}
       authoredPresent={current !== undefined} authored={current?.source.authored ?? undefined} blank={{}}
       revision={current?.source.revision ?? source.absent_resource_revision}

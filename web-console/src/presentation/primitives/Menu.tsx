@@ -1,7 +1,8 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { autoUpdate, flip, offset, shift, size, useFloating, type Placement, type VirtualElement } from '@floating-ui/react-dom'
 import clsx from 'clsx'
 import { IconCheckOutline16 } from './icons/index.tsx'
 import { usePointerGrace } from './pointer-grace.ts'
@@ -44,8 +45,14 @@ function isLabel(entry: MenuEntry): entry is MenuLabel {
   return 'type' in entry && entry.type === 'label'
 }
 
-/** Unplaced portal list: hidden but laid out at a fixed origin so offsetWidth/offsetHeight are real. */
-const MEASURE_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
+/** Distance a portaled list keeps from the viewport edges. */
+const VIEWPORT_MARGIN = 12
+
+/** The rustX side/align vocabulary as one Floating UI placement. A side card
+ * opens beside the anchor's top edge, as it always has. */
+function placementOf(side: 'bottom' | 'top' | 'right', align: 'start' | 'end'): Placement {
+  return side === 'right' ? 'right-start' : `${side}-${align}`
+}
 
 /**
  * Render an anchored dropdown menu. While the list is open its keys mirror the
@@ -66,10 +73,13 @@ const MEASURE_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
  * cross-origin iframe leaves).
  * @param props.align - list alignment against the anchor (default 'start').
  * @param props.side - open below (`bottom`, default) or above (`top`) the anchor.
- * @param props.portal - render the list into document.body, fixed-positioned
- * from the anchor rect (repositions on scroll/resize while open). Use when an
- * ancestor's overflow clipping would crop the in-place list; default false
- * keeps the pure-CSS in-place behavior.
+ * @param props.portal - render the list into document.body as a fixed,
+ * Floating UI-placed top layer: it flips to the other side and shifts along
+ * it to stay 12px inside the viewport, a scrollable list takes only the
+ * height the viewport leaves, and it follows its anchor through scroll,
+ * resize and layout changes while open. Use when an ancestor's overflow
+ * clipping would crop the in-place list; default false keeps the pure-CSS
+ * in-place behavior.
  * @param props.closeOnPointerLeave - close the list once the pointer has left
  * both trigger and list for the pointer grace (default false keeps it open
  * until outside click/Escape/selection). The grace makes the 4px trigger->list
@@ -80,8 +90,8 @@ const MEASURE_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
  * directly (e.g. from a host-owned trigger button) instead of measuring the
  * Menu's own wrapper span. Required when the wrapper isn't itself laid out at
  * the trigger (render-prop anchors, effect-positioned proxies — measuring the
- * wrapper there races the host's layout effects). Called on open and on every
- * scroll/resize; return null to skip placement for that frame.
+ * wrapper there races the host's layout effects). Called whenever Floating UI
+ * repositions the list; return null to skip placement for that frame.
  * @param props.footer - rows pinned below the scrolling items area, separated
  * by a hairline; they stay visible while the items above scroll.
  * @param props.selection - how a selected row is marked: a trailing check
@@ -153,61 +163,75 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   const openRef = useRef(open)
   openRef.current = open
   const [openSubmenuId, setOpenSubmenuId] = useState<string | null>(null)
-  const [fixedPos, setFixedPos] = useState<CSSProperties | null>(null)
   const { arm: armClose, cancel: cancelClose } = usePointerGrace(onClose)
 
-  // Portal mode: fixed-position the list from the anchor rect before paint;
-  // track the anchor while open (capture-phase scroll catches nested panes).
-  // getAnchorRect trumps measuring the wrapper span: a child layout effect
-  // runs before the parent's, so a wrapper the host positions in its own
-  // effect measures stale here — the host callback owns the truth instead.
-  useLayoutEffect(() => {
-    if (!open || !portal) { setFixedPos(null); return }
-    const place = () => {
-      let r: DOMRect | null
-      if (getAnchorRect !== undefined) {
-        r = getAnchorRect()
-      } else {
-        /* v8 ignore next 2 -- the ref is attached before the layout effect runs and the listeners die with it. */
-        r = rootRef.current?.getBoundingClientRect() ?? null
-      }
-      if (r === null) return
-      const MARGIN = 12
-      const vw = window.innerWidth
-      const vh = window.innerHeight
-      const listEl = listRef.current
-      const lw = listEl?.offsetWidth ?? 0
-      const lh = listEl?.offsetHeight ?? 0
+  // The submenu card is absolutely positioned outside the list box; the
+  // scroll clip would crop it, so only submenu-free menus get the height cap.
+  const scrollable = !items.some(entry => !isSeparator(entry) && !isLabel(entry) && entry.submenu !== undefined && entry.submenu.length > 0)
 
-      let x: number
-      let y: number
-      if (side === 'right') {
-        x = r.right + 4
-        y = r.top
-      } else if (align === 'start') {
-        x = r.left
-        y = side === 'bottom' ? r.bottom + 4 : r.top - lh - 4
-      } else {
-        x = r.right - lw
-        y = side === 'bottom' ? r.bottom + 4 : r.top - lh - 4
-      }
-
-      if (lw > 0) x = Math.min(Math.max(x, MARGIN), vw - lw - MARGIN)
-      if (lh > 0) y = Math.min(Math.max(y, MARGIN), vh - lh - MARGIN)
-
-      setFixedPos({ left: x, top: y })
+  // Portal geometry is Floating UI's, and only Floating UI's: anchor
+  // measurement, the side/align placement, flipping to the other side and
+  // shifting along it to stay VIEWPORT_MARGIN inside the viewport, the height
+  // the viewport leaves for a scrollable list, and repositioning whenever an
+  // ancestor scrolls, the viewport resizes or either element's layout changes.
+  // getAnchorRect trumps measuring the wrapper span: a child layout effect runs
+  // before the parent's, so a wrapper the host positions in its own effect
+  // measures stale — the host callback owns the truth, as a virtual reference.
+  const [anchorElement, setAnchorElement] = useState<HTMLSpanElement | null>(null)
+  const setRoot = useCallback((node: HTMLSpanElement | null) => {
+    rootRef.current = node
+    setAnchorElement(node)
+  }, [])
+  const anchorRect = useRef(getAnchorRect)
+  anchorRect.current = getAnchorRect
+  /** The last rect a host-owned anchor supplied. A host returning null skips
+   * that frame: the list keeps its last placement, or stays hidden until the
+   * host has ever supplied one. */
+  const hostRect = useRef<DOMRect | null>(null)
+  const hostAnchored = getAnchorRect !== undefined
+  const reference = useMemo<HTMLSpanElement | VirtualElement | null>(() => {
+    if (!hostAnchored || anchorElement === null) return anchorElement
+    return {
+      contextElement: anchorElement,
+      getBoundingClientRect: () => {
+        const rect = anchorRect.current?.() ?? null
+        if (rect !== null) hostRect.current = rect
+        return hostRect.current ?? new DOMRect()
+      },
     }
-    // First run measures the hidden pre-render (same commit as `open`), so
-    // end/top alignment and clamping use real dimensions before anything
-    // paints — no visible jump from a zero-size first guess.
-    place()
-    window.addEventListener('scroll', place, true)
-    window.addEventListener('resize', place)
-    return () => {
-      window.removeEventListener('scroll', place, true)
-      window.removeEventListener('resize', place)
-    }
-  }, [open, portal, align, side, getAnchorRect])
+  }, [hostAnchored, anchorElement])
+  const { refs, floatingStyles, isPositioned } = useFloating({
+    open: open && portal,
+    placement: placementOf(side, align),
+    strategy: 'fixed',
+    transform: false,
+    elements: { reference: portal ? reference : null },
+    whileElementsMounted: autoUpdate,
+    middleware: [
+      offset(4),
+      flip({ padding: VIEWPORT_MARGIN }),
+      shift({ padding: VIEWPORT_MARGIN }),
+      size({
+        padding: VIEWPORT_MARGIN,
+        apply({ availableWidth, availableHeight, elements }) {
+          elements.floating.style.maxWidth = `${Math.max(0, availableWidth)}px`
+          // A list with submenu rows is never clipped: the side card would be.
+          elements.floating.style.maxHeight = scrollable ? `${Math.max(0, availableHeight)}px` : ''
+        },
+      }),
+    ],
+  })
+  const setList = useCallback((node: HTMLDivElement | null) => {
+    listRef.current = node
+    refs.setFloating(node)
+  }, [refs])
+  // Floating UI places a portaled list in the commit that opens it: its first
+  // computation resolves within the same task and is flushed synchronously,
+  // before the browser paints. autoFocus still waits for that placement, so it
+  // never lands on an unplaced row. A host-owned anchor that has never supplied
+  // a rect has nothing to place against, so that list stays invisible.
+  const placed = !portal || (isPositioned && (!hostAnchored || hostRect.current !== null))
+  const portalStyle: CSSProperties = !hostAnchored || hostRect.current !== null ? floatingStyles : { ...floatingStyles, visibility: 'hidden' }
 
   // Opening remembers where the keyboard was, so closing can hand it back to
   // that control — an anchor wrapping several (a split button) cannot be asked
@@ -223,11 +247,11 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   }, [open])
 
   useEffect(() => {
-    if (!open || !autoFocus || (portal && fixedPos === null)) return
+    if (!open || !autoFocus || !placed) return
     const first = listRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')
     walkIndex.current = first === undefined || first === null ? null : 0
     first?.focus()
-  }, [open, autoFocus, portal, fixedPos === null])
+  }, [open, autoFocus, placed])
 
   useEffect(() => {
     if (!open) {
@@ -249,7 +273,13 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
       const insideList = listRef.current?.contains(focused) === true
       const anchored = rootRef.current?.contains(focused) === true || insideList
       if (e.key === 'Escape') {
-        e.preventDefault() // Escape belongs to this menu before its containing modal.
+        // Escape belongs to this menu before its containing modal. The rustX
+        // Modal reads the prevented default; a React Aria modal answers
+        // Escape from React's own listener, which a portaled list's events
+        // still reach through the React tree, so the event stops here, in
+        // the document capture phase, before any of them sees it.
+        e.preventDefault()
+        e.stopPropagation()
         // Closing hands the keyboard back when the menu had it — and, as this
         // primitive always did for autoFocus menus, when it held the keyboard
         // and lost it again (a row that unmounted under it).
@@ -335,10 +365,6 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
     if (!open) cancelClose()
   }, [open, cancelClose])
 
-  // The submenu card is absolutely positioned outside the list box; the
-  // scroll clip would crop it, so only submenu-free menus get the height cap.
-  const scrollable = !items.some(entry => !isSeparator(entry) && !isLabel(entry) && entry.submenu !== undefined && entry.submenu.length > 0)
-
   const renderEntry = (entry: MenuEntry) => {
     if (isSeparator(entry)) {
       return <div key={entry.id} className={css.separator} role="separator" />
@@ -361,6 +387,9 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
           role="menuitem"
           className={clsx(css.item, selected && (selection === 'fill' ? css.selectedFill : css.selected), entry.danger === true && css.danger)}
           disabled={entry.disabled}
+          // The selection marker is also announced: a row shown as selected is
+          // the current one, never a visual-only state.
+          aria-current={selected ? 'true' : undefined}
           aria-haspopup={hasSub ? 'menu' : undefined}
           aria-expanded={hasSub ? subOpen : undefined}
           onFocus={() => { setOpenSubmenuId(hasSub ? entry.id : null) }}
@@ -399,15 +428,18 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
     )
   }
 
-  // Portal lists render hidden until placed: the placement effect measures
-  // this pre-render in the same commit, so the first painted frame is
-  // already at the final position (with getAnchorRect returning null the
-  // list simply stays hidden).
+  // The first painted frame of a portal list is already at its final position
+  // (with getAnchorRect never returning a rect the list stays hidden). A
+  // portaled list is a top
+  // layer: a React Aria modal that contains its anchor keeps it visible to
+  // assistive technology, lets focus enter it and does not treat a press
+  // inside it as an interaction outside the modal.
   const list = open && (
     <div
-      ref={listRef}
+      ref={setList}
       className={clsx(css.list, dense && css.denseList, compact && css.compactList, scrollable && css.scrollable, portal && css.portal, side === 'top' && !portal && css.sideTop, align === 'end' && !portal && css.alignEnd)}
-      style={portal ? fixedPos ?? MEASURE_STYLE : undefined}
+      style={portal ? portalStyle : undefined}
+      data-react-aria-top-layer={portal ? true : undefined}
       role="menu"
       // React portals bubble synthetic events through the REACT tree: without
       // this stop, an item click re-fires the anchor row's own onClick
@@ -431,7 +463,7 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   // gap between them, therefore never counts as leaving.
   return (
     <span
-      ref={rootRef}
+      ref={setRoot}
       className={clsx(css.root, className)}
       onPointerEnter={closeOnPointerLeave ? cancelClose : undefined}
       onPointerLeave={closeOnPointerLeave ? () => { if (open) armClose() } : undefined}

@@ -38,10 +38,10 @@
   max-width: 360px;
 }
 
-/* Portal mode: fixed in the viewport, coordinates supplied inline from the
- * anchor rect (side/align resolved in JS, the in-place offset rules above
- * don't apply). Portaled lists must layer above modal overlays (z 1000) —
- * an anchor inside a dialog still expects its menu on top. */
+/* Portal mode: fixed in the viewport; Floating UI supplies the coordinates
+ * and the available max-width/max-height inline (the in-place offset rules
+ * above don't apply). Portaled lists must layer above modal overlays (z 1000)
+ * — an anchor inside a dialog still expects its menu on top. */
 .portal {
   position: fixed;
   top: auto;
@@ -60,11 +60,12 @@
   right: 0;
 }
 
-/* Viewport fit: the card stops 12px short of the viewport's top/bottom edges
- * (24 = 2 × the portal MARGIN in Menu.tsx) and taller content scrolls inside
- * .viewport, so a pinned .footer stays visible. Menus with submenu rows skip
- * this class — the overflow clip would crop the side card, so they rely on
- * staying short. */
+/* Viewport fit for an in-place list: the card stops 12px short of the
+ * viewport's top/bottom edges and taller content scrolls inside .viewport, so
+ * a pinned .footer stays visible. A portaled list is capped tighter, inline,
+ * by the height Floating UI's size middleware reports available. Menus with
+ * submenu rows skip this class — the overflow clip would crop the side card,
+ * so they rely on staying short. */
 .scrollable {
   max-height: calc(100vh - 24px);
 }
