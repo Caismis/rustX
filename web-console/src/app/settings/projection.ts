@@ -180,6 +180,37 @@ export function sourceView(source: SourceSettings | undefined, scope: SourceScop
   if (!source) return undefined;
   return scope === 'user' ? source.user : source.workspace ?? undefined;
 }
+
+/** Which mutations one native document admits right now.
+ *
+ * Native parses a document before applying any structured mutation to it, and
+ * reports a parse failure as `diagnostic` with no `authored` layer. A document
+ * that does not parse therefore admits no structured mutation at all, and the
+ * browser must not present editors for mutations native will inevitably
+ * reject. That fact belongs to the document, not to each editor, so it is
+ * decided here once:
+ *
+ * - `structured` — the document parsed; semantic-unit editing is available;
+ * - `malformed` — the document did not parse; for `rustx.toml` the one
+ *   mutation native accepts is `repair_config`, fenced on this revision;
+ * - `unavailable` — this scope has no view of the document at all.
+ *
+ * Each native document is its own authority: a malformed `rustx.toml` says
+ * nothing about an MCP document, a named Agent resource or any inventory. */
+export type DocumentAuthoring<T> =
+  | { state: 'structured'; path: string; revision: string; document: T }
+  | { state: 'malformed'; path: string; revision: string; diagnostic: string }
+  | { state: 'unavailable' };
+export function documentAuthoring<T>(view: { path: string; revision: string; authored?: T | null; diagnostic?: string | null } | null | undefined): DocumentAuthoring<T> {
+  if (!view) return { state: 'unavailable' };
+  const { path, revision } = view;
+  if (view.authored) return { state: 'structured', path, revision, document: view.authored };
+  return { state: 'malformed', path, revision, diagnostic: view.diagnostic ?? 'Source document was not loaded.' };
+}
+/** This scope's `rustx.toml`. */
+export function configAuthoring(source: SourceSettings | undefined, scope: SourceScope): DocumentAuthoring<RuntimeLayer> {
+  return documentAuthoring(sourceView(source, scope));
+}
 /** Native authored membership for exactly this scope. A parse failure means the
  * document was not loaded, so membership is unknown, never absent. */
 export function authoredFacts(source: SourceSettings | undefined, scope: SourceScope, mutation: SourceMutation): AuthoredFacts {
@@ -278,8 +309,26 @@ export function catalogMutation(container: CatalogContainer, id: string): Source
 export function catalogEntries<T>(source: SourceSettings | undefined, scope: SourceScope, container: CatalogContainer): CatalogEntry<T>[] {
   const authored = (sourceView(source, scope)?.authored?.[container] ?? undefined) as Record<string, T> | undefined;
   const effective = (source?.resolved?.[container] ?? undefined) as Record<string, T> | undefined;
-  return reachableIdentities(scope, authored, effective)
+  return catalogIdentities(source, scope, container)
     .map(id => ({ id, authored: authored?.[id], effective: effective?.[id], origin: unitProvenance(source, catalogMutation(container, id)) }));
+}
+/** The one identity-discovery rule of a named catalog, shared by every Settings
+ * surface that lists or selects its identities — the Providers & Models
+ * catalog, the Root model selector and a named Agent's explicit-model
+ * selector all reach exactly these, so they can never disagree.
+ *
+ * - User: exactly the identities the User document authors.
+ * - Workspace: exactly the identities the Workspace document authors, together
+ *   with the native effective identities whenever native resolution produced
+ *   them.
+ *
+ * Authored and effective facts are orthogonal. A native resolution failure —
+ * say, a malformed User document — removes the effective identities and
+ * nothing else: what this exact scope's own valid document authors is still
+ * observed, and still listed. No other scope's authored layer ever stands in for
+ * a missing effective one, so no inheritance is reconstructed here. */
+export function catalogIdentities(source: SourceSettings | undefined, scope: SourceScope, container: CatalogContainer): string[] {
+  return reachableIdentities(scope, sourceView(source, scope)?.authored?.[container], source?.resolved?.[container]);
 }
 /** The identities of one named semantic-unit container this scope must be able
  * to reach, on the same terms as a catalog: a Workspace reaches the native

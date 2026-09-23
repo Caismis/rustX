@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { expect, it } from 'vitest';
-import type { Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v18';
+import type { Model, Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v18';
 import {
-  applicationOwners, applicationScope, authoredUnit, catalogEntries, changeBehavior, changeBehaviorLabel,
+  applicationOwners, applicationScope, authoredUnit, catalogEntries, catalogIdentities, changeBehavior, changeBehaviorLabel, configAuthoring, documentAuthoring,
   effectiveStateLabel, inheritedResources, observedResult, observedResultLabel, openOwnerLabel, provenanceLabel,
   reachableIdentities, revisionSelector, selectedRevision, settingsLifecycle, settingsTargetKey, settingsTargetLabel, sourceTargetKey,
   unitApplication, unitFacts, unitProvenance, unitProvenancePath, userSettingsTarget, workspaceSettingsTarget,
@@ -315,4 +315,51 @@ it('S1-15 a Workspace reaches native effective identities of a named container, 
   // An authored identity native resolution did not produce stays reachable.
   expect(reachableIdentities('workspace', { unresolved: {} }, null)).toEqual(['unresolved']);
   expect(reachableIdentities('workspace', null, null)).toEqual([]);
+});
+
+// ── Identity discovery survives effective-resolution failure ────────────────
+
+const workspaceModel: Model = { provider: 'transport', id: 'wire-w', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false } };
+const userModel: Model = { ...workspaceModel, id: 'wire-u' };
+
+it('ID-01 a Workspace keeps its own authored identities when a malformed User document makes resolution unavailable', () => {
+  const source = cfg3Source();
+  source.target = { kind: 'workspace', directory: '/workspace/A' };
+  source.user = { path: '/bound/rustx.toml', revision: 'user-1', authored: null, diagnostic: 'invalid rustx.toml; source was not loaded' };
+  source.workspace = { path: '/workspace/rustx.toml', revision: 'workspace-1', authored: { models: { 'workspace-model': workspaceModel } } };
+  source.resolved = null;
+  source.prospective_diagnostic = 'Source cannot be resolved; repair the diagnosed authored document.';
+  expect(catalogIdentities(source, 'workspace', 'models')).toEqual(['workspace-model']);
+  // The catalog is the same rule, and fabricates no effective value.
+  expect(catalogEntries(source, 'workspace', 'models')).toEqual([
+    { id: 'workspace-model', authored: workspaceModel, effective: undefined, origin: { state: 'unavailable' } },
+  ]);
+  // The malformed User document invents nothing, in either scope.
+  expect(catalogIdentities(source, 'user', 'models')).toEqual([]);
+  expect(catalogIdentities(source, 'workspace', 'providers')).toEqual([]);
+});
+
+it('ID-02 a resolved Workspace reaches inherited effective identities, and User reaches exactly its own authored ones', () => {
+  const source = cfg3Source();
+  source.user.authored = { models: { 'user-model': userModel } };
+  source.workspace = { path: '/workspace/rustx.toml', revision: 'workspace-1', authored: { models: { 'workspace-model': workspaceModel } } };
+  source.resolved = { models: { 'user-model': userModel, 'workspace-model': workspaceModel } } as never;
+  expect(catalogIdentities(source, 'workspace', 'models')).toEqual(['user-model', 'workspace-model']);
+  expect(catalogIdentities(source, 'user', 'models')).toEqual(['user-model']);
+  // User never reaches a Workspace-owned identity through the effective layer.
+  source.user.authored = {};
+  expect(catalogIdentities(source, 'user', 'models')).toEqual([]);
+});
+
+// ── One native document admits structured mutation only when it parses ─────
+
+it('DA-01 a malformed rustx.toml admits only repair, fenced on its exact revision, and says nothing about other documents', () => {
+  const source = cfg3Source();
+  source.user = { path: '/bound/rustx.toml', revision: 'user-7', authored: null, diagnostic: 'invalid rustx.toml; source was not loaded' };
+  expect(configAuthoring(source, 'user')).toEqual({ state: 'malformed', path: '/bound/rustx.toml', revision: 'user-7', diagnostic: 'invalid rustx.toml; source was not loaded' });
+  expect(configAuthoring(source, 'workspace')).toEqual({ state: 'structured', path: '/workspace/rustx.toml', revision: 'workspace-1', document: {} });
+  expect(documentAuthoring(source.user_mcp)).toEqual({ state: 'structured', path: source.user_mcp.path, revision: 'mcp-1', document: {} });
+  expect(configAuthoring(undefined, 'user')).toEqual({ state: 'unavailable' });
+  source.workspace = null;
+  expect(configAuthoring(source, 'workspace')).toEqual({ state: 'unavailable' });
 });

@@ -416,7 +416,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "01a4c2b680df0f60e56b48679d8405ceb53eb9dd6c450e49a4ea662684a2e059"
+      "local_sha256": "eb6bd9a7edd6f75f6c954ec7084d00543c745ae5b7680b3d6b889e116a836628"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -461,7 +461,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c775f8f80819656cc2f73cf0ca5d96e8decb475e87a7726db3b80d9bd4b4c345"
+      "local_sha256": "65ef78e15042516c70211ecf955b0c284eec04eff1f7292fdac8212a83009016"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",

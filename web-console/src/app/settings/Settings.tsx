@@ -21,19 +21,30 @@ import type { ConnectionController } from '../../connection/controller';
 import { ConnectionSettings } from './ConnectionSettings';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import {
-  changeBehavior, changeBehaviorLabel, observedResult, observedResultLabel, observedUnitLabel,
+  catalogIdentities, changeBehavior, changeBehaviorLabel, configAuthoring, observedResult, observedResultLabel, observedUnitLabel,
   observedUnits, settingsLifecycle, settingsLifecycleLabel, settingsTargetKey,
   settingsTargetLabel, settingsTargetScope, unitApplication, type SettingsTarget,
 } from './projection';
 
-const sections: readonly (readonly [SettingsSection, string, string])[] = [
-  ['overview', 'Overview', 'General'], ['general', 'General', 'General'], ['catalog', 'Providers & Models', 'Models'],
-  ['root-model', 'Default model', 'Models'], ['policies', 'Tool Policies', 'Agents & Tools'],
-  ['root-tools', 'Tools', 'Agents & Tools'], ['root-skills', 'Skill access', 'Agents & Tools'],
-  ['root-plugins', 'Plugins', 'Agents & Tools'], ['root-agents', 'Agents & Workflows', 'Agents & Tools'],
-  ['agents', 'Agents', 'Agents & Tools'], ['mcp', 'MCP', 'Integrations'], ['python', 'Managed Python', 'Integrations'],
-  ['skills', 'Skills', 'Integrations'], ['workflows', 'Workflows', 'Integrations'], ['advanced', 'Server & source diagnostics', 'Advanced'],
+/** The native document a section's editors mutate.
+ *
+ * - `config`: the scope's `rustx.toml`, through semantic-unit mutations;
+ * - `resources`: documents independent of `rustx.toml` — MCP, named Agent
+ *   resources and resource inventories — each governed by its own native state;
+ * - `none`: nothing is authored here.
+ *
+ * This is what lets the composition decide once, for a whole section, whether
+ * its structured editors can exist: no individual editor rediscovers it. */
+type SectionDocument = 'config' | 'resources' | 'none';
+const sections: readonly (readonly [SettingsSection, string, string, SectionDocument])[] = [
+  ['overview', 'Overview', 'General', 'none'], ['general', 'General', 'General', 'config'], ['catalog', 'Providers & Models', 'Models', 'config'],
+  ['root-model', 'Default model', 'Models', 'config'], ['policies', 'Tool Policies', 'Agents & Tools', 'config'],
+  ['root-tools', 'Tools', 'Agents & Tools', 'config'], ['root-skills', 'Skill access', 'Agents & Tools', 'config'],
+  ['root-plugins', 'Plugins', 'Agents & Tools', 'config'], ['root-agents', 'Agents & Workflows', 'Agents & Tools', 'config'],
+  ['agents', 'Agents', 'Agents & Tools', 'resources'], ['mcp', 'MCP', 'Integrations', 'resources'], ['python', 'Managed Python', 'Integrations', 'resources'],
+  ['skills', 'Skills', 'Integrations', 'resources'], ['workflows', 'Workflows', 'Integrations', 'resources'], ['advanced', 'Server & source diagnostics', 'Advanced', 'none'],
 ];
+const sectionDocument = (section: SettingsSection): SectionDocument => sections.find(([id]) => id === section)?.[3] ?? 'none';
 
 export interface SettingsProps {
   client: AppServerClient; target: SettingsTarget; host?: ProductHostWorkspaces; onClose?: () => void;
@@ -90,7 +101,16 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
   // "this target is observable" is exactly "no read failure is outstanding".
   const targetValid = !readError;
   const selected = source?.[scope];
-  const models = Object.keys(source?.resolved?.models ?? source?.user.authored?.models ?? {});
+  // Whether this scope's `rustx.toml` admits structured semantic-unit editing,
+  // decided once for every config-backed section. A malformed document admits
+  // exactly one mutation — `repair_config` — and no editor may advertise any
+  // other, while the independent resource documents keep their own authority.
+  const config = configAuthoring(source, scope);
+  const document = sectionDocument(section);
+  // One identity-discovery rule for every model selector, shared with the
+  // Providers & Models catalog: this scope's authored identities, plus the
+  // native effective ones for a Workspace when resolution produced them.
+  const models = catalogIdentities(source, scope, 'models');
   const roots = [source?.user_resource_root ? source.user_resource_root + '/skills' : '', source?.workspace_resource_root ? source.workspace_resource_root + '/skills' : ''];
   const lifecycle = settingsLifecycle({ connection: transport.connection, hasSource: !!observed, targetValid, readError });
   // A section change remounts the editor subtree so its local picker state does
@@ -98,12 +118,22 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
   // that subtree, so they survive the remount.
   const editorKey = `${transport.endpoint ?? ''}|${transport.authorityRevision ?? 0}|${settingsTargetKey(target)}:${section}`;
   const editor = selected && <fieldset disabled={busy || !targetValid || !observed || transport.connection !== 'connected'} className={css.editor}>
-    {section === 'catalog' && <CatalogEditor source={source!} scope={scope} revision={selected.revision} />}
-    {(section === 'general' || section === 'policies') && <RuntimeEditor document={selected.authored ?? {}} resolved={source!.resolved} scope={scope} revision={selected.revision} policyOnly={section === 'policies'} processPolicyImpacts={source!.process_policy_impacts} />}
-    {section.startsWith('root-') && <RootEditor document={selected.authored ?? {}} resolved={source!.resolved} scope={scope} revision={selected.revision} section={section as RootSection} models={models} skillRoots={roots} />}
+    {document === 'config' && config.state === 'structured' && <>
+      {section === 'catalog' && <CatalogEditor source={source!} scope={scope} revision={config.revision} />}
+      {(section === 'general' || section === 'policies') && <RuntimeEditor document={config.document} resolved={source!.resolved} scope={scope} revision={config.revision} policyOnly={section === 'policies'} processPolicyImpacts={source!.process_policy_impacts} />}
+      {section.startsWith('root-') && <RootEditor document={config.document} resolved={source!.resolved} scope={scope} revision={config.revision} section={section as RootSection} models={models} skillRoots={roots} />}
+    </>}
+    {document === 'config' && config.state === 'malformed' && <p role="status">Structured editing is unavailable because {config.path} does not parse. Repair the source to edit it again.</p>}
     {section === 'mcp' && <Integrations source={source!} scope={scope} />}
     {section === 'agents' && <AgentEditor source={source!} scope={scope} models={models} />}
-    {['mcp', 'agents', 'python', 'skills', 'workflows'].includes(section) && source?.prospective_resources && <ResourceInventory resources={source.prospective_resources} family={section} scope={scope} />}
+    {document === 'resources' && source?.prospective_resources && <ResourceInventory resources={source.prospective_resources} family={section} scope={scope} />}
+    {/* The one mutation a malformed `rustx.toml` admits, fenced on its exact
+        current revision. It exists only while the document does not parse, and
+        never in a section that edits an independent document. */}
+    {config.state === 'malformed' && document !== 'resources' && <UnitForm title="Repair malformed source" blank="" revision={config.revision} removable={false}
+      mutation={replacement => ({ kind: 'repair_config', document: replacement ?? '' })}>
+      {(value, change) => <label>Replacement TOML<textarea value={value} onChange={event => change(event.target.value)} /></label>}
+    </UnitForm>}
   </fieldset>;
   return <SettingsPanel rows={[{ id: 'appearance', label: 'Appearance' }, ...(connection ? [{ id: 'connection', label: 'Connection' }] : []), ...sections.map(([id, label, group]) => ({ id, label, group }))]} activeId={section} onSelect={id => onSelect(id as SettingsSection)} onClose={onClose}>
     {section === 'connection' && connection ? <ConnectionSettings connection={connection} client={client} /> : section === 'appearance' ?
@@ -122,12 +152,7 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
         {source?.prospective_diagnostic && <p role="status">{source.prospective_diagnostic}</p>}
         {scope === 'workspace' && <p>Remove an override to reset to the global default. An explicit empty selection means none.</p>}
         <h3>{sections.find(([id]) => id === section)?.[1]}</h3>
-        <SettingsActorContext value={actor}><SourceContext value={source}><div key={editorKey}>{editor}
-          {selected?.diagnostic && !selected.authored && <UnitForm title="Repair malformed source" blank="" revision={selected.revision} removable={false}
-            mutation={document => ({ kind: 'repair_config', document: document ?? '' })}>
-            {(value, change) => <label>Replacement TOML<textarea value={value} onChange={event => change(event.target.value)} /></label>}
-          </UnitForm>}
-        </div></SourceContext></SettingsActorContext>
+        <SettingsActorContext value={actor}><SourceContext value={source}><div key={editorKey}>{editor}</div></SourceContext></SettingsActorContext>
         {section === 'overview' && <p>Definitions and defaults belong to this source. Session selections and explicit adoption belong to each Session.</p>}
         {section === 'advanced' && source && <>
           <h3>Application observation</h3>

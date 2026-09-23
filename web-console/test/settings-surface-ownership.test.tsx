@@ -181,14 +181,14 @@ it.each([
   expect(writes(s)).toHaveLength(0);
 });
 
-it('S1-04 an invalid Workspace document offers no removal, because authored presence is unknown', async () => {
+it('S1-04 an invalid Workspace document offers no unit editor and no removal, because native cannot mutate a document it cannot parse', async () => {
   const s = cfg3Client();
   s.source.workspace = { path: '/workspace/rustx.toml', revision: 'workspace-1', authored: null, diagnostic: 'invalid rustx.toml' };
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await screen.findByText(/invalid rustx\.toml/);
   fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
-  const form = within(screen.getByRole('form', { name: 'Native Tools' }));
-  expect(form.queryByRole('button', { name: /Use global default/ })).toBeNull();
+  expect(screen.queryByRole('form', { name: 'Native Tools' })).toBeNull();
+  expect(screen.queryByRole('button', { name: /Use global default/ })).toBeNull();
   expect(writes(s)).toHaveLength(0);
 });
 
@@ -389,7 +389,9 @@ it('S1-12 invalid configuration stays repairable and is not presented as empty o
   await screen.findByText(/invalid rustx\.toml/);
   expect(screen.getByRole('form', { name: 'Repair malformed source' })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'General' }));
-  expect(screen.getAllByText(/Authored source is invalid/).length).toBeGreaterThan(0);
+  // No structured editor presents the unparsed document as empty, inherited or
+  // defaulted: it names the malformed document and offers only its repair.
+  expect(screen.getByText(/Structured editing is unavailable because \/workspace\/rustx\.toml does not parse/)).toBeTruthy();
   expect(screen.queryByText(/Inherited — no Workspace override/)).toBeNull();
   expect(screen.queryByText(/Native default — no authored value/)).toBeNull();
   // Repair submits an exact revision-fenced repair mutation.

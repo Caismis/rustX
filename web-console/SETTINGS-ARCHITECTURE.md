@@ -367,6 +367,30 @@ disables authoring of the valid scope: repair, inventory, diagnostics and exact
 CAS writes stay available. `unset` is the distinct fact that resolution succeeded
 and no source authors the unit, so the native default governs.
 
+### Malformed documents admit exactly their native recovery
+
+Native parses a document before applying any structured mutation to it, so a
+document that does not parse admits none. `documentAuthoring` decides this once
+per native document — `structured`, `malformed` or `unavailable` — and every
+Settings section declares which document it mutates (`config`, `resources` or
+`none`), so no individual editor rediscovers it:
+
+```text
+malformed rustx.toml
+  config-backed sections (Providers & Models, General, Tool Policies, Root …)
+      → no structured editor, no add/override/remove action
+      → "Repair malformed source" (`repair_config`), fenced on the exact revision
+  independent documents (MCP, named Agent resources, resource inventories)
+      → governed by their own native state, unaffected
+```
+
+Structured editing returns only after the committed repair is observed by an
+authoritative read that parses. The rule is per document, never global: a
+malformed MCP document likewise offers no MCP editor — native parses it before
+every MCP mutation and has no MCP repair mutation — while `rustx.toml` editing
+stays available. A named Agent resource is replaced whole without parsing the
+previous file, so an invalid one stays editable.
+
 ### Exact provenance identity
 
 `unitProvenancePath` maps every semantic unit to the exact dotted key native
@@ -450,7 +474,21 @@ invalid or unobserved authored document proves no override, so it offers none.
 
 ## Identity discovery
 
-Enumerating an identity is a native fact, not an authored one. Workspace catalogs
+Enumerating an identity is a native fact, not an authored one. One rule,
+`catalogIdentities`, serves every surface that lists or selects a catalog
+identity — the Providers & Models catalog, the Root model selector and a named
+Agent's explicit-model selector — so they can never disagree:
+
+```text
+User       identities = exactly the User-authored identities
+Workspace  identities = the Workspace-authored identities
+                        ∪ the native effective identities, when resolution produced them
+```
+
+Authored and effective facts are orthogonal: a resolution failure (for example a
+malformed User document) removes the effective identities and nothing else, so a
+valid Workspace's own authored identities stay reachable. No other scope's
+authored layer ever stands in for a missing effective layer. Workspace catalogs
 list every Provider and Model identity in `SourceSettings.resolved`, together with
 whatever this scope authors for it and the native `provenance` origin, so an
 inherited identity is reachable without being retyped and is reported as
