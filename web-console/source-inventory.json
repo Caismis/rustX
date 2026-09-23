@@ -428,7 +428,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "a2386045884af57c972333fe1921fc17fd3f0429a0cd2b9a0cf8a6d2fa44fe79"
+      "local_sha256": "f01e6accb1276bca0aae2964e8e52364b1ae0c36f55bab534a061187d77cf138"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",

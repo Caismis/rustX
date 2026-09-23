@@ -538,11 +538,13 @@ projected rather than inferred.
 
 ## Authoring intent
 
-`UnitForm` keeps five facts distinct and never collapses them into one form value:
+`UnitForm` keeps these facts distinct and never collapses them into one form value:
 
 ```text
 native effective value        projected from SourceSettings.resolved
-native authored value         this scope's own membership (`authored` prop)
+native authored presence      whether this scope's source holds the unit (`authoredPresent`)
+native authored value         what native parsed it into (`authored` prop)
+shadowed definition           the same-name User resource a Workspace one replaces
 local override intent         exists only after Override or a real edit
 local dirty draft             the value carrying that intent
 CAS base revision             the exact revision the next write is fenced on
@@ -571,6 +573,17 @@ Authored presence is the native projection value the call site passes without a
 fallback — only `undefined` means "authors none" — so an explicitly authored `[]`,
 `{}`, `false` or `""` counts as an override and keeps its removal action. An
 invalid or unobserved authored document proves no override, so it offers none.
+
+For a whole-file resource presence and value are separate native facts, because
+presence is a file fact and the value is a parsing fact. A named-Agent file that
+exists but does not parse projects its path, real revision and diagnostic with
+no authored value; it is still this scope's definition, never `new` and never
+`inherited`. It is displayed from the neutral seed rather than from the User
+definition it shadows, replaced by an ordinary edit fenced on its own revision,
+and removed through that revision — as **Use global default** when a User
+definition lies underneath, otherwise as **Remove**. An MCP identity needs no
+separate presence: its presence is a fact of the parsed `mcp.toml`, and a
+document that does not parse admits no MCP editing at all.
 
 ## Identity discovery
 

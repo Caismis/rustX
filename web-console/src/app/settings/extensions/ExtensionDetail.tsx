@@ -95,6 +95,9 @@ function McpDefinition({ source, scope, name }: ExtensionDetailProps) {
   if (mcp.state === 'malformed') return <section aria-label="MCP definition"><h4>MCP definition</h4>
     <p>{mcp.path}</p><p role="alert">{mcp.diagnostic}</p>
     <p role="status">MCP editing is unavailable because this document does not parse. Correct the file, then rescan configuration files on Advanced.</p></section>;
+  // Presence of an identity is the parsed document's own fact: native closes
+  // the whole document above when it does not parse, so a present MCP identity
+  // always has an authored value.
   const authored = mcp.document[name];
   return <section aria-label="MCP definition"><h4>MCP definition</h4>
     <p>A definition is inert. It is prepared and connected only once something selects it, and this section never connects to it.</p>
@@ -141,14 +144,19 @@ function McpFields({ form }: { form: import('../forms/bridge').TypedUnitForm<Mcp
   </>}</Subscribe>;
 }
 
-/** One named Agent's complete profile document. */
+/** One named Agent's complete profile document.
+ *
+ * Each named Agent is its own file, so whether this scope defines it and what
+ * native parsed it into are two facts: a file that does not parse is still this
+ * scope's definition — winning, and shadowing any same-name User one — and it
+ * is replaced or removed on its own revision. */
 function AgentDefinition({ source, scope, name, models }: ExtensionDetailProps) {
   const current = source.agents.find(agent => agent.scope === scope && agent.name === name);
   return <section aria-label="Agent definition"><h4>Agent definition</h4>
     <p>Each named Agent is an independent complete profile. A Workspace definition replaces the whole same-name User one, invalid definitions included.</p>
     {current?.source.diagnostic && <p role="alert">{current.source.diagnostic}</p>}
     <TypedUnitForm<AgentProfileDocument> key={`agent:${name}`} title={`Agent ${name}`}
-      authored={current?.source.authored ?? undefined} blank={{}}
+      authoredPresent={current !== undefined} authored={current?.source.authored ?? undefined} blank={{}}
       revision={current?.source.revision ?? source.absent_resource_revision}
       removalNotice={<p>The root Agent's delegation allowlist is a separate unit and is not changed by this. Removing the definition does not remove the name from that allowlist.</p>}
       mutation={value => ({ kind: 'agent', name, authored: value })}>

@@ -58,10 +58,15 @@ export type DefinitionAuthoring = 'new' | 'inherited' | 'overriding' | 'authored
 /** Everything one semantic unit's editing surface needs, owned where it
  * belongs.
  *
- * Five facts stay distinct and are never collapsed into one form value:
+ * These facts stay distinct and are never collapsed into one form value:
  *
  * - the native **effective** value, projected from `SourceSettings.resolved`;
- * - this scope's native **authored** presence/value (`authored`);
+ * - this scope's native **authored presence** (`authoredPresent`) — whether its
+ *   source holds the unit at all;
+ * - this scope's native **authored value** (`authored`) — what native parsed
+ *   that unit into. A whole-identity resource lives in its own file, so a file
+ *   that exists but does not parse is present with no value: it is still this
+ *   scope's definition, replaced or removed on its own revision;
  * - this browser's **override intent**, which exists only after an explicit
  *   Override action or, for a value-inherited semantic unit, an actual edit —
  *   an inherited whole resource definition admits no edit before its explicit
@@ -69,7 +74,7 @@ export type DefinitionAuthoring = 'new' | 'inherited' | 'overriding' | 'authored
  * - the **dirty draft** carrying that intent's value;
  * - the exact **CAS base revision** the next write is fenced on.
  *
- * None of those five live in a React component or in a TanStack Form instance.
+ * None of those live in a React component or in a TanStack Form instance.
  * They live in the unit's transaction actor, which is owned by the Settings
  * authority actor and outlives this form, the detail view it sits in, the page
  * it belongs to and the whole Settings dialog.
@@ -83,7 +88,8 @@ export type DefinitionAuthoring = 'new' | 'inherited' | 'overriding' | 'authored
  * Remove is the exact inverse of authoring, not a generic mutation: it exists
  * only while this scope really authors the unit. Authored presence is the
  * native projection fact the call site passes, never a truthiness test —
- * `false`, `[]`, `{}` and `""` are authored values like any other. */
+ * `false`, `[]`, `{}` and `""` are authored values like any other — and never
+ * inferred from a parse: an unparsed definition is present. */
 export interface UnitEditing<T> {
   readonly identity: string;
   /** The value this editor must present: the browser draft when one exists,
@@ -96,7 +102,10 @@ export interface UnitEditing<T> {
   readonly discard: () => void;
   readonly review: () => void;
   readonly draft: boolean;
+  /** This scope's source holds the unit, parsed or not. */
   readonly authoredPresent: boolean;
+  /** This scope's source holds the unit but native parsed no value from it. */
+  readonly unparsed: boolean;
   readonly overriding: boolean;
   readonly inheritance: boolean;
   readonly committed: boolean;
@@ -127,8 +136,15 @@ export interface UnitEditing<T> {
 
 export interface UnitOptions<T> {
   /** The exact value this scope authors for this unit, or `undefined` when it
-   * authors none. Call sites pass the native projection without a fallback. */
+   * authors none or native parsed none. Call sites pass the native projection
+   * without a fallback. */
   authored?: T;
+  /** Whether this scope's source holds the unit, independent of whether native
+   * parsed it into `authored`. It defaults to `authored !== undefined`, which is
+   * exact wherever presence and value come from one parsed document — every
+   * `rustx.toml` unit and every MCP identity of a parsed `mcp.toml`. A named
+   * Agent is its own file, so its call site passes the file's presence. */
+  authoredPresent?: boolean;
   /** The neutral seed for authoring a unit this scope does not have yet. */
   blank: T;
   revision: string;
@@ -143,7 +159,7 @@ export interface UnitOptions<T> {
   redacted?: boolean;
 }
 
-export function useUnitEditing<T>({ authored, blank, revision, mutation, inherited = value => value as T, redacted = false }: UnitOptions<T>): UnitEditing<T> {
+export function useUnitEditing<T>({ authored, authoredPresent = authored !== undefined, blank, revision, mutation, inherited = value => value as T, redacted = false }: UnitOptions<T>): UnitEditing<T> {
   const actor = useSettingsActor();
   const source = useContext(SourceContext);
   const scope = source?.target.kind ?? 'user';
@@ -178,7 +194,7 @@ export function useUnitEditing<T>({ authored, blank, revision, mutation, inherit
   // about this unit, so two independent sections never borrow each other's.
   const outcome = useSelector(actor, target => unitOutcome(target, identity), (left, right) => left.kind === right.kind && JSON.stringify(left) === JSON.stringify(right));
   const draft = transaction?.draft as { value: T } | undefined;
-  const authoredPresent = authored !== undefined;
+  const unparsed = authoredPresent && authored === undefined;
   const base = transaction?.base ?? revision;
   const observed = transaction?.observed ?? revision;
   // The native effective value, adapted to this control's authored shape. It is
@@ -193,6 +209,9 @@ export function useUnitEditing<T>({ authored, blank, revision, mutation, inherit
   // inherited definition is inspected and is never authoring state until the
   // override transition copies it into a draft.
   const overrideSeed = (shadowed?.seed ?? blank) as T;
+  // An unparsed definition of this scope is `authored`: it is displayed from
+  // the neutral seed, never from the definition it shadows, and replacing it is
+  // an ordinary edit fenced on its own revision.
   const displayed: T = draft ? draft.value
     : redacted ? blank
       : authored !== undefined ? authored
@@ -201,7 +220,7 @@ export function useUnitEditing<T>({ authored, blank, revision, mutation, inherit
   const writable = definition !== 'inherited';
   const begin = (value: T) => actor.send({ type: 'UNIT.EDIT', identity, selector, revision, value });
   return {
-    identity, displayed, outcome, draft: draft !== undefined, authoredPresent,
+    identity, displayed, outcome, draft: draft !== undefined, authoredPresent, unparsed,
     overriding: draft !== undefined || authoredPresent, inheritance, committed, busy, admitted,
     base, observed, scope, facts, configUnit: unitMutation.kind === 'config',
     definition, shadowed, writable,
@@ -252,6 +271,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
   const restoresInherited = workspace && (unit.definition === undefined || unit.shadowed !== undefined);
   const owner = workspace ? 'Workspace' : 'User';
   return <form aria-label={title} className={css.unit} data-definition={unit.definition}
+    data-authored-value={unit.definition === 'authored' ? unit.unparsed ? 'unparsed' : 'parsed' : undefined}
     onSubmit={event => { event.preventDefault(); unit.submit(); }}>
     <fieldset disabled={unit.busy}><legend>{title}</legend>
       {unit.configUnit && unit.facts.authored.state !== 'unavailable' && <>
@@ -335,7 +355,10 @@ function DefinitionNotice<T>({ unit, owner }: { unit: UnitEditing<T>; owner: str
       <p role="status" data-definition-state="overriding">Workspace override draft. Saving creates a Workspace definition that replaces the whole User definition; discarding it keeps the User definition in effect.</p>
       {withheld}
     </>;
-    case 'authored': return <p role="status" data-definition-state="authored">{owner} definition{shadowed ? ' — overrides the User definition of the same identity' : ''}.</p>;
+    case 'authored': return <p role="status" data-definition-state="authored">
+      {owner} definition{shadowed ? ' — overrides the User definition of the same identity' : ''}.
+      {unit.unparsed && ' Its file does not parse, so no field shows its content. Saving replaces the whole file with the definition entered here, on its current revision.'}
+    </p>;
     default: return null;
   }
 }

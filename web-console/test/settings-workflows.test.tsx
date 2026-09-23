@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { CapabilityInspection1, Model, Request1 } from '../../protocol/app-server/v19';
+import type { CapabilityInspection1, Model, Request1, SourceSettings } from '../../protocol/app-server/v19';
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/app-server';
@@ -571,6 +571,188 @@ it('S2-07 a new Workspace resource and a Workspace-only definition are worded as
   expect(definitionState('MCP local')).toBe('authored');
   expect(screen.queryByRole('button', { name: 'Use global default MCP local' })).toBeNull();
   expect(screen.getByRole('button', { name: 'Remove MCP local' }).closest('[data-removal]')!.getAttribute('data-removal')).toBe('authored-removal');
+});
+
+// ── S2-07 A definition that does not parse is still authored ────────────────
+
+const USER_REVIEWER = '/home/user/rustx/.agents/agents/reviewer.toml';
+const WORKSPACE_REVIEWER = '/workspace/.agents/agents/reviewer.toml';
+const INVALID_AGENT = 'invalid named Agent definition';
+
+/** Named-Agent files in both scopes over a native store that projects them
+ * exactly as native does: a file that does not parse keeps its path and its
+ * real revision and carries a diagnostic instead of an authored value. The
+ * resource inventory is resolved from the files the way native resolves them —
+ * the Workspace file wins, parsed or not, and shadows the same-name User file. */
+function agentFiles(files: { user?: 'valid' | 'malformed'; workspace?: 'valid' | 'malformed' }) {
+  type Scope = 'user' | 'workspace';
+  const path = (scope: Scope) => scope === 'user' ? USER_REVIEWER : WORKSPACE_REVIEWER;
+  let commits = 0;
+  const resolve = (source: SourceSettings) => {
+    const file = (scope: Scope) => source.agents.find(agent => agent.scope === scope && agent.name === 'reviewer');
+    const user = file('user'), workspace = file('workspace'), winner = workspace ?? user;
+    source.prospective_resources = {
+      definitions: winner ? [{ family: 'agent', name: 'reviewer', valid: !!winner.source.authored, location: {
+        scope: winner.scope, path: winner.source.path, ...(workspace && user ? { shadowed: user.source.path } : {}),
+      } }] : [],
+      resource_diagnostics: winner && !winner.source.authored
+        ? [{ subject: { kind: 'resource', family: 'agent', name: 'reviewer' }, file: winner.source.path, field: 'agents.reviewer', reason: 'reviewer: expected a table' }] : [],
+      agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [],
+    } as never;
+  };
+  const s = cfg3Client(async (op, source) => {
+    if (op.method !== 'configuration/sourceWrite' || op.params.mutation.kind !== 'agent') return;
+    const { target: { kind: scope }, mutation } = op.params;
+    source.agents = source.agents.filter(agent => !(agent.scope === scope && agent.name === mutation.name));
+    if (mutation.authored) source.agents.push({ scope, name: mutation.name, source: { path: path(scope), revision: `agent-${scope}-${++commits}`, authored: mutation.authored } });
+    resolve(s.source);
+  });
+  s.source.agents = (['user', 'workspace'] as const).flatMap(scope => {
+    const state = files[scope];
+    if (!state) return [];
+    return [{ scope, name: 'reviewer', source: state === 'valid'
+      ? { path: path(scope), revision: `agent-${scope}-valid`, authored: { description: `${scope === 'user' ? 'User' : 'Workspace'} reviewer`, instructions: 'Review carefully.' } }
+      : { path: path(scope), revision: `agent-${scope}-bad`, diagnostic: INVALID_AGENT } }];
+  });
+  resolve(s.source);
+  return s;
+}
+async function openReviewer(s: Subject, scope: 'user' | 'workspace') {
+  await (scope === 'user' ? user : workspace)(s, 'Extensions');
+  fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
+  await openResourceRow('reviewer');
+}
+const authoredValue = (title: string) => definition(title).getAttribute('data-authored-value');
+const enabled = (name: string) => !(screen.getByRole('button', { name }) as HTMLButtonElement).disabled;
+
+it('S2-07 a User named-Agent file that does not parse is an existing invalid User definition, replaced on its real revision', async () => {
+  const s = agentFiles({ user: 'malformed' });
+  await openReviewer(s, 'user');
+  // Present in the source, without a parsed value: authored, never new.
+  expect(definitionState('Agent reviewer')).toBe('authored');
+  expect(authoredValue('Agent reviewer')).toBe('unparsed');
+  expect(screen.queryByText(/New User definition/)).toBeNull();
+  expect(within(definition('Agent reviewer')).getByText(/User definition\. Its file does not parse/)).toBeTruthy();
+  expect(screen.getAllByText(INVALID_AGENT).length).toBeGreaterThan(0);
+  // Its removal is the real removal of the User file, available at once.
+  expect(screen.getByRole('button', { name: 'Remove Agent reviewer' }).closest('[data-removal]')!.getAttribute('data-removal')).toBe('authored-removal');
+  expect(enabled('Remove Agent reviewer')).toBe(true);
+  // Opening it authored nothing.
+  expect(field('Description').value).toBe('');
+  expect(disabled(field('Description'))).toBe(false);
+  expect(enabled('Save Agent reviewer')).toBe(false);
+  expect(retained(s)).not.toContain('agent-user-bad');
+  expect(writes(s)).toHaveLength(0);
+
+  // Replacement is an ordinary unit edit, pinned on the malformed file's own
+  // revision, never on the absent-identity token.
+  fireEvent.change(field('Description'), { target: { value: 'Repaired reviewer' } });
+  expect(retained(s)).toContain('"base":"agent-user-bad"');
+  fireEvent.click(screen.getByRole('button', { name: 'Save Agent reviewer' }));
+  await waitFor(() => expect(writes(s)).toHaveLength(1));
+  expect(writes(s)[0].params).toEqual({
+    target: { kind: 'user' }, expected_revision: 'agent-user-bad',
+    mutation: { kind: 'agent', name: 'reviewer', authored: { description: 'Repaired reviewer' } },
+  });
+  // The authoritative reread settles the same unit with the parsed value.
+  await waitFor(() => expect(authoredValue('Agent reviewer')).toBe('parsed'));
+  expect(definitionState('Agent reviewer')).toBe('authored');
+  expect(field('Description').value).toBe('Repaired reviewer');
+  expect(writes(s)).toHaveLength(1);
+});
+
+it('S2-07 removing a malformed User named Agent deletes exactly that file through its real revision', async () => {
+  const s = agentFiles({ user: 'malformed' });
+  await openReviewer(s, 'user');
+  await confirmAction('Remove Agent reviewer');
+  await waitFor(() => expect(writes(s)).toHaveLength(1));
+  expect(writes(s)[0].params).toEqual({
+    target: { kind: 'user' }, expected_revision: 'agent-user-bad',
+    mutation: { kind: 'agent', name: 'reviewer', authored: null },
+  });
+  // After the authoritative reread the identity is absent in this source.
+  await waitFor(() => expect(definitionState('Agent reviewer')).toBe('new'));
+  expect(s.source.agents).toEqual([]);
+  expect(writes(s)).toHaveLength(1);
+});
+
+it('S2-07 a malformed Workspace named Agent is the Workspace definition shadowing the User one, replaced on its own revision', async () => {
+  const s = agentFiles({ user: 'valid', workspace: 'malformed' });
+  await openReviewer(s, 'workspace');
+  // The Workspace file is authored and invalid, and it shadows the User file.
+  expect(definitionState('Agent reviewer')).toBe('authored');
+  expect(authoredValue('Agent reviewer')).toBe('unparsed');
+  expect(within(definition('Agent reviewer')).getByText(/Workspace definition — overrides the User definition of the same identity\. Its file does not parse/)).toBeTruthy();
+  expect(screen.getByText('Overrides the inherited definition')).toBeTruthy();
+  expect(screen.getByText('Invalid definition')).toBeTruthy();
+  expect(screen.queryByText(/Inherited from User/)).toBeNull();
+  // Nothing is locked behind an Override transition, and nothing is seeded
+  // from the User definition: the Workspace one already exists.
+  expect(screen.queryByRole('button', { name: /^Override Agent reviewer/ })).toBeNull();
+  expect(disabled(field('Description'))).toBe(false);
+  expect(field('Description').value).toBe('');
+  expect(retained(s)).not.toContain('User reviewer');
+  expect(writes(s)).toHaveLength(0);
+  // Removing it restores the User definition, so it is worded as inheritance.
+  expect(screen.queryByRole('button', { name: 'Remove Agent reviewer' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Use global default Agent reviewer' }).closest('[data-removal]')!.getAttribute('data-removal')).toBe('override-removal');
+
+  // The replacement draft is the transaction actor's: it survives leaving the
+  // detail and the page, and navigation writes nothing.
+  fireEvent.change(field('Description'), { target: { value: 'Workspace reviewer' } });
+  expect(retained(s)).toContain('"base":"agent-workspace-bad"');
+  await openSettingsPage('Models');
+  await openSettingsPage('Extensions');
+  expect(field('Description').value).toBe('Workspace reviewer');
+  expect(writes(s)).toHaveLength(0);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Save Agent reviewer' }));
+  await waitFor(() => expect(writes(s)).toHaveLength(1));
+  expect(writes(s)[0].params).toEqual({
+    target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'agent-workspace-bad',
+    mutation: { kind: 'agent', name: 'reviewer', authored: { description: 'Workspace reviewer' } },
+  });
+  await waitFor(() => expect(authoredValue('Agent reviewer')).toBe('parsed'));
+  expect(screen.getByText('Valid definition')).toBeTruthy();
+  expect(writes(s).filter(op => op.params.target.kind === 'user')).toHaveLength(0);
+  expect(writes(s)).toHaveLength(1);
+});
+
+it('S2-07 using the global default in place of a malformed Workspace named Agent removes it on its revision and the User one takes effect', async () => {
+  const s = agentFiles({ user: 'valid', workspace: 'malformed' });
+  await openReviewer(s, 'workspace');
+  await confirmAction('Use global default Agent reviewer');
+  await waitFor(() => expect(writes(s)).toHaveLength(1));
+  expect(writes(s)[0].params).toEqual({
+    target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'agent-workspace-bad',
+    mutation: { kind: 'agent', name: 'reviewer', authored: null },
+  });
+  // The authoritative reread shows the User definition in effect again,
+  // inspected read-only, with no Workspace draft created by the transition.
+  await waitFor(() => expect(definitionState('Agent reviewer')).toBe('inherited'));
+  expect(screen.getByText('Inherited from User · no override in this Workspace')).toBeTruthy();
+  expect(field('Description').value).toBe('User reviewer');
+  expect(disabled(field('Description'))).toBe(true);
+  expect(s.source.agents.map(agent => agent.scope)).toEqual(['user']);
+  expect(writes(s)).toHaveLength(1);
+});
+
+it('S2-07 a malformed Workspace-only named Agent is authored by the Workspace and removed as a real deletion', async () => {
+  const s = agentFiles({ workspace: 'malformed' });
+  await openReviewer(s, 'workspace');
+  expect(definitionState('Agent reviewer')).toBe('authored');
+  expect(authoredValue('Agent reviewer')).toBe('unparsed');
+  expect(within(definition('Agent reviewer')).getByText(/^Workspace definition\. Its file does not parse/)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Use global default Agent reviewer' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Remove Agent reviewer' }).closest('[data-removal]')!.getAttribute('data-removal')).toBe('authored-removal');
+  await confirmAction('Remove Agent reviewer');
+  await waitFor(() => expect(writes(s)).toHaveLength(1));
+  expect(writes(s)[0].params).toEqual({
+    target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'agent-workspace-bad',
+    mutation: { kind: 'agent', name: 'reviewer', authored: null },
+  });
+  await waitFor(() => expect(definitionState('Agent reviewer')).toBe('new'));
+  expect(s.source.agents).toEqual([]);
 });
 
 // ── S2-08 No fictitious authoring ───────────────────────────────────────────

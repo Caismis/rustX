@@ -251,7 +251,10 @@ definition or named Agent is shown read-only; **Override … in this Workspace**
 the only way to begin a Workspace definition, which replaces the whole User one
 when saved. Its seed never copies an inherited literal environment value or
 header. **Use global default** removes that override and the User definition
-applies again; a Workspace-only definition is removed with **Remove**. A Provider is the one
+applies again; a Workspace-only definition is removed with **Remove**. A named
+Agent file that exists but does not parse is still that scope's definition — a
+Workspace one still shadows the User one — so it is reported as invalid, never as
+new or inherited, and is replaced or removed on its own revision. A Provider is the one
 whole unit that inherits no editing state at all — an inherited credential stays
 redacted, is never read back from the shadowed definition, and an override always
 authors a new credential. User Settings is the lowest authored source and
