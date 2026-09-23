@@ -39,6 +39,18 @@ import type { RevisionSelector } from '../projection';
  * mutation is in flight the intent belongs to it, and the gesture is not
  * accepted.
  *
+ * A definitive commit is also the one point at which the CAS base and the
+ * presented value part: the base names the committed revision at once, while
+ * the authoritative projection — and every editor rendering it — still
+ * carries the source before the commit until the post-commit observation
+ * arrives. A draft begun in between would be fenced on the committed revision
+ * yet derived from the pre-commit value, so no exact CAS could stop it from
+ * silently restoring what the commit replaced. While `mutation.acknowledged`
+ * is `awaitingObservation` the unit therefore accepts no `EDIT` at all: a
+ * newer intent authored before the acknowledgement survives it untouched, and
+ * editing resumes once an authoritative observation has either settled the
+ * commit or revealed its divergence.
+ *
  * The fourth region, `lifetime`, is the transaction's own ownership decision.
  * The transaction retires once it owns nothing at all — no intent, no pinned
  * base and no commit left to observe — which is a fact about the other three
@@ -118,6 +130,9 @@ export const unitTransactionMachine = setup({
     intentUnchanged: ({ context }) => context.submitted?.generation === context.generation,
     /** Nothing is left for this transaction to fence on. */
     nothingAuthored: ({ context }) => context.draft === undefined,
+    /** A semantic unit whose definitive commit still awaits authoritative
+     * observation is not a valid source for a new same-unit draft. */
+    editable: not(stateIn({ mutation: { acknowledged: 'awaitingObservation' } })),
     /** A submitted mutation owns the browser intent until its outcome. */
     inFlight: stateIn({ mutation: 'submitting' }),
     /** No mutation is in flight and no definitive commit still owes its
@@ -171,10 +186,10 @@ export const unitTransactionMachine = setup({
         DISCARD: { guard: not('inFlight'), target: '.clean', actions: ['dropDraft', raise({ type: 'RELEASE' })] },
       },
       states: {
-        clean: { on: { EDIT: { target: 'dirty', actions: 'recordEdit' } } },
+        clean: { on: { EDIT: { guard: 'editable', target: 'dirty', actions: 'recordEdit' } } },
         dirty: {
           on: {
-            EDIT: { target: 'dirty', actions: 'recordEdit' },
+            EDIT: { guard: 'editable', target: 'dirty', actions: 'recordEdit' },
             // A confirmed commit of exactly this intent drops the authored
             // draft. A newer intent survives its own older acknowledgement.
             COMMITTED: { guard: 'intentUnchanged', target: 'clean', actions: 'dropDraft' },
@@ -190,7 +205,7 @@ export const unitTransactionMachine = setup({
         following: {
           on: {
             OBSERVED: { actions: ['recordObservation', 'followObservation'] },
-            EDIT: 'pinned',
+            EDIT: { guard: 'editable', target: 'pinned' },
             SUBMIT: 'pinned',
             REVIEW: { target: 'pinned', actions: 'reviewObservation' },
           },
@@ -293,8 +308,14 @@ export type UnitTransactionSnapshot = SnapshotFrom<typeof unitTransactionMachine
  * gesture. The one difference that is not a divergence is a definitive commit
  * no post-commit authoritative observation has completed for yet. */
 export function requiresReview(snapshot: UnitTransactionSnapshot): boolean {
-  return snapshot.context.base !== snapshot.context.observed
-    && !snapshot.matches({ mutation: { acknowledged: 'awaitingObservation' } });
+  return snapshot.context.base !== snapshot.context.observed && !awaitingCommitObservation(snapshot);
+}
+
+/** Whether a definitive commit of this unit still awaits the authoritative
+ * observation that settles it or reveals its divergence. Until then the
+ * presented source predates the commit, so the unit accepts no edit. */
+export function awaitingCommitObservation(snapshot: UnitTransactionSnapshot): boolean {
+  return snapshot.matches({ mutation: { acknowledged: 'awaitingObservation' } });
 }
 
 /** Whether the transaction holds browser authoring intent that `DISCARD`

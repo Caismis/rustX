@@ -828,6 +828,69 @@ it('S2-09 a dirty Provider draft survives list/detail, page, filter and revision
   expect(writes(s)[0].params.expected_revision).toBe('user-external');
 });
 
+it('S2-09 a committed Model accepts no edit until its authoritative reread, and the next edit starts from the observed Model', async () => {
+  // Native applies each write and acknowledges it at a new revision; the read
+  // after a commit is held until the test releases it.
+  let revision = 1;
+  let reread: ReturnType<typeof deferred<void>> | undefined;
+  const s = cfg3Client(async (op, source) => {
+    if (op.method === 'configuration/sourceWrite') {
+      const { mutation } = op.params.mutation as Extract<Write['params']['mutation'], { kind: 'config' }>;
+      if (mutation.unit === 'model') source.user.authored!.models![mutation.id] = mutation.authored!;
+      source.user.revision = `user-${++revision}`;
+      reread = deferred<void>();
+      return { type: 'source_settings', projection: structuredClone(source) };
+    }
+    if (op.method === 'configuration/sourcesRead' && reread) await reread.promise;
+  });
+  s.source.user.authored!.models = { main: fullModel() };
+  s.source.user.revision = 'user-1';
+  await user(s, 'Models');
+  await openResourceRow('transport');
+  fireEvent.click(within(screen.getByRole('grid', { name: 'Models of Provider transport' })).getByRole('row', { name: 'main' }));
+  const wire = () => screen.getByLabelText('Wire model identity') as HTMLInputElement;
+  const contextWindow = () => screen.getByLabelText('Context window') as HTMLInputElement;
+  const save = (name: string) => screen.getByRole('button', { name: `Save ${name}` }) as HTMLButtonElement;
+  // D1 changes one field of the whole Model and commits at user-2.
+  fireEvent.change(wire(), { target: { value: 'wire-new' } });
+  fireEvent.click(save('Model main'));
+  await waitFor(() => expect(writes(s)).toHaveLength(1));
+  expect(writes(s)[0].params.expected_revision).toBe('user-1');
+  expect(writes(s)[0].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...fullModel(), id: 'wire-new' } } });
+  await screen.findByText('Saved. Native application proceeds automatically.');
+  // The post-commit read is outstanding: the presentation still holds the
+  // pre-commit Model, and it is no base for a new draft of the same unit.
+  expect(wire().value).toBe('wire');
+  expect(wire().closest('fieldset')!.disabled).toBe(true);
+  expect(contextWindow().closest('fieldset')!.disabled).toBe(true);
+  fireEvent.change(contextWindow(), { target: { value: '256000' } });
+  expect(contextWindow().value).toBe('128000');
+  expect(retained(s)).not.toContain('256000');
+  expect(save('Model main').disabled).toBe(true);
+  expect(writes(s)).toHaveLength(1);
+  // Another unit stays editable in the same window, but cannot submit.
+  fireEvent.click(screen.getByRole('button', { name: '← Provider transport' }));
+  fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://draft.invalid' } });
+  expect(retained(s)).toContain('https://draft.invalid');
+  expect(save('Provider transport').disabled).toBe(true);
+  expect(writes(s)).toHaveLength(1);
+  // The authoritative observation of the committed Model releases both.
+  await act(async () => reread!.resolve());
+  await waitFor(() => expect(save('Provider transport').disabled).toBe(false));
+  fireEvent.click(within(screen.getByRole('grid', { name: 'Models of Provider transport' })).getByRole('row', { name: 'main' }));
+  await waitFor(() => expect(wire().value).toBe('wire-new'));
+  expect(contextWindow().closest('fieldset')!.disabled).toBe(false);
+  // The next edit is a fresh draft of the observed Model, fenced on its
+  // revision, and the complete replacement keeps what D1 committed.
+  fireEvent.change(contextWindow(), { target: { value: '256000' } });
+  fireEvent.click(save('Model main'));
+  await waitFor(() => expect(writes(s)).toHaveLength(2));
+  expect(writes(s)[1].params.expected_revision).toBe('user-2');
+  expect(writes(s)[1].params.mutation).toEqual({ kind: 'config', mutation: {
+    unit: 'model', id: 'main', authored: { ...fullModel(), id: 'wire-new', context_window: '256000' },
+  } });
+});
+
 // ── S2-10 Deletion confirmation ─────────────────────────────────────────────
 
 it('S2-10 cancelling a deletion writes nothing and returns focus; confirming performs exactly one removal', async () => {

@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { assign, createActor, setup, type ActorRefFrom, type InspectionEvent } from 'xstate';
 import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v19';
 import { admitsSourceMutation, mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
-import { discardable, requiresReview, unitTransactionMachine } from '../src/app/settings/machines/unit-transaction';
+import { awaitingCommitObservation, discardable, requiresReview, unitTransactionMachine } from '../src/app/settings/machines/unit-transaction';
 import { adoptionInFlight, sessionConfigurationMachine } from '../src/app/settings/machines/session-configuration';
 import {
   admitsFocus, settingsNavigationMachine, settingsPages,
@@ -2923,6 +2923,110 @@ it.each([
   await flush();
   expect(admitted(actor)).toBe(true);
   submitStatus(actor, 'r1');
+  await flush();
+  expect(scripted.writes).toHaveLength(2);
+  expect(scripted.writes[1].expected).toBe('r1');
+});
+
+// ── 37. Same-unit editing across a definitive commit ────────────────────────
+//
+// A definitive acknowledgement advances the unit's CAS base to the committed
+// revision at once, while the authoritative projection every editor renders
+// still carries the source before the commit. A draft begun in that window
+// would be fenced on the new revision yet derived from the old value, so no
+// CAS could stop it from restoring what the commit replaced. A semantic unit
+// whose definitive commit still awaits authoritative observation is therefore
+// not a valid source for a new same-unit draft; every other unit stays
+// editable behind the target-wide submission barrier.
+
+it('R37 a unit whose definitive commit awaits its observation refuses a new edit, and resumes from the observed source', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r0'));
+  await flush();
+  edit(actor, ['read'], 'r0');
+  submit(actor, 'r0');
+  await flush();
+  const first = unitOf(actor);
+  scripted.writes[0].resolve({ acknowledgement: projection('r1') });
+  await flush();
+  let unit = first.getSnapshot();
+  expect(awaitingCommitObservation(unit)).toBe(true);
+  expect(unit.context).toMatchObject({ base: 'r1', observed: 'r0' });
+  // The confirmed draft of the unchanged intent is gone.
+  expect(unit.context.draft).toBeUndefined();
+  expect(unit.matches({ intent: 'clean' })).toBe(true);
+  const generation = unit.context.generation;
+  // An edit derived from the pre-commit projection is refused by the unit
+  // itself: no draft, no new intent generation, nothing written.
+  edit(actor, ['write'], 'r0');
+  await flush();
+  unit = first.getSnapshot();
+  expect(unit.context.draft).toBeUndefined();
+  expect(unit.context.generation).toBe(generation);
+  expect(unit.matches({ intent: 'clean', mutation: { acknowledged: 'awaitingObservation' } })).toBe(true);
+  expect(unit.context).toMatchObject({ base: 'r1', observed: 'r0' });
+  expect(scripted.writes).toHaveLength(1);
+  // Target mutation admission is still held by the unobserved commit, and a
+  // different unit stays editable behind it.
+  expect(admitted(actor)).toBe(false);
+  editStatus(actor, 'r0');
+  expect(unitOf(actor, statusIdentity).getSnapshot().context.draft).toEqual({ value: { enabled: true } });
+  submitStatus(actor, 'r0');
+  await flush();
+  expect(scripted.writes).toHaveLength(1);
+  // The authoritative post-commit observation settles the commit and retires
+  // the transaction.
+  scripted.reads[1].resolve(projection('r1'));
+  await flush();
+  expectRetired(actor);
+  expect(admitted(actor)).toBe(true);
+  expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'saved', observed: true });
+  // Editing resumes as a fresh transaction on the newly observed source.
+  edit(actor, ['read', 'write'], 'r1');
+  const second = unitOf(actor);
+  expect(second).not.toBe(first);
+  expect(second.getSnapshot().context).toMatchObject({ base: 'r1', observed: 'r1', draft: { value: ['read', 'write'] } });
+  expect(awaitingCommitObservation(second.getSnapshot())).toBe(false);
+  submit(actor, 'r1');
+  await flush();
+  expect(scripted.writes).toHaveLength(2);
+  expect(scripted.writes[1].expected).toBe('r1');
+  expect(scripted.writes[1].mutation).toEqual(toolsMutation);
+});
+
+it('R37 a newer intent authored before the acknowledgement survives it, is frozen until the observation, then editable again', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r0'));
+  await flush();
+  edit(actor, ['read'], 'r0');
+  submit(actor, 'r0');
+  await flush();
+  // Intent B exists before the acknowledgement of A.
+  edit(actor, ['read', 'write'], 'r0');
+  scripted.writes[0].resolve({ acknowledgement: projection('r1') });
+  await flush();
+  let unit = unitOf(actor).getSnapshot();
+  expect(awaitingCommitObservation(unit)).toBe(true);
+  expect(unit.context.draft).toEqual({ value: ['read', 'write'] });
+  const generation = unit.context.generation;
+  // B survives, but no edit — of B or of anything else — begins while the
+  // commit is unobserved.
+  edit(actor, ['write'], 'r0');
+  unit = unitOf(actor).getSnapshot();
+  expect(unit.context.draft).toEqual({ value: ['read', 'write'] });
+  expect(unit.context.generation).toBe(generation);
+  scripted.reads[1].resolve(projection('r1'));
+  await flush();
+  unit = unitOf(actor).getSnapshot();
+  expect(unit.matches({ intent: 'dirty', mutation: 'settled', lifetime: 'live' })).toBe(true);
+  expect(unit.context).toMatchObject({ base: 'r1', observed: 'r1' });
+  edit(actor, ['read', 'write', 'shell'], 'r1');
+  expect(unitOf(actor).getSnapshot().context.draft).toEqual({ value: ['read', 'write', 'shell'] });
+  submit(actor, 'r1');
   await flush();
   expect(scripted.writes).toHaveLength(2);
   expect(scripted.writes[1].expected).toBe('r1');

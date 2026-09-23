@@ -195,6 +195,14 @@ the reviewed one. A read already in flight when the commit is acknowledged is
 still adopted, but it never classifies that commit; only one that already
 carries the committed revision observes it.
 
+A semantic unit whose definitive commit still awaits authoritative observation
+is not a valid source for a new same-unit draft: until that observation, its
+editor presents the pre-commit value while its CAS base already names the
+committed revision, so the unit's transaction refuses every edit and its fields
+are disabled. Editing resumes from the observed source once the observation
+settles the commit or reveals a divergence. Other units stay editable, and
+still cannot submit until the observation arrives.
+
 The Settings navigation machine is the one owner of which Settings surface is
 displayed. Opening Settings, opening Connection, opening an owning Workspace,
 selecting a page and focusing a detail inside it are all its events, so a

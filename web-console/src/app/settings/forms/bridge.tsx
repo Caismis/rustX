@@ -6,7 +6,7 @@ import { Button } from '../../../presentation/primitives/Button';
 import { SourceContext } from '../source-context';
 import { useSettingsActor, useUnitTransaction } from '../machines/react';
 import { admitsSourceMutation, committedUnit, unitOutcome, type MutationOutcome } from '../machines/settings-target';
-import { committed as unitCommitted, discardable, requiresReview } from '../machines/unit-transaction';
+import { awaitingCommitObservation, committed as unitCommitted, discardable, requiresReview } from '../machines/unit-transaction';
 import {
   authoredStateLabel, effectiveStateLabel, provenanceLabel, revisionSelector, shadowedDefinition, unitFacts, unitOwnership,
   type ShadowedDefinition,
@@ -126,6 +126,11 @@ export interface UnitEditing<T> {
   /** The lower-scope definition this scope's definition shadows or would
    * shadow, if any. */
   readonly shadowed?: ShadowedDefinition;
+  /** This unit's definitive commit still awaits the authoritative observation
+   * that settles it. The presented source predates the commit, so it is no
+   * base for a new draft: no field, Author or Override gesture edits the unit
+   * until the observation arrives. */
+  readonly awaitingObservation: boolean;
   /** Whether the fields may change this unit's draft now. */
   readonly writable: boolean;
   /** The one explicit transition from inspecting an inherited definition to
@@ -185,6 +190,10 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
   // This unit's own mutation is in flight: its transaction owns the intent
   // until the outcome, so its controls are closed.
   const busy = !!snapshot?.matches({ mutation: 'submitting' });
+  // This unit's own commit is definitive but not yet observed. The transaction
+  // refuses every edit until it is; the controls say so rather than offering
+  // the pre-commit projection as an editing base.
+  const awaitingObservation = !!snapshot && awaitingCommitObservation(snapshot);
   // Whether the target admits any new source mutation now. It is one
   // target-wide fact owned by the Settings authority actor: while another
   // unit's mutation is submitting, or a settled mutation still awaits its
@@ -217,13 +226,13 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
       : authored !== undefined ? authored
         : inheritedValue !== undefined ? inheritedValue
           : definition === 'inherited' ? overrideSeed : blank;
-  const writable = definition !== 'inherited';
+  const writable = definition !== 'inherited' && !awaitingObservation;
   const begin = (value: T) => actor.send({ type: 'UNIT.EDIT', identity, selector, revision, value });
   return {
     identity, displayed, outcome, draft: draft !== undefined, authoredPresent, unparsed,
     overriding: draft !== undefined || authoredPresent, inheritance, committed, busy, admitted,
     base, observed, scope, facts, configUnit: unitMutation.kind === 'config',
-    definition, shadowed, writable,
+    definition, shadowed, awaitingObservation, writable,
     // For a value-inherited unit an edit is an unambiguous override
     // transition: it starts from whatever this control displays and becomes
     // this browser's authored intent. An inherited whole definition is only
@@ -231,7 +240,7 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
     // value goes to the transaction actor, never to component or form state
     // that a remount could lose.
     edit: (value: T) => { if (writable) begin(value); },
-    override: definition === 'inherited' ? () => begin(overrideSeed) : undefined,
+    override: definition === 'inherited' ? () => { if (!awaitingObservation) begin(overrideSeed); } : undefined,
     submit: (remove = false) => {
       if (!remove && !draft) return;
       // Only the mutation itself carries the authored payload; the transaction
@@ -306,8 +315,8 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
             selection authorable without an incidental edit. */}
         {unit.override && <Button type="button" variant="primary"
           title={`Begin a Workspace definition of ${title} from the inherited one. Nothing is written until you save.`}
-          onClick={unit.override}>Override {title} in this Workspace</Button>}
-        {unit.configUnit && !unit.overriding && <Button type="button"
+          disabled={unit.awaitingObservation} onClick={unit.override}>Override {title} in this Workspace</Button>}
+        {unit.configUnit && !unit.overriding && <Button type="button" disabled={unit.awaitingObservation}
           title={workspace ? 'Author this unit in this Workspace. Nothing is written until you save.' : 'Author this unit in this source. Nothing is written until you save.'}
           onClick={() => unit.edit(unit.displayed)}>{workspace ? 'Override' : 'Author'} {title}</Button>}
         {removable && unit.authoredPresent && (restoresInherited
@@ -432,9 +441,10 @@ export function TypedUnitForm<T>({ title, children, removable = true, removalNot
     listeners: {
       onChange: ({ formApi }) => {
         const { writable, displayed, edit } = current.current;
-        // An inspected inherited definition is not writable: the transaction
-        // owner refuses the edit, so the field returns to the owner's value at
-        // once rather than holding a local value no draft backs.
+        // An inspected inherited definition, or a unit whose commit awaits its
+        // observation, is not writable: the transaction owner refuses the
+        // edit, so the field returns to the owner's value at once rather than
+        // holding a local value no draft backs.
         if (!writable) { formApi.reset(displayed); return; }
         const values = formApi.state.values as T;
         reflected.current = values;

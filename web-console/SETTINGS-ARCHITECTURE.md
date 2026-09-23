@@ -255,6 +255,22 @@ observation of the committed revision still settles it. `requiresReview`
 answers the review question from these regions; React renders it and never
 reconstructs chronology from revision values.
 
+A semantic unit whose definitive commit still awaits authoritative observation
+is not a valid source for a new same-unit draft. Between the acknowledgement and
+that observation the base already names the committed revision while the
+presented value is still the pre-commit one, so a draft begun there would carry
+an old value on a new revision, and exact CAS could not stop it from restoring
+what the commit replaced. The transaction's `EDIT` transitions are therefore
+guarded on `not(acknowledged.awaitingObservation)`: an edit in that window is
+refused by the actor itself, whoever sends it, and `awaitingCommitObservation`
+lets the editor disable its fields, Author and Override for exactly that
+state. A newer intent authored before the acknowledgement survives it
+untouched; editing resumes once an authoritative observation either settles the
+commit — a retired transaction's next edit starts fresh from the observed
+source and revision — or reveals `diverged`, which keeps its review semantics.
+Other units stay editable throughout, behind the target-wide submission
+barrier.
+
 #### Discarding browser intent
 
 `DISCARD` abandons browser authoring intent and nothing else. What is
