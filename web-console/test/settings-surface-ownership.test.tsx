@@ -2,12 +2,14 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
-import { SettingsSurface } from './settings-harness';
+import { renderEditor, SettingsSurface } from './settings-harness';
+import { UnitForm } from '../src/app/settings/controls';
+import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/app-server';
 import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v18';
-import { cfg3Application } from './cfg3-data';
+import { cfg3Application, cfg3Source } from './cfg3-data';
 import { cfg3Client, cfg3Host, cfg3Session } from './cfg3-fixture';
 afterEach(cleanup);
 
@@ -684,4 +686,59 @@ it('S1-16 an acknowledgement from the retired authority settles its own transact
   expect(JSON.stringify(replacement[0].retainedState())).not.toContain(SECRET_SENTINEL);
   expect(JSON.stringify(submitting[0].retainedState())).not.toContain(SECRET_SENTINEL);
   expect(writes(s)).toHaveLength(1);
+});
+
+function gate<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(res => { resolve = res; });
+  return { promise, resolve };
+}
+
+it('S1-35 while one unit owns the target mutation barrier every other unit stays editable, and its submission is unavailable until the post-commit observation', async () => {
+  const committed = cfg3Source(); committed.user.revision = 'user-2';
+  const write = gate<WriteOutcome>(), reread = gate<SourceSettings>();
+  const source = cfg3Source();
+  const { writes: submitted } = await renderEditor(<>
+    <UnitForm title="Tools" blank="" revision="user-1"
+      mutation={value => ({ kind: 'config', mutation: { unit: 'native_tools', authored: value === null ? null : [value] } })}>
+      {(value, change) => <label>Tool<input value={value} onChange={event => change(event.target.value)} /></label>}
+    </UnitForm>
+    <UnitForm title="Status" blank="" authored="off" revision="user-1"
+      mutation={value => ({ kind: 'config', mutation: { unit: 'agent_status', authored: value === null ? null : { enabled: value === 'on' } } })}>
+      {(value, change) => <label>Status<input value={value} onChange={event => change(event.target.value)} /></label>}
+    </UnitForm>
+  </>, { source, context: source, write: () => write.promise, reread: () => reread.promise });
+  const tools = within(screen.getByRole('form', { name: 'Tools' }));
+  const status = within(screen.getByRole('form', { name: 'Status' }));
+  const saveStatus = () => status.getByRole('button', { name: 'Save Status' }) as HTMLButtonElement;
+  const removeStatus = () => status.getByRole('button', { name: 'Remove Status' }) as HTMLButtonElement;
+  fireEvent.change(tools.getByLabelText('Tool'), { target: { value: 'read' } });
+  fireEvent.change(status.getByLabelText('Status'), { target: { value: 'on' } });
+  expect(saveStatus().disabled).toBe(false);
+  fireEvent.click(tools.getByRole('button', { name: 'Save Tools' }));
+  await waitFor(() => expect(submitted).toHaveBeenCalledTimes(1));
+  // Tools owns the barrier while natively submitting. Status stays editable,
+  // but its Save and Remove are truthfully unavailable.
+  await waitFor(() => expect(saveStatus().disabled).toBe(true));
+  expect(removeStatus().disabled).toBe(true);
+  const statusInput = status.getByLabelText('Status') as HTMLInputElement;
+  expect(statusInput.disabled).toBe(false);
+  fireEvent.change(statusInput, { target: { value: 'on!' } });
+  expect(statusInput.value).toBe('on!');
+  fireEvent.click(saveStatus());
+  fireEvent.click(removeStatus());
+  expect(submitted).toHaveBeenCalledTimes(1);
+  // The commit is acknowledged; its post-commit read is still outstanding.
+  await act(async () => { write.resolve({ acknowledgement: committed }); });
+  await screen.findByText('Saved. Native application proceeds automatically.');
+  expect(saveStatus().disabled).toBe(true);
+  expect(statusInput.disabled).toBe(false);
+  // The authoritative post-commit observation releases the barrier in place:
+  // no remount, and Status still holds its draft.
+  await act(async () => { reread.resolve(structuredClone(committed)); });
+  await waitFor(() => expect(saveStatus().disabled).toBe(false));
+  expect(removeStatus().disabled).toBe(false);
+  expect(status.getByLabelText('Status')).toBe(statusInput);
+  expect(statusInput.value).toBe('on!');
+  expect(submitted).toHaveBeenCalledTimes(1);
 });

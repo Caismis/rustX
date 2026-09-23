@@ -5,6 +5,7 @@ import { Switch } from '../../presentation/primitives/Switch';
 import { Button } from '../../presentation/primitives/Button';
 import { SourceContext } from './source-context';
 import { useSettingsActor, useUnitTransaction } from './machines/react';
+import { admitsSourceMutation } from './machines/settings-target';
 import { committed as unitCommitted, discardable, requiresReview } from './machines/unit-transaction';
 import { authoredStateLabel, effectiveStateLabel, provenanceLabel, revisionSelector, unitFacts } from './projection';
 import css from '../../presentation/settings/SettingsContent.module.css';
@@ -69,7 +70,14 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, childr
   const snapshot = useUnitTransaction(actor, identity);
   const transaction = snapshot?.context;
   const committed = !!snapshot && unitCommitted(snapshot);
-  const busy = useSelector(actor, snapshot => snapshot.matches({ mutation: 'submitting' }) && snapshot.context.submission?.identity === identity);
+  // This unit's own mutation is in flight: its transaction owns the intent
+  // until the outcome, so its controls are closed.
+  const busy = !!snapshot?.matches({ mutation: 'submitting' });
+  // Whether the target admits any new source mutation now. It is one
+  // target-wide fact owned by the Settings authority actor: while another
+  // unit's mutation is submitting, or a settled mutation still awaits its
+  // authoritative observation, this unit stays editable but cannot submit.
+  const admitted = useSelector(actor, target => admitsSourceMutation(target.context));
   const draft = transaction?.draft as { value: T } | undefined;
   // This exact scope's authored presence, from the native projection the call
   // site passes without a fallback. Only `undefined` means "authors none".
@@ -118,9 +126,9 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, childr
       {children(displayed, edit)}
       <details><summary>Source revision & replacement</summary><p className={css.hint}>Draft base revision: {base}<br />Current revision: {observed}</p><p>Save replaces this native semantic unit. Remove omits it from this scope. Empty selections remain explicit.</p></details>
       {reviewNeeded && <div className={css.review}><p role="status">Source revision changed. {preserved} Review the current source before replacing it.</p><details><summary>Review current authored unit (redacted)</summary><pre>{redacted ? 'Authored value not projected' : JSON.stringify(authored, null, 2)}</pre></details></div>}
-      <div className={css.actions}><Button variant="primary" type="submit" disabled={!draft}>Save {title}</Button>
+      <div className={css.actions}><Button variant="primary" type="submit" disabled={!draft || !admitted}>Save {title}</Button>
         {inheritance && !overriding && <Button type="button" title="Author this unit in this Workspace. Nothing is written until you save." onClick={() => edit(displayed)}>Override {title}</Button>}
-        {removable && authoredPresent && <Button type="button" title={workspace ? 'Remove the unit this Workspace authors, through exact CAS. The native inherited value becomes effective.' : 'Remove the authored value through exact CAS'} onClick={() => submit(true)}>{workspace ? 'Use global default' : 'Remove'} {title}</Button>}
+        {removable && authoredPresent && <Button type="button" title={workspace ? 'Remove the unit this Workspace authors, through exact CAS. The native inherited value becomes effective.' : 'Remove the authored value through exact CAS'} disabled={!admitted} onClick={() => submit(true)}>{workspace ? 'Use global default' : 'Remove'} {title}</Button>}
         {intent && <Button type="button" onClick={() => actor.send({ type: 'UNIT.DISCARD', identity })}>Discard draft</Button>}
         {reviewNeeded && <Button type="button" onClick={() => actor.send({ type: 'UNIT.REVIEW', identity })}>Use reviewed revision</Button>}
       </div>{committed && <p role="status">Saved. Native application proceeds automatically.</p>}

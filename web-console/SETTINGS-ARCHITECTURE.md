@@ -52,6 +52,7 @@ ConfigurationSystem(client)                    keyed by (endpoint, authority rev
   └── sessionConfiguration: <session>          ─┘ reference counted by its presentation
 
 client publication ──(authority, TRANSPORT)──▶ every live actor of the current lifetime
+                      └─ Settings target: port.publication(configuration) → its own scope only
 React Settings dialog ──ATTACH/DETACH──▶ an existing target actor
 React Session region  ──retain/release, ADOPT──▶ its Session actor
 ```
@@ -59,12 +60,29 @@ React Session region  ──retain/release, ADOPT──▶ its Session actor
 The `ConfigurationSystem` is also the one owner of transport delivery. At every
 client publication it first retires a replaced authority, then tells every live
 actor of the current lifetime the transport — connection state, connection
-generation, native publications and, for a Session actor, that Session's
-authoritative snapshot — whether or not a presentation is attached or holds it.
-Retired actors of a replaced authority are told nothing. No React effect
-forwards transport, so no read, reconnect recovery or convergence ever depends on
-a component rendering; each machine ignores a delivery that changes nothing it
-observes, so an unrelated publication never retries a failed read.
+generation and, for a Settings target, the publication of its own source
+scope; for a Session actor, that Session's publication and authoritative
+snapshot — whether or not a presentation is attached or holds it. Retired
+actors of a replaced authority are told nothing. No React effect forwards
+transport, so no read, reconnect recovery or convergence ever depends on a
+component rendering; each machine ignores a delivery that changes nothing it
+observes.
+
+**Publication ownership is target-local.** The client mirrors every native
+application scope — each Session, each source — in one `configuration` map and
+replaces that map on any publication, so its identity is not an observation
+fact. A Settings target never sees the map: its `ConfigurationPort` projects it
+to the one `ConfigurationApplication` of the exact native source scope that
+target owns, compared by scope and version. User is the native constant
+`source:user`. A Workspace scope names the exact canonical configuration
+directory, which only the Product Host's registration resolution
+(`resolveWorkspace`, the same resolution that names every Workspace
+configuration operation's `SourceTarget`) knows; the port asks it alongside its
+reads until it answers, and the system delivers the newly named level at once.
+Until then no publication is attributed to that target — the directory is never
+guessed from an id, a display name, a Session or a path. A Session
+publication, another Workspace's or the other source's publication therefore
+cannot retry, refresh, unblock or advance a target's source reads.
 
 - **App Server authority lifetime** — `(endpoint, authorityRevision)`. The
   `ConfigurationSystem` subscribes to its client and observes this key itself,
@@ -129,6 +147,8 @@ authority   suspended ──ATTACH──▶ idle ⇄ reading.{current | predates
                                     └── awaitingWrite ──────────────────────────────────────┘
 mutation    idle → submitting → observing → saved | unobserved
                              ↘ conflicted | rejected | uncertain
+            (UNIT.SUBMIT only from idle | saved | conflicted | rejected | uncertain,
+             and only while admitsSourceMutation holds)
 ```
 
 Important events: `ATTACH`, `DETACH`, `TRANSPORT`, `REFRESH`, `RECONCILE`,
@@ -141,7 +161,8 @@ Each region owns its own facts, and no region assigns another's:
 
 ```text
 authority     observation · staleObservation · readError · convergenceError · chasing
-mutation      the region state itself · rejection (native detail while `rejected`)
+              · unobservedSettlement (discharged by adoption)
+mutation      the region state itself · submission · rejection (native detail while `rejected`)
 maintenance   maintenanceError
 ```
 
@@ -152,6 +173,24 @@ The user-visible save status is `mutationOutcome(snapshot)`, projected from the
 generation replacement retires the `authority` facts above and never touches
 the `mutation` region, so an outcome reads the same whichever of it and the
 replacement arrived first.
+
+**Source mutation admission is target-wide and has one owner.** Every semantic
+unit submits through the one `mutation` region, and `admitsSourceMutation` —
+exported from the machine module and used by both the `UNIT.SUBMIT` guard and
+the unit forms — is the only admission fact: connected, a current authoritative
+observation with no read failure, no `submission` natively in flight, and no
+`unobservedSettlement`. Every settlement — definitive commit, conflict,
+rejection or unknown outcome — records `unobservedSettlement`, and only the
+adoption of an authoritative read issued after it (or, for a commit, one that
+already carries the committed revision) discharges it; a failed settlement
+forces that read at once, which stops any read issued before it. So while one
+unit's mutation is submitting, or its settlement's authoritative observation is
+still owed — including when that observation failed — no other unit can submit
+against the projection known to predate it. A refused `UNIT.SUBMIT` has no
+transition and changes nothing: drafts stay independent, memory-only and
+editable, and nothing queues, replays or retries them. Once the post-settlement
+observation is adopted, the next mutation is fenced on its unit's own CAS base,
+which a moved source still requires the explicit review gesture to advance.
 
 `reading` records whether the read in flight postdates every definitive commit
 this target has recorded: a read is issued `current`, and a commit recorded
@@ -659,8 +698,8 @@ authoritative observation of the new attachment.
 The reservation is therefore explicit context, `rereadReservation`, named by the
 token of the submission that took it, and it is a different fact from that
 submission. It also records the publication watermark it was established
-against — the application scope of the observation it was submitted over, and
-the version then published for it. The Host's reread is issued after the commit,
+against — the version then published for this target's own source scope. The
+Host's reread is issued after the commit,
 so it answers every publication up to that watermark. Supersession compares the
 current publication with that watermark only, never with the current
 presentation observation, which every `ATTACH` demotes: a newer publication
@@ -678,13 +717,15 @@ read the current generation owns.
 
 Convergence is level-triggered and has no loop, worker, timer or poll:
 `idle` takes an eventless transition to `reading` whenever an obligation is
-outstanding — a publication this projection has not reached, a definitive commit
-no post-commit read has observed, or no projection at all. Publications arriving
+outstanding — a publication of its own scope this projection has not reached,
+a settled mutation no post-settlement read has observed, or no projection at
+all. Publications arriving
 while a read is in flight coalesce, because the region is not in `idle`. After a
 read is adopted, `settling` decides once: the obligation is satisfied, or it
 advanced (one more bounded read), or native is measurably stale (reported once,
 then `blocked`). A failed read also lands in `blocked`, where nothing retries on
-its own until a publication, reconnect, reattach or explicit refresh arrives.
+its own until a publication of this target's own source scope, a reconnect, a
+reattach or an explicit refresh arrives.
 
 The saved notice is the `mutation` region's `saved` / `unobserved` state: it is
 reported once the post-commit observation settles — carried by an

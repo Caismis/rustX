@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { createActor, type InspectionEvent } from 'xstate';
 import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v18';
-import { mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
+import { admitsSourceMutation, mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
 import { discardable, requiresReview } from '../src/app/settings/machines/unit-transaction';
 import { adoptionInFlight, sessionConfigurationMachine } from '../src/app/settings/machines/session-configuration';
 import { settingsNavigationMachine, type OwnerResolution } from '../src/app/settings/machines/navigation';
@@ -9,6 +9,7 @@ import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machin
 import { ConfigurationSystem } from '../src/app/settings/machines/system';
 import { revisionSelector, userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain, RpcFailure, type AppServerClient, type ClientView, type ConnectionState } from '../src/client/app-server';
+import type { ProductHostWorkspaces, WorkspaceConfigurationOperation, WorkspaceConfigurationResult } from '../src/workspaces/host';
 import { cfg3Source, cfg3SourceApplication } from './cfg3-data';
 
 /** Every ordering in this file is established by an explicit deferred promise
@@ -48,6 +49,8 @@ function scriptedPort(ownsReread = false): Scripted {
     reads, writes,
     port: {
       ownsReread,
+      // A machine test hands the target its publication level directly.
+      publication: () => undefined,
       read: () => { const gate = deferred<SourceSettings>(); reads.push(gate); return gate.promise; },
       write: (expected, mutation) => { const gate = deferred<WriteOutcome>(); writes.push({ expected, mutation, ...gate }); return gate.promise; },
       reconcile: async () => {},
@@ -55,13 +58,13 @@ function scriptedPort(ownsReread = false): Scripted {
   };
 }
 function settingsActor(
-  port: ConfigurationPort, publications?: Record<string, ConfigurationApplication>, workspace = false,
+  port: ConfigurationPort, publication?: ConfigurationApplication, workspace = false,
   inspect?: (inspection: InspectionEvent) => void,
 ) {
   const actor = createActor(settingsTargetMachine, {
     input: {
       target: workspace ? workspaceSettingsTarget('A', 'A') : userSettingsTarget,
-      port, connection: 'connected', generation: 1, publications,
+      port, connection: 'connected', generation: 1, publication,
     },
     inspect,
   });
@@ -114,8 +117,8 @@ it('R01 a superseded read cannot publish a read failure either', async () => {
 // failure, a Workspace-owned reread — may become authoritative for it. The
 // mutation that was already submitted keeps its own transaction lifetime.
 
-const reconnect = (actor: ReturnType<typeof settingsActor>, generation: number, publications?: Record<string, ConfigurationApplication>) =>
-  actor.send({ type: 'TRANSPORT', connection: 'connected', generation, publications });
+const reconnect = (actor: ReturnType<typeof settingsActor>, generation: number, publication?: ConfigurationApplication) =>
+  actor.send({ type: 'TRANSPORT', connection: 'connected', generation, publication });
 
 it.each(['A resolves first', 'A resolves last'] as const)('R16 a read of a replaced connection generation never becomes authoritative, when %s', async order => {
   const scripted = scriptedPort();
@@ -261,7 +264,7 @@ it.each([
   ['the write settles first', 'observed'],
 ] as const)('R18 a commit whose superseding read fails settles as committed-but-unobserved, when %s and its own reread %s', async (order, reread) => {
   const scripted = scriptedPort(true);
-  const actor = settingsActor(scripted.port, { 'source:user': userApplication('1') }, true);
+  const actor = settingsActor(scripted.port, userApplication('1'), true);
   await flush();
   scripted.reads[0].resolve(projection('r1', userApplication('1')));
   await flush();
@@ -272,7 +275,7 @@ it.each([
   expect(actor.getSnapshot().matches({ authority: { attached: 'awaitingWrite' } })).toBe(true);
   // A new native publication owes a read that takes presentation authority
   // away from the Workspace write's own reread.
-  reconnect(actor, 1, { 'source:user': userApplication('2') });
+  reconnect(actor, 1, userApplication('2'));
   await flush();
   expect(scripted.reads).toHaveLength(2);
   expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
@@ -316,7 +319,7 @@ it('R18 a Product Host commit that lands while the connection is down settles, a
   await flush();
   // The App Server connection is lost, which is always a new generation. The
   // Product Host is an independent transport and the write is still in flight.
-  actor.send({ type: 'TRANSPORT', connection: 'stale', generation: 2, publications: undefined });
+  actor.send({ type: 'TRANSPORT', connection: 'stale', generation: 2, publication: undefined });
   await flush();
   expect(scripted.reads).toHaveLength(1);
   expect(actor.getSnapshot().matches({ authority: { attached: 'blocked' } })).toBe(true);
@@ -545,7 +548,7 @@ it('R22 reopening with an unobserved commit coalesces validation and post-commit
   // The definitive commit lands while nothing is presented.
   scripted.writes[0].resolve({ acknowledgement: projection('r2') });
   await flush();
-  expect(actor.getSnapshot().context.unobservedCommit).toEqual({ identity: toolsIdentity, selector: revisionSelector(toolsMutation), revision: 'r2' });
+  expect(actor.getSnapshot().context.unobservedSettlement).toEqual({ identity: toolsIdentity, selector: revisionSelector(toolsMutation), committed: true, revision: 'r2' });
   actor.send({ type: 'ATTACH' });
   await flush();
   // The new attachment's validation and the commit's post-commit read are the
@@ -563,13 +566,13 @@ it('R22 reopening with an unobserved commit coalesces validation and post-commit
 
 it('R22 reopening with a newer publication coalesces validation and publication into one read', async () => {
   const scripted = scriptedPort();
-  const actor = settingsActor(scripted.port, { 'source:user': userApplication('1') });
+  const actor = settingsActor(scripted.port, userApplication('1'));
   await flush();
   scripted.reads[0].resolve(projection('r1', userApplication('1')));
   await flush();
   actor.send({ type: 'DETACH' });
   // A newer native publication arrives while nothing is presented.
-  reconnect(actor, 1, { 'source:user': userApplication('2') });
+  reconnect(actor, 1, userApplication('2'));
   actor.send({ type: 'ATTACH' });
   await flush();
   // One read answers both the new attachment and the publication.
@@ -841,7 +844,7 @@ it.each(['observed', 'failed'] as const)('R24 a generation replaced while Settin
 
 it('R24 a reservation superseded by a newer publication read is not resurrected by reattaching', async () => {
   const scripted = scriptedPort(true);
-  const actor = settingsActor(scripted.port, { 'source:user': userApplication('1') }, true);
+  const actor = settingsActor(scripted.port, userApplication('1'), true);
   await flush();
   scripted.reads[0].resolve(projection('r1', userApplication('1')));
   await flush();
@@ -850,7 +853,7 @@ it('R24 a reservation superseded by a newer publication read is not resurrected 
   await flush();
   // Same generation: a newer publication owes a read that supersedes the
   // write-owned reread.
-  reconnect(actor, 1, { 'source:user': userApplication('2') });
+  reconnect(actor, 1, userApplication('2'));
   await flush();
   expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
   actor.send({ type: 'DETACH' });
@@ -886,7 +889,7 @@ it.each([
 ] as const)('R25 a same-generation publication newer than the reservation watermark supersedes the reserved Workspace reread across a reattach, when it arrives %s and the late reread %s', async (arrival, outcome) => {
   const scripted = scriptedPort(true);
   const settlement = settlementLog();
-  const actor = settingsActor(scripted.port, { 'source:user': userApplication('1') }, true, settlement.inspect);
+  const actor = settingsActor(scripted.port, userApplication('1'), true, settlement.inspect);
   await flush();
   scripted.reads[0].resolve(projection('r1', userApplication('1')));
   await flush();
@@ -895,9 +898,9 @@ it.each([
   await flush();
   // The Workspace write reserves the read order at publication 1.
   expect(actor.getSnapshot().matches({ authority: { attached: 'awaitingWrite' } })).toBe(true);
-  expect(actor.getSnapshot().context.rereadReservation).toEqual({ token: 1, scope: 'source:user', publication: 1n });
+  expect(actor.getSnapshot().context.rereadReservation).toEqual({ token: 1, publication: 1n });
   actor.send({ type: 'DETACH' });
-  if (arrival === 'while detached') reconnect(actor, 1, { 'source:user': userApplication('2') });
+  if (arrival === 'while detached') reconnect(actor, 1, userApplication('2'));
   else {
     // A presentation bounce alone neither revokes the reservation nor lets the
     // reattached presentation start a competing read: the publication the
@@ -907,11 +910,11 @@ it.each([
     const reattached = actor.getSnapshot();
     expect(reattached.matches({ authority: { attached: 'awaitingWrite' } })).toBe(true);
     expect(reattached.context.observation).toBeUndefined();
-    expect(reattached.context.rereadReservation).toEqual({ token: 1, scope: 'source:user', publication: 1n });
+    expect(reattached.context.rereadReservation).toEqual({ token: 1, publication: 1n });
     expect(scripted.reads).toHaveLength(1);
     // With no current observation at all, publication 2 is still newer than
     // the reservation's watermark.
-    reconnect(actor, 1, { 'source:user': userApplication('2') });
+    reconnect(actor, 1, userApplication('2'));
   }
   if (arrival === 'while detached') actor.send({ type: 'ATTACH' });
   await flush();
@@ -955,7 +958,7 @@ it.each([
 
 it('R25 a publication no newer than the reservation watermark never supersedes the reserved reread', async () => {
   const scripted = scriptedPort(true);
-  const actor = settingsActor(scripted.port, { 'source:user': userApplication('1') }, true);
+  const actor = settingsActor(scripted.port, userApplication('1'), true);
   await flush();
   scripted.reads[0].resolve(projection('r1', userApplication('1')));
   await flush();
@@ -965,7 +968,7 @@ it('R25 a publication no newer than the reservation watermark never supersedes t
   actor.send({ type: 'DETACH' });
   actor.send({ type: 'ATTACH' });
   // The same publication delivered again is no publication progress.
-  reconnect(actor, 1, { 'source:user': userApplication('1') });
+  reconnect(actor, 1, userApplication('1'));
   await flush();
   expect(actor.getSnapshot().matches({ authority: { attached: 'awaitingWrite' } })).toBe(true);
   expect(scripted.reads).toHaveLength(1);
@@ -1064,17 +1067,17 @@ it('R08 a late acknowledgement of an older intent never erases a newer edit', as
 
 it('R09 a publication arriving during an outstanding read keeps the obligation', async () => {
   const scripted = scriptedPort();
-  const actor = settingsActor(scripted.port, { 'source:user': userApplication('1') });
+  const actor = settingsActor(scripted.port, userApplication('1'));
   await flush();
   scripted.reads[0].resolve(projection('r1', userApplication('1')));
   await flush();
   expect(scripted.reads).toHaveLength(1);
   // Publication 2 starts exactly one read. Publication 3 arrives while it is
   // outstanding and starts none — the obligation is a level, not an edge.
-  actor.send({ type: 'TRANSPORT', connection: 'connected', generation: 1, publications: { 'source:user': userApplication('2') } });
+  actor.send({ type: 'TRANSPORT', connection: 'connected', generation: 1, publication: userApplication('2') });
   await flush();
   expect(scripted.reads).toHaveLength(2);
-  actor.send({ type: 'TRANSPORT', connection: 'connected', generation: 1, publications: { 'source:user': userApplication('3') } });
+  actor.send({ type: 'TRANSPORT', connection: 'connected', generation: 1, publication: userApplication('3') });
   await flush();
   expect(scripted.reads).toHaveLength(2);
   // The outstanding read settles at 2; the surviving obligation drives exactly
@@ -1089,7 +1092,7 @@ it('R09 a publication arriving during an outstanding read keeps the obligation',
 
 it('R10 a newer publication cannot be discharged by an older projection', async () => {
   const scripted = scriptedPort();
-  const actor = settingsActor(scripted.port, { 'source:user': userApplication('5') });
+  const actor = settingsActor(scripted.port, userApplication('5'));
   await flush();
   // A projection that predates the publication does not satisfy it.
   scripted.reads[0].resolve(projection('r1', userApplication('4')));
@@ -1336,7 +1339,7 @@ it.each([
   ['r1', 'diverges'],
 ] as const)('R29 a read issued before the acknowledgement never classifies the commit; the post-commit read observing %s %s', async (postCommit, verdict) => {
   const scripted = scriptedPort(true);
-  const actor = settingsActor(scripted.port, { 'source:user': userApplication('1') }, true);
+  const actor = settingsActor(scripted.port, userApplication('1'), true);
   await flush();
   scripted.reads[0].resolve(projection('r1', userApplication('1')));
   await flush();
@@ -1345,7 +1348,7 @@ it.each([
   await flush();
   // A newer publication supersedes the Workspace write's reserved reread
   // with a read issued while the write is still in flight.
-  reconnect(actor, 1, { 'source:user': userApplication('2') });
+  reconnect(actor, 1, userApplication('2'));
   await flush();
   expect(scripted.reads).toHaveLength(2);
   expect(actor.getSnapshot().matches({ authority: { attached: { reading: 'current' } } })).toBe(true);
@@ -2314,7 +2317,7 @@ it('R33 a native publication and a Session snapshot change delivered during the 
   expect(native.pending('session/configuration')).toHaveLength(3);
 });
 
-it('R33 a Settings target attached before a reconnect reads exactly once when its generation becomes connected, and an unrelated publication never retries a failed read', async () => {
+it('R33 a Settings target attached before a reconnect reads exactly once when its generation becomes connected, and no unrelated client publication retries a failed read', async () => {
   const native = scriptedClient();
   const target = native.system.settingsTarget(userSettingsTarget, () => undefined);
   target.send({ type: 'ATTACH' });
@@ -2330,12 +2333,380 @@ it('R33 a Settings target attached before a reconnect reads exactly once when it
   expect(target.getSnapshot().context.readError).toContain('configuration read unavailable');
   native.publish({ sessions: [] });
   native.publish({ views: {} });
+  // A Session's configuration publication replaces the client's whole
+  // configuration map, and still concerns no source target.
+  publishApplication(native, sessionApplication('session-1', '4'));
   await flush();
   expect(native.pending('configuration/sourcesRead')).toHaveLength(2);
-  // A native publication is one.
-  native.publish({ configuration: { 'source:user': { ...cfg3SourceApplication(), version: '9' } } });
+  // This target's own source publication is one.
+  publishApplication(native, { ...cfg3SourceApplication(), version: '9' });
   await flush();
   expect(native.pending('configuration/sourcesRead')).toHaveLength(3);
+});
+
+// ── 34. Target-local publication ownership ──────────────────────────────────
+//
+// A native publication obligation is a level-triggered fact about one exact
+// application scope. The client mirrors every scope's publication in one map
+// and replaces that map on each of them; only the publication of the exact
+// source scope a Settings target owns may retry, refresh, unblock or advance
+// that target's source reads.
+
+/** Publish one native application exactly as the real client does: the entry
+ * for its scope is replaced and the whole configuration map is a new object. */
+function publishApplication(native: ReturnType<typeof scriptedClient>, application: ConfigurationApplication) {
+  native.publish({ configuration: { ...native.transport().configuration, [application.scope]: application } });
+}
+const sessionApplication = (session: string, version: string): ConfigurationApplication =>
+  ({ ...cfg3SourceApplication(), scope: session, version });
+const workspaceApplication = (directory: string, version: string): ConfigurationApplication =>
+  ({ ...cfg3SourceApplication({ kind: 'workspace', directory }), version });
+
+it('R34 a failed User Settings read is retried by its own source publication alone', async () => {
+  const native = scriptedClient();
+  const target = native.system.settingsTarget(userSettingsTarget, () => undefined);
+  target.send({ type: 'ATTACH' });
+  await flush();
+  const reads = () => native.pending('configuration/sourcesRead');
+  reads()[0].reject(new Error('configuration read unavailable'));
+  await flush();
+  expect(target.getSnapshot().matches({ authority: { attached: 'blocked' } })).toBe(true);
+  expect(target.getSnapshot().context.observation).toBeUndefined();
+  // A Session application, another Workspace's source application and a newer
+  // Session version each replace the client's configuration map. None of them
+  // is this target's publication, so none wakes the blocked read.
+  publishApplication(native, sessionApplication('session-1', '1'));
+  publishApplication(native, workspaceApplication('/workspace/A', '3'));
+  publishApplication(native, sessionApplication('session-1', '2'));
+  await flush();
+  expect(reads()).toHaveLength(1);
+  expect(target.getSnapshot().matches({ authority: { attached: 'blocked' } })).toBe(true);
+  expect(target.getSnapshot().context.publication).toBeUndefined();
+  // The exact User source publication creates the obligation: one read.
+  publishApplication(native, { ...cfg3SourceApplication(), version: '2' });
+  await flush();
+  expect(reads()).toHaveLength(2);
+  // Publications arriving while that read is in flight coalesce as a level:
+  // unrelated ones change nothing, and a newer own version starts no second
+  // read now — it survives the settlement below it instead.
+  publishApplication(native, sessionApplication('session-2', '1'));
+  publishApplication(native, { ...cfg3SourceApplication(), version: '3' });
+  await flush();
+  expect(reads()).toHaveLength(2);
+  reads()[1].resolve({ projection: projection('r1', userApplication('2')) });
+  await flush();
+  expect(reads()).toHaveLength(3);
+  reads()[2].resolve({ projection: projection('r2', userApplication('3')) });
+  await flush();
+  expect(reads()).toHaveLength(3);
+  expect(target.getSnapshot().context.observation?.user.revision).toBe('r2');
+  // Converged: unrelated publications still start nothing.
+  publishApplication(native, sessionApplication('session-1', '3'));
+  publishApplication(native, workspaceApplication('/workspace/B', '1'));
+  await flush();
+  expect(reads()).toHaveLength(3);
+  // Explicit refresh still reads, as before.
+  target.send({ type: 'REFRESH' });
+  await flush();
+  expect(reads()).toHaveLength(4);
+});
+
+/** A Product Host whose registration resolution and configuration operations
+ * are each released explicitly by the test. */
+function scriptedHost() {
+  const resolutions: { id: string; resolve: (value: { cwd: string }) => void; reject: (reason?: unknown) => void }[] = [];
+  const operations: { operation: WorkspaceConfigurationOperation; resolve: (value: WorkspaceConfigurationResult) => void; reject: (reason?: unknown) => void }[] = [];
+  const host = {
+    resolveWorkspace: (id: string) => { const gate = deferred<{ cwd: string }>(); resolutions.push({ id, ...gate }); return gate.promise; },
+    configureWorkspace: (_id: string, _endpoint: string, operation: WorkspaceConfigurationOperation) => {
+      const gate = deferred<WorkspaceConfigurationResult>(); operations.push({ operation, ...gate }); return gate.promise;
+    },
+  } as unknown as ProductHostWorkspaces;
+  return { host, resolutions, operations, reads: () => operations.filter(entry => entry.operation.kind === 'read') };
+}
+
+it('R34 a failed Workspace Settings read is retried by the publication of its own Host-resolved source scope alone', async () => {
+  const native = scriptedClient();
+  const scripted = scriptedHost();
+  const target = native.system.settingsTarget(workspaceSettingsTarget('wA', 'A'), () => scripted.host);
+  target.send({ type: 'ATTACH' });
+  await flush();
+  // The first read asks the Product Host registration resolution — the one
+  // authority that names this Workspace's canonical source directory — for
+  // the source scope, before the read settles.
+  expect(scripted.resolutions.map(entry => entry.id)).toEqual(['wA']);
+  expect(scripted.reads()).toHaveLength(1);
+  publishApplication(native, workspaceApplication('/workspace/A', '1'));
+  await flush();
+  // Unnamed, nothing is attributed to this target.
+  expect(target.getSnapshot().context.publication).toBeUndefined();
+  scripted.resolutions[0].resolve({ cwd: '/workspace/A' });
+  await flush();
+  // Named, its own standing publication level is delivered at once.
+  expect(target.getSnapshot().context.publication?.scope).toBe('source:workspace:/workspace/A');
+  scripted.reads()[0].reject(new Error('Workspace read unavailable'));
+  await flush();
+  expect(target.getSnapshot().matches({ authority: { attached: 'blocked' } })).toBe(true);
+  // Another Workspace's source, a Session and the User source are all other
+  // scopes' publications.
+  publishApplication(native, workspaceApplication('/workspace/B', '5'));
+  publishApplication(native, sessionApplication('session-1', '1'));
+  publishApplication(native, { ...cfg3SourceApplication(), version: '7' });
+  await flush();
+  expect(scripted.reads()).toHaveLength(1);
+  expect(target.getSnapshot().matches({ authority: { attached: 'blocked' } })).toBe(true);
+  // The exact Workspace source publication creates the obligation.
+  publishApplication(native, workspaceApplication('/workspace/A', '2'));
+  await flush();
+  expect(scripted.reads()).toHaveLength(2);
+  // A named scope is never resolved again.
+  expect(scripted.resolutions).toHaveLength(1);
+  // While that read is in flight, other scopes change nothing and a newer own
+  // version coalesces into exactly one follow-up read.
+  publishApplication(native, workspaceApplication('/workspace/B', '6'));
+  publishApplication(native, workspaceApplication('/workspace/A', '3'));
+  await flush();
+  expect(scripted.reads()).toHaveLength(2);
+  const workspaceProjection = (revision: string, version: string) => {
+    const source = projection(revision, workspaceApplication('/workspace/A', version));
+    source.target = { kind: 'workspace', directory: '/workspace/A' };
+    return source;
+  };
+  scripted.reads()[1].resolve({ kind: 'read', projection: workspaceProjection('ws-1', '2') });
+  await flush();
+  expect(scripted.reads()).toHaveLength(3);
+  scripted.reads()[2].resolve({ kind: 'read', projection: workspaceProjection('ws-2', '3') });
+  await flush();
+  expect(scripted.reads()).toHaveLength(3);
+  publishApplication(native, workspaceApplication('/workspace/B', '7'));
+  await flush();
+  expect(scripted.reads()).toHaveLength(3);
+});
+
+it('R34 a Workspace whose source scope the Product Host has not named attributes no publication, and recovery stays explicit', async () => {
+  const native = scriptedClient();
+  const scripted = scriptedHost();
+  const target = native.system.settingsTarget(workspaceSettingsTarget('wA', 'A'), () => scripted.host);
+  target.send({ type: 'ATTACH' });
+  await flush();
+  scripted.resolutions[0].reject(new Error('Host unavailable'));
+  scripted.reads()[0].reject(new Error('Host unavailable'));
+  await flush();
+  expect(target.getSnapshot().matches({ authority: { attached: 'blocked' } })).toBe(true);
+  // No scope is guessed from the Workspace id, its display name or a path, so
+  // no publication — not even the one that would be its own — is attributed.
+  publishApplication(native, workspaceApplication('/workspace/A', '1'));
+  publishApplication(native, workspaceApplication('/workspace/wA', '1'));
+  await flush();
+  expect(scripted.reads()).toHaveLength(1);
+  expect(target.getSnapshot().context.publication).toBeUndefined();
+  // An explicit refresh reads again, and asks the Host to name the scope again.
+  target.send({ type: 'REFRESH' });
+  await flush();
+  expect(scripted.reads()).toHaveLength(2);
+  expect(scripted.resolutions).toHaveLength(2);
+  scripted.resolutions[1].resolve({ cwd: '/workspace/A' });
+  await flush();
+  expect(target.getSnapshot().context.publication?.version).toBe('1');
+});
+
+// ── 35. Target-wide source mutation admission ───────────────────────────────
+//
+// One target-wide native source mutation lifecycle. Once a mutation crosses
+// the native submission boundary, no second one — from any semantic unit — may
+// start until the target again owns a current authoritative observation issued
+// after that mutation settled. Drafts stay independent and editable; nothing
+// queues, replays or retries a refused submission.
+
+const statusMutation: SourceMutation = { kind: 'config', mutation: { unit: 'agent_status', authored: { enabled: true } } };
+const statusIdentity = JSON.stringify({ kind: 'config', mutation: { unit: 'agent_status', authored: null } });
+const editStatus = (actor: ReturnType<typeof settingsActor>, revision: string) =>
+  actor.send({ type: 'UNIT.EDIT', identity: statusIdentity, selector: revisionSelector(statusMutation), revision, value: { enabled: true } });
+const submitStatus = (actor: ReturnType<typeof settingsActor>, revision: string) =>
+  actor.send({ type: 'UNIT.SUBMIT', identity: statusIdentity, selector: revisionSelector(statusMutation), revision, mutation: statusMutation });
+const admitted = (actor: ReturnType<typeof settingsActor>) => admitsSourceMutation(actor.getSnapshot().context);
+/** Unit B still holds exactly its own untouched draft and never submitted. */
+function expectStatusDraftIntact(actor: ReturnType<typeof settingsActor>) {
+  const status = unitOf(actor, statusIdentity).getSnapshot();
+  expect(status.matches({ intent: 'dirty' })).toBe(true);
+  expect(status.matches({ mutation: 'idle' })).toBe(true);
+  expect(status.context.draft).toEqual({ value: { enabled: true } });
+  expect(status.context.base).toBe('r1');
+}
+
+it('R35 a mutation natively submitting refuses every other unit, which keeps its draft', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  editStatus(actor, 'r1');
+  expect(admitted(actor)).toBe(true);
+  submit(actor, 'r1');
+  await flush();
+  expect(scripted.writes).toHaveLength(1);
+  expect(admitted(actor)).toBe(false);
+  // Unit B is refused: the machine has no transition for it, so its
+  // submission neither reaches native nor changes anything at all.
+  const before = actor.getSnapshot();
+  expect(before.can({ type: 'UNIT.SUBMIT', identity: statusIdentity, selector: revisionSelector(statusMutation), revision: 'r1', mutation: statusMutation })).toBe(false);
+  submitStatus(actor, 'r1');
+  await flush();
+  expect(scripted.writes).toHaveLength(1);
+  expect(actor.getSnapshot().context.submission?.identity).toBe(toolsIdentity);
+  expectStatusDraftIntact(actor);
+  // B stays editable while A is pending.
+  actor.send({ type: 'UNIT.EDIT', identity: statusIdentity, selector: revisionSelector(statusMutation), revision: 'r1', value: { enabled: true } });
+  expectStatusDraftIntact(actor);
+  // A settles normally. Its acknowledgement alone admits nothing: the
+  // observation this target holds predates the commit.
+  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  await flush();
+  expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'committed' });
+  expect(admitted(actor)).toBe(false);
+  expect(scripted.reads).toHaveLength(2);
+  scripted.reads[1].resolve(projection('r2'));
+  await flush();
+  expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'saved', observed: true });
+  expect(admitted(actor)).toBe(true);
+  expect(scripted.writes).toHaveLength(1);
+  expect(unitOf(actor, statusIdentity).getSnapshot().context.draft).toEqual({ value: { enabled: true } });
+});
+
+it('R35 a definitive commit awaiting its post-commit observation refuses a second unit fenced on the pre-commit revision', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  editStatus(actor, 'r1');
+  submit(actor, 'r1');
+  await flush();
+  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  await flush();
+  // A is definitively committed; its post-commit read is outstanding.
+  expect(unitOf(actor).getSnapshot().matches({ mutation: 'acknowledged' })).toBe(true);
+  expect(actor.getSnapshot().context.observation?.user.revision).toBe('r1');
+  expect(actor.getSnapshot().context.unobservedSettlement).toMatchObject({ identity: toolsIdentity, committed: true, revision: 'r2' });
+  expect(admitted(actor)).toBe(false);
+  submitStatus(actor, 'r1');
+  await flush();
+  expect(scripted.writes).toHaveLength(1);
+  expectStatusDraftIntact(actor);
+  // The authoritative post-commit observation at r2 releases the barrier.
+  scripted.reads[1].resolve(projection('r2'));
+  await flush();
+  expect(admitted(actor)).toBe(true);
+  // B's pinned base still names r1, which the source moved on from: its CAS
+  // is never silently rebased. The explicit review fences it on r2.
+  expect(requiresReview(unitOf(actor, statusIdentity).getSnapshot())).toBe(true);
+  actor.send({ type: 'UNIT.REVIEW', identity: statusIdentity });
+  submitStatus(actor, 'r2');
+  await flush();
+  expect(scripted.writes).toHaveLength(2);
+  expect(scripted.writes[1].expected).toBe('r2');
+  expect(scripted.writes[1].mutation).toEqual(statusMutation);
+});
+
+it('R35 a pre-commit read adopted after a Workspace commit is current observation, yet still admits no second mutation', async () => {
+  const scripted = scriptedPort(true);
+  const actor = settingsActor(scripted.port, userApplication('1'), true);
+  await flush();
+  scripted.reads[0].resolve(projection('r1', userApplication('1')));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  editStatus(actor, 'r1');
+  submit(actor, 'r1');
+  await flush();
+  // A newer publication supersedes the write-owned reread: a read is issued
+  // before the commit, and the reservation is revoked.
+  reconnect(actor, 1, userApplication('2'));
+  await flush();
+  expect(scripted.reads).toHaveLength(2);
+  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: { status: 'observed', projection: projection('r2', userApplication('2')) } });
+  await flush();
+  // The read issued before the commit answers with the pre-commit source.
+  scripted.reads[1].resolve(projection('r1', userApplication('2')));
+  await flush();
+  expect(actor.getSnapshot().context.observation?.user.revision).toBe('r1');
+  expect(actor.getSnapshot().context.readError).toBe('');
+  expect(admitted(actor)).toBe(false);
+  submitStatus(actor, 'r1');
+  await flush();
+  expect(scripted.writes).toHaveLength(1);
+  expectStatusDraftIntact(actor);
+  // The standing commit obligation drives the post-commit read.
+  expect(scripted.reads).toHaveLength(3);
+  scripted.reads[2].resolve(projection('r2', userApplication('2')));
+  await flush();
+  expect(admitted(actor)).toBe(true);
+});
+
+it('R35 a commit whose post-commit read fails exposes no pre-commit authority and replays nothing', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  editStatus(actor, 'r1');
+  submit(actor, 'r1');
+  await flush();
+  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  await flush();
+  scripted.reads[1].reject(new Error('post-commit read unavailable'));
+  await flush();
+  expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'saved', observed: false });
+  expect(admitted(actor)).toBe(false);
+  submitStatus(actor, 'r1');
+  await flush();
+  // Neither B nor a replay of A reaches native, and nothing retries on its own.
+  expect(scripted.writes).toHaveLength(1);
+  expect(scripted.reads).toHaveLength(2);
+  expectStatusDraftIntact(actor);
+  // Recovery is explicit.
+  actor.send({ type: 'REFRESH' });
+  await flush();
+  scripted.reads[2].resolve(projection('r2'));
+  await flush();
+  expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'saved', observed: true });
+  expect(admitted(actor)).toBe(true);
+  expect(scripted.writes).toHaveLength(1);
+});
+
+it.each([
+  ['conflict', new RpcFailure({ code: -32000, message: 'conflict', data: { kind: 'source_conflict', scope: 'user', expected: 'r1', actual: 'r9' } })],
+  ['rejection', new Error('native refused')],
+  ['unknown outcome', new OutcomeUncertain()],
+] as const)('R35 a %s holds the barrier until its post-settlement read is adopted', async (_kind, failure) => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  editStatus(actor, 'r1');
+  submit(actor, 'r1');
+  await flush();
+  scripted.writes[0].reject(failure);
+  await flush();
+  // The failed write forced a post-settlement read; until it is adopted the
+  // observation is known to predate the settlement.
+  expect(scripted.reads).toHaveLength(2);
+  expect(admitted(actor)).toBe(false);
+  submitStatus(actor, 'r1');
+  await flush();
+  expect(scripted.writes).toHaveLength(1);
+  expectStatusDraftIntact(actor);
+  scripted.reads[1].resolve(projection('r1'));
+  await flush();
+  expect(admitted(actor)).toBe(true);
+  submitStatus(actor, 'r1');
+  await flush();
+  expect(scripted.writes).toHaveLength(2);
+  expect(scripted.writes[1].expected).toBe('r1');
 });
 
 // ── 14./15. Settings navigation ─────────────────────────────────────────────

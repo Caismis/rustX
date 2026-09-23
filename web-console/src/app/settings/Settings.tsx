@@ -117,7 +117,11 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
   // not leak across sections. Editing transactions are deliberately not part of
   // that subtree, so they survive the remount.
   const editorKey = `${transport.endpoint ?? ''}|${transport.authorityRevision ?? 0}|${settingsTargetKey(target)}:${section}`;
-  const editor = selected && <fieldset disabled={busy || !targetValid || !observed || transport.connection !== 'connected'} className={css.editor}>
+  // Authoring stays closed until the target holds a current authoritative
+  // observation. A mutation in flight does not close it: every other unit
+  // stays editable, and whether any unit may submit is the actor's one
+  // target-wide admission fact, which each unit form reads.
+  const editor = selected && <fieldset disabled={!targetValid || !observed || transport.connection !== 'connected'} className={css.editor}>
     {document === 'config' && config.state === 'structured' && <>
       {section === 'catalog' && <CatalogEditor source={source!} scope={scope} revision={config.revision} />}
       {(section === 'general' || section === 'policies') && <RuntimeEditor document={config.document} resolved={source!.resolved} scope={scope} revision={config.revision} policyOnly={section === 'policies'} processPolicyImpacts={source!.process_policy_impacts} />}

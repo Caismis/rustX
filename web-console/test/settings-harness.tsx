@@ -35,11 +35,15 @@ export function sameRevision(source: SourceSettings, revision: string): SourceSe
  * the editor's facts never drift and no timer or sleep is involved anywhere. */
 export function settingsAuthority(source: SourceSettings = cfg3Source(), options: {
   write?: (expected: string, mutation: SourceMutation) => Promise<WriteOutcome>;
+  /** Answers every read after the first; by default the projection under test. */
+  reread?: () => Promise<SourceSettings>;
 } = {}) {
+  let reads = 0;
   const writes = vi.fn<(mutation: SourceMutation, expected: string) => void>();
   const port: ConfigurationPort = {
     ownsReread: false,
-    read: async () => structuredClone(source),
+    publication: () => undefined,
+    read: () => reads++ && options.reread ? options.reread() : Promise.resolve(structuredClone(source)),
     // By default native refuses the write, so an editor test observes exactly
     // what was submitted — including a sequence of submissions against the same
     // pinned CAS base — without a confirmed commit retiring the draft it is
@@ -53,7 +57,7 @@ export function settingsAuthority(source: SourceSettings = cfg3Source(), options
   const actor = createActor(settingsTargetMachine, {
     input: {
       target: source.target.kind === 'user' ? userSettingsTarget : workspaceSettingsTarget('A', 'A'),
-      port, connection: 'connected', generation: 1, publications: undefined,
+      port, connection: 'connected', generation: 1, publication: undefined,
     },
   });
   actor.start();
@@ -67,8 +71,12 @@ export function InSettings({ actor, source, children }: { actor: ReturnType<type
 
 /** Render one editor under a live Settings authority and wait until its single
  * authoritative read has been adopted, which is what makes authoring legal. */
-export async function renderEditor(node: ReactNode, options: { source?: SourceSettings; context?: SourceSettings; write?: (expected: string, mutation: SourceMutation) => Promise<WriteOutcome> } = {}) {
-  const authority = settingsAuthority(options.source ?? options.context ?? cfg3Source(), { write: options.write });
+export async function renderEditor(node: ReactNode, options: {
+  source?: SourceSettings; context?: SourceSettings;
+  write?: (expected: string, mutation: SourceMutation) => Promise<WriteOutcome>;
+  reread?: () => Promise<SourceSettings>;
+} = {}) {
+  const authority = settingsAuthority(options.source ?? options.context ?? cfg3Source(), { write: options.write, reread: options.reread });
   const view = render(<InSettings actor={authority.actor} source={options.context}>{node}</InSettings>);
   await waitFor(() => expect(authority.context().observation).toBeTruthy());
   const rerender = (next: ReactNode) => view.rerender(<InSettings actor={authority.actor} source={options.context}>{next}</InSettings>);

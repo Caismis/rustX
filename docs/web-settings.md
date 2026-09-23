@@ -109,6 +109,16 @@ is in flight, and starting a newer one stops the older read actor, so a
 superseded response has no completion path at all. The reread a Workspace write
 owns is reserved when the write starts, and is silently superseded — in
 success and in failure alike — by any read a newer native publication owes.
+Only the publication of the target's own native source scope is such a
+trigger: the Settings port projects the client's publications to that one
+scope (`source:user`, or the Workspace directory its Product Host registration
+resolves to), so a Session's or another Workspace's publication never retries,
+refreshes or advances another target's reads.
+
+Source mutations are admitted target-wide. While one semantic unit's mutation is
+submitting, or until an authoritative read issued after its settlement (commit,
+conflict, rejection or unknown outcome) has been adopted, every other unit stays
+editable but cannot save or remove; nothing is queued, replayed or retried.
 The pending write and its reread's authority to publish are separate facts. The
 write always settles, even across a connection generation replacement; the
 reservation survives a plain Settings close and reopen, but a newer read or a

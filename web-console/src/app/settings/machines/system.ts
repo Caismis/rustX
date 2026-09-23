@@ -94,7 +94,12 @@ export class ConfigurationSystem {
    * connection generation replacement, a reconnect reaching `connected`, a
    * native publication and a Session snapshot change are therefore facts the
    * actors observe directly, and whatever read they owe starts from their own
-   * transition graph, never from a presentation happening to render. */
+   * transition graph, never from a presentation happening to render.
+   *
+   * A Settings target is told only its own publication level: its port
+   * projects the client's publications to the one application scope that
+   * target owns, so a Session's, another Workspace's or any other scope's
+   * publication is not a fact that target can observe at all. */
   constructor(private readonly client: AppServerClient) {
     this.lifetime = authorityLifetime(client.getSnapshot());
     client.subscribe(() => this.observeClient());
@@ -119,11 +124,18 @@ export class ConfigurationSystem {
     // Each delivery reads the client's current snapshot rather than the one
     // this publication started from, so even a publication nested inside a
     // delivery can never leave a later actor holding an older transport.
-    for (const actor of this.targets.values()) {
-      const current = this.client.getSnapshot();
-      actor.send({ type: 'TRANSPORT', connection: current.connection, generation: current.generation, publications: current.configuration });
-    }
+    for (const actor of this.targets.values()) this.deliverTarget(actor);
     for (const [sessionId, entry] of this.sessions) entry.actor.send({ type: 'TRANSPORT', ...sessionTransport(this.client.getSnapshot(), sessionId) });
+  }
+
+  /** Tell one live target actor the current transport, projected through its
+   * own port to its own publication level. */
+  private deliverTarget(actor: SettingsTargetActor) {
+    const current = this.client.getSnapshot();
+    actor.send({
+      type: 'TRANSPORT', connection: current.connection, generation: current.generation,
+      publication: actor.getSnapshot().context.port.publication(current.configuration),
+    });
   }
 
   /** Retire one target actor of a replaced authority.
@@ -156,13 +168,20 @@ export class ConfigurationSystem {
     const key = settingsTargetKey(target);
     const existing = this.targets.get(key);
     if (existing) return existing;
-    const actor = createActor(settingsTargetMachine, {
+    // A Workspace port names its source scope asynchronously. Once it does, the
+    // publication level it now projects is delivered at once — to this actor
+    // only, and only while it is still a live target of this lifetime.
+    const identified = () => { if (this.targets.get(key) === actor) this.deliverTarget(actor); };
+    const port = createConfigurationPort({
+      client: this.client, endpoint: transport.endpoint ?? '', workspaceId: target.kind === 'workspace' ? target.id : undefined, host, identified,
+    });
+    const actor: SettingsTargetActor = createActor(settingsTargetMachine, {
       input: {
         target,
-        port: createConfigurationPort({ client: this.client, endpoint: transport.endpoint ?? '', workspaceId: target.kind === 'workspace' ? target.id : undefined, host }),
+        port,
         connection: transport.connection,
         generation: transport.generation,
-        publications: transport.configuration,
+        publication: port.publication(transport.configuration),
       },
     });
     this.targets.set(key, actor);

@@ -292,6 +292,8 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
   });
   const host: ProductHostWorkspaces = {
     ...s.workspaceHost,
+    // The Host registration resolution that names every operation's source.
+    resolveWorkspace: async id => ({ cwd: `/workspace/${id === 'workspace-a' ? 'A' : 'B'}` }),
     configureWorkspace: async (id, _endpoint, operation) => {
       const target: SourceTarget = { kind: 'workspace', directory: `/workspace/${id === 'workspace-a' ? 'A' : 'B'}` };
       if (operation.kind === 'write') {
@@ -418,6 +420,7 @@ it('S12 a held Workspace post-write reread cannot regress a newer authoritative 
   s.handlers.set('configuration/sourceWrite', () => { revision = 'ws-B'; return { type: 'source_settings', projection: projection() }; });
   const host: ProductHostWorkspaces = {
     ...s.workspaceHost,
+    resolveWorkspace: async () => ({ cwd: target.directory }),
     configureWorkspace: async (_id, _endpoint, operation) => {
       if (operation.kind === 'write') {
         const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
@@ -497,6 +500,7 @@ it('S13 a write-owned reread cannot commit over a newer read that was only initi
   s.handlers.set('configuration/sourceWrite', () => { native.revision = 'ws-B'; return { type: 'source_settings', projection: native.projection() }; });
   const host: ProductHostWorkspaces = {
     ...s.workspaceHost,
+    resolveWorkspace: async () => ({ cwd: native.target.directory }),
     configureWorkspace: async (_id, _endpoint, operation) => {
       if (operation.kind === 'write') {
         const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target: native.target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
@@ -567,6 +571,7 @@ it('S14 a superseded write-owned reread failure publishes no read error and leav
   s.handlers.set('configuration/sourceWrite', () => { native.revision = 'ws-B'; return { type: 'source_settings', projection: native.projection() }; });
   const host: ProductHostWorkspaces = {
     ...s.workspaceHost,
+    resolveWorkspace: async () => ({ cwd: native.target.directory }),
     configureWorkspace: async (_id, _endpoint, operation) => {
       if (operation.kind === 'write') {
         const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target: native.target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
