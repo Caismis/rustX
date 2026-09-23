@@ -166,15 +166,36 @@ Agent references; the real-server suite runs the same production entry path.
 
 Visual authority remains the digest-pinned Playwright 1.63.0 container. Use
 `pnpm --dir web-console test:e2e:update` only for reviewed baseline changes, then
-`pnpm --dir web-console test:e2e`. Every reference is compared under the one
-contract in `test/e2e/screenshot-comparison.ts`: per-pixel perceived colour
-threshold `0.027`, `maxDiffPixels: 0`, no per-screenshot allowance. The threshold
-is the smallest that classifies every measured rasterizer-noise pixel
-(`test/fixtures/rasterizer-noise.json`: sidebar gear glyphs and the narrow
-Settings panel's rounded corners, at most 7 grey levels) as equal; a single pixel
-beyond it fails. `test/screenshot-comparison.test.ts` holds the contract to that
-noise and to real colour, layout and missing-element changes with Playwright's own
-comparator. `CONTAINER_ENGINE=podman`
+`pnpm --dir web-console test:e2e`. Every reference is asserted through the one
+helper `expectStableScreenshot` (`test/e2e/screenshot.ts`), which captures under
+Playwright's own screenshot defaults and hands the bytes to the one comparator
+(`test/screenshot-comparator.ts`). Screenshots are exact product-output
+contracts: dimensions must match exactly and every RGBA byte of every pixel
+must match exactly. There is no global perceptual threshold anywhere; the
+former `threshold: 0.027` contract is gone. The only tolerance is the explicit
+exception manifest `test/fixtures/rasterizer-noise.json`: reference-local
+measured rasterizer noise (sidebar gear glyphs, the narrow Settings panel's
+rounded corners, the New Session button corner arc — at most 7 grey levels)
+grouped into bounded spatial regions,
+each with a changed-pixel budget and a raw channel-delta bound derived from its
+recorded evidence pixels. A changed pixel outside every registered region fails
+at any amplitude; a count or delta beyond a region's bounds fails; a reference
+without an entry is strict by default. Failures report the reference,
+dimensions, changed and outside-region counts, per-region budgets, the maximum
+observed channel delta and the first unexpected coordinates, and attach the
+actual and diff PNGs under `test-results/`. `test/screenshot-comparison.test.ts`
+holds the contract to the measured noise and to out-of-region, large-area,
+whole-image, budget, delta, layout, missing-element and dimension regressions.
+
+Baseline updates are an explicit intentional action. An intentional UI change
+is reviewed, then `pnpm --dir web-console test:e2e:update` writes a strict new
+baseline — an update never creates or widens a rasterizer-noise allowance (a
+reference that has registered evidence is flagged for re-measurement).
+Unexpected pixel variance in CI is investigated first, proven to be
+rasterizer-only against the recorded evidence, and only then recorded as
+narrowly bounded regions in the manifest. A screenshot failure is never
+answered by weakening the comparison — no global threshold exists to raise.
+`CONTAINER_ENGINE=podman`
 is the supported local engine selection when Docker is absent. Current composer
 references cover idle empty/draft, running Stop/Queue, attachments and the context
 stack in both themes at 1440px and 390px. Shell/Settings baselines also include the

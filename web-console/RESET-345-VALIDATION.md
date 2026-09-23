@@ -91,22 +91,33 @@ TUI and Playwright test runner continue running on the Linux host.
   authority. Host networking lets Chromium reach the unchanged loopback fixtures;
   the Playwright server binds only to `127.0.0.1` on an ephemeral port. The wrapper
   removes its container on success, failure or interruption.
-- Comparison (current): **`threshold: 0.027`, `maxDiffPixels: 0`**, defined once in
-  `test/e2e/screenshot-comparison.ts`, no retries and no per-screenshot
-  allowance. It tolerates only verified low-amplitude rasterizer/anti-aliasing
-  colour differences — the measured noise in `test/fixtures/rasterizer-noise.json`
-  peaks at 7 grey levels, which needs `0.02652` — while retaining zero allowance
-  for any pixel whose perceived difference exceeds that threshold;
-  `test/screenshot-comparison.test.ts` proves both with Playwright's comparator.
-  Normal runs use `updateSnapshots: 'none'`, so even missing references fail
-  instead of being written. Direct host Playwright runs are rejected with the
+- Comparison (current): **exact pixel comparison with a reference-local
+  rasterizer-noise exception policy** (`test/screenshot-comparator.ts`), invoked
+  for every reference by the single helper `expectStableScreenshot`
+  (`test/e2e/screenshot.ts`), with no retries and no per-screenshot allowances.
+  Dimensions must match exactly and every RGBA byte must match exactly, unless
+  `test/fixtures/rasterizer-noise.json` registers bounded regions for that exact
+  reference — each with a measured changed-pixel budget and a measured raw
+  channel-delta bound derived from its recorded evidence pixels (the measured
+  noise peaks at 7 grey levels). A changed pixel outside every registered region
+  fails at any amplitude; the former global perceptual `threshold: 0.027` no
+  longer exists anywhere. `test/screenshot-comparison.test.ts` proves the
+  measured noise passes and that same-delta-outside-region, large-area +7,
+  whole-image shift, budget, delta, layout, missing-element and dimension
+  regressions all fail. Normal runs use `updateSnapshots: 'none'` and no
+  `RUSTX_SCREENSHOT_UPDATE`, so even missing references fail instead of being
+  written; `pnpm test:e2e:update` is the explicit baseline update and never
+  creates a noise allowance. Direct host Playwright runs are rejected with the
   required command. No screenshot-only fonts/CSS, skipped states or production
   theme changes.
 - Comparison (historical, #345 acceptance): **`threshold: 0`, `maxDiffPixels: 0`**.
   The validation table below records runs under that original contract. Later
   captures under the same pinned authority showed glyph and rounded-corner
   anti-aliasing landing 1–7 grey levels apart with identical geometry, which a
-  zero colour threshold reports as a failure; the current contract replaces it.
+  zero colour threshold reports as a failure; a global-threshold era in between
+  (perceptual `threshold: 0.027`) was retired for classifying whole-image
+  low-amplitude regressions as identical, and the current contract replaces
+  both with exact comparison plus the explicit measured-noise manifest.
 
 Install the existing host prerequisites (Node 24, Corepack, Docker or Podman,
 Rust, uv and the repository's Python toolchain), then from the repository root:
