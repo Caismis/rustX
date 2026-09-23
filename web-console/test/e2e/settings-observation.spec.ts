@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote } from './shell-actions';
+import { connectRemote, openSettingsPage } from './shell-actions';
 
 /** Observe the real socket and hold selected server responses until the test
  * releases them explicitly. Nothing is manufactured: every delivered byte is
@@ -65,11 +65,12 @@ test('publications and an acknowledgement during outstanding convergence reads c
     await routeWorkspaceHost(page, f); await page.goto('/'); await connectRemote(page, f.endpoint, f.token);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    // Process policy and source revisions are both on Advanced.
+    await openSettingsPage(page, 'Advanced');
     await expect(settings.getByText(/Revision:/)).toBeVisible();
-    await settings.getByRole('button', { name: 'General', exact: true }).click();
     const field = settings.getByLabel('max_connections', { exact: true });
     const save = settings.getByRole('button', { name: 'Save App Server policy', exact: true });
-    const notice = settings.getByText(/Source saved. Native coordination/);
+    const notice = settings.getByText('App Server policy saved. Native coordination owns application.');
     // Settle a save whose acknowledgement already landed: release held
     // authoritative reads one at a time until the post-commit read is adopted.
     // Each stale or superseded read may owe exactly one more bounded read.
@@ -117,8 +118,9 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     await routeWorkspaceHost(page, f); await page.goto('/'); await connectRemote(page, f.endpoint, f.token);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    // Process policy and source revisions are both on Advanced.
+    await openSettingsPage(page, 'Advanced');
     await expect(settings.getByText(/Revision:/)).toBeVisible();
-    await settings.getByRole('button', { name: 'General', exact: true }).click();
 
     // The write commits natively, but its acknowledgement is held on the wire.
     probe.armWrites();
@@ -141,7 +143,7 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     // The delayed acknowledgement settles only the save outcome. The visible
     // whole projection stays the authoritative one and nothing is replayed.
     probe.releaseWrites();
-    await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();
+    await expect(settings.getByText('App Server policy saved. Native coordination owns application.')).toBeVisible();
     await expect(revision).toHaveText(observed);
     expect(probe.writes()).toBe(1);
   } finally { await remote.shutdown(); await f.stop(false); }

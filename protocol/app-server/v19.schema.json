@@ -15326,13 +15326,17 @@
       "description": "Bounded resource diagnostics expose source ownership, never source contents.",
       "type": "object",
       "properties": {
+        "subject": {
+          "$ref": "#/$defs/ResourceDiagnosticSubject"
+        },
         "file": {
           "type": [
             "string",
             "null"
           ]
         },
-        "identity": {
+        "field": {
+          "description": "The authored field the loader located the failure at. It locates the\nfailure inside `file`; it is not an identity.",
           "type": "string"
         },
         "reason": {
@@ -15340,8 +15344,52 @@
         }
       },
       "required": [
-        "identity",
+        "subject",
+        "field",
         "reason"
+      ]
+    },
+    "ResourceDiagnosticSubject": {
+      "description": "What one resource diagnostic belongs to.\n\nAttribution is a native fact, decided where the identity is known: the\ncatalog entry keyed by that identity. It is never derived from a field path\nor from a source file several identities share, so a client never has to\nguess which resource a diagnostic is about.",
+      "oneOf": [
+        {
+          "description": "Exactly one resource identity's definition is invalid.",
+          "type": "object",
+          "properties": {
+            "family": {
+              "$ref": "#/$defs/ResourceFamily"
+            },
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "resource"
+            }
+          },
+          "required": [
+            "kind",
+            "family",
+            "name"
+          ]
+        },
+        {
+          "description": "A family's source document or collection failed as a whole. No single\nidentity owns it, and it is not a diagnostic of any identity it holds.",
+          "type": "object",
+          "properties": {
+            "family": {
+              "$ref": "#/$defs/ResourceFamily"
+            },
+            "kind": {
+              "type": "string",
+              "const": "collection"
+            }
+          },
+          "required": [
+            "kind",
+            "family"
+          ]
+        }
       ]
     },
     "AgentInspection": {

@@ -1,5 +1,54 @@
 # Harness presentation provenance — WEB-RESET-01
 
+## #392 Settings product pages and resource workflows
+
+This change imports no new upstream source and repins nothing; re-fetched
+upstream remains `ddefc45fbc7f8e46dd73185e68295696d1297887`. Reviewed inventory
+updates only:
+
+- `app/settings/CatalogEditor.tsx` moved to `app/settings/models/ModelsPage.tsx`
+  (the same `ProviderEditor.tsx`-derived Provider/Model cards, now the Models page
+  with Provider list → Provider detail → Model detail).
+- `app/settings/Integrations.tsx` moved to
+  `app/settings/extensions/ExtensionDetail.tsx` (the same
+  `PluginInventorySettingsTab.tsx`-derived resource cards, now one resource detail).
+- `app/settings/Settings.tsx`, `presentation/settings/SettingsRoot.tsx` and
+  `SettingsRoot.module.css` carry new local hashes and import closures. The
+  Harness overlay/nav/content DOM and classes are retained; its focus trap,
+  portal and section buttons are replaced by React Aria `ModalOverlay`/`Modal`/
+  `Dialog`/`Tabs`.
+
+Every other new Settings module (`general/`, `agent/`, `tools/`,
+`extensions/ExtensionsPage.tsx`, `extensions/inventory.ts`,
+`extensions/NativeExtensions.tsx`, `advanced/`, `capability.ts`, `primitives/`,
+`forms/` and `presentation/settings/SettingsWorkflow.module.css`) is
+rustX-authored and carries no DeepSeek header.
+
+New pinned production dependencies, the only two this issue allows:
+`react-aria-components` 1.21.1 (Adobe, Apache-2.0) and `@tanstack/react-form`
+1.33.5 (MIT), with their install closure (`react-aria`, `react-stately`,
+`@react-types/shared`, `@internationalized/*`, `@swc/helpers`, `aria-hidden`,
+`client-only`, `@tanstack/form-core`, `@tanstack/store`, `@tanstack/react-store`,
+`@tanstack/pacer-lite`, `@tanstack/devtools-event-client`, `tslib`). Their license
+texts are reproduced in the regenerated `public/THIRD-PARTY-NOTICES.txt`.
+`client-only` 0.0.1 declares MIT but publishes no license file; `scripts/notices.ts`
+records it through an exact-version, exact-license reviewed exception that fails
+closed on any change. No Spectrum stylesheet, second design system, router,
+global state library, query cache or schema library is added.
+
+`@tanstack/devtools-event-client` is installed but never bundled: `vite.config.ts`
+resolves it to the rustX-authored `forms/inert-devtools-event-client.ts`, because
+the stock client broadcasts and queues complete form state (typed secrets
+included) on `window`. `scripts/provenance.ts --artifact` fails the build if the
+devtools handshake appears in the bundle. TanStack Form Devtools are not used.
+
+Reference products were inspected only, with no source, asset or text copied:
+Z.ai ZCode configuration docs (<https://zcode.z.ai/cn/docs/configuration>) for
+the Provider → Provider detail → Model detail hierarchy, and Kimi Web reference
+docs (`MoonshotAI/kimi-cli` `docs/en/reference/kimi-web.md`, commit
+`934b704a5eff1726623dd80db62907fbc1f7dd72`, 2026-03-23) for task-grouped pages
+with diagnostics kept apart.
+
 ## #391 Settings orchestration actors
 
 This change imports no new upstream source and repins nothing. The derived

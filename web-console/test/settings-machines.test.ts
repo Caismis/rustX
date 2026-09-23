@@ -1,10 +1,13 @@
 import { expect, it, vi } from 'vitest';
 import { assign, createActor, setup, type ActorRefFrom, type InspectionEvent } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v18';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v19';
 import { admitsSourceMutation, mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
-import { discardable, requiresReview, unitTransactionMachine } from '../src/app/settings/machines/unit-transaction';
+import { awaitingCommitObservation, discardable, requiresReview, unitTransactionMachine } from '../src/app/settings/machines/unit-transaction';
 import { adoptionInFlight, sessionConfigurationMachine } from '../src/app/settings/machines/session-configuration';
-import { settingsNavigationMachine, type OwnerResolution } from '../src/app/settings/machines/navigation';
+import {
+  admitsFocus, settingsNavigationMachine, settingsPages,
+  type OwnerResolution, type SettingsFocus, type SettingsPage,
+} from '../src/app/settings/machines/navigation';
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
 import { ConfigurationSystem } from '../src/app/settings/machines/system';
 import { revisionSelector, userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
@@ -2925,6 +2928,110 @@ it.each([
   expect(scripted.writes[1].expected).toBe('r1');
 });
 
+// ── 37. Same-unit editing across a definitive commit ────────────────────────
+//
+// A definitive acknowledgement advances the unit's CAS base to the committed
+// revision at once, while the authoritative projection every editor renders
+// still carries the source before the commit. A draft begun in that window
+// would be fenced on the new revision yet derived from the old value, so no
+// CAS could stop it from restoring what the commit replaced. A semantic unit
+// whose definitive commit still awaits authoritative observation is therefore
+// not a valid source for a new same-unit draft; every other unit stays
+// editable behind the target-wide submission barrier.
+
+it('R37 a unit whose definitive commit awaits its observation refuses a new edit, and resumes from the observed source', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r0'));
+  await flush();
+  edit(actor, ['read'], 'r0');
+  submit(actor, 'r0');
+  await flush();
+  const first = unitOf(actor);
+  scripted.writes[0].resolve({ acknowledgement: projection('r1') });
+  await flush();
+  let unit = first.getSnapshot();
+  expect(awaitingCommitObservation(unit)).toBe(true);
+  expect(unit.context).toMatchObject({ base: 'r1', observed: 'r0' });
+  // The confirmed draft of the unchanged intent is gone.
+  expect(unit.context.draft).toBeUndefined();
+  expect(unit.matches({ intent: 'clean' })).toBe(true);
+  const generation = unit.context.generation;
+  // An edit derived from the pre-commit projection is refused by the unit
+  // itself: no draft, no new intent generation, nothing written.
+  edit(actor, ['write'], 'r0');
+  await flush();
+  unit = first.getSnapshot();
+  expect(unit.context.draft).toBeUndefined();
+  expect(unit.context.generation).toBe(generation);
+  expect(unit.matches({ intent: 'clean', mutation: { acknowledged: 'awaitingObservation' } })).toBe(true);
+  expect(unit.context).toMatchObject({ base: 'r1', observed: 'r0' });
+  expect(scripted.writes).toHaveLength(1);
+  // Target mutation admission is still held by the unobserved commit, and a
+  // different unit stays editable behind it.
+  expect(admitted(actor)).toBe(false);
+  editStatus(actor, 'r0');
+  expect(unitOf(actor, statusIdentity).getSnapshot().context.draft).toEqual({ value: { enabled: true } });
+  submitStatus(actor, 'r0');
+  await flush();
+  expect(scripted.writes).toHaveLength(1);
+  // The authoritative post-commit observation settles the commit and retires
+  // the transaction.
+  scripted.reads[1].resolve(projection('r1'));
+  await flush();
+  expectRetired(actor);
+  expect(admitted(actor)).toBe(true);
+  expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'saved', observed: true });
+  // Editing resumes as a fresh transaction on the newly observed source.
+  edit(actor, ['read', 'write'], 'r1');
+  const second = unitOf(actor);
+  expect(second).not.toBe(first);
+  expect(second.getSnapshot().context).toMatchObject({ base: 'r1', observed: 'r1', draft: { value: ['read', 'write'] } });
+  expect(awaitingCommitObservation(second.getSnapshot())).toBe(false);
+  submit(actor, 'r1');
+  await flush();
+  expect(scripted.writes).toHaveLength(2);
+  expect(scripted.writes[1].expected).toBe('r1');
+  expect(scripted.writes[1].mutation).toEqual(toolsMutation);
+});
+
+it('R37 a newer intent authored before the acknowledgement survives it, is frozen until the observation, then editable again', async () => {
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port);
+  await flush();
+  scripted.reads[0].resolve(projection('r0'));
+  await flush();
+  edit(actor, ['read'], 'r0');
+  submit(actor, 'r0');
+  await flush();
+  // Intent B exists before the acknowledgement of A.
+  edit(actor, ['read', 'write'], 'r0');
+  scripted.writes[0].resolve({ acknowledgement: projection('r1') });
+  await flush();
+  let unit = unitOf(actor).getSnapshot();
+  expect(awaitingCommitObservation(unit)).toBe(true);
+  expect(unit.context.draft).toEqual({ value: ['read', 'write'] });
+  const generation = unit.context.generation;
+  // B survives, but no edit — of B or of anything else — begins while the
+  // commit is unobserved.
+  edit(actor, ['write'], 'r0');
+  unit = unitOf(actor).getSnapshot();
+  expect(unit.context.draft).toEqual({ value: ['read', 'write'] });
+  expect(unit.context.generation).toBe(generation);
+  scripted.reads[1].resolve(projection('r1'));
+  await flush();
+  unit = unitOf(actor).getSnapshot();
+  expect(unit.matches({ intent: 'dirty', mutation: 'settled', lifetime: 'live' })).toBe(true);
+  expect(unit.context).toMatchObject({ base: 'r1', observed: 'r1' });
+  edit(actor, ['read', 'write', 'shell'], 'r1');
+  expect(unitOf(actor).getSnapshot().context.draft).toEqual({ value: ['read', 'write', 'shell'] });
+  submit(actor, 'r1');
+  await flush();
+  expect(scripted.writes).toHaveLength(2);
+  expect(scripted.writes[1].expected).toBe('r1');
+});
+
 // ── 14./15. Settings navigation ─────────────────────────────────────────────
 
 function navigationActor(lookup: (directory: string) => Promise<OwnerResolution>) {
@@ -2945,7 +3052,7 @@ it.each(['resolved', 'failed'] as const)('R14 a stale owner lookup that %s after
   gate.resolve(outcome === 'resolved' ? { kind: 'resolved', id: 'wA', displayName: 'Workspace A' } : { kind: 'failed', message: 'stale owner lookup failed' });
   await flush();
   expect(actor.getSnapshot().context.target).toEqual(userSettingsTarget);
-  expect(actor.getSnapshot().context.section).toBe('overview');
+  expect(actor.getSnapshot().context.page).toBe('general');
   expect(actor.getSnapshot().context.error).toBe('');
   expect(lookup).toHaveBeenCalledTimes(1);
 });
@@ -2960,7 +3067,7 @@ it('R15 a lookup completing under a replaced authority mutates nothing', async (
   actor.send({ type: 'RETIRE' });
   gate.resolve({ kind: 'retired' });
   await flush();
-  expect(actor.getSnapshot().context.section).toBeUndefined();
+  expect(actor.getSnapshot().context.page).toBeUndefined();
   expect(actor.getSnapshot().context.error).toBe('');
   expect(actor.getSnapshot().context.target).toEqual(userSettingsTarget);
 });
@@ -2970,7 +3077,9 @@ it('R15 a current lookup still commits the exact registered owning Workspace', a
   actor.send({ type: 'OPEN.OWNER', directory: '/workspace/A' });
   await flush();
   expect(actor.getSnapshot().context.target).toEqual(workspaceSettingsTarget('wA', 'Workspace A'));
-  expect(actor.getSnapshot().context.section).toBe('overview');
+  // A Workspace surface is constrained: it has no General page and lands on Models.
+  expect(actor.getSnapshot().context.page).toBe('models');
+  expect(actor.getSnapshot().context.focus).toEqual({});
 });
 
 it('R15 an unregistered owning Workspace reports explicitly and opens nothing', async () => {
@@ -2978,6 +3087,214 @@ it('R15 an unregistered owning Workspace reports explicitly and opens nothing', 
   actor.send({ type: 'OPEN.OWNER', directory: '/workspace/revoked' });
   await flush();
   expect(actor.getSnapshot().context.error).toContain('/workspace/revoked is not registered');
-  expect(actor.getSnapshot().context.section).toBeUndefined();
+  expect(actor.getSnapshot().context.page).toBeUndefined();
   expect(actor.getSnapshot().context.target).toEqual(userSettingsTarget);
+});
+
+// ── #392 page and focus navigation ──────────────────────────────────────────
+
+it('S2-01 User Settings lands on General and a Workspace lands on its first constrained page', () => {
+  const actor = navigationActor(async () => ({ kind: 'retired' }));
+  actor.send({ type: 'OPEN', target: userSettingsTarget });
+  expect(actor.getSnapshot().context.page).toBe('general');
+  actor.send({ type: 'OPEN', target: workspaceSettingsTarget('wA', 'Workspace A') });
+  expect(actor.getSnapshot().context.page).toBe('models');
+});
+
+it('S2-09 each page keeps its own detail focus across page changes, and a new target starts with none', () => {
+  const actor = navigationActor(async () => ({ kind: 'retired' }));
+  actor.send({ type: 'OPEN', target: userSettingsTarget });
+  actor.send({ type: 'SELECT', page: 'models' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'deepseek' } });
+  actor.send({ type: 'SELECT', page: 'extensions' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'mcp', name: 'search' } });
+  actor.send({ type: 'SELECT', page: 'models' });
+  expect(actor.getSnapshot().context.focus).toEqual({
+    models: { kind: 'provider', id: 'deepseek' },
+    extensions: { kind: 'extension', family: 'mcp', name: 'search' },
+  });
+  // Leaving a detail for its list clears only that page's focus.
+  actor.send({ type: 'FOCUS' });
+  expect(actor.getSnapshot().context.focus).toEqual({ extensions: { kind: 'extension', family: 'mcp', name: 'search' } });
+  actor.send({ type: 'OPEN', target: workspaceSettingsTarget('wA', 'Workspace A') });
+  expect(actor.getSnapshot().context.focus).toEqual({});
+});
+
+it('S2-01 Connection is the Advanced sub-surface of the global client, never a seventh page', () => {
+  const actor = navigationActor(async () => ({ kind: 'retired' }));
+  actor.send({ type: 'OPEN', target: userSettingsTarget });
+  actor.send({ type: 'SELECT', page: 'models' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'deepseek' } });
+  actor.send({ type: 'OPEN.CONNECTION' });
+  expect(actor.getSnapshot().context.page).toBe('advanced');
+  expect(actor.getSnapshot().context.focus).toEqual({ models: { kind: 'provider', id: 'deepseek' }, advanced: { kind: 'connection' } });
+  // From a Workspace surface, Connection retargets to the global client and
+  // carries none of the Workspace's focus with it.
+  actor.send({ type: 'OPEN', target: workspaceSettingsTarget('wA', 'Workspace A') });
+  actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'workspace-only' } });
+  actor.send({ type: 'OPEN.CONNECTION' });
+  expect(actor.getSnapshot().context.target).toEqual(userSettingsTarget);
+  expect(actor.getSnapshot().context.focus).toEqual({ advanced: { kind: 'connection' } });
+});
+
+it('S2-01 a page cannot be selected or focused while Settings is closed', () => {
+  const actor = navigationActor(async () => ({ kind: 'retired' }));
+  actor.send({ type: 'SELECT', page: 'models' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'deepseek' } });
+  expect(actor.getSnapshot().context.page).toBeUndefined();
+  expect(actor.getSnapshot().context.focus).toEqual({});
+});
+
+// ── #392 target capability: navigation never enters an unauthorized state ──
+//
+// Every case sends the illegal event straight to the machine. No renderer is
+// involved, so none of these can pass because a presentation repaired the
+// state afterwards.
+
+const workspaceA = workspaceSettingsTarget('wA', 'Workspace A');
+const everyPage: readonly SettingsPage[] = ['general', 'models', 'agent', 'tools', 'extensions', 'advanced'];
+const everyFocus: readonly SettingsFocus[] = [
+  { kind: 'provider', id: 'deepseek' }, { kind: 'model', id: 'main', provider: 'deepseek' },
+  { kind: 'extension', family: 'mcp', name: 'search' }, { kind: 'connection' },
+];
+/** The exact legal page → focus-kind matrix of each owner. */
+const legal = {
+  user: { general: [], models: ['provider', 'model'], agent: [], tools: [], extensions: ['extension'], advanced: ['connection'] },
+  workspace: { models: ['provider', 'model'], agent: [], tools: [], extensions: ['extension'], advanced: [] },
+} as const satisfies Record<'user' | 'workspace', Partial<Record<SettingsPage, readonly SettingsFocus['kind'][]>>>;
+function opened(target = userSettingsTarget as typeof userSettingsTarget | typeof workspaceA) {
+  const actor = navigationActor(async () => ({ kind: 'retired' }));
+  actor.send({ type: 'OPEN', target });
+  return actor;
+}
+/** The invariant itself, checked against a live snapshot. */
+function expectLegal(actor: ReturnType<typeof navigationActor>) {
+  const { target, page, focus } = actor.getSnapshot().context;
+  if (page === undefined) return;
+  expect(settingsPages(target)).toContain(page);
+  for (const [owner, detail] of Object.entries(focus)) expect(admitsFocus(target, owner as SettingsPage, detail as SettingsFocus)).toBe(true);
+}
+
+it.each(['user', 'workspace'] as const)('N01 the %s target admits exactly its legal page and focus matrix', kind => {
+  const target = kind === 'user' ? userSettingsTarget : workspaceA;
+  const matrix: Partial<Record<SettingsPage, readonly string[]>> = legal[kind];
+  expect(settingsPages(target)).toEqual(Object.keys(matrix));
+  for (const page of everyPage) for (const focus of everyFocus) {
+    const actor = opened(target);
+    const landing = actor.getSnapshot().context.page;
+    actor.send({ type: 'SELECT', page });
+    const pageLegal = page in matrix;
+    expect(actor.getSnapshot().context.page).toBe(pageLegal ? page : landing);
+    if (!pageLegal) continue;
+    actor.send({ type: 'FOCUS', focus });
+    const focusLegal = matrix[page]!.includes(focus.kind);
+    expect(admitsFocus(target, page, focus)).toBe(focusLegal);
+    expect(actor.getSnapshot().context.focus).toEqual(focusLegal ? { [page]: focus } : {});
+    expectLegal(actor);
+  }
+});
+
+it('N02 a Workspace target refuses General and stays on the page it had', () => {
+  const actor = opened(workspaceA);
+  actor.send({ type: 'SELECT', page: 'tools' });
+  actor.send({ type: 'SELECT', page: 'general' });
+  expect(actor.getSnapshot().context.page).toBe('tools');
+  expectLegal(actor);
+});
+
+it('N03 a Workspace target can never enter Connection focus', () => {
+  const actor = opened(workspaceA);
+  actor.send({ type: 'SELECT', page: 'advanced' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'connection' } });
+  expect(actor.getSnapshot().context.page).toBe('advanced');
+  expect(actor.getSnapshot().context.focus).toEqual({});
+  expectLegal(actor);
+});
+
+it('N04 Models refuses an Extension focus and Extensions refuses a Provider or Model focus', () => {
+  const actor = opened();
+  actor.send({ type: 'SELECT', page: 'models' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'mcp', name: 'search' } });
+  expect(actor.getSnapshot().context.focus).toEqual({});
+  actor.send({ type: 'SELECT', page: 'extensions' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'deepseek' } });
+  actor.send({ type: 'FOCUS', focus: { kind: 'model', id: 'main' } });
+  actor.send({ type: 'FOCUS', focus: { kind: 'connection' } });
+  expect(actor.getSnapshot().context.focus).toEqual({});
+  expectLegal(actor);
+});
+
+it.each(['general', 'agent', 'tools'] as const)('N05 %s admits no secondary focus of any kind', page => {
+  const actor = opened();
+  actor.send({ type: 'SELECT', page });
+  for (const focus of everyFocus) actor.send({ type: 'FOCUS', focus });
+  expect(actor.getSnapshot().context.page).toBe(page);
+  expect(actor.getSnapshot().context.focus).toEqual({});
+});
+
+it('N06 an illegal FOCUS refused on one page leaves every other page\'s focus intact', () => {
+  const actor = opened();
+  actor.send({ type: 'SELECT', page: 'models' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'deepseek' } });
+  actor.send({ type: 'FOCUS', focus: { kind: 'connection' } });
+  expect(actor.getSnapshot().context.focus).toEqual({ models: { kind: 'provider', id: 'deepseek' } });
+});
+
+it('N07 switching User → Workspace drops User-only focus and lands on a Workspace page', () => {
+  const actor = opened();
+  actor.send({ type: 'SELECT', page: 'models' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'deepseek' } });
+  actor.send({ type: 'SELECT', page: 'advanced' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'connection' } });
+  actor.send({ type: 'SELECT', page: 'general' });
+  actor.send({ type: 'OPEN', target: workspaceA });
+  expect(actor.getSnapshot().context.target).toEqual(workspaceA);
+  expect(actor.getSnapshot().context.page).toBe('models');
+  expect(actor.getSnapshot().context.focus).toEqual({});
+  expectLegal(actor);
+  // And the owning-Workspace path obeys the same rule.
+  const owner = navigationActor(async () => ({ kind: 'resolved', id: 'wA', displayName: 'Workspace A' }));
+  owner.send({ type: 'OPEN.CONNECTION' });
+  owner.send({ type: 'OPEN.OWNER', directory: '/workspace/A' });
+  return flush().then(() => {
+    expect(owner.getSnapshot().context.target).toEqual(workspaceA);
+    expect(owner.getSnapshot().context.page).toBe('models');
+    expect(owner.getSnapshot().context.focus).toEqual({});
+    expectLegal(owner);
+  });
+});
+
+it('N08 OPEN.CONNECTION explicitly retargets to User, Advanced and Connection focus', () => {
+  const actor = opened(workspaceA);
+  actor.send({ type: 'SELECT', page: 'extensions' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'agent', name: 'reviewer' } });
+  actor.send({ type: 'OPEN.CONNECTION' });
+  expect(actor.getSnapshot().context).toMatchObject({ target: userSettingsTarget, page: 'advanced', focus: { advanced: { kind: 'connection' } } });
+  // The Workspace's extension focus did not migrate into the global surface.
+  expect(actor.getSnapshot().context.focus.extensions).toBeUndefined();
+  expectLegal(actor);
+  // From a closed dialog too.
+  const closed = navigationActor(async () => ({ kind: 'retired' }));
+  closed.send({ type: 'OPEN.CONNECTION' });
+  expect(closed.getSnapshot().context).toMatchObject({ target: userSettingsTarget, page: 'advanced', focus: { advanced: { kind: 'connection' } } });
+});
+
+it('N09 legal per-page focus is restored after leaving a page, and illegal attempts in between change nothing', () => {
+  const actor = opened();
+  actor.send({ type: 'SELECT', page: 'models' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'model', id: 'main', provider: 'deepseek' } });
+  actor.send({ type: 'SELECT', page: 'extensions' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'mcp', name: 'search' } });
+  actor.send({ type: 'SELECT', page: 'agent' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'elsewhere' } });
+  actor.send({ type: 'SELECT', page: 'advanced' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'connection' } });
+  actor.send({ type: 'SELECT', page: 'models' });
+  expect(actor.getSnapshot().context.focus.models).toEqual({ kind: 'model', id: 'main', provider: 'deepseek' });
+  actor.send({ type: 'SELECT', page: 'extensions' });
+  expect(actor.getSnapshot().context.focus.extensions).toEqual({ kind: 'extension', family: 'mcp', name: 'search' });
+  actor.send({ type: 'SELECT', page: 'advanced' });
+  expect(actor.getSnapshot().context.focus.advanced).toEqual({ kind: 'connection' });
+  expect(actor.getSnapshot().context.focus).not.toHaveProperty('agent');
+  expectLegal(actor);
 });

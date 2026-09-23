@@ -2,7 +2,7 @@
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
-import { SettingsSurface } from './settings-harness';
+import { openResourceRow, openSettingsPage, settingsReady, SettingsSurface } from './settings-harness';
 import { workspaceSettingsTarget, userSettingsTarget } from '../src/app/settings/projection';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 afterEach(cleanup);
@@ -29,10 +29,13 @@ function redactedSources(s: ReturnType<typeof cfg3Client>) {
   s.source.user_mcp.authored = { search: { definition: { type: 'stdio', command: 'search-server' }, retained_env: ['TOKEN'], retained_headers: [] } };
 }
 
+/** Literal Tool environment values are authored on Advanced, where the native
+ * environment identities and the rest of the diagnostics live. */
 async function openWorkspaceRuntime(s: ReturnType<typeof cfg3Client>) {
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={cfg3Host(s)} />);
+  await settingsReady();
+  await openSettingsPage('Advanced');
   await screen.findByText(/Revision: workspace-1/);
-  fireEvent.click(screen.getByRole('button', { name: 'General' }));
 }
 
 it('S1-15 an inherited environment identity is discoverable while its User value is never projected', async () => {
@@ -49,8 +52,7 @@ it('S1-15 an inherited environment identity is discoverable while its User value
   // The native-resolved disclosure exists, and carries the redaction fact in
   // place of a value: there is no branch that could render one.
   expect(form.getByText('Native resolved value (not Session adoption)')).toBeTruthy();
-  expect(form.getByText('Native resolved value (not Session adoption)').parentElement!.querySelector('pre')!.textContent)
-    .toBe('Native effective value exists — the literal is never projected');
+  expect(form.getByText('Native effective value exists — the literal is never projected', { selector: 'pre' })).toBeTruthy();
   // Nothing anywhere in the document carries the value.
   expect(document.body.innerHTML).not.toContain(SENTINEL);
   expect(retained(s)).not.toContain(SENTINEL);
@@ -84,10 +86,11 @@ it('S1-15 Override authors an empty Workspace draft and sends only the newly typ
 it('S1-15 Advanced diagnostics render the native projection without any literal value', async () => {
   const s = cfg3Client(); redactedSources(s);
   render(<SettingsSurface client={s.client} target={userSettingsTarget} host={cfg3Host(s)} />);
+  await settingsReady();
+  await openSettingsPage('Advanced');
   await screen.findByText(/Revision: user-1/);
-  fireEvent.click(screen.getByRole('button', { name: 'Server & source diagnostics' }));
-  const diagnostics = screen.getByText('Source and application diagnostics').parentElement!.querySelector('pre')!.textContent!;
-  const resolved = screen.getByText('Resolved preview — source resolution only').parentElement!.querySelector('pre')!.textContent!;
+  const diagnostics = screen.getByLabelText('Source and application projection').textContent!;
+  const resolved = screen.getByLabelText('Resolved preview projection').textContent!;
   // Both diagnostics carry the identities and no value at all: the environment
   // members are a list of names, the Provider credential is `"type":"literal"`
   // with no secret, and the MCP definition's `env` was cleared natively.
@@ -103,15 +106,17 @@ it('S1-15 Advanced diagnostics render the native projection without any literal 
 it('S1-15 a Provider credential is never read back from a shadowed definition', async () => {
   const s = cfg3Client(); redactedSources(s);
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={cfg3Host(s)} />);
-  await screen.findByText(/Revision: workspace-1/);
-  fireEvent.click(screen.getByRole('button', { name: 'Providers & Models' }));
+  await settingsReady();
   // The inherited identity is reachable and reported as a redacted native fact.
   expect(screen.getByText(/Literal secret \(redacted\)/)).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Override Provider transport' }));
+  await openResourceRow('transport');
   // Authoring an override starts a complete new definition; `retain` is not
   // even offered, because this Workspace authors no credential to retain.
-  const credential = screen.getByLabelText('Credential source') as HTMLSelectElement;
-  expect([...credential.options].map(option => option.value)).toEqual(['environment', 'literal']);
+  fireEvent.click(await screen.findByRole('button', { name: /Credential source/ }));
+  expect((await screen.findAllByRole('option')).map(option => option.textContent)).toEqual([
+    'Read it from an environment variable', 'Enter a literal secret',
+  ]);
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
   expect((screen.getByLabelText('Endpoint') as HTMLInputElement).value).toBe('');
   expect(document.body.innerHTML).not.toContain(SENTINEL);
 });
@@ -119,12 +124,39 @@ it('S1-15 a Provider credential is never read back from a shadowed definition', 
 it('S1-15 an MCP literal environment value is never projected back into its editor', async () => {
   const s = cfg3Client(); redactedSources(s);
   render(<SettingsSurface client={s.client} target={userSettingsTarget} host={cfg3Host(s)} />);
-  await screen.findByText(/Revision: user-1/);
-  fireEvent.click(screen.getByRole('button', { name: 'MCP' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Edit MCP search' }));
+  await settingsReady();
+  await openSettingsPage('Extensions');
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
+  await openResourceRow('search');
   // Native cleared the literal map and named only the identities it retained.
   expect(within(screen.getByRole('group', { name: 'Literal environment' })).queryByLabelText('TOKEN')).toBeNull();
   expect((within(screen.getByRole('group', { name: 'Retain existing environment keys' })).getByRole('textbox', { name: 'Retain existing environment keys 1' }) as HTMLInputElement).value).toBe('TOKEN');
   expect(document.body.innerHTML).not.toContain(SENTINEL);
   expect(retained(s)).not.toContain(SENTINEL);
+});
+
+it('S2-12 the form library opens no devtools channel, so a typed secret is never broadcast or queued for one', async () => {
+  // Act as a devtools bus would: answer the handshake and record every event
+  // dispatched on the page. The form library must never attempt either.
+  const observed: string[] = [];
+  const handshake = () => { observed.push('tanstack-connect'); window.dispatchEvent(new CustomEvent('tanstack-connect-success')); };
+  const record = (event: Event) => observed.push(JSON.stringify((event as CustomEvent).detail));
+  window.addEventListener('tanstack-connect', handshake);
+  window.addEventListener('tanstack-dispatch-event', record);
+  try {
+    const s = cfg3Client();
+    render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
+    await settingsReady();
+    await openSettingsPage('Models');
+    await openResourceRow('transport');
+    fireEvent.click(screen.getByRole('button', { name: /Credential source$/ }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Enter a literal secret' }));
+    fireEvent.change(screen.getByLabelText('New literal credential'), { target: { value: SENTINEL } });
+    // The draft legitimately holds the secret in the actor-owned transaction.
+    await waitFor(() => expect(retained(s)).toContain(SENTINEL));
+    expect(observed).toEqual([]);
+  } finally {
+    window.removeEventListener('tanstack-connect', handshake);
+    window.removeEventListener('tanstack-dispatch-event', record);
+  }
 });

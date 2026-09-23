@@ -76,5 +76,8 @@ const notice = inventory.files.find((entry: { upstream: string }) => entry.upstr
 assert(createHash('sha256').update(readFileSync(resolve(repository, notice.destination))).digest('hex') === notice.upstream_sha256, 'Harness license changed');
 if (process.argv.includes('--artifact')) {
   for (const name of ['LICENSE-DeepSeek-Harness.txt', 'THIRD-PARTY-NOTICES.txt']) assert(readFileSync(resolve(web, 'dist', name)).equals(readFileSync(resolve(web, 'public', name))), `Missing production notice ${name}`);
+  // Form state, secret field values included, must have no devtools channel in
+  // the shipped bundle (see src/app/settings/forms/inert-devtools-event-client.ts).
+  for (const file of walk(resolve(web, 'dist')).filter(path => path.endsWith('.js'))) assert(!readFileSync(file, 'utf8').includes('tanstack-connect'), `Form devtools channel shipped in ${file}`);
 }
 console.log(`Verified ${destinations.size} source records and presentation dependency boundary`);

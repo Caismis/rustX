@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
+import { choose } from './shell-actions';
 // Each reference owns a fresh context/page, including its renderer paint caches.
 for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'questionnaire', 'selectors']) test(`Harness Agent ${mode} reference uses native snapshots`, async ({ page }) => {
  const errors: string[] = [];
@@ -29,8 +30,7 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
  if (mode === 'selectors') {
  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
  await page.getByRole('button', { name: 'Settings', exact: true }).click();
- await page.getByRole('button', { name: 'Appearance', exact: true }).click();
- await page.getByLabel('Theme', { exact: true }).selectOption('dark');
+ await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Theme', 'Dark');
  await page.getByRole('button', { name: 'Close Settings' }).click();
  await expectStableScreenshot(page, 'agent-dark-desktop.png');
  await page.setViewportSize({ width: 390, height: 844 });

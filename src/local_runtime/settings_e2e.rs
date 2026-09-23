@@ -251,3 +251,107 @@ fn s1_mcp_literal_environment_and_headers_stay_redacted() {
     assert!(view.definition.env.is_empty());
     assert_eq!(view.retained_env, vec!["TOKEN".to_string()]);
 }
+
+/// A diagnostic belongs to exactly the resource native attributes it to.
+/// Two MCP definitions share one `mcp.toml`, so the file cannot say which one
+/// failed: only the catalog entry keyed by the identity can, and a document
+/// that fails as a whole is the document's diagnostic, not any identity's.
+#[test]
+fn resource_diagnostics_are_attributed_by_identity_never_by_shared_file() {
+    use crate::runtime::capability_inspection::{ResourceDiagnosticSubject, ResourceFamily};
+    let (root, host, request) = fixture();
+    let (manager, _input) = request.session_input(&host).unwrap();
+    let user = crate::local_runtime::configuration::settings::SourceTarget::User;
+    let resources = root.path().join("home/rustx/.agents");
+    std::fs::create_dir_all(resources.join("tools/analysis")).unwrap();
+    std::fs::write(
+        resources.join("mcp.toml"),
+        "[mcp_servers.search]\ncommand = 'server'\n[mcp_servers.broken]\ncommand = 3\n",
+    )
+    .unwrap();
+    let inventory = manager
+        .read_source_settings(&user)
+        .unwrap()
+        .prospective_resources
+        .unwrap();
+    let subjects = |family: ResourceFamily| {
+        inventory
+            .resource_diagnostics
+            .iter()
+            .filter(|diagnostic| match &diagnostic.subject {
+                ResourceDiagnosticSubject::Resource { family: owner, .. }
+                | ResourceDiagnosticSubject::Collection { family: owner } => *owner == family,
+            })
+            .map(|diagnostic| diagnostic.subject.clone())
+            .collect::<Vec<_>>()
+    };
+    // Native publishes resolved source paths; the temporary directory may be
+    // reached through a symlink (macOS `/var` → `/private/var`).
+    let mcp = std::fs::canonicalize(resources.join("mcp.toml")).unwrap();
+    let definition = |name: &str| {
+        inventory
+            .definitions
+            .iter()
+            .find(|entry| entry.family == ResourceFamily::Mcp && entry.name == name)
+            .unwrap()
+    };
+    // Both identities come from one document; only one of them is invalid.
+    assert_eq!(definition("search").location.path, mcp);
+    assert_eq!(definition("broken").location.path, mcp);
+    assert!(definition("search").valid);
+    assert!(!definition("broken").valid);
+    assert_eq!(
+        subjects(ResourceFamily::Mcp),
+        [ResourceDiagnosticSubject::Resource {
+            family: ResourceFamily::Mcp,
+            name: "broken".into()
+        }]
+    );
+    // A Managed Python package is one identity under its bare name, the same
+    // name its definition is published under — not the `python:` source id.
+    assert!(
+        inventory
+            .definitions
+            .iter()
+            .any(|entry| entry.family == ResourceFamily::ManagedPython && entry.name == "analysis")
+    );
+    assert_eq!(
+        subjects(ResourceFamily::ManagedPython),
+        [ResourceDiagnosticSubject::Resource {
+            family: ResourceFamily::ManagedPython,
+            name: "analysis".into()
+        }]
+    );
+
+    // A document that does not parse names no identity at all: the failure is
+    // the document's, and no identity diagnostic is fabricated from it.
+    std::fs::write(&mcp, "invalid = [").unwrap();
+    let inventory = manager
+        .read_source_settings(&user)
+        .unwrap()
+        .prospective_resources
+        .unwrap();
+    let mcp_diagnostics: Vec<_> = inventory
+        .resource_diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            matches!(
+                diagnostic.subject,
+                ResourceDiagnosticSubject::Resource {
+                    family: ResourceFamily::Mcp,
+                    ..
+                } | ResourceDiagnosticSubject::Collection {
+                    family: ResourceFamily::Mcp
+                }
+            )
+        })
+        .collect();
+    assert_eq!(mcp_diagnostics.len(), 1);
+    assert_eq!(
+        mcp_diagnostics[0].subject,
+        ResourceDiagnosticSubject::Collection {
+            family: ResourceFamily::Mcp
+        }
+    );
+    assert_eq!(mcp_diagnostics[0].file.as_deref(), Some(mcp.as_path()));
+}

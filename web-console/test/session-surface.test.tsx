@@ -7,7 +7,7 @@ import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v18';
+import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v19';
 
 let server: Server;
 beforeEach(() => {
@@ -88,6 +88,7 @@ it('identifies two unnamed previews and two empty Sessions without UUID fallback
 it('Connection shows product state without a generation counter', async () => {
   await mount();
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
+  fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
   expect(document.querySelector('.connection-status')!.textContent).toBe('Connected');
   expect(document.querySelector('.connection-status small')).toBeNull();
@@ -371,6 +372,7 @@ it('unscoped uncertainty is global, not assigned to every Session; reviewed diag
   fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
   expect(JSON.parse(screen.getByLabelText('Native diagnostic JSON').textContent!).uncertain_operations).toEqual([]);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
+  fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
   fireEvent.click(screen.getByText('Review uncertain operations'));
   const before = methods().length;
@@ -396,6 +398,7 @@ it('interaction operation evidence is scoped and cannot be dismissed as a non-in
   const evidence = JSON.parse(screen.getByLabelText('Native diagnostic JSON').textContent!);
   expect(Object.values(evidence.interactions)).toEqual([{ sessionId: 'B', status: 'uncertain' }]);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
+  fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
   expect(screen.queryByText('Review uncertain operations')).toBeNull();
   expect(methods().filter(method => method === 'interaction/respond')).toHaveLength(1);
@@ -484,6 +487,7 @@ it('reviewing a notice restores capacity at the 64-diagnostic limit without repl
   await expect(server.client.request({ method: 'session/name', params: { session_id: 'A', name: 'Blocked' } }, 'session')).rejects.toThrow();
   expect(methods().filter(method => method === 'session/name')).toHaveLength(64);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
+  fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
   fireEvent.click(screen.getByText('Review uncertain operations'));
   const before = methods().length;
@@ -690,7 +694,7 @@ const reads = (id?: string) => server.requests.filter(({ request }) => request.m
   && (!id || ('session_id' in request.params && request.params.session_id === id))).length;
 /** Freeze a held response against native state now, so releasing it later
  * cannot recompute a newer one. */
-function freeze(request: import('../../protocol/app-server/v18').Request) { server.commit(request); return request; }
+function freeze(request: import('../../protocol/app-server/v19').Request) { server.commit(request); return request; }
 /** Let every automatic follow-up the client decided to issue run to completion. */
 async function settle() { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); }); }
 

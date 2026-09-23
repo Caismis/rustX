@@ -20,7 +20,7 @@ effective.resources.definitions = [
  { family: 'skill', name: 'incomplete', valid: false, location: { scope: 'workspace', path: '/workspace/.agents/skills/incomplete/SKILL.md' } },
  { family: 'managed_python', name: 'analysis', valid: true, location: { scope: 'user', path: '/home/user/rustx/.agents/python/analysis' } },
 ];
-effective.resources.resource_diagnostics = [{ identity: 'incomplete', file: '/workspace/.agents/skills/incomplete/SKILL.md', reason: 'Missing package description' }];
+effective.resources.resource_diagnostics = [{ subject: { kind: 'resource', family: 'skill', name: 'incomplete' }, file: '/workspace/.agents/skills/incomplete/SKILL.md', field: 'description', reason: 'Missing package description' }];
 effective.resources.sources = { 'python:analysis': { status: 'unprepared' } };
 source.prospective_resources = effective.resources;
 source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/workspace/.agents/agents/reviewer.toml', revision: 'agent-1', authored: { description: 'Independent code review', instructions: 'Inspect changed boundaries and report findings.', tools: { builtin: ['read', 'grep'] }, skills: ['review'] } } }];

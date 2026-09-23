@@ -22,7 +22,7 @@
       "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. No local delivery preference, runtime or slot/store authority.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
+        "../../../../protocol/app-server/v19",
         "../../client/app-server",
         "../../client/uploads",
         "../../presentation/agent/Composer.module.css",
@@ -42,7 +42,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "891689090c068daf575cd22088abf8f3fe823037124207b5c55e28b00e2771f2"
+      "local_sha256": "4f11e5d977d5e2f9694b81acac092873fa3ee8a710b27e45499105d6ce3ed012"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -53,7 +53,7 @@
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
+        "../../../../protocol/app-server/v19",
         "../../bindings/questionnaire",
         "../../presentation/agent/Question.module.css",
         "../../presentation/primitives/Button",
@@ -67,7 +67,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "1daa99f08e6bafb98ac45a49d3e22a19850bc3582a7e153a7eb6f78e1320ee4e"
+      "local_sha256": "61ad57f36c07bdf52147bf076c4397d2aef4e7a4dd0ca147177c115b3cdc5f5f"
     },
     {
       "upstream": "packages/client/ui-input-trigger/src/client/MenuView.tsx",
@@ -95,7 +95,7 @@
       "treatment": "rewritten selectors with Harness Modal and typed rustX dispatch",
       "upstream_sha256": "c6a89ae2771f36ff6da26886fbc6719369f41f9eae004e52561644c788df153f",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
+        "../../../../protocol/app-server/v19",
         "../../bindings/projection",
         "../../client/app-server",
         "../../presentation/primitives/Button",
@@ -113,7 +113,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "00e3437d7b62f7d5917c6ccc83962489c1332405001f13d33f97fd5397c8ec73"
+      "local_sha256": "9cfd9e6ab7d502d93f4ecdc888676980fdf733895089b8ebeb91b7424c04e6c8"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -215,7 +215,7 @@
       "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds the rustX durable GoalPhase as the sole lifecycle authority (one Pause-or-Resume control, no activation flag), adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs",
       "upstream_sha256": "fcd9ec77f6e40cf4220a883f276d59be5641768a606ff128a5aa209222a637fa",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
+        "../../../../protocol/app-server/v19",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -232,7 +232,7 @@
         "clear/tombstone control"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "446bc339edfdecdd6994146f902ea36bc631820fcf15f583a9b901587f2907e3"
+      "local_sha256": "127edc610efaaa636192bcdfcc7d7fa56da91102350b7bc8783c08ccdf4e6409"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
@@ -254,7 +254,7 @@
       "treatment": "adapted: collapsible queue, inline text editing, remove, busy controls and preserved drafts; native exact pending CAS and authoritative readback; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Use latest version conflict copy; exact expected revision remains native. Native authority unchanged.",
       "upstream_sha256": "682d5bb4aa11478acbac0f2e21ed1e129baddd18cbff732c64ae5bdb95fb738e",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
+        "../../../../protocol/app-server/v19",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -269,7 +269,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "335a5e50ca9e5d9dddf971716b5250045f6301c9bab75f448dfbc8705d3bbda8"
+      "local_sha256": "67891cd825d5166d9bda78ebc494267fc4abe1889a0923aac6a53d9d44a92be4"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -291,7 +291,7 @@
       "treatment": "adapted: Harness empty-renders-nothing, collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds blocked_by and active_form. Issue #377 removes the composed-empty strip so extension-absent and composed-empty share one visual result; Harness turn-scoped plan clearing is deliberately excluded.",
       "upstream_sha256": "1d1e9d87c12b505fc8bc2bdf9973fc349fb80b9385419e0247420ecdb1fc2f4a",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
+        "../../../../protocol/app-server/v19",
         "../../bindings/composer-context",
         "../../presentation/primitives/icons",
         "./TodoDock.module.css",
@@ -305,7 +305,7 @@
         "Harness locale runtime"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "09f9b952aa49f9efebb85508c1c6cd31f5dd97f3c0b56f31501b70b5c51a98c9"
+      "local_sha256": "8dbe8804e21b9163463eddb74d2aab5eecaf06dc758279089d1ee6835c28804d"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
@@ -333,17 +333,21 @@
     },
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
-      "destination": "web-console/src/app/settings/CatalogEditor.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery. Dedicated Provider/Model drill-down with explicit return to the native catalog; unsaved units retained by app draft owner. Catalog identities are enumerated from the native effective projection, with this scope's authoring and native provenance kept separate; no browser inheritance engine.",
+      "destination": "web-console/src/app/settings/models/ModelsPage.tsx",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery. Dedicated Provider/Model drill-down with explicit return to the native catalog; unsaved units retained by app draft owner. Catalog identities are enumerated from the native effective projection, with this scope's authoring and native provenance kept separate; no browser inheritance engine. #392: moved into the Models product page as Provider list → Provider detail → Model detail; complete typed Provider/Model forms are TanStack Form field mechanics bridged to the XState unit transaction; interaction hierarchy follows ZCode public docs (inspected only, no source copied). #392 repair: Provider and Model focus are typed by the Models page from the navigation domain, so no other page's detail can reach it.",
       "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
-        "../../presentation/primitives/Button",
-        "../../presentation/settings/SettingsContent",
-        "../../presentation/settings/SettingsContent.module.css",
-        "./RequestPolicy",
-        "./controls",
-        "./projection",
+        "../../../../../protocol/app-server/v19",
+        "../../../presentation/primitives/Button",
+        "../../../presentation/settings/SettingsContent",
+        "../../../presentation/settings/SettingsContent.module.css",
+        "../../../presentation/settings/SettingsWorkflow.module.css",
+        "../forms/bridge",
+        "../forms/controls",
+        "../forms/fields",
+        "../machines/navigation",
+        "../primitives/aria",
+        "../projection",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -360,22 +364,30 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "1909513166614270ecde3b847cdc7a07523445114ce2889271228e7b9f9f7c01"
+      "local_sha256": "921cea656cb62e8b0946730c2b929820cc9c803c050b23056e3d884852496a31"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
-      "destination": "web-console/src/app/settings/Integrations.tsx",
-      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS. infer native MCP transport for display without rewriting authored intent Inherited MCP identities are enumerated from the native resource inventory, which names each identity's winning scope; no browser catalog merge.",
+      "destination": "web-console/src/app/settings/extensions/ExtensionDetail.tsx",
+      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS. infer native MCP transport for display without rewriting authored intent Inherited MCP identities are enumerated from the native resource inventory, which names each identity's winning scope; no browser catalog merge. #392: moved into the Extensions resource detail; MCP and named-Agent definitions and root availability are separate units with separate outcomes, and resource kinds without an authoring API show inventory/diagnostics/selection only. #392 repair: extension focus is typed by the Extensions page from the navigation domain.",
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
-        "../../bindings/mcp",
-        "../../presentation/primitives/Button",
-        "../../presentation/settings/SettingsContent",
-        "../../presentation/settings/SettingsContent.module.css",
-        "./controls",
-        "./projection",
-        "react"
+        "../../../../../protocol/app-server/v19",
+        "../../../bindings/mcp",
+        "../../../presentation/primitives/Button",
+        "../../../presentation/settings/SettingsContent",
+        "../../../presentation/settings/SettingsContent.module.css",
+        "../../../presentation/settings/SettingsWorkflow.module.css",
+        "../../components/NativeFacts",
+        "../capability",
+        "../forms/bridge",
+        "../forms/controls",
+        "../forms/fields",
+        "../machines/navigation",
+        "../models/ModelsPage",
+        "../primitives/aria",
+        "../projection",
+        "./inventory"
       ],
       "excluded_dependencies": [
         "Cordis and dynamic plugin runtime",
@@ -416,35 +428,35 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "eb6bd9a7edd6f75f6c954ec7084d00543c745ae5b7680b3d6b889e116a836628"
+      "local_sha256": "f01e6accb1276bca0aae2964e8e52364b1ae0c36f55bab534a061187d77cf138"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "destination": "web-console/src/app/settings/Settings.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation. Read ordering: a Workspace write-owned reread is ordered by the identity reserved when the write operation is initiated and may replace only a projection older than the newest already accepted, and both the success and the failure of an owning-Workspace lookup are fenced by the Settings navigation epoch and App Server authority revision. Transaction settlement uses the mutation's non-sensitive revision selector, so no authored payload is retained. The displayed Settings section is owned by the Settings navigation machine; the shell holds no section state, and mutation outcomes are projected from the Settings authority actor's mutation region.",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation. Read ordering: a Workspace write-owned reread is ordered by the identity reserved when the write operation is initiated and may replace only a projection older than the newest already accepted, and both the success and the failure of an owning-Workspace lookup are fenced by the Settings navigation epoch and App Server authority revision. Transaction settlement uses the mutation's non-sensitive revision selector, so no authored payload is retained. The displayed Settings section is owned by the Settings navigation machine; the shell holds no section state, and mutation outcomes are projected from the Settings authority actor's mutation region. #392: composes six product pages (General, Models, Agent, Tools & Permissions, Extensions, Advanced) through the navigation machine; diagnostics moved to Advanced and Connection is an Advanced sub-surface. #392 repair: renders the navigation actor's target, page and focus as they are, with no renderer fallback; Connection is reachable only where the navigation target capability admits it, never because a ConnectionController is supplied.",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
+        "../../../../protocol/app-server/v19",
         "../../client/app-server",
         "../../connection/controller",
         "../../presentation/primitives/Button",
         "../../presentation/settings/SettingsContent.module.css",
         "../../presentation/settings/SettingsRoot",
         "../../workspaces/host",
-        "./AgentEditor",
-        "./CatalogEditor",
         "./ConnectionSettings",
-        "./Integrations",
-        "./ResourceInventory",
-        "./RootEditor",
-        "./RuntimeEditor",
-        "./controls",
+        "./advanced/AdvancedPage",
+        "./agent/AgentPage",
+        "./extensions/ExtensionsPage",
+        "./forms/bridge",
+        "./general/GeneralPage",
         "./machines/navigation",
         "./machines/react",
         "./machines/settings-target",
         "./machines/system",
+        "./models/ModelsPage",
         "./projection",
         "./source-context",
+        "./tools/ToolsPage",
         "@xstate/react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -461,7 +473,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "a5170d37ced5e6df968fc3cda9b7b598c70669c229377e0a1cece7d7eca12f7a"
+      "local_sha256": "91a756590e175c6c766e06f8062502cbf51b6e957fd43376eea5e430576d4ac6"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -489,7 +501,7 @@
       "treatment": "adapted dense ledger, folding, loaded-window search, virtualization, prepend anchoring and tail-follow onto server-resolved native Trace records; the Harness toolbar is folded into this one view seat; preserve the virtualization enable boundary and bounded canonical message batches. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: one paging authority feeds the toolbar, the ledger history row and the overview marker; an explicit overview selection clears a search that would otherwise hide the selected record.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
+        "../../../../protocol/app-server/v19",
         "../../client/trace",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Input",
@@ -531,7 +543,7 @@
           "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1"
         }
       ],
-      "local_sha256": "e5d99185d9e5ff461cad93d3b69301c2670f2d5d14c91a35a483b71461f857f6"
+      "local_sha256": "7642caf88c495710a4b6736cea8518be6238766de06ca4aadf8e06615c601885"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -539,7 +551,7 @@
       "treatment": "adapted per-kind inspector sections onto native Trace detail; Markdown, JSON tree, code and artifact rendering use the existing audited rustX primitives; refetch detail after authoritative lifecycle repair; preserve the virtualization enable boundary and bounded canonical message batches; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; distinguish recorded empty text from unavailable authority; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: the request title reads as model plus native retry, and the native disclosure names retry_number as the retry / recovery ordinal it is.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
+        "../../../../protocol/app-server/v19",
         "../../presentation/markdown/CodeBlock",
         "../../presentation/markdown/MarkdownText",
         "../../presentation/primitives/Button",
@@ -574,7 +586,7 @@
           "upstream_sha256": "a31b4253ba9c7c2490f942768d060c769ff1b5b4fb653ccf67ab54af1e1593b7"
         }
       ],
-      "local_sha256": "b64e3b3bccc467e50e4eb22b9892d7a7fcc88dcdf35ec40b46168f523299e823"
+      "local_sha256": "720f66deae6666b24b16c0fbf2a9ef20f2d20722ebd86c17d8cbec4c3acbec74"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -602,7 +614,7 @@
       "treatment": "adapted lane overview with drag-to-focus, wheel zoom, right-button clear/pan and the recorded TTFT/decode split; spans come only from two authoritative timestamps; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: adapted the upstream EarlierHistoryBoundary as a keyboard-reachable earlier-history marker gated, as upstream gates it, to the earliest edge of the projection; unlike upstream it holds no pending state of its own, because the rustX Trace cache already owns loading and the finite history limit. Request spans are named by model, native retry ordinal and exact request identity, never by a synthesized request number.",
       "upstream_sha256": "c062d06535a38498051346095bb713a292f45085e7de817a9400a92292c4eedc",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
+        "../../../../protocol/app-server/v19",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Tooltip",
         "./TrajectoryTimeline.module.css",
@@ -619,7 +631,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "5eaee75831e638880075f642354dad5203eba24a81fcb3d30f7ca3fb38521174"
+      "local_sha256": "98945bc94dc845aa1980845ea467b8253c781feb34e7988000510d7ca56610e4"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -627,7 +639,7 @@
       "treatment": "adapted section/group/fold projection; rustX reads the Attempt and Step the server resolved instead of deriving turn and step membership in the browser. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation.",
       "upstream_sha256": "9d198059498d082555cb5ea8d3d1a0bf4f991afc47bc55646028eada2fb981f1",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18"
+        "../../../../protocol/app-server/v19"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -639,7 +651,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "5dd32468391ba1fa4b52b3731ce20bc2693dcf08b405dbcd337f81d4c3e9cdae"
+      "local_sha256": "adb4cd60cf510711abd2a05ef886dbb2fef96b8e0aa25069112df55b6207a377"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
@@ -647,7 +659,7 @@
       "treatment": "adapted incremental loaded-window index over native Trace record fields",
       "upstream_sha256": "081fdf9092da9fe24e23b255262f3bd0f0e020aa9f377e318722f956b6cd371a",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
+        "../../../../protocol/app-server/v19",
         "./layout"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -660,7 +672,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "57df13bb75e46b3a1d7907b867c6c488aa7799ef06e2f8934361b1a740881751"
+      "local_sha256": "eab61e27c26e0f8347ab378b3dd3976f0776483832922a728434310f50a2ac73"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
@@ -668,7 +680,7 @@
       "treatment": "adapted sequence/duration projections, focus interval and duration formatting over native Trace timing and settled generation evidence; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT WEB-15 review: request span labels carry model, native retry ordinal and exact request identity; retry_number is never presented as a request number.",
       "upstream_sha256": "ed2ebfd8b4233022115d9757d50d3af6cf399690ccc4fcf36f9f3edcf8e7b173",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18"
+        "../../../../protocol/app-server/v19"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -680,7 +692,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "7b8d69d725c772209a991e4730df9fb8ceedb0f8f617480592bf131d3204472d"
+      "local_sha256": "408a7b0a553e6bfd2adc4b8448926f997ce5b0141f04428af06e4672f8a0de00"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1919,9 +1931,9 @@
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/presentation/settings/SettingsContent.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor.",
+      "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "77dd01a46d76b59eef27ab7a0c5a8ac1a03a4bc25f35a7814b9f225805a0bfa6",
+      "local_sha256": "3beb4d1ffd6dfe4a080780e42055aec2310ed86054d71fe92a45c75626547ab4",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -1948,7 +1960,7 @@
       "destination": "web-console/src/presentation/settings/SettingsRoot.module.css",
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation WEB-RESET-03: bounded category labels hidden in horizontal narrow navigation.",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation WEB-RESET-03: bounded category labels hidden in horizontal narrow navigation. #392: the mask moves onto the React Aria overlay and the dialog/tab roots gain layout classes. #392 repair: the horizontal page strip is laid out from React Aria data-orientation; only the narrow panel geometry stays on the breakpoint.",
       "upstream_sha256": "52a665b2c19ce30b35811c7b8b4c73e4ee94342d86e8e6fec77e61e1ced5738b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1957,7 +1969,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "96f78f5ce33a37b88285c815a2b97f3a1c7e10e1117b05c68c92e496eacaa302",
+      "local_sha256": "9860b03430cb7e8731ea48945bf5ff8eecbf374342eab156b82cb0b43dac30a2",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -1965,7 +1977,7 @@
       "destination": "web-console/src/presentation/settings/SettingsRoot.tsx",
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: upstream overlay/nav/content DOM with explicit section seats, body portal and modal focus isolation; native CFG3 editors and Appearance content supplied by app adapter WEB-RESET-03: optional native section group labels; unchanged single modal geometry, focus and close ownership.",
+      "treatment": "B: upstream overlay/nav/content DOM with explicit section seats, body portal and modal focus isolation; native CFG3 editors and Appearance content supplied by app adapter WEB-RESET-03: optional native section group labels; unchanged single modal geometry, focus and close ownership. #392: the overlay, focus containment/restoration and vertical page tabs are React Aria Components (ModalOverlay/Modal/Dialog/Tabs) styled by the retained upstream classes; the hand-written focus trap and portal are removed. #392 repair: page tab orientation follows the viewport (vertical rail, horizontal narrow strip) so arrow-key semantics match the visual axis; the render-time missing-page fallback is removed because navigation admits only listed pages. The selected tab keeps itself inside a horizontal strip once it is committed as selected, including selections that do not move focus.",
       "upstream_sha256": "7ce55121345e28bed96b01c2e08641162d7bee4569083bad46b98c1574577ecb",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1976,13 +1988,13 @@
       ],
       "retained_dependencies": [
         "../primitives/icons",
-        "../primitives/useModalFocus",
         "./SettingsRoot.module.css",
+        "./SettingsWorkflow.module.css",
         "clsx",
         "react",
-        "react-dom"
+        "react-aria-components"
       ],
-      "local_sha256": "070c6d2c2b0d317b76dc57f494f015d6bce09c0abfc386dcd7953167107a2cd9",
+      "local_sha256": "75c830f92890666e97ca38215745f99438f667c198007b6533d484246309de84",
       "classification": "B"
     },
     {
@@ -2351,7 +2363,7 @@
         }
       ],
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
+        "../../../../protocol/app-server/v19",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Modal",
         "../../presentation/primitives/Tooltip",
@@ -2368,7 +2380,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "ae61c2c964d4e84ce7d9da400f425095677e646344e086155a91dea2341dee66"
+      "local_sha256": "c6c0e85d724f162be07fe432062e8d2d1a6ab3ecf687c5af3169ed3c2e0c8c8f"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
@@ -2405,7 +2417,7 @@
         }
       ],
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
+        "../../../../protocol/app-server/v19",
         "../../presentation/primitives/Tooltip",
         "./ResponseTail",
         "./ResponseTail.module.css"
@@ -2417,7 +2429,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "95e882ce46878d73090f356ca9e59fb89570e73b8fc3cbc71f94b4d1d1d53777"
+      "local_sha256": "4d38f3d7dc36f6e52ef3e443ecbb1d9948f408e420e68aaeb562f1c959f69797"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -2425,7 +2437,7 @@
       "treatment": "Adapt semantic role glyphs, compact icon/tag cells, Tool name/argument/result separation and content previews. Uses existing MarkdownText; reads native TraceRecord only. No Harness event assembly, Tool-name dispatch or inferred membership. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: ordinary rows carry compact artifact identity (native name, image/file distinction, count for the rest) rendered summary-only, with no ArtifactResources read; rustX-specific domain kinds keep a persistent short label so they stay distinguishable without hover.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v18",
+        "../../../../protocol/app-server/v19",
         "../../presentation/markdown/MarkdownText",
         "../../presentation/primitives/icons",
         "./Trajectory.module.css"
@@ -2441,7 +2453,7 @@
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "additional_sources": [],
-      "local_sha256": "3b860c8f19dec13cdda01f026d212c2fe6ee208b60f27a4eb8a1f7401cadb459"
+      "local_sha256": "ff239f56282665704bdc9c3ce94cb7d4e73395cc711c26fc85cfe3893ac0f4ab"
     }
   ],
   "inspected_only": [

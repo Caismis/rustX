@@ -19,7 +19,7 @@ XState v5 actors and machines      app/settings/machines/*
         ↓
 explicit machine snapshots + events
         ↓
-React presentation                 Settings.tsx, controls.tsx, SessionConfiguration.tsx
+React presentation                 Settings.tsx, <page>/*.tsx, forms/*, SessionConfiguration.tsx
 ```
 
 XState orchestrates browser behaviour only. It is never configuration authority:
@@ -118,7 +118,7 @@ cannot retry, refresh, unblock or advance a target's source reads.
   in flight included: its late response has no completion path, so it can
   neither reread nor replay anything through the replacement.
 - **Transaction lifetime** — per-unit actors live for the whole authority
-  lifetime. Closing Settings, changing section or switching target is a React
+  lifetime. Closing Settings, changing page or switching target is a React
   unmount and cannot reach them.
 - **Presentation lifetime** — `ATTACH` / `DETACH`. A detached presentation reads
   nothing and converges nothing; it neither polls nor keeps a background read
@@ -254,6 +254,22 @@ on the committed revision until the explicit `UNIT.REVIEW`, and a later
 observation of the committed revision still settles it. `requiresReview`
 answers the review question from these regions; React renders it and never
 reconstructs chronology from revision values.
+
+A semantic unit whose definitive commit still awaits authoritative observation
+is not a valid source for a new same-unit draft. Between the acknowledgement and
+that observation the base already names the committed revision while the
+presented value is still the pre-commit one, so a draft begun there would carry
+an old value on a new revision, and exact CAS could not stop it from restoring
+what the commit replaced. The transaction's `EDIT` transitions are therefore
+guarded on `not(acknowledged.awaitingObservation)`: an edit in that window is
+refused by the actor itself, whoever sends it, and `awaitingCommitObservation`
+lets the editor disable its fields, Author and Override for exactly that
+state. A newer intent authored before the acknowledgement survives it
+untouched; editing resumes once an authoritative observation either settles the
+commit — a retired transaction's next edit starts fresh from the observed
+source and revision — or reveals `diverged`, which keeps its review semantics.
+Other units stay editable throughout, behind the target-wide submission
+barrier.
 
 #### Discarding browser intent
 
@@ -447,15 +463,19 @@ and no source authors the unit, so the native default governs.
 
 Native parses a document before applying any structured mutation to it, so a
 document that does not parse admits none. `documentAuthoring` decides this once
-per native document — `structured`, `malformed` or `unavailable` — and every
-Settings section declares which document it mutates (`config`, `resources` or
-`none`), so no individual editor rediscovers it:
+per native document — `structured`, `malformed` or `unavailable` — and
+`Settings` decides it once for every page that authors `rustx.toml` units, so no
+individual editor rediscovers it:
 
 ```text
 malformed rustx.toml
-  config-backed sections (Providers & Models, General, Tool Policies, Root …)
+  config-backed pages (Models, Agent, Tools & Permissions, Advanced editors)
       → no structured editor, no add/override/remove action
       → "Repair malformed source" (`repair_config`), fenced on the exact revision
+  Extensions → Native extensions and each resource's root availability
+      → closed on the same terms (they are rustx.toml units)
+  Advanced diagnostics and rescan
+      → always available: a document that does not parse is when they matter
   independent documents (MCP, named Agent resources, resource inventories)
       → governed by their own native state, unaffected
 ```
@@ -493,11 +513,31 @@ Settings navigation itself is one machine owned by the product shell
 (`machines/navigation.ts`), and every user action that changes Settings
 navigation is an event on it: open User Settings, open an exact Workspace, open
 an owning Workspace, open Connection Settings — including the disconnected
-recovery "Show details" gesture — select a section inside the open dialog,
-close Settings, and authority replacement. The machine's `section` is the one
-owner of the displayed Settings surface: `Settings` receives it and sends
-`SELECT`, and holds no section state of its own, so a top-level decision taken
-while the dialog stays mounted is exactly what it shows.
+recovery "Show details" gesture — select a page inside the open dialog, focus
+a detail inside that page, close Settings, and authority replacement. The
+machine's `target`, `page` and per-page `focus` are the one owner of the
+displayed Settings surface: `Settings` takes the navigation actor itself, renders
+its state as it is and sends `SELECT` / `FOCUS` / `CLOSE`, and holds no page
+state of its own, so a top-level decision taken while the dialog stays mounted is
+exactly what it shows. The unit-test Settings surface composes the same machine
+and a real `ConnectionController`, so no test can reach or hide a navigation state
+the product could not.
+
+The machine also owns **target capability**: a Settings target can never enter a
+navigation state it does not authorize. `settingsPages(target)` and
+`admitsFocus(target, page, focus)` are the whole capability matrix — Models
+focuses a Provider or Model, Extensions an extension resource, Advanced
+Connection only for the User target, and General, Agent and Tools & Permissions
+nothing. `PageFocus` types each focus by the page that owns it. `SELECT` and
+`FOCUS` are guarded by exactly those functions, so an illegal request is refused,
+never admitted and repaired by the renderer; every transition that changes the
+target lands on that target's landing page with no focus. Whether Advanced shows
+the Connection entry is that same capability, never the presence of a
+`ConnectionController` — `App` supplies one for every target, and Workspace
+Settings still cannot expose or enter Connection. Focus is kept per page, so leaving a
+Provider detail for Extensions and returning restores that Provider; a new
+target starts with no focus, and Connection (`{ kind: 'connection' }` on
+Advanced) retargets to the global client without carrying a Workspace's focus.
 Each of those re-enters `idle`, which **stops** the owning-Workspace lookup
 actor. Owner lookup (`listWorkspaces`) is asynchronous *preparation*, never
 standing authority to commit navigation later, and that is now structural rather
@@ -514,11 +554,13 @@ projected rather than inferred.
 
 ## Authoring intent
 
-`UnitForm` keeps five facts distinct and never collapses them into one form value:
+`UnitForm` keeps these facts distinct and never collapses them into one form value:
 
 ```text
 native effective value        projected from SourceSettings.resolved
-native authored value         this scope's own membership (`authored` prop)
+native authored presence      whether this scope's source holds the unit (`authoredPresent`)
+native authored value         what native parsed it into (`authored` prop)
+shadowed definition           the same-name User resource a Workspace one replaces
 local override intent         exists only after Override or a real edit
 local dirty draft             the value carrying that intent
 CAS base revision             the exact revision the next write is fenced on
@@ -548,6 +590,17 @@ fallback — only `undefined` means "authors none" — so an explicitly authored
 `{}`, `false` or `""` counts as an override and keeps its removal action. An
 invalid or unobserved authored document proves no override, so it offers none.
 
+For a whole-file resource presence and value are separate native facts, because
+presence is a file fact and the value is a parsing fact. A named-Agent file that
+exists but does not parse projects its path, real revision and diagnostic with
+no authored value; it is still this scope's definition, never `new` and never
+`inherited`. It is displayed from the neutral seed rather than from the User
+definition it shadows, replaced by an ordinary edit fenced on its own revision,
+and removed through that revision — as **Use global default** when a User
+definition lies underneath, otherwise as **Remove**. An MCP identity needs no
+separate presence: its presence is a fact of the parsed `mcp.toml`, and a
+document that does not parse admits no MCP editing at all.
+
 ## Identity discovery
 
 Enumerating an identity is a native fact, not an authored one. One rule,
@@ -571,12 +624,36 @@ inherited identity is reachable without being retyped and is reported as
 inherited rather than as an override. Whole-file resource families (MCP
 definitions, named Agent profiles) are shadowed as whole identities, so there is
 no value to merge: `prospective_resources.definitions` names the winning scope of
-each identity, and an identity owned by User is listed as inherited with an
-`Override` action. User authoring is the lowest authored source and inherits from
-nothing, so its catalogs list exactly what it authors and never present a
-Workspace-owned identity as User-overridable. Opening an inherited identity
-authors nothing, and an override always begins from a safe authoring seed — for a
-Provider that seed contains no credential at all. The same rule governs every
+each identity, and an identity owned by User is listed as inherited. User
+authoring is the lowest authored source and inherits from nothing, so its catalogs
+list exactly what it authors and never present a Workspace-owned identity as
+User-overridable. Opening an inherited identity authors nothing, and an override
+always begins from a safe authoring seed — for a Provider that seed contains no
+credential at all.
+
+The bridge models the two inheritance forms explicitly (`unitOwnership`). A
+`value` unit — a `rustx.toml` semantic unit — keeps #391's contract: the inherited
+value is displayed and an edit of it is an override of exactly that unit. An
+`identity` unit — an MCP definition or named Agent profile — has a definition
+lifecycle, `DefinitionAuthoring`:
+
+```text
+new         nothing authored or inherited; creation opened it; fields writable
+inherited   a User definition is in effect (User document or native inventory);
+            inspected read-only, no draft, edits refused by the bridge
+overriding  explicit "Override … in this Workspace" copied the secret-free seed
+            (`shadowedDefinition`) into the unit's XState draft; nothing written
+authored    this scope authors it; removal is "Use global default" when it
+            shadows a User definition, otherwise "Remove"
+```
+
+Viewing is never authoring: the only transition out of `inherited` is the
+explicit override, which is an ordinary `UNIT.EDIT` into the existing unit
+transaction, so there is still exactly one draft owner. An MCP override seed
+carries the inherited definition's shape and `$VARIABLE` references only — literal
+`env`/`headers` are dropped and nothing is retained, because retained keys can
+only name values the Workspace document holds; the withheld key names are shown.
+Definition and root availability remain two independent transactions. The same rule governs every
 named semantic-unit container reached from a list — source-tool selections, MCP
 invocation policies and environment variables — through one shared
 `reachableIdentities` projection.
@@ -637,7 +714,10 @@ revision settles it — with no replay and no second write.
 
 ## Composition
 
-`presentation/settings/SettingsRoot` remains the sole modal/navigation owner.
+`presentation/settings/SettingsRoot` remains the sole modal/navigation owner. Its
+overlay, focus containment and restoration and its vertical page tabs are React
+Aria Components (`ModalOverlay`/`Modal`/`Dialog`/`Tabs`) styled by the retained
+Harness classes; the hand-written focus trap and portal it replaced are gone.
 `SettingsContent.module.css` adapts the pinned Harness Models editor and Plugin
 field/inventory vocabulary: outlined identity cards, filled editing modules,
 compact field rows, disclosures, diagnostics and narrow layouts. `Switch` is the
@@ -647,8 +727,10 @@ rustX-authored presentation seats, with no protocol imports or persistence.
 `app/settings/Settings` renders one Settings presentation and owns no
 asynchronous configuration semantics at all: it attaches to the Settings
 authority actor of its exact target, selects presentation state from that
-actor's snapshot, and sends user intent. It composes runtime, catalog, Root, MCP
-and named-Agent adapters with the resource inventory. `UnitForm` presents one
+actor's snapshot, and sends user intent. It composes the six product pages
+(`general/`, `models/`, `agent/`, `tools/`, `extensions/`, `advanced/`).
+`forms/bridge.tsx` holds `useUnitEditing`, `UnitShell`, `UnitForm` and
+`TypedUnitForm`. `UnitForm` presents one
 native mutation's editable intent, reading that unit's transaction actor and
 sending `UNIT.EDIT` / `UNIT.SUBMIT` / `UNIT.REVIEW` / `UNIT.DISCARD`; it holds no
 ref, no effect and no local orchestration state. The unit transaction actor owns
@@ -795,16 +877,20 @@ available. Settings renders native per-unit state without inferring field impact
 
 ## Coverage and native limits
 
-General edits Root identity/description/instructions, approval, context, model
-and Tool deadlines, environment and child capacity. App Server process policy is
-User-only. Native classification distinguishes hot fields from restart fields;
+Agent edits Root identity, description, instructions and project guidance.
+Tools & Permissions edits approval, Native Tools, Tool-source selection, Skill
+visibility, the delegation allowlists and per-Tool/MCP policies. Advanced edits
+context, model and Tool deadlines, environment and child capacity. App Server
+process policy is User-only. Native classification distinguishes hot fields from restart fields;
 the source projection retains desired and actual process bindings across reopening.
 Reverting desired to actual clears restart state through native authority.
 
-Root model selection, Native/source Tools, Skills, Plugins, named Agents,
-Workflows and AGENTS.md guidance use native semantic units. Agent Status
+Root model selection, Native/source Tools, Skills, native extensions, named
+Agents, Workflows and AGENTS.md guidance use native semantic units. Agent Status
 contributor selectors preserve unspecified/default intent; the UI does not
-substitute `false` for a native default. Plugins remain the closed Rust set.
+substitute `false` for a native default. The native extensions (Todo, Goal,
+Agent Status) remain the closed Rust set; there is no plugin runtime,
+installation flow or marketplace.
 
 Resource cards separate source ownership/shadowing, validity, preparation and
 Root selection. MCP transport badges/forms prefer an explicit type, then infer
@@ -869,3 +955,95 @@ stay in the pure `app/settings/projection.ts`. `UnitForm` takes the exact native
 whose value native never projects. No compatibility export, alternate Settings
 root, legacy mode or feature flag exists.
 Tests formerly addressing newline textareas now exercise structured identity rows.
+
+#392 deleted `CatalogEditor.tsx`, `RootEditor.tsx`, `RuntimeEditor.tsx`,
+`AgentEditor.tsx`, `Integrations.tsx`, `ResourceInventory.tsx`,
+`RequestPolicy.tsx` and `controls.tsx`, the Overview page and every
+native-unit section route (Providers & Models, Default model, Tool Policies,
+Tools, Skill access, Plugins, Agents & Workflows, MCP, Managed Python, Skills,
+Workflows, Appearance, Connection, Server & source diagnostics). Their editors
+moved into the six pages; no route alias or dual renderer remains.
+
+## Product pages (#392)
+
+```text
+Settings.tsx               header (target, lifecycle, Reload configuration) + one page
+general/GeneralPage.tsx    client-owned Appearance
+models/ModelsPage.tsx      default model; Provider list → Provider detail → Model detail
+agent/AgentPage.tsx        Root identity, description, instructions, project guidance
+tools/ToolsPage.tsx        approval, Native Tools, sources, Skills, allowlists, policies
+extensions/                inventory.ts (facts), ExtensionsPage (list/filter/search),
+                           ExtensionDetail (definition + root availability), NativeExtensions
+advanced/AdvancedPage.tsx  runtime limits, environment, process policy, diagnostics, rescan
+capability.ts              the one resource capability matrix
+primitives/aria.tsx        bounded React Aria wrappers used several times across pages
+forms/bridge.tsx           useUnitEditing, UnitShell, UnitForm, TypedUnitForm
+forms/fields.tsx           typed field controls for TypedUnitForm
+forms/controls.tsx         plain value controls (identity rows, selections, checklists)
+```
+
+**Capability matrix.** `capability.ts` records, per resource family, whether
+native offers an inventory, which source mutation authors a definition
+(`mcp`, `agent` or none), which root-selection unit governs it (`source_tools`,
+`skills`, `agents`, `workflows` or none), and whether native reports preparation.
+Skills, Workflows and Managed Python have no authoring mutation, so no Add,
+Edit, Save or Delete is rendered for their definitions; their root selection is
+edited through its real unit.
+
+**Definition and selection are independent.** A resource detail renders its
+definition form and its root-availability form as two units with two
+transactions and two outcomes. The availability form is the *same* unit (same
+transaction identity) as the Tools & Permissions control, so there is one draft
+and one CAS base. Saving one never submits the other; the target's single
+outcome slot reports whichever submission happened last, and a rejected or
+uncertain definition stays dirty and unsaved after a selection save.
+
+**TanStack Form is field mechanics only.** `TypedUnitForm` creates a form whose
+default values are the unit's displayed value (the actor-owned draft when one
+exists). A form-level change listener reflects every value into `UNIT.EDIT`; the
+form resets only when the displayed value differs from what it last reflected,
+so an authoritative revision update never discards a dirty form, and Save is
+`UNIT.SUBMIT`. There is no second draft and no schema mirror: syntactic checks
+(required, URL, positive) are local conveniences and native validation decides.
+TanStack Form core's devtools event client is aliased in `vite.config.ts` to
+`forms/inert-devtools-event-client.ts`, because the stock client broadcasts and
+queues complete form state (values included) on `window`; the production build
+(`scripts/provenance.ts --artifact`) fails if `tanstack-connect` appears in the
+bundle, and a unit test answers the devtools handshake and asserts nothing is
+ever dispatched.
+
+**React Aria is interaction semantics only.** It is imported only by
+`primitives/aria.tsx` and `presentation/settings/SettingsRoot.tsx`. It owns
+keyboard navigation, roving focus, dialog focus containment and restoration,
+tab/grid/select/menu/disclosure/switch semantics. The page tabs take their
+orientation from the viewport (`narrowSettingsLayout`): a vertical rail answers
+ArrowUp/ArrowDown on a wide viewport, a horizontal strip answers
+ArrowLeft/ArrowRight on a narrow one, and the strip layout is styled from React
+Aria's `data-orientation`, so keyboard semantics and the visual axis are one
+decision. No Spectrum stylesheet is
+loaded; every visual token is the existing `--dsw-*` family
+(`SettingsWorkflow.module.css`). Destructive confirmations are
+`ModalOverlay`+`Dialog role="alertdialog"` layers over the one Settings root,
+with initial focus on Cancel; the global WebUI modals are unchanged.
+
+**Removal semantics.** User Settings removes an authored definition
+(`data-removal="authored-removal"`, "Remove … from User configuration?").
+Workspace Settings removes only the override (`data-removal="override-removal"`,
+"Use the global default for …?") whenever something is inherited again; a
+Workspace resource definition that shadows no User definition is a real deletion
+and says so ("Remove … from Workspace configuration?"). Both send `authored: null` at the exact
+revision after confirmation; cancelling sends nothing.
+
+**Diagnostics.** Source paths and revisions, native unit names, application
+observations, process bindings and raw projections are on Advanced. The only
+per-unit revision detail is the collapsed *Source revision & replacement*
+disclosure that the CAS review flow needs.
+
+**Reference products.** The Provider → Provider detail → Model detail hierarchy
+follows the public Z.ai ZCode configuration docs
+(<https://zcode.z.ai/cn/docs/configuration>), and the page-per-task grouping
+with a separate diagnostics surface follows the Kimi Web reference docs
+(`MoonshotAI/kimi-cli` `docs/en/reference/kimi-web.md` at commit
+`934b704a5eff1726623dd80db62907fbc1f7dd72`). Both were inspected only; no source,
+asset or text was copied, and neither product's configuration precedence,
+account or billing concepts were adopted.

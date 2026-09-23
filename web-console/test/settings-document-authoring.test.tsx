@@ -1,17 +1,18 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v18';
+import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v19';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
-import { SettingsSurface } from './settings-harness';
+import { findOnAdvanced, openResourceRow, SettingsSurface } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 afterEach(cleanup);
 
-/** Every Settings section whose editors mutate `rustx.toml` semantic units. */
-const configSections = ['General', 'Providers & Models', 'Default model', 'Tool Policies', 'Tools', 'Skill access', 'Plugins', 'Agents & Workflows'] as const;
+/** Every product page whose editors mutate `rustx.toml` semantic units. */
+const configPages = ['Models', 'Agent', 'Tools & Permissions', 'Advanced'] as const;
 const writes = (s: ReturnType<typeof cfg3Client>) => s.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite').map(([op]) => op as Extract<Request1, { method: 'configuration/sourceWrite' }>);
 const sourcesReads = (s: ReturnType<typeof cfg3Client>) => s.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead');
-const open = (section: string) => fireEvent.click(screen.getByRole('button', { name: section }));
+const open = (page: string) => fireEvent.click(screen.getByRole('tab', { name: page }));
+const filter = (family: string) => fireEvent.click(screen.getByRole('tab', { name: family }));
 const forms = () => screen.queryAllByRole('form').map(form => form.getAttribute('aria-label'));
 const MALFORMED = 'invalid rustx.toml; source was not loaded';
 
@@ -38,14 +39,21 @@ function repairingClient(scope: 'user' | 'workspace') {
 }
 
 async function assertRepairIsTheOnlyConfigMutation(s: ReturnType<typeof cfg3Client>, revision: string) {
-  // Every config-backed section: the malformed document is named, and no
-  // structured editor, add action or catalog card is offered for it.
-  for (const section of configSections) {
-    open(section);
+  // Every config-backed page: the malformed document is named, and no
+  // structured editor, add action or catalog row is offered for it.
+  for (const page of configPages) {
+    open(page);
     expect(screen.getByText(/Structured editing is unavailable because .*rustx\.toml does not parse/)).toBeTruthy();
     expect(forms()).toEqual(['Repair malformed source']);
-    expect(screen.queryByRole('button', { name: /^(Add|Edit|Override|Use global default) |^Save (?!Repair malformed source$)/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(Add|Edit|Override|Author|Use global default|Remove) |^Save (?!Repair malformed source$)/ })).toBeNull();
   }
+  // Extensions: the native extensions and root availability are units of the
+  // same document, and they are closed on the same terms.
+  open('Extensions');
+  filter('Native');
+  expect(screen.getByText(/Structured editing of this source's rustx\.toml is unavailable/)).toBeTruthy();
+  expect(forms()).toEqual([]);
+  open('Advanced');
   expect(writes(s)).toHaveLength(0);
   // The repair form is enabled and fenced on the exact current revision.
   const repair = screen.getByRole('form', { name: 'Repair malformed source' });
@@ -61,15 +69,17 @@ it.each(['user', 'workspace'] as const)('DA-02 a malformed %s rustx.toml exposes
   render(scope === 'user'
     ? <SettingsSurface client={s.client} target={userSettingsTarget} />
     : <SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
-  await screen.findByText(new RegExp(`Revision: ${scope}-1`));
-  // Overview offers the repair too; it is the only form there.
-  expect(forms()).toEqual(['Repair malformed source']);
+  // Diagnostics stay on Advanced even while the document does not parse.
+  await findOnAdvanced(new RegExp(`Revision: ${scope}-1`));
+  open('Advanced');
+  expect(screen.getAllByRole('alert').map(alert => alert.textContent)).toContain(MALFORMED);
+  if (scope === 'workspace') expect(forms()).toEqual(['Repair malformed source']);
   await assertRepairIsTheOnlyConfigMutation(s, `${scope}-1`);
   // The committed repair is observed by an authoritative read, and only that
   // observation makes structured editing available again.
   await screen.findByText(/Revision: saved-2/);
   expect(screen.queryByRole('form', { name: 'Repair malformed source' })).toBeNull();
-  open('Tools');
+  open('Tools & Permissions');
   const tools = within(screen.getByRole('form', { name: 'Native Tools' }));
   fireEvent.click(tools.getByLabelText('read'));
   fireEvent.click(tools.getByRole('button', { name: 'Save Native Tools' }));
@@ -82,9 +92,10 @@ it('DA-03 a malformed rustx.toml leaves the independent MCP and named Agent docu
   const s = cfg3Client();
   malformed(s.source, 'user');
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
-  await screen.findByText(/Revision: user-1/);
+  await findOnAdvanced(/Revision: user-1/);
   // MCP: its own valid document, its own revision.
-  open('MCP');
+  open('Extensions');
+  filter('MCP');
   expect(screen.queryByRole('form', { name: 'Repair malformed source' })).toBeNull();
   fireEvent.change(screen.getByLabelText('New MCP identity'), { target: { value: 'probe' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add MCP' }));
@@ -94,7 +105,8 @@ it('DA-03 a malformed rustx.toml leaves the independent MCP and named Agent docu
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ expected_revision: 'mcp-1', mutation: { kind: 'mcp', id: 'probe' } });
   // Named Agent: a whole resource document of its own.
-  open('Agents');
+  fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+  filter('Agents');
   expect(screen.queryByRole('form', { name: 'Repair malformed source' })).toBeNull();
   fireEvent.change(screen.getByLabelText('New Agent identity'), { target: { value: 'helper' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Agent' }));
@@ -111,13 +123,14 @@ it('DA-04 a malformed MCP document admits no MCP mutation and leaves rustx.toml 
   const s = cfg3Client();
   s.source.user_mcp = { path: '/home/user/rustx/.agents/mcp.toml', revision: 'mcp-1', authored: null, diagnostic: 'invalid MCP document' };
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
-  await screen.findByText(/Revision: user-1/);
-  open('MCP');
+  await findOnAdvanced(/Revision: user-1/);
+  open('Extensions');
+  filter('MCP');
   expect(screen.getByText('invalid MCP document')).toBeTruthy();
   expect(screen.getByText(/MCP editing is unavailable because this document does not parse/)).toBeTruthy();
   expect(screen.queryByLabelText('New MCP identity')).toBeNull();
   expect(forms()).toEqual([]);
-  open('Tools');
+  open('Tools & Permissions');
   const tools = within(screen.getByRole('form', { name: 'Native Tools' }));
   fireEvent.click(tools.getByLabelText('read'));
   fireEvent.click(tools.getByRole('button', { name: 'Save Native Tools' }));
@@ -128,22 +141,34 @@ it('DA-04 a malformed MCP document admits no MCP mutation and leaves rustx.toml 
 // ── Model identity discovery ────────────────────────────────────────────────
 
 const model = (id: string): Model => ({ provider: 'transport', id, protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false } });
-const options = (select: HTMLElement) => [...(select as HTMLSelectElement).options].map(option => option.value);
+/** The option labels of one React Aria Select, read by opening it. */
+function options(scope: HTMLElement, label: RegExp) {
+  fireEvent.click(within(scope).getByRole('button', { name: label }));
+  const listed = within(screen.getByRole('listbox')).getAllByRole('option').map(option => option.textContent!);
+  fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
+  return listed;
+}
+const allModels = () => {
+  fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
+  return within(screen.getByRole('grid', { name: 'All Models' }));
+};
 
-/** The Catalog, the Root model selector and a named Agent's explicit-model
- * selector, in that order, for one rendered Settings surface. */
+/** The Model catalog, the default-model selector and a named Agent's
+ * explicit-model selector, in that order, for one rendered Settings surface. */
 async function reachableModels() {
-  open('Providers & Models');
-  const catalog = screen.getAllByRole('button', { name: /^(Edit|Override) Model / }).map(button => button.textContent!.replace(/^(Edit|Override) Model /, ''));
-  open('Default model');
-  const root = options(within(screen.getByRole('form', { name: 'Root model' })).getByLabelText('Model'));
-  open('Agents');
+  open('Models');
+  const catalog = allModels().queryAllByRole('row').map(row => row.getAttribute('aria-label')!);
+  const root = options(screen.getByRole('form', { name: 'Default model' }), /Model$/);
+  open('Extensions');
+  filter('Agents');
   fireEvent.change(screen.getByLabelText('New Agent identity'), { target: { value: 'helper' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Agent' }));
-  const agent = within(screen.getByRole('form', { name: 'Agent helper' }));
-  fireEvent.click(agent.getByLabelText('Explicit child model'));
-  const named = options(agent.getByLabelText('Model'));
-  return { catalog, root: root.filter(Boolean), named: named.filter(Boolean) };
+  const agent = screen.getByRole('form', { name: 'Agent helper' });
+  fireEvent.click(within(agent).getByLabelText('Explicit child model'));
+  const named = options(agent, /Model$/);
+  fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+  const selectable = (list: string[]) => list.filter(option => option !== 'Select model');
+  return { catalog, root: selectable(root), named: selectable(named) };
 }
 
 it('ID-03 Workspace-authored models stay reachable in every selector when a malformed User document leaves resolution unavailable', async () => {
@@ -153,17 +178,17 @@ it('ID-03 Workspace-authored models stay reachable in every selector when a malf
   s.source.resolved = null;
   s.source.prospective_diagnostic = 'Source cannot be resolved; repair the diagnosed authored document.';
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
-  await screen.findByText(/Revision: workspace-1/);
+  await findOnAdvanced(/Revision: workspace-1/);
   // The three surfaces agree, and list exactly what this Workspace authors:
   // nothing is invented from the malformed User document.
   expect(await reachableModels()).toEqual({ catalog: ['workspace-model'], root: ['workspace-model'], named: ['workspace-model'] });
   // No effective value is fabricated for the identity.
-  open('Default model');
-  const rootForm = within(screen.getByRole('form', { name: 'Root model' }));
+  open('Models');
+  const rootForm = within(screen.getByRole('form', { name: 'Default model' }));
   expect(rootForm.getByText(/Inherited — no Workspace override/).getAttribute('data-effective')).toBe('invalid');
   expect(rootForm.queryByText(/Native effective value available/)).toBeNull();
-  open('Providers & Models');
-  fireEvent.click(screen.getByRole('button', { name: 'Edit Model workspace-model' }));
+  allModels();
+  await openResourceRow('workspace-model');
   expect(within(screen.getByRole('form', { name: 'Model workspace-model' })).getByText(/Workspace override/)).toBeTruthy();
   // Nothing was copied into Workspace authoring.
   expect(writes(s)).toHaveLength(0);
@@ -175,13 +200,13 @@ it('ID-04 a resolved Workspace reaches inherited effective models in every selec
   s.source.workspace = { path: '/workspace/rustx.toml', revision: 'workspace-1', authored: { models: { 'workspace-model': model('wire-w') } } };
   s.source.resolved = { models: { 'user-model': model('wire-u'), 'workspace-model': model('wire-w') } } as never;
   const view = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
-  await screen.findByText(/Revision: workspace-1/);
+  await findOnAdvanced(/Revision: workspace-1/);
   expect(await reachableModels()).toEqual({
     catalog: ['user-model', 'workspace-model'], root: ['user-model', 'workspace-model'], named: ['user-model', 'workspace-model'],
   });
   view.unmount();
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
-  await screen.findByText(/Revision: user-1/);
+  await findOnAdvanced(/Revision: user-1/);
   expect(await reachableModels()).toEqual({ catalog: ['user-model'], root: ['user-model'], named: ['user-model'] });
   expect(writes(s)).toHaveLength(0);
 });

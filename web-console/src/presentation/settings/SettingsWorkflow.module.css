@@ -1,0 +1,141 @@
+/* rustX-owned presentation for the product-oriented Settings workflows.
+   React Aria Components supply interaction and accessibility semantics only;
+   every visual decision here stays in the existing Harness-derived token
+   family (--dsw-alias-*), the same radii, spacing and type scale the rest of
+   Settings already uses. No Spectrum stylesheet is imported. */
+
+/* Primary page tabs — the six product pages in the panel's nav rail. React
+   Aria owns roving focus and arrow-key navigation; the cell geometry is the
+   existing `.navCell` geometry of the Harness Settings nav. */
+.pageTabs { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; padding-bottom: 20px; }
+.pageTab {
+  display: flex; align-items: center; gap: 8px; height: 40px; padding: 9px 16px 9px 12px;
+  box-sizing: border-box; border: none; border-radius: 12px; background: transparent; cursor: pointer;
+  font: inherit; font-size: 14px; line-height: 22px; color: var(--dsw-alias-label-primary); text-align: left;
+  outline: none;
+}
+.pageTab[data-hovered] { background: var(--dsw-specific-sidebar-nav-item-hover); }
+.pageTab[data-selected] { background: var(--dsw-specific-sidebar-nav-item-active); }
+.pageTab[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: -2px; }
+.pageTabIcon { flex: none; }
+.pageTabLabel { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pageTabPanel { outline: none; min-width: 0; }
+.pageTabPanel[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 4px; border-radius: 8px; }
+
+/* Secondary filter tabs — the Extensions All/MCP/Skills/... row. The capsule
+   family already used by `.tabs` in SettingsContent. */
+.filterTabs { display: flex; gap: 4px; padding: 4px; border-radius: 20px; background: var(--dsw-alias-bg-module-platform); width: fit-content; max-width: 100%; overflow-x: auto; }
+.filterTab {
+  border: 0; background: transparent; color: var(--dsw-alias-label-secondary); padding: 6px 14px;
+  border-radius: 16px; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; outline: none;
+}
+.filterTab[data-hovered] { color: var(--dsw-alias-label-primary); }
+.filterTab[data-selected] { background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); box-shadow: var(--dsw-elevation-stroke); }
+.filterTab[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
+
+/* Resource list — Providers, Models and extension resources. Rows keep the
+   existing outlined `.card` geometry; React Aria owns arrow-key navigation,
+   typeahead and pointer/keyboard action parity. */
+.list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; outline: none; }
+.row {
+  display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; min-width: 0;
+  border: .5px solid var(--dsw-alias-border-l4); border-radius: 16px; cursor: pointer; outline: none;
+  overflow-wrap: anywhere;
+}
+.row[data-hovered] { background: var(--dsw-alias-interactive-bg-hover); }
+.row[data-selected] { border-color: var(--dsw-alias-state-business-primary); }
+.row[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.rowTop { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* The identity keeps its own width; the facts wrap below it rather than
+   squeezing the name. */
+.rowName { font-size: 14px; font-weight: 500; flex: 1 0 auto; max-width: 100%; overflow-wrap: anywhere; }
+.rowFacts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.empty { color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; margin: 12px 0; }
+
+/* Search field. */
+.search { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; font-size: 13px; color: var(--dsw-alias-label-secondary); }
+.search input {
+  box-sizing: border-box; width: 100%; height: 36px; padding: 0 12px; font: inherit; font-size: 13px;
+  border: .5px solid var(--dsw-alias-border-l4); border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary);
+}
+.search input[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+
+/* Select — every closed enum in Settings. The trigger reuses the field
+   geometry; the popup reuses the module surface. */
+.select { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; font-size: 13px; color: var(--dsw-alias-label-secondary); }
+.selectTrigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  box-sizing: border-box; width: 100%; height: 36px; padding: 0 12px; font: inherit; font-size: 13px;
+  border: .5px solid var(--dsw-alias-border-l4); border-radius: 8px; cursor: pointer;
+  background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); text-align: left; outline: none;
+}
+.selectTrigger[data-hovered] { background: var(--dsw-alias-interactive-bg-hover); }
+.selectTrigger[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.selectTrigger[data-disabled] { opacity: .5; cursor: default; }
+.popover {
+  box-sizing: border-box; min-width: var(--trigger-width); max-height: 320px; overflow: auto; padding: 4px;
+  border: .5px solid var(--dsw-alias-border-l3); border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-2); box-shadow: var(--dsw-elevation-prominent); z-index: 1100;
+}
+.option, .menuItem {
+  display: block; padding: 7px 10px; border-radius: 8px; cursor: pointer; outline: none;
+  font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-primary);
+}
+.option[data-focused], .menuItem[data-focused] { background: var(--dsw-alias-interactive-bg-hover); }
+.option[data-selected] { background: var(--dsw-specific-sidebar-nav-item-active); }
+.menuItem[data-danger] { color: var(--dsw-alias-state-error-primary); }
+
+/* Disclosure — advanced/secondary sections that stay out of the ordinary path. */
+.disclosure { border-top: .5px solid var(--dsw-alias-border-l2); }
+.disclosureButton {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 0;
+  border: 0; background: transparent; cursor: pointer; font: inherit; font-size: 13px;
+  color: var(--dsw-alias-label-primary); text-align: left; outline: none;
+}
+.disclosureButton[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; border-radius: 6px; }
+.disclosureMarker { flex: none; color: var(--dsw-alias-label-tertiary); font-size: 11px; }
+.disclosurePanel { padding: 0 0 8px; min-width: 0; }
+
+/* Confirmation dialog — a transient layer over the one Settings modal root,
+   never a second Settings tree. */
+.confirmOverlay { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; background: var(--dsw-alias-bg-mask-1); backdrop-filter: var(--dsw-mask-blur); }
+.confirmModal { max-width: min(440px, calc(100vw - 48px)); }
+.confirmDialog {
+  box-sizing: border-box; padding: 20px 22px; border-radius: 20px; outline: none;
+  background: var(--dsw-alias-bg-layer-2); box-shadow: var(--dsw-elevation-prominent);
+  color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 22px;
+}
+.confirmDialog h2 { margin: 0 0 10px; font-size: 16px; font-weight: 500; }
+.confirmDialog p { margin: 8px 0; }
+.confirmActions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; flex-wrap: wrap; }
+
+/* Detail workflows: the Provider -> Model and resource list -> detail paths. */
+.detail { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.detailHead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.detailHead h3 { margin: 0; flex: 1; min-width: 0; font-size: 16px; font-weight: 500; }
+.breadcrumb { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
+.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.toolbar > *:first-child { flex: 1; min-width: 160px; }
+
+/* Switch row: label plus React Aria Switch, reusing the existing thumb art. */
+.switchRow { display: flex; align-items: center; gap: 10px; padding: 10px 0; font-size: 13px; color: var(--dsw-alias-label-secondary); }
+.switchRow > span:first-child { flex: 1; min-width: 0; }
+.switch { display: inline-flex; align-items: center; cursor: pointer; outline: none; }
+.switchTrack {
+  position: relative; display: inline-block; flex: none; width: 36px; height: 20px; border-radius: 999px;
+  background: var(--dsw-alias-border-l3); transition: background .15s ease;
+}
+.switch[data-selected] .switchTrack { background: var(--dsw-alias-state-business-primary); }
+.switch[data-focus-visible] .switchTrack { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.switch[data-disabled] { opacity: .5; cursor: default; }
+.switchTrack::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--dsw-alias-bg-layer-1, #fff); transition: transform .15s ease;
+}
+.switch[data-selected] .switchTrack::after { transform: translateX(16px); }
+
+/* The page list lays out along its ARIA orientation, never along a separate
+   breakpoint, so arrow-key semantics and the visual axis cannot disagree. */
+.pageTabs[data-orientation="horizontal"] { flex-direction: row; overflow-x: auto; padding-bottom: 6px; }
+.pageTabs[data-orientation="horizontal"] .pageTab { flex: none; }

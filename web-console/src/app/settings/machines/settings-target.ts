@@ -1,5 +1,5 @@
 import { assign, enqueueActions, fromPromise, raise, setup, stateIn, type ActorRefFrom, type SnapshotFrom } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v18';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v19';
 import { isOutcomeUncertain, RpcFailure, type ConnectionState } from '../../../client/app-server';
 import { WorkspaceHostError } from '../../../workspaces/host';
 import { applicationScope, selectedRevision, type RevisionSelector, type SettingsTarget } from '../projection';
@@ -898,4 +898,15 @@ export function mutationOutcome(snapshot: SnapshotFrom<typeof settingsTargetMach
   if (snapshot.matches({ mutation: 'rejected' })) return { kind: 'rejected', detail: snapshot.context.rejection! };
   if (snapshot.matches({ mutation: 'uncertain' })) return { kind: 'uncertain' };
   return { kind: 'none' };
+}
+
+/** The `mutation` region's outcome, attributed to exactly the unit it is about.
+ *
+ * A target reports one outcome at a time because it admits one mutation at a
+ * time, but a page shows several independent units at once. Attributing the
+ * outcome to its own unit is what lets each of them report its own result: a
+ * committed definition and a conflicted permission are two facts about two
+ * native mutations, and neither may be presented as the other's. */
+export function unitOutcome(snapshot: SnapshotFrom<typeof settingsTargetMachine>, identity: string): MutationOutcome {
+  return snapshot.context.outcomeUnit === identity ? mutationOutcome(snapshot) : { kind: 'none' };
 }

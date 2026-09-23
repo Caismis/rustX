@@ -66,11 +66,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.mask {
-  position: absolute;
-  inset: 0;
+  /* React Aria's ModalOverlay is the mask element itself: it owns the
+     dismissable backdrop, so no separate mask node is rendered. */
   background: var(--dsw-alias-bg-mask-1);
   backdrop-filter: var(--dsw-mask-blur);
 }
@@ -101,6 +98,26 @@
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
+/* Dialog and Tabs seats. React Aria inserts one element for the dialog and one
+   for the tab group between the panel and its rail/content children; both are
+   pure layout pass-throughs so the figma panel geometry above is unchanged. */
+.dialog {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  width: 100%;
+  outline: none;
+}
+
+.tabsRoot {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  width: 100%;
+}
+
 /* Nav rail (figma .Setting-nav 501:29958): 188 wide, pad (12,22,12,0),
    gap 18, no own fill — the panel white shows through. */
 .nav {
@@ -108,7 +125,9 @@
   display: flex;
   flex-direction: column;
   gap: 18px;
-  width: 188px;
+  /* 188px upstream; widened so the longest product page name, "Tools &
+     Permissions", is never truncated. */
+  width: 212px;
   padding: 22px 12px 0;
   box-sizing: border-box;
 }
@@ -237,11 +256,12 @@
 }
 
 .navList { overflow-y: auto; min-height: 0; padding-bottom: 20px; }
+/* The narrow panel geometry. The breakpoint is `narrowSettingsLayout` in
+   SettingsRoot.tsx, which also turns the page tabs horizontal; the tab strip
+   below follows that ARIA orientation rather than this breakpoint. */
 @media (max-width: 640px) {
   .panel { flex-direction: column; max-width: calc(100vw - 24px); height: calc(100dvh - 24px); border-radius: 24px; }
-  .nav { width: 100%; padding: 16px 16px 0; gap: 8px; }
-  .navList { flex-direction: row; overflow-x: auto; padding-bottom: 6px; }
-  .navCell { flex: none; }
+  .dialog { flex-direction: column; }
   .content { min-height: 0; }
   .header { height: 44px; padding-top: 8px; }
   .options { padding: 0 16px 16px; }
@@ -249,3 +269,11 @@
 
 .group { padding: 10px 12px 2px; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
 @media (max-width: 640px) { .group { display: none; } }
+
+/* A horizontal page tab list is a strip above the content. Layout follows the
+   orientation React Aria announces, so the axis the arrow keys move along is
+   always the axis the tabs are laid out along. */
+.tabsRoot[data-orientation="horizontal"] { flex-direction: column; }
+.tabsRoot[data-orientation="horizontal"] .nav { width: 100%; padding: 16px 16px 0; gap: 8px; }
+.navList[data-orientation="horizontal"] { flex-direction: row; overflow-x: auto; padding-bottom: 6px; }
+.navList[data-orientation="horizontal"] .navCell { flex: none; }

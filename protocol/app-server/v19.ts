@@ -1981,6 +1981,24 @@ export type InFlightBlock =
     };
 export type ResourceFamily = 'agent' | 'workflow' | 'managed_python' | 'mcp' | 'skill';
 export type SourceScope = 'user' | 'workspace';
+/**
+ * What one resource diagnostic belongs to.
+ *
+ * Attribution is a native fact, decided where the identity is known: the
+ * catalog entry keyed by that identity. It is never derived from a field path
+ * or from a source file several identities share, so a client never has to
+ * guess which resource a diagnostic is about.
+ */
+export type ResourceDiagnosticSubject =
+  | {
+      family: ResourceFamily;
+      name: string;
+      kind: 'resource';
+    }
+  | {
+      family: ResourceFamily;
+      kind: 'collection';
+    };
 export type AgentIdentity =
   | {
       kind: 'main';
@@ -8385,8 +8403,13 @@ export interface ResourceLocation {
  * Bounded resource diagnostics expose source ownership, never source contents.
  */
 export interface ResourceDiagnostic {
+  subject: ResourceDiagnosticSubject;
   file?: string | null;
-  identity: string;
+  /**
+   * The authored field the loader located the failure at. It locates the
+   * failure inside `file`; it is not an identity.
+   */
+  field: string;
   reason: string;
 }
 export interface AgentInspection {

@@ -424,7 +424,7 @@ fn project(operation: &'static str, launch: &ProspectiveSessionConfig) -> Report
                 classification: "warning",
                 category: "invalid_resource",
                 file: resource.file.clone(),
-                path: resource.identity.clone(),
+                path: resource.field.clone(),
                 reason: resource.reason.clone(),
                 correction: "correct the authored resource before selecting it".into(),
                 line: None,

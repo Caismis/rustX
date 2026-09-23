@@ -377,7 +377,12 @@ pub enum RuntimeClientSessionRequest {
 /// Subagent and Workflow records. Version 42 clients are rejected: the
 /// mandatory summary vocabulary changed shape, and no compatibility decoder
 /// or dual Trace DTO path exists in either version.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 44;
+/// Version 45 makes resource-diagnostic attribution a mandatory native
+/// `subject` — one resource identity, or a family's source collection as a
+/// whole — instead of a field path published as `identity`, so no client
+/// infers which resource a diagnostic belongs to from a path or a shared file.
+/// Version 44 clients are rejected without a compatibility projection.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 45;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1359,7 +1364,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 44);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 45);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

@@ -166,20 +166,132 @@ impl AgentInspection {
     }
 }
 
+/// What one resource diagnostic belongs to.
+///
+/// Attribution is a native fact, decided where the identity is known: the
+/// catalog entry keyed by that identity. It is never derived from a field path
+/// or from a source file several identities share, so a client never has to
+/// guess which resource a diagnostic is about.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResourceDiagnosticSubject {
+    /// Exactly one resource identity's definition is invalid.
+    Resource {
+        family: ResourceFamily,
+        name: String,
+    },
+    /// A family's source document or collection failed as a whole. No single
+    /// identity owns it, and it is not a diagnostic of any identity it holds.
+    Collection { family: ResourceFamily },
+}
+
 /// Bounded resource diagnostics expose source ownership, never source contents.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
 )]
 pub struct ResourceDiagnostic {
+    pub subject: ResourceDiagnosticSubject,
     pub file: Option<std::path::PathBuf>,
-    pub identity: String,
+    /// The authored field the loader located the failure at. It locates the
+    /// failure inside `file`; it is not an identity.
+    pub field: String,
     pub reason: String,
 }
 impl ResourceDiagnostic {
-    pub(crate) fn from_error(error: &crate::runtime::resources::RuntimeResourceLoadError) -> Self {
+    /// A diagnostic of exactly one resource identity.
+    pub(crate) fn resource(
+        family: ResourceFamily,
+        name: &(impl std::fmt::Display + ?Sized),
+        error: &crate::runtime::resources::RuntimeResourceLoadError,
+    ) -> Self {
+        Self::attributed(
+            ResourceDiagnosticSubject::Resource {
+                family,
+                name: name.to_string(),
+            },
+            error,
+        )
+    }
+    /// A diagnostic of one family's source document or collection as a whole.
+    pub(crate) fn collection(
+        family: ResourceFamily,
+        error: &crate::runtime::resources::RuntimeResourceLoadError,
+    ) -> Self {
+        Self::attributed(ResourceDiagnosticSubject::Collection { family }, error)
+    }
+    /// A Managed Python package the source lifecycle could not read. Its
+    /// failure is a package error, not a resource-load error, so only the
+    /// static reason crosses this boundary.
+    pub(crate) fn invalid_package(name: &str) -> Self {
         Self {
+            subject: ResourceDiagnosticSubject::Resource {
+                family: ResourceFamily::ManagedPython,
+                name: name.to_string(),
+            },
+            file: None,
+            field: String::new(),
+            reason: "Managed Python package is invalid or unreadable".into(),
+        }
+    }
+    /// Every diagnostic of the named Agent catalog, each attributed from the
+    /// catalog entry that owns it.
+    pub(crate) fn of_agents(
+        catalog: &crate::runtime::subagent::AgentCatalog,
+    ) -> impl Iterator<Item = Self> + '_ {
+        catalog
+            .invalid()
+            .iter()
+            .map(|(name, error)| Self::resource(ResourceFamily::Agent, name, error))
+            .chain(
+                catalog
+                    .discovery_diagnostics
+                    .iter()
+                    .map(|error| Self::collection(ResourceFamily::Agent, error)),
+            )
+    }
+    /// Every diagnostic of the Workflow catalog, each attributed from the
+    /// catalog entry that owns it.
+    pub(crate) fn of_workflows(catalog: &WorkflowCatalog) -> impl Iterator<Item = Self> + '_ {
+        catalog
+            .invalid()
+            .iter()
+            .map(|(id, error)| Self::resource(ResourceFamily::Workflow, id, error))
+            .chain(
+                catalog
+                    .discovery_diagnostics
+                    .iter()
+                    .map(|error| Self::collection(ResourceFamily::Workflow, error)),
+            )
+    }
+    /// Every diagnostic of the Managed Python catalog, each attributed from the
+    /// catalog entry that owns it.
+    pub(crate) fn of_managed_python(
+        catalog: &crate::runtime::resources::ManagedPythonCatalog,
+    ) -> impl Iterator<Item = Self> + '_ {
+        catalog
+            .packages()
+            .iter()
+            .filter(|(_, package)| package.is_err())
+            .map(|(id, _)| {
+                Self::invalid_package(id.managed_python().expect("Python catalog identity"))
+            })
+            .chain(
+                catalog
+                    .discovery_diagnostics
+                    .iter()
+                    .map(|error| Self::collection(ResourceFamily::ManagedPython, error)),
+            )
+    }
+    fn attributed(
+        subject: ResourceDiagnosticSubject,
+        error: &crate::runtime::resources::RuntimeResourceLoadError,
+    ) -> Self {
+        Self {
+            subject,
             file: error.source_file.clone(),
-            identity: error.field_path.clone().unwrap_or_default(),
+            field: error.field_path.clone().unwrap_or_default(),
             reason: error
                 .diagnostic_reason
                 .unwrap_or("resource is invalid or unreadable")
@@ -347,6 +459,22 @@ mod tests {
             inspection.workflows.values().next().unwrap(),
             WorkflowInspection::Disabled(_)
         ));
+        assert_eq!(
+            inspection
+                .resource_diagnostics
+                .iter()
+                .map(|diagnostic| &diagnostic.subject)
+                .collect::<Vec<_>>(),
+            [
+                &ResourceDiagnosticSubject::Resource {
+                    family: ResourceFamily::Mcp,
+                    name: "broken".into()
+                },
+                &ResourceDiagnosticSubject::Collection {
+                    family: ResourceFamily::Workflow
+                },
+            ]
+        );
     }
 
     #[test]

@@ -9,7 +9,7 @@
  * Nothing here decides execution truth; it decides row order, section
  * boundaries and fold summaries.
  */
-import type { TraceRecord } from '../../../../protocol/app-server/v18';
+import type { TraceRecord } from '../../../../protocol/app-server/v19';
 
 /** One ledger row: a record plus the display structure around it. */
 export interface TrajectoryRow {

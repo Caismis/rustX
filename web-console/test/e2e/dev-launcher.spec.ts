@@ -46,7 +46,7 @@ compat = { chat_reasoning_replay = "omit" }
     expect(launchToken).not.toBe(token);
     // Real native admission: browser credentials cannot enter the v9 transport.
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v18', `rustx-token.${launchToken}`]);
+      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v19', `rustx-token.${launchToken}`]);
       socket.onopen = () => { socket.close(); reject(new Error('Browser token admitted by native App Server')); };
       socket.onerror = () => resolve();
     });
@@ -62,7 +62,7 @@ compat = { chat_reasoning_replay = "omit" }
     const proof = await page.evaluate(key => sessionStorage.getItem(key), BROWSER_SESSION_STORAGE);
     expect(proof).toMatch(/^[A-Za-z0-9_-]{43}$/); expect([token, launchToken]).not.toContain(proof);
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v18', `rustx-token.${proof}`]);
+      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v19', `rustx-token.${proof}`]);
       socket.onopen = () => { socket.close(); reject(new Error('Browser session proof admitted by native App Server')); };
       socket.onerror = () => resolve();
     });
@@ -78,7 +78,7 @@ compat = { chat_reasoning_replay = "omit" }
     expect((await page.request.post(`${clean}product-host/adopt`, { headers, data: { location: nested } })).status()).toBe(400);
     expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain(token);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('tablist', { name: 'Settings pages' }).getByRole('tab', { name: 'General', exact: true })).toHaveAttribute('aria-selected', 'true');
     await openConnectionSettings(page);
     await expect(page.getByLabel('Connection mode')).toHaveValue('local');
     await page.getByLabel('Connection mode').selectOption('remote');
@@ -113,7 +113,8 @@ compat = { chat_reasoning_replay = "omit" }
     await expect(page.locator('.connection-status')).toHaveText('Disconnected');
     await closeSettings(page);
     await page.getByRole('button', { name: 'Show details', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Connection', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('tablist', { name: 'Settings pages' }).getByRole('tab', { name: 'Advanced', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('region', { name: 'Connection Settings' })).toBeVisible();
     await page.unroute('**/__rustx/bootstrap');
     await page.getByRole('region', { name: 'Connection Settings' }).getByRole('button', { name: 'Reconnect', exact: true }).click();
     await expect(page.locator('.connection-status')).toHaveText('Connected');

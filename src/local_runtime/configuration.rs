@@ -1042,7 +1042,12 @@ impl UserConfigManager {
         let mut diagnostics: Vec<_> = mcp
             .invalid_scopes
             .iter()
-            .map(crate::runtime::capability_inspection::ResourceDiagnostic::from_error)
+            .map(|error| {
+                crate::runtime::capability_inspection::ResourceDiagnostic::collection(
+                    crate::runtime::capability_inspection::ResourceFamily::Mcp,
+                    error,
+                )
+            })
             .collect();
         let definitions = mcp
             .locations
@@ -1080,7 +1085,9 @@ impl UserConfigManager {
                 }
                 Err(error) => {
                     diagnostics.push(
-                        crate::runtime::capability_inspection::ResourceDiagnostic::from_error(
+                        crate::runtime::capability_inspection::ResourceDiagnostic::resource(
+                            crate::runtime::capability_inspection::ResourceFamily::Mcp,
+                            &id,
                             &error,
                         ),
                     );
@@ -1333,12 +1340,7 @@ impl UserConfigManager {
         resource_definitions.extend(managed_python.locations.iter().map(|(id, location)| {
             ResourceDefinition {
                 family: ResourceFamily::ManagedPython,
-                name: match id {
-                    crate::capabilities::ToolSourceId::ManagedPython(name) => name.clone(),
-                    crate::capabilities::ToolSourceId::Mcp(_) => {
-                        unreachable!("Python catalog identity")
-                    }
-                },
+                name: id.managed_python().expect("Python catalog identity").into(),
                 location: location.clone(),
                 valid: managed_python.packages().get(id).is_some_and(Result::is_ok),
             }
@@ -1370,30 +1372,14 @@ impl UserConfigManager {
         inspection
             .definitions
             .sort_by(|a, b| (&a.family, &a.name).cmp(&(&b.family, &b.name)));
-        diagnostics.extend(
-            subagents
-                .invalid()
-                .values()
-                .chain(workflows.invalid().values())
-                .chain(subagents.discovery_diagnostics.iter())
-                .chain(workflows.discovery_diagnostics.iter())
-                .chain(managed_python.discovery_diagnostics.iter())
-                .map(crate::runtime::capability_inspection::ResourceDiagnostic::from_error),
-        );
-        diagnostics.extend(
-            managed_python
-                .packages()
-                .iter()
-                .filter_map(|(id, package)| {
-                    package.as_ref().err().map(|_| {
-                        crate::runtime::capability_inspection::ResourceDiagnostic {
-                            file: None,
-                            identity: id.to_string(),
-                            reason: "Managed Python package is invalid or unreadable".into(),
-                        }
-                    })
-                }),
-        );
+        {
+            use crate::runtime::capability_inspection::ResourceDiagnostic;
+            diagnostics.extend(
+                ResourceDiagnostic::of_agents(&subagents)
+                    .chain(ResourceDiagnostic::of_workflows(&workflows))
+                    .chain(ResourceDiagnostic::of_managed_python(&managed_python)),
+            );
+        }
         for root in [
             host.home_directory.join("rustx/.agents"),
             locations.workspace.join(".agents"),

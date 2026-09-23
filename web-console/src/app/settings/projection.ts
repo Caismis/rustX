@@ -1,7 +1,7 @@
 import type {
-  ConfigurationApplication, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
+  ConfigurationApplication, McpView, McpWrite, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
-} from '../../../../protocol/app-server/v18';
+} from '../../../../protocol/app-server/v19';
 import type { ConnectionState } from '../../client/app-server';
 
 /** The single owner a Settings instance is bound to for its whole lifetime.
@@ -23,6 +23,19 @@ export function settingsTargetKey(target: SettingsTarget): string {
 }
 export function settingsTargetLabel(target: SettingsTarget): string {
   return target.kind === 'user' ? 'User Settings' : `Workspace Settings — ${target.displayName}`;
+}
+
+/** Every resource kind the one Extensions surface manages. `native` is the
+ * closed set of native extensions configured through `rustx.toml` semantic
+ * units rather than through a resource document of their own. */
+export type ExtensionFamily = ResourceFamily | 'native';
+export const extensionFamilies: readonly ExtensionFamily[] = ['mcp', 'skill', 'agent', 'workflow', 'managed_python', 'native'];
+export function extensionFamilyLabel(family: ExtensionFamily): string {
+  return family === 'mcp' ? 'MCP'
+    : family === 'skill' ? 'Skill'
+      : family === 'agent' ? 'Agent'
+        : family === 'workflow' ? 'Workflow'
+          : family === 'managed_python' ? 'Managed Python' : 'Native';
 }
 
 /** The native application scope this source target publishes under, exactly as
@@ -361,6 +374,60 @@ export function resourceIdentities(source: SourceSettings | undefined, family: R
 export function inheritedResources(source: SourceSettings | undefined, scope: SourceScope, family: ResourceFamily, authored: readonly string[]): readonly ResourceIdentity[] {
   if (scope !== 'workspace') return [];
   return resourceIdentities(source, family).filter(entry => entry.scope === 'user' && !authored.includes(entry.name));
+}
+
+/** How a scope that authors nothing for one unit inherits it.
+ *
+ * - `value` — a `rustx.toml` semantic unit. Native overlays documents unit by
+ *   unit, so the inherited value is displayed in the editor and an edit of it
+ *   is this scope's override of exactly that unit (#391).
+ * - `identity` — a whole resource definition in its own native document (MCP,
+ *   named Agent). A Workspace definition shadows the entire same-name User
+ *   definition, so there is no value to overlay: inspecting the inherited
+ *   definition is not authoring, and a Workspace definition begins only with an
+ *   explicit override that replaces it whole. */
+export type UnitOwnership = 'value' | 'identity';
+export function unitOwnership(mutation: SourceMutation): UnitOwnership {
+  return mutation.kind === 'mcp' || mutation.kind === 'agent' ? 'identity' : 'value';
+}
+
+/** The lower-scope definition one Workspace resource identity would shadow.
+ *
+ * Only a Workspace inherits, and only from a User definition of the same
+ * identity. Either native fact establishes one: the User document authoring
+ * it, or the native inventory reporting a User definition — winning, or
+ * shadowed by this Workspace's own. An identity is never treated as new merely
+ * because one projection omits it.
+ *
+ * `seed` is what an explicit override begins from: the inherited definition
+ * with every secret-bearing value removed. Native never projects an MCP literal
+ * environment value or header, and retained keys name values of the *same*
+ * document, so a Workspace override retains nothing of the User one — the
+ * withheld keys are listed so the override can say what it does not copy. A
+ * User definition whose content is not projected, or does not parse, has no
+ * seed; its override starts from the neutral authoring seed. */
+export interface ShadowedDefinition { path: string; seed?: unknown; withheld: readonly string[]; diagnostic?: string }
+export function shadowedDefinition(source: SourceSettings | undefined, scope: SourceScope, mutation: SourceMutation): ShadowedDefinition | undefined {
+  if (!source || scope !== 'workspace' || (mutation.kind !== 'mcp' && mutation.kind !== 'agent')) return undefined;
+  const name = mutation.kind === 'mcp' ? mutation.id : mutation.name;
+  const listed = resourceIdentities(source, mutation.kind).find(entry => entry.name === name);
+  const inventoried = listed?.scope === 'user' ? listed.path : listed?.shadowed;
+  if (mutation.kind === 'mcp') {
+    const view = source.user_mcp.authored?.[name];
+    if (view) return { path: source.user_mcp.path, seed: mcpOverrideSeed(view), withheld: [...view.retained_env, ...view.retained_headers] };
+    return inventoried === undefined ? undefined : { path: inventoried, withheld: [], diagnostic: source.user_mcp.diagnostic ?? undefined };
+  }
+  const user = source.agents.find(agent => agent.scope === 'user' && agent.name === name);
+  if (user) return { path: user.source.path, seed: user.source.authored ?? undefined, withheld: [], diagnostic: user.source.diagnostic ?? undefined };
+  return inventoried === undefined ? undefined : { path: inventoried, withheld: [] };
+}
+/** A Workspace MCP override seed from the inherited User definition: its
+ * non-secret shape and environment *references* only. Literal values are
+ * dropped even if a projection ever carried one, and nothing is retained,
+ * because retained keys can only name values the Workspace document holds. */
+function mcpOverrideSeed(view: McpView): McpWrite {
+  const { env: _env, headers: _headers, ...definition } = view.definition;
+  return { definition, retained_env: [], retained_headers: [] };
 }
 
 /** Owner navigation from native facts only.

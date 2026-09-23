@@ -1,7 +1,9 @@
 import { connectRemote } from './shell-actions';
 import { closeSessionView } from './shell-actions';
 import { showInspector } from './shell-actions';
-import { chooseWorkspace, connectionAction, closeSettings, openWorkspaceSettings } from './shell-actions';
+import {
+  choose, chooseWorkspace, closeSettings, confirmSettingsAction, connectionAction, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
+} from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
@@ -47,17 +49,19 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     // Configuration source commits cannot rewrite a running admitted attempt.
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-    await expect(settings.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
+    expect(await selectedSettingsPage(page)).toBe('General');
     await closeSettings(page);
     await openWorkspaceSettings(page, 'Workspace A');
-    await settings.getByRole('button', { name: 'Default model', exact: true }).click();
-    await settings.getByRole('combobox', { name: 'Model', exact: true }).selectOption('fixture/second-model');
-    await settings.getByRole('button', { name: 'Save Root model', exact: true }).click();
+    const defaultModel = settings.getByRole('form', { name: 'Default model', exact: true });
+    await choose(defaultModel, 'Model', 'fixture/second-model');
+    await defaultModel.getByRole('button', { name: 'Save Default model', exact: true }).click();
+    await expect(settings.getByText('Default model saved. Native coordination owns application.')).toBeVisible();
+    await openSettingsPage(page, 'Advanced');
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     await expect(settings.getByRole('button', { name: /Adopt/ })).toHaveCount(0);
-    await settings.getByRole('button', { name: 'Default model', exact: true }).click();
-    await settings.getByRole('button', { name: 'Use global default Root model', exact: true }).click();
-    await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();
+    await openSettingsPage(page, 'Models');
+    await confirmSettingsAction(page, 'Use global default Default model');
+    await expect(settings.getByText('Default model saved. Native coordination owns application.')).toBeVisible();
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 
     await page.locator(`button[data-session-id="${idB}"]`).click(); await send('Use B while A runs');
@@ -137,8 +141,8 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.locator(`button[data-session-id="${idA}"]`).click();
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-current', 'page');
-    await settings.getByRole('button', { name: 'Server & source diagnostics', exact: true }).click();
+    expect(await selectedSettingsPage(page)).toBe('General');
+    await openSettingsPage(page, 'Advanced');
     await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     await closeSettings(page);
