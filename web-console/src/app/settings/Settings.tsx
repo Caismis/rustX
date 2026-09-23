@@ -1,6 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
-import { useState } from 'react';
-import { useSelector } from '@xstate/react';
+import { shallowEqual, useSelector } from '@xstate/react';
 import type { SourceScope } from '../../../../protocol/app-server/v18';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
@@ -14,6 +13,8 @@ import { UnitForm } from './controls';
 import css from '../../presentation/settings/SettingsContent.module.css';
 import { SourceContext } from './source-context';
 import { SettingsActorContext, useSettingsTarget } from './machines/react';
+import { mutationOutcome, type MutationOutcome } from './machines/settings-target';
+import type { SettingsSection } from './machines/navigation';
 import { configurationSystem, type TransactionOwner } from './machines/system';
 import { SettingsPanel } from '../../presentation/settings/SettingsRoot';
 import type { ConnectionController } from '../../connection/controller';
@@ -25,20 +26,33 @@ import {
   settingsTargetLabel, settingsTargetScope, unitApplication, type SettingsTarget,
 } from './projection';
 
-const sections = [
+const sections: readonly (readonly [SettingsSection, string, string])[] = [
   ['overview', 'Overview', 'General'], ['general', 'General', 'General'], ['catalog', 'Providers & Models', 'Models'],
   ['root-model', 'Default model', 'Models'], ['policies', 'Tool Policies', 'Agents & Tools'],
   ['root-tools', 'Tools', 'Agents & Tools'], ['root-skills', 'Skill access', 'Agents & Tools'],
   ['root-plugins', 'Plugins', 'Agents & Tools'], ['root-agents', 'Agents & Workflows', 'Agents & Tools'],
   ['agents', 'Agents', 'Agents & Tools'], ['mcp', 'MCP', 'Integrations'], ['python', 'Managed Python', 'Integrations'],
   ['skills', 'Skills', 'Integrations'], ['workflows', 'Workflows', 'Integrations'], ['advanced', 'Server & source diagnostics', 'Advanced'],
-] as const;
-type Section = typeof sections[number][0] | 'appearance' | 'connection';
+];
 
-interface SettingsProps {
+export interface SettingsProps {
   client: AppServerClient; target: SettingsTarget; host?: ProductHostWorkspaces; onClose?: () => void;
   theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void;
-  connection?: ConnectionController; initialSection?: 'overview' | 'connection';
+  connection?: ConnectionController;
+  /** The displayed surface and the selection intent, both owned by the
+   * Settings navigation machine. This component holds no section state. */
+  section: SettingsSection; onSelect: (section: SettingsSection) => void;
+}
+
+/** The presentation of one mutation outcome. */
+function MutationNotice({ outcome }: { outcome: MutationOutcome }) {
+  switch (outcome.kind) {
+    case 'saved': return <p role="status">Source saved. Native coordination owns application.</p>;
+    case 'conflict': return <p role="alert">Source changed. Your draft and base revision are preserved.</p>;
+    case 'rejected': return <p role="alert">{outcome.detail}</p>;
+    case 'uncertain': return <p role="alert">Save outcome uncertain. Authority is reread; the write is never replayed. Review the current source before saving again.</p>;
+    default: return null;
+  }
 }
 
 /** Test-only inspection of the live transaction owners of one client, for the
@@ -57,10 +71,9 @@ export function settingsTransactionOwners(client: AppServerClient): readonly Tra
  * authority actor this presentation attaches to. Opening, closing, changing
  * section and switching target are presentation events; none of them cancels a
  * native commit or discards an editing transaction. */
-export function Settings({ client, target, host, onClose = () => {}, theme = 'light', setTheme, connection, initialSection }: SettingsProps) {
+export function Settings({ client, target, host, onClose = () => {}, theme = 'light', setTheme, connection, section, onSelect }: SettingsProps) {
   const { actor, transport } = useSettingsTarget(client, target, host);
   const scope: SourceScope = settingsTargetScope(target);
-  const [section, setSection] = useState<Section>(initialSection ?? 'overview');
   // The fresh authoritative observation, and the last one demoted to stale
   // presentation data by a presentation or generation boundary. Rendering the
   // stale value keeps the presentation continuous across a dialog reopen; it is
@@ -69,8 +82,9 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
   const observed = useSelector(actor, snapshot => snapshot.context.observation);
   const source = useSelector(actor, snapshot => snapshot.context.observation ?? snapshot.context.staleObservation);
   const readError = useSelector(actor, snapshot => snapshot.context.readError);
-  const writeError = useSelector(actor, snapshot => snapshot.context.writeError);
-  const message = useSelector(actor, snapshot => snapshot.context.message);
+  const convergenceError = useSelector(actor, snapshot => snapshot.context.convergenceError);
+  const maintenanceError = useSelector(actor, snapshot => snapshot.context.maintenanceError);
+  const outcome = useSelector(actor, mutationOutcome, shallowEqual);
   const busy = useSelector(actor, snapshot => snapshot.matches({ mutation: 'submitting' }));
   // A successful authoritative read clears only the read error it answers, so
   // "this target is observable" is exactly "no read failure is outstanding".
@@ -91,7 +105,7 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
     {section === 'agents' && <AgentEditor source={source!} scope={scope} models={models} />}
     {['mcp', 'agents', 'python', 'skills', 'workflows'].includes(section) && source?.prospective_resources && <ResourceInventory resources={source.prospective_resources} family={section} scope={scope} />}
   </fieldset>;
-  return <SettingsPanel rows={[{ id: 'appearance', label: 'Appearance' }, ...(connection ? [{ id: 'connection', label: 'Connection' }] : []), ...sections.map(([id, label, group]) => ({ id, label, group }))]} activeId={section} onSelect={id => setSection(id as Section)} onClose={onClose}>
+  return <SettingsPanel rows={[{ id: 'appearance', label: 'Appearance' }, ...(connection ? [{ id: 'connection', label: 'Connection' }] : []), ...sections.map(([id, label, group]) => ({ id, label, group }))]} activeId={section} onSelect={id => onSelect(id as SettingsSection)} onClose={onClose}>
     {section === 'connection' && connection ? <ConnectionSettings connection={connection} client={client} /> : section === 'appearance' ?
       <section><h2>Appearance</h2><label>Theme<select aria-label="Theme" value={theme} onChange={event => setTheme?.(event.target.value as 'light' | 'dark')}><option value="light">Light</option><option value="dark">Dark</option></select></label></section> :
       <section className={css.settings} aria-label="Settings" aria-busy={busy}>
@@ -100,8 +114,9 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
         <p role="status" data-lifecycle={lifecycle}>{settingsLifecycleLabel(lifecycle)}</p>
         <Button disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>Read current sources</Button>
         {readError && <p role="alert">Source read failed. {readError}</p>}
-        {writeError && <p role="alert">{writeError}</p>}
-        {message && <p role="status">{message}</p>}
+        {convergenceError && <p role="alert">{convergenceError}</p>}
+        <MutationNotice outcome={outcome} />
+        {maintenanceError && <p role="alert">{maintenanceError}</p>}
         {selected && <p>{selected.path} · Revision: {selected.revision}</p>}
         {selected?.diagnostic && <p role="alert">{selected.diagnostic}</p>}
         {source?.prospective_diagnostic && <p role="status">{source.prospective_diagnostic}</p>}

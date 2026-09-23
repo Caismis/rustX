@@ -177,3 +177,35 @@ it('navigation E: recovery Show details fences a stale owner-lookup failure', as
   fireEvent.click(screen.getByRole('button', { name: 'Overview' }));
   expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
 });
+
+// One owner for the displayed Settings section: the navigation machine. A
+// top-level decision taken while the dialog stays mounted is what the dialog
+// shows, whatever section the user had selected inside it.
+
+it('navigation F: a Connection decision while Settings stays mounted shows Connection', async () => {
+  await mountOwnerFailure();
+  fireEvent.click(screen.getByRole('button', { name: 'View options' }));
+  await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Close all views' })); });
+  await act(async () => { await server.client.disconnect(); });
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  await screen.findByRole('heading', { name: 'User Settings' });
+  fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+  expect(screen.getByRole('button', { name: 'Tools' }).getAttribute('aria-current')).toBe('page');
+  // The dialog is still mounted when the recovery surface decides otherwise.
+  fireEvent.click(screen.getByRole('button', { name: 'Show details' }));
+  expect(screen.getByRole('button', { name: 'Connection' }).getAttribute('aria-current')).toBe('page');
+  expect(screen.getByRole('button', { name: 'Tools' }).getAttribute('aria-current')).toBeNull();
+});
+
+it('navigation F: an owning-Workspace decision while Settings stays mounted opens its Overview', async () => {
+  const { startLookup } = await mountOwnerFailure();
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  await screen.findByRole('heading', { name: 'User Settings' });
+  fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+  expect(screen.getByRole('button', { name: 'Tools' }).getAttribute('aria-current')).toBe('page');
+  const held = startLookup();
+  await release(held, true);
+  expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
+  expect(screen.getByRole('button', { name: 'Tools' }).getAttribute('aria-current')).toBeNull();
+});

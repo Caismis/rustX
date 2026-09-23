@@ -4,7 +4,8 @@ import type { SourceMutation } from '../../../../protocol/app-server/v18';
 import { Switch } from '../../presentation/primitives/Switch';
 import { Button } from '../../presentation/primitives/Button';
 import { SourceContext } from './source-context';
-import { useSettingsActor, useUnitCommitted, useUnitTransaction } from './machines/react';
+import { useSettingsActor, useUnitTransaction } from './machines/react';
+import { committed as unitCommitted, requiresReview } from './machines/unit-transaction';
 import { authoredStateLabel, effectiveStateLabel, provenanceLabel, revisionSelector, unitFacts } from './projection';
 import css from '../../presentation/settings/SettingsContent.module.css';
 
@@ -65,8 +66,9 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, childr
   // The unit's live transaction, owned by the Settings authority actor.
   // `undefined` is exactly "this browser authored nothing for the unit and
   // fences on native authority".
-  const transaction = useUnitTransaction(actor, identity);
-  const committed = useUnitCommitted(actor, identity);
+  const snapshot = useUnitTransaction(actor, identity);
+  const transaction = snapshot?.context;
+  const committed = !!snapshot && unitCommitted(snapshot);
   const busy = useSelector(actor, snapshot => snapshot.matches({ mutation: 'submitting' }) && snapshot.context.submission?.identity === identity);
   const draft = transaction?.draft as { value: T } | undefined;
   // This exact scope's authored presence, from the native projection the call
@@ -92,11 +94,9 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, childr
     // handed the token and the non-sensitive selector that settle it.
     actor.send({ type: 'UNIT.SUBMIT', identity, selector, revision, mutation: mutation(remove ? null : draft!.value) });
   };
-  // An acknowledgement advances `base` before the authoritative projection
-  // catches up; while the projection still carries exactly the pre-save base,
-  // the source is merely unobserved, not changed — no review prompt. Any other
-  // revision means the source really moved and keeps the explicit review.
-  const reviewNeeded = base !== observed && observed !== transaction?.submitted?.savedFrom;
+  // Whether the current source diverges from the CAS base is the transaction's
+  // own fact: it alone knows whether a post-commit observation has completed.
+  const reviewNeeded = !!snapshot && requiresReview(snapshot);
   return <form aria-label={title} className={css.unit} onSubmit={e => { e.preventDefault(); submit(); }}>
     <fieldset disabled={busy}><legend>{title}</legend>
       {source && unitMutation.kind === 'config' && <>

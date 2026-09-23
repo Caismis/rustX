@@ -3,7 +3,13 @@ import type { AppServerClient } from '../../../client/app-server';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
 import { userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from '../projection';
 
-export type SettingsSection = 'overview' | 'connection';
+/** Every Settings surface. The navigation machine is the one owner of which
+ * one is displayed: a top-level decision and a section selection inside the
+ * open dialog are both navigation events of this machine, so the rendered page
+ * can never disagree with the latest decision. */
+export type SettingsSection =
+  | 'appearance' | 'connection' | 'overview' | 'general' | 'catalog' | 'root-model' | 'policies' | 'root-tools'
+  | 'root-skills' | 'root-plugins' | 'root-agents' | 'agents' | 'mcp' | 'python' | 'skills' | 'workflows' | 'advanced';
 
 /** What an owning-Workspace lookup can truthfully answer. There is deliberately
  * no error channel: a lookup that completes under a retired authority answers
@@ -43,9 +49,11 @@ export interface SettingsNavigationContext {
 }
 
 export type SettingsNavigationEvent =
-  | { type: 'OPEN'; target: SettingsTarget; section?: SettingsSection }
+  | { type: 'OPEN'; target: SettingsTarget }
   | { type: 'OPEN.CONNECTION' }
   | { type: 'OPEN.OWNER'; directory: string }
+  /** Select another surface of the open Settings dialog, keeping its target. */
+  | { type: 'SELECT'; section: SettingsSection }
   | { type: 'CLOSE' }
   | { type: 'RETIRE' }
   | { type: 'DISMISS' };
@@ -58,8 +66,9 @@ export type SettingsNavigationEvent =
  * > to navigate.
  *
  * Every navigation-affecting decision — open User Settings, open a Workspace's
- * Settings, open the owning Workspace's Settings, open Connection, close, or
- * authority replacement — re-enters `idle`, which *stops* the lookup actor. A
+ * Settings, open the owning Workspace's Settings, open Connection, select a
+ * section of the open dialog, close, or authority replacement — re-enters
+ * `idle`, which *stops* the lookup actor. A
  * stale lookup then has no completion path at all, so neither its success nor
  * its failure can overwrite a newer decision, reopen a closed dialog or publish
  * an obsolete error. Both are silent because neither runs. */
@@ -76,16 +85,22 @@ export const settingsNavigationMachine = setup({
     ownerResolved: ({ event }) => (event as unknown as { output: OwnerResolution }).output.kind === 'resolved',
     ownerUnregistered: ({ event }) => (event as unknown as { output: OwnerResolution }).output.kind === 'unregistered',
     ownerFailed: ({ event }) => (event as unknown as { output: OwnerResolution }).output.kind === 'failed',
+    /** A section can be selected only inside an open Settings dialog. */
+    settingsOpen: ({ context }) => context.section !== undefined,
   },
   actions: {
     openTarget: assign({
       target: ({ context, event }) => event.type === 'OPEN' ? event.target : context.target,
-      section: ({ context, event }) => event.type === 'OPEN' ? event.section ?? 'overview' : context.section,
+      section: () => 'overview' as const,
       error: () => '',
     }),
     // Connection is a client-owned surface and never changes the configuration
     // owner an editor is bound to.
     openConnection: assign({ section: () => 'connection' as const, error: () => '' }),
+    select: assign({
+      section: ({ context, event }) => event.type === 'SELECT' ? event.section : context.section,
+      error: () => '',
+    }),
     close: assign({ section: () => undefined, error: () => '' }),
     clearError: assign({ error: () => '' }),
     openResolvedOwner: assign({
@@ -129,6 +144,7 @@ export const settingsNavigationMachine = setup({
     OPEN: { target: '.idle', reenter: true, actions: 'openTarget' },
     'OPEN.CONNECTION': { target: '.idle', reenter: true, actions: 'openConnection' },
     'OPEN.OWNER': { target: '.resolvingOwner', reenter: true, actions: 'clearError' },
+    SELECT: { guard: 'settingsOpen', target: '.idle', reenter: true, actions: 'select' },
     CLOSE: { target: '.idle', reenter: true, actions: 'close' },
     // Authority replacement retires the lookup without reinterpreting the
     // presentation decision the user already made.

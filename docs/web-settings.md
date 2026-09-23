@@ -113,6 +113,32 @@ reservation survives a plain Settings close and reopen, but a newer read or a
 replaced connection generation revokes it for good, so reopening Settings while
 that write is still pending performs a fresh read instead of reviving it.
 
+Replacing a connection generation retires only what that generation observed:
+its projection, its read failure and its convergence report. A mutation outcome
+— definitive commit, CAS conflict, native rejection or unknown outcome — is a
+state of the Settings authority's mutation region, not of any generation, so it
+reads the same whether the outcome or the replacement arrived first, and only a
+new submission replaces it. Dirty intent, the pinned CAS base and a definitive
+commit awaiting settlement live on the unit's transaction actor and survive the
+replacement as well; an unknown outcome is reread, never replayed.
+
+A definitive commit advances the transaction's CAS base to the committed
+revision before any authoritative read has observed it. Until a read issued
+after the commit completes, the transaction is *awaiting its commit
+observation* and the difference from the held observation is not a source
+change. Once such a read has completed, any revision other than the committed
+one — including the exact pre-save revision restored by an external writer — is
+an external divergence: the transaction reports it, requires review, and keeps
+the next save fenced on the committed revision until the user explicitly adopts
+the reviewed one. A read already in flight when the commit is acknowledged is
+still adopted, but it never classifies that commit; only one that already
+carries the committed revision observes it.
+
+The Settings navigation machine is the one owner of which Settings surface is
+displayed. Opening Settings, opening Connection, opening an owning Workspace and
+selecting a section inside the open dialog are all its events, so a top-level
+decision taken while the dialog stays mounted is exactly what the dialog shows.
+
 Authored source state and effective resolution state are two independent
 dimensions, not one state machine. "This Workspace authors no override" and "the
 effective value is unset" are different claims: when a lower document does not

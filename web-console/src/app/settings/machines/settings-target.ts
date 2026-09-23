@@ -1,4 +1,4 @@
-import { assign, enqueueActions, fromPromise, raise, setup, type ActorRefFrom, type SnapshotFrom } from 'xstate';
+import { assign, enqueueActions, fromPromise, raise, setup, stateIn, type ActorRefFrom, type SnapshotFrom } from 'xstate';
 import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v18';
 import { isOutcomeUncertain, RpcFailure, type ConnectionState } from '../../../client/app-server';
 import { WorkspaceHostError } from '../../../workspaces/host';
@@ -12,6 +12,22 @@ export type UnitTransactionRef = ActorRefFrom<typeof unitTransactionMachine>;
  * and an unknown outcome are three different facts and are never collapsed. */
 type WriteFailureKind = 'conflict' | 'rejected' | 'uncertain';
 
+/** Where this target's last submitted mutation stands, projected from the
+ * `mutation` region alone. It is a fact about the mutation, so neither a
+ * connection generation replacement nor a successful read changes it; only a
+ * new submission does. */
+export type MutationOutcome =
+  | { kind: 'none' }
+  | { kind: 'submitting' }
+  /** Definitively committed; its authoritative observation is still owed. */
+  | { kind: 'committed' }
+  /** Committed, and the observation that followed it is `observed` or
+   * explicitly unavailable. Never "unsaved" and never "applied". */
+  | { kind: 'saved'; observed: boolean }
+  | { kind: 'conflict' }
+  | { kind: 'rejected'; detail: string }
+  | { kind: 'uncertain' };
+
 export interface SettingsTargetContext {
   /** The one owner this actor is bound to for its whole lifetime. Session focus
    * never retargets it; only authority replacement retires it. */
@@ -21,7 +37,8 @@ export interface SettingsTargetContext {
   readonly port: ConfigurationPort;
   connection: ConnectionState;
   /** The App Server connection generation. A new generation retires this
-   * lifetime's observation but never its editing transactions. */
+   * lifetime's observation but never its editing transactions or the outcome
+   * of a mutation already submitted. */
   generation: number;
   /** Native per-scope application publications, exactly as the client mirrors
    * them. A level, never an edge. */
@@ -38,20 +55,33 @@ export interface SettingsTargetContext {
    * observation for presentation is never declaring it the fresh authority of a
    * newly attached presentation. */
   staleObservation?: SourceSettings;
-  /** Owned by the `authority` region alone. A successful read clears only this;
-   * it never erases a write, conflict or application failure. */
+  /** Owned by the `authority` region alone and scoped to the connection
+   * generation that observed it. A successful read clears only this and the
+   * convergence report it re-answers; it never erases a mutation outcome. */
   readError: string;
-  /** Owned by the `mutation` region alone. */
-  writeError: string;
-  message: string;
+  /** Owned by the `authority` region: the authoritative read issued after a
+   * native publication settled measurably below it. An observation fact of one
+   * connection generation, re-answered by every adopted read. */
+  convergenceError: string;
+  /** Owned by the `mutation` region: native's rejection of the last submitted
+   * mutation, present exactly while `mutation.rejected` is active. Conflict and
+   * unknown outcome carry no detail beyond their state. The outcome belongs to
+   * the mutation, not to the connection generation it was observed on, so only
+   * a new submission replaces it. */
+  rejection?: string;
+  /** Owned by the `maintenance` region: why the last explicit rescan failed. */
+  maintenanceError: string;
   /** The publication version the read in flight was started to observe, so a
    * read that settles below it is reported as measurably stale exactly once
    * instead of driving another read. */
   chasing?: bigint;
-  /** The transaction whose definitive commit no authoritative read issued after
-   * it has observed yet. This is the post-commit read obligation; it is a
-   * different fact from that transaction's own settlement. */
-  unobservedCommit?: { identity: string };
+  /** The transaction whose definitive commit no authoritative read has observed
+   * yet, with the revision that commit produced. This is the post-commit read
+   * obligation; it is a different fact from that transaction's own settlement.
+   * A read discharges it when it was issued after the commit, or — whenever it
+   * was issued — when it already carries exactly the committed revision, which
+   * is a direct observation of the commit. */
+  unobservedCommit?: { identity: string; selector: RevisionSelector; revision?: string };
   /** The mutation in flight: its owning transaction, the token that identifies
    * it, its non-sensitive revision selector and the exact CAS revision it is
    * fenced on. Deliberately never the authored payload. */
@@ -143,11 +173,6 @@ function classifyWriteFailure(cause: unknown): WriteFailureKind {
   return 'rejected';
 }
 
-function writeFailureMessage(kind: WriteFailureKind, cause: unknown): string {
-  return kind === 'conflict' ? 'Source changed. Your draft and base revision are preserved.'
-    : kind === 'uncertain' ? 'Save outcome uncertain. Rereading authority without replaying the write.'
-      : String(cause);
-}
 
 /** The exact revision one unit's transaction is settled by, from a projection
  * this target just adopted. A projection whose scope view is unavailable
@@ -269,6 +294,9 @@ export const settingsTargetMachine = setup({
     holdsRereadReservation: ({ context }) => context.rereadReservation !== undefined,
     generationChanged: ({ context, event }) => event.type === 'TRANSPORT' && event.generation !== context.generation,
     isConflict: ({ event }) => classifyWriteFailure((event as unknown as { error: unknown }).error) === 'conflict',
+    /** The read being adopted was issued before the definitive commit recorded
+     * since, so it may have been served before that commit landed natively. */
+    readPredatesCommit: stateIn({ authority: { attached: { reading: 'predatesCommit' } } }),
     isUncertain: ({ event }) => classifyWriteFailure((event as unknown as { error: unknown }).error) === 'uncertain',
   },
   actions: {
@@ -278,22 +306,26 @@ export const settingsTargetMachine = setup({
       publications: ({ context, event }) => event.type === 'TRANSPORT' ? event.publications : context.publications,
     }),
     /** A new connection generation retires everything the previous generation
-     * observed: its projection, the read failure that answered it, the
-     * convergence target it was chasing and the notices it published. They are
-     * all scoped to the generation that acquired them.
+     * observed, and nothing else: its projection, the read failure that
+     * answered it, the convergence report it produced and the convergence
+     * target it was chasing. They are all scoped to the generation that
+     * acquired them, and all owned by the `authority` region.
      *
-     * Two things are deliberately not. Editing transactions belong to the
-     * authority lifetime, not to the connection. And `unobservedCommit` is the
-     * post-commit read obligation of a mutation that already crossed the native
-     * submission boundary: clearing it would strand that commit's classification
-     * on a lifetime that no longer reads, so the new generation's own
-     * authoritative read inherits the obligation and settles it instead. The
-     * previous generation's projection is retired outright — not even kept as
-     * stale presentation data — because an observation belongs to exactly one
-     * connection generation. */
+     * Everything the `mutation` region and the transactions own is deliberately
+     * not generation-scoped. Editing transactions, dirty intents and pinned CAS
+     * bases belong to the authority lifetime. A mutation outcome — conflict,
+     * rejection, unknown outcome, definitive commit — belongs to the mutation,
+     * and must read the same whether it arrived before or after the
+     * replacement. And `unobservedCommit` is the post-commit read obligation of
+     * a mutation that already crossed the native submission boundary: clearing
+     * it would strand that commit's classification on a lifetime that no
+     * longer reads, so the new generation's own authoritative read inherits the
+     * obligation and settles it instead. The previous generation's projection
+     * is retired outright — not even kept as stale presentation data — because
+     * an observation belongs to exactly one connection generation. */
     retireObservation: assign({
       observation: () => undefined, staleObservation: () => undefined,
-      readError: () => '', writeError: () => '', message: () => '',
+      readError: () => '', convergenceError: () => '',
       chasing: () => undefined,
     }),
     /** The observation's authority ends with the presentation attachment that
@@ -321,7 +353,7 @@ export const settingsTargetMachine = setup({
      * write itself is untouched and still settles. */
     revokeRereadReservation: assign({ rereadReservation: () => undefined }),
     reportStaleApplication: assign({
-      writeError: ({ context }) => {
+      convergenceError: ({ context }) => {
         const held = context.observation!;
         return `Native ${applicationScope(held.target)} published application version ${context.chasing}, but the authoritative read issued after it settled at ${held.application?.version}.`;
       },
@@ -351,19 +383,30 @@ export const settingsTargetMachine = setup({
      * settled by, so an acknowledged mutation retires even when the editor, or
      * the whole dialog, that submitted it is gone. Adopting also drops the
      * demoted stale copy: once a fresh observation exists, nothing presents
-     * the old one. */
-    adoptProjection: enqueueActions(({ context, event, enqueue }) => {
+     * the old one.
+     *
+     * `postCommit` states whether the read was issued after every definitive
+     * commit this target has recorded. Only such a read is the post-commit
+     * observation a commit awaits: it discharges the commit's observation
+     * obligation, and it tells each transaction that a revision other than its
+     * committed one is a real divergence. A read issued before the latest
+     * commit is still this target's authoritative observation; unless it
+     * already carries the committed revision it is evidence about the source
+     * before that commit, so it discharges nothing and the standing obligation
+     * drives the post-commit read. */
+    adoptProjection: enqueueActions(({ context, event, enqueue }, params: { postCommit: boolean }) => {
       const projection = (event as unknown as { output?: SourceSettings; projection?: SourceSettings }).output
         ?? (event as unknown as { projection: SourceSettings }).projection;
-      enqueue.assign({ observation: () => projection, readError: () => '', staleObservation: () => undefined });
+      enqueue.assign({ observation: () => projection, readError: () => '', convergenceError: () => '', staleObservation: () => undefined });
       for (const unit of Object.values(context.units)) {
         const revision = unitRevision(projection, unit.getSnapshot().context.selector);
-        if (revision !== undefined) enqueue.sendTo(unit, { type: 'OBSERVED', revision });
+        if (revision !== undefined) enqueue.sendTo(unit, { type: 'OBSERVED', revision, postCommit: params.postCommit });
       }
       // A read issued after a definitive commit discharges that commit's
       // observation obligation, whatever revision it happens to carry: the
       // transaction's own settlement is the separate fact broadcast above.
-      if (context.unobservedCommit) {
+      const commit = context.unobservedCommit;
+      if (commit && (params.postCommit || (commit.revision !== undefined && unitRevision(projection, commit.selector) === commit.revision))) {
         enqueue.assign({ unobservedCommit: () => undefined });
         enqueue.raise({ type: 'COMMIT.OBSERVED' });
       }
@@ -412,10 +455,11 @@ export const settingsTargetMachine = setup({
       const request = event as Extract<SettingsTargetEvent, { type: 'UNIT.SUBMIT' }>;
       const unit = context.units[request.identity]!;
       const token = context.nextToken;
+      // A new submission is the one event that replaces the previous
+      // mutation's outcome.
       enqueue.assign({
         nextToken: () => token + 1,
-        writeError: () => '',
-        message: () => '',
+        rejection: () => undefined,
         submission: () => ({ identity: request.identity, token, selector: request.selector, expected: unit.getSnapshot().context.base }),
       });
       enqueue.sendTo(unit, { type: 'SUBMIT', token });
@@ -435,17 +479,11 @@ export const settingsTargetMachine = setup({
       const unit = context.units[submission.identity];
       if (unit && revision !== undefined) enqueue.sendTo(unit, { type: 'COMMITTED', token: submission.token, revision });
       enqueue.assign({
-        unobservedCommit: () => ({ identity: submission.identity }),
+        unobservedCommit: () => ({ identity: submission.identity, selector: submission.selector, revision }),
         submission: () => undefined,
         rereadReservation: () => undefined,
       });
     }),
-    /** The saved notice is truthful against the projection the presentation is
-     * actually showing, so it is reported when the post-commit observation
-     * settles — either because an authoritative read carried it, or because the
-     * read that owed it failed and the observation is explicitly uncertain. The
-     * commit itself was definitive either way. */
-    reportSaved: assign({ message: () => 'Source saved. Native coordination owns application.' }),
     /** Publish the write's own reread — in either outcome — only if this exact
      * submission still holds the reservation it took. A revoked reservation
      * publishes nothing, however the reread turned out: its projection is not
@@ -457,19 +495,17 @@ export const settingsTargetMachine = setup({
         ? { type: 'READ.ADOPT', projection: reread.projection }
         : { type: 'READ.REREAD_FAILED', error: reread.error });
     }),
-    /** The write did not commit. The transaction keeps its browser intent and
-     * its exact reviewed base; the mutation is never replayed. */
-    recordWriteFailure: enqueueActions(({ context, event, enqueue }) => {
-      const cause = (event as unknown as { error: unknown }).error;
+    /** The write ended without a definitive commit. The transaction keeps its
+     * browser intent and its exact reviewed base; the mutation is never
+     * replayed. Which of conflict, rejection or unknown outcome it was is the
+     * state the `mutation` region enters. */
+    recordWriteFailure: enqueueActions(({ context, enqueue }) => {
       const submission = context.submission!;
       const unit = context.units[submission.identity];
       if (unit) enqueue.sendTo(unit, { type: 'FAILED', token: submission.token });
-      enqueue.assign({
-        writeError: () => writeFailureMessage(classifyWriteFailure(cause), cause),
-        submission: () => undefined,
-        rereadReservation: () => undefined,
-      });
+      enqueue.assign({ submission: () => undefined, rereadReservation: () => undefined });
     }),
+    recordRejection: assign({ rejection: ({ event }) => String((event as unknown as { error: unknown }).error) }),
   },
 }).createMachine({
   id: 'settingsTarget',
@@ -480,8 +516,8 @@ export const settingsTargetMachine = setup({
     generation: input.generation,
     publications: input.publications,
     readError: '',
-    writeError: '',
-    message: '',
+    convergenceError: '',
+    maintenanceError: '',
     units: {},
     nextToken: 1,
   }),
@@ -548,14 +584,30 @@ export const settingsTargetMachine = setup({
              * superseded read is cancelled, not compared, so it can never
              * publish a projection, a read failure or a commit observation.
              * Starting a read likewise revokes any write-owned reread
-             * reservation: the newer read owns the order from here on. */
+             * reservation: the newer read owns the order from here on.
+             *
+             * Whether the read in flight postdates every recorded commit is
+             * the child state, not a comparison: a read is issued `current`,
+             * and a definitive commit recorded while it is outstanding makes it
+             * `predatesCommit`. Such a read is still adopted, and still fails
+             * into `blocked` like any other — which is what lets its failure
+             * and the acknowledgement arrive in either order — but it is never
+             * the post-commit observation of that commit. */
             reading: {
               entry: ['revokeRereadReservation', 'recordChasing'],
               invoke: {
                 src: 'readSource',
                 input: ({ context }) => ({ port: context.port }),
-                onDone: { target: 'settling', actions: 'adoptProjection' },
+                onDone: [
+                  { guard: 'readPredatesCommit', target: 'settling', actions: { type: 'adoptProjection', params: { postCommit: false } } },
+                  { target: 'settling', actions: { type: 'adoptProjection', params: { postCommit: true } } },
+                ],
                 onError: { target: 'blocked', actions: 'recordReadFailure' },
+              },
+              initial: 'current',
+              states: {
+                current: { on: { 'COMMIT.PENDING': 'predatesCommit' } },
+                predatesCommit: {},
               },
               on: {
                 REFRESH: { target: 'reading', reenter: true },
@@ -584,7 +636,9 @@ export const settingsTargetMachine = setup({
             awaitingWrite: {
               always: { guard: 'publicationSupersedesReservation', target: 'reading' },
               on: {
-                'READ.ADOPT': { target: 'settling', actions: 'adoptProjection' },
+                // The Host issues a write's own reread after that write
+                // commits, and a reservation never survives another write.
+                'READ.ADOPT': { target: 'settling', actions: { type: 'adoptProjection', params: { postCommit: true } } },
                 'READ.REREAD_FAILED': { target: 'blocked', actions: 'recordRereadFailure' },
                 REFRESH: 'reading',
                 'READ.FORCE': 'reading',
@@ -625,9 +679,11 @@ export const settingsTargetMachine = setup({
       },
     },
 
-    /** The one source mutation this presentation may have in flight, and where
-     * it ended up. Acknowledgement, authoritative observation, conflict,
-     * native rejection and an unknown outcome are five separate facts. */
+    /** The one source mutation this target may have in flight, and where it
+     * ended up. Acknowledgement, authoritative observation, conflict, native
+     * rejection and an unknown outcome are five separate facts, and each is a
+     * state of this region that only a new submission leaves: no connection
+     * generation, presentation attachment or read outcome rewrites it. */
     mutation: {
       initial: 'idle',
       states: {
@@ -661,7 +717,7 @@ export const settingsTargetMachine = setup({
             onError: [
               { guard: 'isConflict', target: 'conflicted', actions: ['recordWriteFailure', raise({ type: 'READ.FORCE' })] },
               { guard: 'isUncertain', target: 'uncertain', actions: ['recordWriteFailure', raise({ type: 'READ.FORCE' })] },
-              { target: 'rejected', actions: ['recordWriteFailure', raise({ type: 'READ.FORCE' })] },
+              { target: 'rejected', actions: ['recordWriteFailure', 'recordRejection', raise({ type: 'READ.FORCE' })] },
             ],
           },
         },
@@ -670,16 +726,20 @@ export const settingsTargetMachine = setup({
          * never whether the write committed. */
         observing: {
           on: {
-            'COMMIT.OBSERVED': { target: 'idle', actions: 'reportSaved' },
-            'COMMIT.UNOBSERVED': { target: 'unobserved', actions: 'reportSaved' },
+            'COMMIT.OBSERVED': 'saved',
+            'COMMIT.UNOBSERVED': 'unobserved',
             'UNIT.SUBMIT': { guard: 'canSubmit', target: 'submitting', actions: ['ensureUnit', 'openSubmission'] },
           },
         },
+        /** Committed, and an authoritative read issued after the commit
+         * observed the source. The saved notice is truthful against the
+         * projection the presentation is actually showing. */
+        saved: { on: { 'UNIT.SUBMIT': { guard: 'canSubmit', target: 'submitting', actions: ['ensureUnit', 'openSubmission'] } } },
         /** Committed, and the authoritative observation that would follow it is
          * explicitly unavailable. Never "unsaved", and never "applied". */
         unobserved: {
           on: {
-            'COMMIT.OBSERVED': 'idle',
+            'COMMIT.OBSERVED': 'saved',
             'UNIT.SUBMIT': { guard: 'canSubmit', target: 'submitting', actions: ['ensureUnit', 'openSubmission'] },
           },
         },
@@ -696,11 +756,12 @@ export const settingsTargetMachine = setup({
       states: {
         idle: { on: { RECONCILE: 'reconciling' } },
         reconciling: {
+          entry: assign({ maintenanceError: () => '' }),
           invoke: {
             src: 'reconcileSource',
             input: ({ context }) => ({ port: context.port }),
             onDone: { target: 'idle', actions: raise({ type: 'READ.FORCE' }) },
-            onError: { target: 'idle', actions: assign({ writeError: ({ event }) => String(event.error) }) },
+            onError: { target: 'idle', actions: assign({ maintenanceError: ({ event }) => String(event.error) }) },
           },
         },
       },
@@ -728,4 +789,16 @@ export const settingsTargetMachine = setup({
  * submitted it. */
 export function mutationInFlight(snapshot: SnapshotFrom<typeof settingsTargetMachine>): boolean {
   return snapshot.hasTag('mutationInFlight');
+}
+
+/** The `mutation` region's outcome, for presentation. */
+export function mutationOutcome(snapshot: SnapshotFrom<typeof settingsTargetMachine>): MutationOutcome {
+  if (snapshot.matches({ mutation: 'submitting' })) return { kind: 'submitting' };
+  if (snapshot.matches({ mutation: 'observing' })) return { kind: 'committed' };
+  if (snapshot.matches({ mutation: 'saved' })) return { kind: 'saved', observed: true };
+  if (snapshot.matches({ mutation: 'unobserved' })) return { kind: 'saved', observed: false };
+  if (snapshot.matches({ mutation: 'conflicted' })) return { kind: 'conflict' };
+  if (snapshot.matches({ mutation: 'rejected' })) return { kind: 'rejected', detail: snapshot.context.rejection! };
+  if (snapshot.matches({ mutation: 'uncertain' })) return { kind: 'uncertain' };
+  return { kind: 'none' };
 }

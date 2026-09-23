@@ -5,7 +5,7 @@ import type { ProductHostWorkspaces } from '../../../workspaces/host';
 import { settingsTargetKey, type SettingsTarget } from '../projection';
 import { configurationSystem, type SessionConfigurationActor, type SettingsTargetActor } from './system';
 import type { UnitTransactionRef } from './settings-target';
-import type { UnitTransactionContext } from './unit-transaction';
+import type { UnitTransactionSnapshot } from './unit-transaction';
 
 /** The Settings authority actor the editors of one Settings instance submit
  * intent to. Provided by `Settings`; an editor never reaches for a client. */
@@ -71,9 +71,10 @@ export function useSessionConfiguration(client: AppServerClient, sessionId: stri
   return { actor, transport };
 }
 
-/** Subscribe to one unit's transaction actor, which exists only while this
- * browser holds a transaction for that unit. */
-function useUnitSnapshot(actor: SettingsTargetActor, identity: string) {
+/** Subscribe to one unit's live editing transaction, which exists only while
+ * this browser holds a transaction for that unit. `undefined` is exactly "this
+ * browser authored nothing for the unit and fences on native authority". */
+export function useUnitTransaction(actor: SettingsTargetActor, identity: string): UnitTransactionSnapshot | undefined {
   const unit: UnitTransactionRef | undefined = useSelector(actor, snapshot => snapshot.context.units[identity]);
   const subscribe = useCallback((notify: () => void) => {
     if (!unit) return () => {};
@@ -82,18 +83,6 @@ function useUnitSnapshot(actor: SettingsTargetActor, identity: string) {
   }, [unit]);
   const read = useCallback(() => unit?.getSnapshot(), [unit]);
   return useSyncExternalStore(subscribe, read, read);
-}
-
-/** One unit's live editing transaction. `undefined` is exactly "this browser
- * authored nothing for the unit and fences on native authority". */
-export function useUnitTransaction(actor: SettingsTargetActor, identity: string): UnitTransactionContext | undefined {
-  return useUnitSnapshot(actor, identity)?.context;
-}
-
-/** Whether one unit's last submitted mutation is natively confirmed. */
-export function useUnitCommitted(actor: SettingsTargetActor, identity: string): boolean {
-  const snapshot = useUnitSnapshot(actor, identity);
-  return !!snapshot && (snapshot.matches({ mutation: 'acknowledged' }) || snapshot.matches({ mutation: 'settled' }));
 }
 
 export type { SessionConfigurationActor, SettingsTargetActor };

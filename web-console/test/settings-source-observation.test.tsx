@@ -2,7 +2,7 @@
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v18';
-import { Settings } from '../src/app/settings/Settings';
+import { SettingsSurface } from './settings-harness';
 import { RpcFailure } from '../src/client/app-server';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import type { ProductHostWorkspaces, WorkspaceConfigurationReread } from '../src/workspaces/host';
@@ -39,7 +39,7 @@ async function open(native: Native) {
   s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: native.projection() }));
   s.handlers.set('configuration/sourceWrite', () => ({ type: 'source_settings', projection: native.projection() }));
   await s.connect();
-  render(<Settings client={s.client} target={userSettingsTarget} />);
+  render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
   await screen.findByText(new RegExp(`Revision: ${native.revision}`));
   fireEvent.click(screen.getByRole('button', { name: 'General' }));
   return s;
@@ -304,7 +304,7 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
     },
   };
   await s.connect();
-  const ui = render(<Settings client={s.client} target={userSettingsTarget} host={host} />);
+  const ui = render(<SettingsSurface client={s.client} target={userSettingsTarget} host={host} />);
   await screen.findByText(/Revision: user-1/);
   fireEvent.click(screen.getByRole('button', { name: 'General' }));
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
@@ -317,7 +317,7 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(2));
   const staleRead = sent(s, 'configuration/sourcesRead')[1];
   // Replace the target before the held read or acknowledgement settles.
-  ui.rerender(<Settings client={s.client} target={workspaceSettingsTarget('workspace-a', 'Workspace A')} host={host} />);
+  ui.rerender(<SettingsSurface client={s.client} target={workspaceSettingsTarget('workspace-a', 'Workspace A')} host={host} />);
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(3));
   await deliver(s, sent(s, 'configuration/sourcesRead')[2]);
   await screen.findByText(/Revision: ws-1/);
@@ -431,7 +431,7 @@ it('S12 a held Workspace post-write reread cannot regress a newer authoritative 
     },
   };
   await s.connect();
-  render(<Settings client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
+  render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   await screen.findByText(/Revision: ws-A/);
   // B and C will both settle at application version 2; only the authored
   // revision distinguishes them.
@@ -510,7 +510,7 @@ it('S13 a write-owned reread cannot commit over a newer read that was only initi
     },
   };
   await s.connect();
-  render(<Settings client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
+  render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   // Step 1: Workspace Settings is open at revision A.
   await screen.findByText(/Revision: ws-A/);
   // Step 2: a Workspace save whose write-owned reread captured revision B.
@@ -579,7 +579,7 @@ it('S14 a superseded write-owned reread failure publishes no read error and leav
     },
   };
   await s.connect();
-  render(<Settings client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
+  render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   await screen.findByText(/Revision: ws-A/);
   fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
   fireEvent.click(screen.getByLabelText('read'));

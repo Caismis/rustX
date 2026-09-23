@@ -1,13 +1,15 @@
 import { expect, vi } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
 import { createActor } from 'xstate';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { SourceMutation, SourceSettings } from '../../protocol/app-server/v18';
 import { settingsTargetMachine, type SettingsTargetContext } from '../src/app/settings/machines/settings-target';
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
 import { SettingsActorContext } from '../src/app/settings/machines/react';
 import { SourceContext } from '../src/app/settings/source-context';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
+import { Settings, type SettingsProps } from '../src/app/settings/Settings';
+import type { SettingsSection } from '../src/app/settings/machines/navigation';
 import { cfg3Source } from './cfg3-data';
 
 /** One acknowledgement that changes no revision, so a sequence of saves in one
@@ -71,4 +73,12 @@ export async function renderEditor(node: ReactNode, options: { source?: SourceSe
   await waitFor(() => expect(authority.context().observation).toBeTruthy());
   const rerender = (next: ReactNode) => view.rerender(<InSettings actor={authority.actor} source={options.context}>{next}</InSettings>);
   return { ...authority, view, rerender };
+}
+
+/** `Settings` rendered on its own, outside the product shell. In the product
+ * the Settings navigation machine owns the displayed section; here the test
+ * surface owns it, exactly as a controlled parent would. */
+export function SettingsSurface(props: Omit<SettingsProps, 'section' | 'onSelect'>) {
+  const [section, setSection] = useState<SettingsSection>('overview');
+  return <Settings {...props} section={section} onSelect={setSection} />;
 }

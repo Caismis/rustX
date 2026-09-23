@@ -88,9 +88,12 @@ React Settings dialog ──ATTACH/DETACH──▶ an existing target actor
   Settings presentation attachment must establish a fresh authoritative
   observation for that exact target and the current connection generation
   before any observation is current again.
-- **Connection lifetime** — a new `generation` retires this lifetime's
-  observation and presentation state, and deliberately keeps its transactions:
-  a reconnect is not a reason to lose a draft or a pinned CAS base.
+- **Connection lifetime** — a new `generation` retires exactly what the
+  replaced generation observed — its projection, its read failure and its
+  convergence report, all owned by the `authority` region — and nothing else. It
+  deliberately keeps the transactions and the mutation outcome: a reconnect is
+  not a reason to lose a draft, a pinned CAS base, a definitive commit awaiting
+  settlement, or the conflict, rejection or unknown outcome of a save.
 
 ### The Settings target machine
 
@@ -98,17 +101,43 @@ Two genuinely independent facts, therefore two parallel regions (plus a small
 `maintenance` region for the explicit native rescan):
 
 ```text
-authority   suspended ──ATTACH──▶ idle ⇄ reading → settling → idle | blocked
-                                    ↑                                   ↑
-                                    └── awaitingWrite ──────────────────┘
-mutation    idle → submitting → observing → idle
+authority   suspended ──ATTACH──▶ idle ⇄ reading.{current | predatesCommit} → settling → idle | blocked
+                                    ↑                                                       ↑
+                                    └── awaitingWrite ──────────────────────────────────────┘
+mutation    idle → submitting → observing → saved | unobserved
                              ↘ conflicted | rejected | uncertain
 ```
 
 Important events: `ATTACH`, `DETACH`, `TRANSPORT`, `REFRESH`, `RECONCILE`,
 `UNIT.EDIT`, `UNIT.SUBMIT`, `UNIT.REVIEW`, `UNIT.DISCARD`, `UNIT.RETIRED`,
 `READ.FORCE`, `READ.ADOPT`, `READ.REREAD_FAILED`, `WRITE.STARTED`,
-`COMMIT.OBSERVED`, `TRIGGER`.
+`COMMIT.PENDING`, `COMMIT.OBSERVED`, `COMMIT.UNOBSERVED`,
+`GENERATION.REPLACED`, `TRIGGER`.
+
+Each region owns its own facts, and no region assigns another's:
+
+```text
+authority     observation · staleObservation · readError · convergenceError · chasing
+mutation      the region state itself · rejection (native detail while `rejected`)
+maintenance   maintenanceError
+```
+
+The user-visible save status is `mutationOutcome(snapshot)`, projected from the
+`mutation` region: `committed` while the post-commit observation is owed,
+`saved` (observed or explicitly unobserved), `conflict`, `rejected` or
+`uncertain`. Only a new submission leaves one of those states. A connection
+generation replacement retires the `authority` facts above and never touches
+the `mutation` region, so an outcome reads the same whichever of it and the
+replacement arrived first.
+
+`reading` records whether the read in flight postdates every definitive commit
+this target has recorded: a read is issued `current`, and a commit recorded
+while it is outstanding (`COMMIT.PENDING`) makes it `predatesCommit`. Such a
+read is still adopted and still fails into `blocked`, so its outcome and the
+acknowledgement converge in either order, but it is not the commit's
+post-commit observation: it discharges the commit's observation obligation only
+if it already carries the committed revision, and it never tells a transaction
+that its commit diverged.
 
 `ATTACH` is the one semantic attachment event and the machine owns all of its
 consequences: it demotes the previous observation to stale presentation data
@@ -130,14 +159,29 @@ Three orthogonal facts, three regions — never a combination of `draft?` /
 ```text
 intent     clean ⇄ dirty
 base       following ⇄ pinned
-mutation   idle → submitting → acknowledged → settled
-                            ↘ conflicted
+mutation   idle → submitting → acknowledged.{awaitingObservation → diverged} → settled
+                            ↘ unconfirmed
 ```
 
 A clean Remove is exactly `intent.clean` + `base.pinned`: delete intent pins the
 reviewed revision without manufacturing a fake value draft. A late
 acknowledgement of an older intent is exactly `mutation.acknowledged` while
-`intent.dirty` already holds a newer generation.
+`intent.dirty` already holds a newer generation. `unconfirmed` is a submission
+that ended without a definitive commit; which of conflict, rejection or unknown
+outcome it was is the target's `mutation` region state.
+
+A definitive commit advances the CAS base to the committed revision before any
+authoritative read has observed it. `acknowledged.awaitingObservation` is
+exactly "no read issued after the commit has completed", so the held
+observation differing from the base is not a source change. An `OBSERVED` event
+carries `postCommit`; the first post-commit observation that does not carry the
+committed revision moves the transaction to `acknowledged.diverged` — whatever
+revision it carries, including the exact pre-save revision restored by an
+external writer. The commit stays a definitive fact, the next save stays fenced
+on the committed revision until the explicit `UNIT.REVIEW`, and a later
+observation of the committed revision still settles it. `requiresReview`
+answers the review question from these regions; React renders it and never
+reconstructs chronology from revision values.
 
 ### The Session configuration machine
 
@@ -238,7 +282,11 @@ Settings navigation itself is one machine owned by the product shell
 (`machines/navigation.ts`), and every user action that changes Settings
 navigation is an event on it: open User Settings, open an exact Workspace, open
 an owning Workspace, open Connection Settings — including the disconnected
-recovery "Show details" gesture — close Settings, and authority replacement.
+recovery "Show details" gesture — select a section inside the open dialog,
+close Settings, and authority replacement. The machine's `section` is the one
+owner of the displayed Settings surface: `Settings` receives it and sends
+`SELECT`, and holds no section state of its own, so a top-level decision taken
+while the dialog stays mounted is exactly what it shows.
 Each of those re-enters `idle`, which **stops** the owning-Workspace lookup
 actor. Owner lookup (`listWorkspaces`) is asynchronous *preparation*, never
 standing authority to commit navigation later, and that is now structural rather
@@ -349,8 +397,8 @@ transaction therefore never holds an authored payload at all:
 
 ```text
 before acknowledgement   live draft value (authored, may be secret)
-                         token · intent generation · savedFrom · selector
-after acknowledgement    token · intent generation · savedFrom · selector
+                         token · intent generation · selector
+after acknowledgement    token · intent generation · selector
                          committed revision
 ```
 
@@ -488,9 +536,12 @@ advanced (one more bounded read), or native is measurably stale (reported once,
 then `blocked`). A failed read also lands in `blocked`, where nothing retries on
 its own until a publication, reconnect, reattach or explicit refresh arrives.
 
-The saved notice is reported at the definitive acknowledgement, because that is
-when the commit became a fact; the projection, the read outcome and the native
-application remain separate facts reported separately.
+The saved notice is the `mutation` region's `saved` / `unobserved` state: it is
+reported once the post-commit observation settles — carried by an
+authoritative read, or explicitly unavailable — so it is truthful against the
+projection the presentation shows. The commit itself was definitive at the
+acknowledgement; the projection, the read outcome and the native application
+remain separate facts reported separately.
 
 **Presentation lifetime is not mutation lifetime.** `DETACH` retains editing
 transactions — dirty drafts, clean Remove intent, pinned CAS bases and submitted

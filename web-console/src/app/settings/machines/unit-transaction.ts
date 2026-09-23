@@ -1,4 +1,4 @@
-import { assign, raise, sendParent, setup } from 'xstate';
+import { assign, raise, sendParent, setup, type SnapshotFrom } from 'xstate';
 import type { RevisionSelector } from '../projection';
 
 /** The editing transaction of exactly one native semantic unit.
@@ -15,6 +15,15 @@ import type { RevisionSelector } from '../projection';
  * delete intent pins the reviewed revision without manufacturing a value draft.
  * A late acknowledgement of an older intent is exactly `mutation.acknowledged`
  * while `intent.dirty` already holds a newer generation.
+ *
+ * Whether the current source diverges from the CAS base is a fact of this
+ * actor, not of the editor that renders it: `requiresReview` answers it from
+ * the regions above. A definitive commit advances the base before any
+ * authoritative read has observed it, so while `mutation.acknowledged` is
+ * `awaitingObservation` the difference is the commit not yet observed. Once an
+ * authoritative observation issued after the commit has completed, any revision
+ * other than the committed one is a real external change — whatever revision
+ * value it happens to carry — and `acknowledged.diverged` says so.
  *
  * The actor is owned by the Settings target actor, not by the editor that
  * renders it, so section changes and editor remounts cannot lose a pinned base,
@@ -42,9 +51,9 @@ export interface UnitTransactionContext {
   generation: number;
   /** The last submitted mutation. Deliberately carries no authored payload:
    * settlement needs the token that identifies it, the intent generation it was
-   * submitted for, the exact pre-save base, and once confirmed the committed
-   * revision — never a Provider credential or a literal environment value. */
-  submitted?: { token: number; generation: number; savedFrom: string; committed?: string };
+   * submitted for, and once confirmed the committed revision — never a Provider
+   * credential or a literal environment value. */
+  submitted?: { token: number; generation: number; committed?: string };
 }
 
 export type UnitTransactionEvent =
@@ -54,7 +63,11 @@ export type UnitTransactionEvent =
   | { type: 'SUBMIT'; token: number }
   | { type: 'COMMITTED'; token: number; revision: string }
   | { type: 'FAILED'; token: number }
-  | { type: 'OBSERVED'; revision: string }
+  /** An authoritative projection carries `revision` for this unit.
+   * `postCommit` is true exactly when the read that produced it was issued after
+   * every definitive commit the owning target has recorded, so it is evidence
+   * about this unit's commit rather than about the source before it. */
+  | { type: 'OBSERVED'; revision: string; postCommit: boolean }
   | { type: 'SETTLED' };
 
 export const unitTransactionMachine = setup({
@@ -71,6 +84,10 @@ export const unitTransactionMachine = setup({
      * This is the transaction's settlement point. */
     settlesCommit: ({ context, event }) =>
       event.type === 'OBSERVED' && context.submitted?.committed !== undefined && context.submitted.committed === event.revision,
+    /** The observation was issued after the commit and does not carry it: the
+     * source moved on from the committed revision. */
+    divergesFromCommit: ({ context, event }) =>
+      event.type === 'OBSERVED' && event.postCommit && context.submitted?.committed !== event.revision,
     /** The browser intent has not moved on since the submitted mutation, so the
      * confirmed draft — the last place an authored secret lives — is dropped. */
     intentUnchanged: ({ context }) => context.submitted?.generation === context.generation,
@@ -82,7 +99,7 @@ export const unitTransactionMachine = setup({
     followObservation: assign({ base: ({ context, event }) => event.type === 'OBSERVED' ? event.revision : context.observed }),
     beginSubmission: assign({
       submitted: ({ context, event }) => event.type === 'SUBMIT'
-        ? { token: event.token, generation: context.generation, savedFrom: context.base }
+        ? { token: event.token, generation: context.generation }
         : context.submitted,
     }),
     recordCommit: assign({
@@ -159,12 +176,14 @@ export const unitTransactionMachine = setup({
         submitting: {
           on: {
             COMMITTED: { guard: 'isCurrentSubmission', target: 'acknowledged', actions: 'recordCommit' },
-            FAILED: { guard: 'isCurrentSubmission', target: 'conflicted', actions: 'retireSubmission' },
+            FAILED: { guard: 'isCurrentSubmission', target: 'unconfirmed', actions: 'retireSubmission' },
           },
         },
-        /** The native write is definitive. The transaction is retired only once
-         * an authoritative projection carries exactly the committed revision. */
+        /** The native write is definitive and `submitted.committed` names it.
+         * The transaction is retired only once an authoritative projection
+         * carries exactly the committed revision. */
         acknowledged: {
+          initial: 'awaitingObservation',
           on: {
             OBSERVED: {
               guard: 'settlesCommit',
@@ -172,6 +191,22 @@ export const unitTransactionMachine = setup({
               actions: ['recordObservation', 'retireSubmission', raise({ type: 'SETTLED' })],
             },
             SUBMIT: { target: 'submitting', actions: 'beginSubmission' },
+          },
+          states: {
+            /** No authoritative read issued after the commit has completed.
+             * The observation this unit still holds predates the commit, so it
+             * differing from the committed base is not a source change. */
+            awaitingObservation: {
+              // A child transition is selected before the parent's, so the guard
+              // leaves the settling observation to `acknowledged` itself.
+              on: { OBSERVED: { guard: 'divergesFromCommit', target: 'diverged' } },
+            },
+            /** An authoritative read issued after the commit completed and the
+             * source no longer carries the committed revision. The commit stays
+             * a definitive fact; the current source diverges from it and must be
+             * reviewed before anything replaces it. A later observation of the
+             * committed revision still settles the transaction. */
+            diverged: {},
           },
         },
         /** Committed and observed. Nothing about this unit is outstanding. */
@@ -181,11 +216,29 @@ export const unitTransactionMachine = setup({
             SUBMIT: { target: 'submitting', actions: 'beginSubmission' },
           },
         },
-        /** The write did not commit. The browser intent and the exact reviewed
+        /** The submission ended without a definitive commit: a conflict, a
+         * native rejection or an unknown outcome, which the owning target's
+         * mutation region tells apart. The browser intent and the exact reviewed
          * base are preserved, and the mutation is never replayed from here. */
-        conflicted: { on: { SUBMIT: { target: 'submitting', actions: 'beginSubmission' } } },
+        unconfirmed: { on: { SUBMIT: { target: 'submitting', actions: 'beginSubmission' } } },
       },
     },
   },
   on: { DISCARD: { actions: 'announceRetirement' } },
 });
+
+export type UnitTransactionSnapshot = SnapshotFrom<typeof unitTransactionMachine>;
+
+/** Whether the current source diverges from the exact CAS base the next
+ * mutation is fenced on, so replacing it needs the explicit reviewed-revision
+ * gesture. The one difference that is not a divergence is a definitive commit
+ * no post-commit authoritative observation has completed for yet. */
+export function requiresReview(snapshot: UnitTransactionSnapshot): boolean {
+  return snapshot.context.base !== snapshot.context.observed
+    && !snapshot.matches({ mutation: { acknowledged: 'awaitingObservation' } });
+}
+
+/** Whether the last submitted mutation is natively confirmed. */
+export function committed(snapshot: UnitTransactionSnapshot): boolean {
+  return snapshot.matches({ mutation: 'acknowledged' }) || snapshot.matches({ mutation: 'settled' });
+}

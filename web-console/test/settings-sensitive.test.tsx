@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { Settings, settingsTransactionOwners } from '../src/app/settings/Settings';
+import { settingsTransactionOwners } from '../src/app/settings/Settings';
+import { SettingsSurface } from './settings-harness';
 import { workspaceSettingsTarget, userSettingsTarget } from '../src/app/settings/projection';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 afterEach(cleanup);
@@ -29,7 +30,7 @@ function redactedSources(s: ReturnType<typeof cfg3Client>) {
 }
 
 async function openWorkspaceRuntime(s: ReturnType<typeof cfg3Client>) {
-  render(<Settings client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={cfg3Host(s)} />);
+  render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={cfg3Host(s)} />);
   await screen.findByText(/Revision: workspace-1/);
   fireEvent.click(screen.getByRole('button', { name: 'General' }));
 }
@@ -82,7 +83,7 @@ it('S1-15 Override authors an empty Workspace draft and sends only the newly typ
 
 it('S1-15 Advanced diagnostics render the native projection without any literal value', async () => {
   const s = cfg3Client(); redactedSources(s);
-  render(<Settings client={s.client} target={userSettingsTarget} host={cfg3Host(s)} />);
+  render(<SettingsSurface client={s.client} target={userSettingsTarget} host={cfg3Host(s)} />);
   await screen.findByText(/Revision: user-1/);
   fireEvent.click(screen.getByRole('button', { name: 'Server & source diagnostics' }));
   const diagnostics = screen.getByText('Source and application diagnostics').parentElement!.querySelector('pre')!.textContent!;
@@ -101,7 +102,7 @@ it('S1-15 Advanced diagnostics render the native projection without any literal 
 
 it('S1-15 a Provider credential is never read back from a shadowed definition', async () => {
   const s = cfg3Client(); redactedSources(s);
-  render(<Settings client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={cfg3Host(s)} />);
+  render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={cfg3Host(s)} />);
   await screen.findByText(/Revision: workspace-1/);
   fireEvent.click(screen.getByRole('button', { name: 'Providers & Models' }));
   // The inherited identity is reachable and reported as a redacted native fact.
@@ -117,7 +118,7 @@ it('S1-15 a Provider credential is never read back from a shadowed definition', 
 
 it('S1-15 an MCP literal environment value is never projected back into its editor', async () => {
   const s = cfg3Client(); redactedSources(s);
-  render(<Settings client={s.client} target={userSettingsTarget} host={cfg3Host(s)} />);
+  render(<SettingsSurface client={s.client} target={userSettingsTarget} host={cfg3Host(s)} />);
   await screen.findByText(/Revision: user-1/);
   fireEvent.click(screen.getByRole('button', { name: 'MCP' }));
   fireEvent.click(screen.getByRole('button', { name: 'Edit MCP search' }));
