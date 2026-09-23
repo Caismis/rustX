@@ -91,10 +91,22 @@ TUI and Playwright test runner continue running on the Linux host.
   authority. Host networking lets Chromium reach the unchanged loopback fixtures;
   the Playwright server binds only to `127.0.0.1` on an ephemeral port. The wrapper
   removes its container on success, failure or interruption.
-- Comparison: **`threshold: 0`, `maxDiffPixels: 0`**, no retries. Normal runs use
-  `updateSnapshots: 'none'`, so even missing references fail instead of being
-  written. Direct host Playwright runs are rejected with the required command.
-  No screenshot-only fonts/CSS, skipped states or production theme changes.
+- Comparison (current): **`threshold: 0.027`, `maxDiffPixels: 0`**, defined once in
+  `test/e2e/screenshot-comparison.ts`, no retries and no per-screenshot
+  allowance. It tolerates only verified low-amplitude rasterizer/anti-aliasing
+  colour differences — the measured noise in `test/fixtures/rasterizer-noise.json`
+  peaks at 7 grey levels, which needs `0.02652` — while retaining zero allowance
+  for any pixel whose perceived difference exceeds that threshold;
+  `test/screenshot-comparison.test.ts` proves both with Playwright's comparator.
+  Normal runs use `updateSnapshots: 'none'`, so even missing references fail
+  instead of being written. Direct host Playwright runs are rejected with the
+  required command. No screenshot-only fonts/CSS, skipped states or production
+  theme changes.
+- Comparison (historical, #345 acceptance): **`threshold: 0`, `maxDiffPixels: 0`**.
+  The validation table below records runs under that original contract. Later
+  captures under the same pinned authority showed glyph and rounded-corner
+  anti-aliasing landing 1–7 grey levels apart with identical geometry, which a
+  zero colour threshold reports as a failure; the current contract replaces it.
 
 Install the existing host prerequisites (Node 24, Corepack, Docker or Podman,
 Rust, uv and the repository's Python toolchain), then from the repository root:
@@ -228,7 +240,7 @@ Correction validation (Node 24.20.0 / pnpm 11.13.1; browser authority above):
 | `pnpm build` | Passed; existing chunk-size advisory only |
 | `pnpm exec playwright install --with-deps chromium` | Passed in a disposable copy of the pinned image; 0 packages installed/upgraded. That container was discarded; baseline runs use pristine image instances, never apt-mutated state |
 | `CONTAINER_ENGINE=podman pnpm test:e2e:update` | Passed: 2 tests, all 10 references generated under the pinned authority |
-| `CONTAINER_ENGINE=podman pnpm test:e2e` | Passed: 17 tests, 1.3 minutes, no skips/retries; all 10 references compared with zero threshold/differing pixels |
+| `CONTAINER_ENGINE=podman pnpm test:e2e` | Passed: 17 tests, 1.3 minutes, no skips/retries; all 10 references compared with zero threshold/differing pixels (the original #345 contract) |
 | `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh shell.spec.ts foundation.spec.ts` | Passed: 2 tests in a second fresh container; all reference comparisons passed |
 | `pnpm exec playwright test --list` outside the wrapper | Rejected as intended with the pinned-environment command, before rendering |
 | `git diff --check` | Passed |

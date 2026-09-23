@@ -166,11 +166,15 @@ Agent references; the real-server suite runs the same production entry path.
 
 Visual authority remains the digest-pinned Playwright 1.63.0 container. Use
 `pnpm --dir web-console test:e2e:update` only for reviewed baseline changes, then
-`pnpm --dir web-console test:e2e` with zero pixel tolerance. Two references bound
-documented host rasterizer variance with `maxDiffPixels: 20` —
-`settings-plugins-light.png` (sidebar glyphs) and `settings-agent-narrow-dark.png`
-(the Settings panel's rounded corners composited over the blurred mask) — while
-every other reference stays at zero tolerance. `CONTAINER_ENGINE=podman`
+`pnpm --dir web-console test:e2e`. Every reference is compared under the one
+contract in `test/e2e/screenshot-comparison.ts`: per-pixel perceived colour
+threshold `0.027`, `maxDiffPixels: 0`, no per-screenshot allowance. The threshold
+is the smallest that classifies every measured rasterizer-noise pixel
+(`test/fixtures/rasterizer-noise.json`: sidebar gear glyphs and the narrow
+Settings panel's rounded corners, at most 7 grey levels) as equal; a single pixel
+beyond it fails. `test/screenshot-comparison.test.ts` holds the contract to that
+noise and to real colour, layout and missing-element changes with Playwright's own
+comparator. `CONTAINER_ENGINE=podman`
 is the supported local engine selection when Docker is absent. Current composer
 references cover idle empty/draft, running Stop/Queue, attachments and the context
 stack in both themes at 1440px and 390px. Shell/Settings baselines also include the
@@ -194,8 +198,8 @@ file-only/no-preview completion, manual rename, and older-list/newer-summary fen
 `view.summary` remains a replaceable observation, not catalog membership authority.
 
 Product-surface baseline validation: 421 deterministic tests in 29 files; all 39 browser acceptance
-tests; 23 intentional snapshot/geometry update cases followed by normal zero-tolerance
-E2E. Keyboard acceptance now explicitly reaches Sidebar row actions/Close view and
+tests; 23 intentional snapshot/geometry update cases followed by normal E2E under the
+then zero-tolerance comparison. Keyboard acceptance now explicitly reaches Sidebar row actions/Close view and
 Inspector at all four widths. Reviewed rendered light/dark/narrow, native preview,
 manual name, empty Session, background work, scoped uncertainty, Inspector and deletion
 captures. Typecheck, production build, 104-source provenance/100-package notices,
