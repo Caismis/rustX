@@ -168,8 +168,19 @@ Visual authority remains the digest-pinned Playwright 1.63.0 container. Use
 `pnpm --dir web-console test:e2e:update` only for reviewed baseline changes, then
 `pnpm --dir web-console test:e2e`. Every reference is asserted through the one
 helper `expectStableScreenshot` (`test/e2e/screenshot.ts`), which captures under
-Playwright's own screenshot defaults and hands the bytes to the one comparator
-(`test/screenshot-comparator.ts`). Screenshots are exact product-output
+Playwright's own screenshot defaults, resolves the baseline with Playwright's
+`testInfo.snapshotPath(name, { kind: 'screenshot' })`, and hands the stable
+capture to the one comparator (`test/screenshot-comparator.ts`). A baseline is
+compared only against a capture proven stable by two consecutive
+render-equivalent captures (`test/screenshot-stability.ts`: same dimensions and
+every decoded RGBA byte identical, never PNG bytes and never the noise policy),
+within a bounded capture schedule. Equality with the baseline is never evidence
+of stability: there is no baseline-first fast path, the stable capture is
+compared exactly once, and a stable mismatch is never recaptured. A rendering
+that does not settle is its own failure — "Screenshot did not stabilize" with
+the last two captures and their diff attached — distinct from a regression.
+`test/screenshot-stability.test.ts` drives these decisions with exact capture
+sequences, no browser and no clock. Screenshots are exact product-output
 contracts: dimensions must match exactly and every RGBA byte of every pixel
 must match exactly. There is no global perceptual threshold anywhere; the
 former `threshold: 0.027` contract is gone. The only tolerance is the explicit
@@ -188,9 +199,12 @@ holds the contract to the measured noise and to out-of-region, large-area,
 whole-image, budget, delta, layout, missing-element and dimension regressions.
 
 Baseline updates are an explicit intentional action. An intentional UI change
-is reviewed, then `pnpm --dir web-console test:e2e:update` writes a strict new
-baseline — an update never creates or widens a rasterizer-noise allowance (a
-reference that has registered evidence is flagged for re-measurement).
+is reviewed, then `pnpm --dir web-console test:e2e:update` — the whole browser
+suite under `RUSTX_SCREENSHOT_UPDATE=1`, so no screenshot-bearing spec can be
+left out — writes each stable capture as a strict new baseline (an unsettled
+rendering fails instead of becoming a baseline). An update never creates or
+widens a rasterizer-noise allowance (a reference that has registered evidence is
+flagged for re-measurement).
 Unexpected pixel variance in CI is investigated first, proven to be
 rasterizer-only against the recorded evidence, and only then recorded as
 narrowly bounded regions in the manifest. A screenshot failure is never

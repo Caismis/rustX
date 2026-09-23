@@ -104,7 +104,11 @@ TUI and Playwright test runner continue running on the Linux host.
   longer exists anywhere. `test/screenshot-comparison.test.ts` proves the
   measured noise passes and that same-delta-outside-region, large-area +7,
   whole-image shift, budget, delta, layout, missing-element and dimension
-  regressions all fail. Normal runs use `updateSnapshots: 'none'` and no
+  regressions all fail. Before any comparison, rendering must be proven
+  stable by two consecutive captures with identical decoded RGBA
+  (`test/screenshot-stability.ts`); the stable capture is then compared exactly
+  once, and a first capture that happens to equal the baseline is never
+  accepted on its own. Normal runs use `updateSnapshots: 'none'` and no
   `RUSTX_SCREENSHOT_UPDATE`, so even missing references fail instead of being
   written; `pnpm test:e2e:update` is the explicit baseline update and never
   creates a noise allowance. Direct host Playwright runs are rejected with the
@@ -132,8 +136,8 @@ corepack enable
 corepack install
 pnpm install --frozen-lockfile
 
-# Intentional update: builds, starts the pinned browser, then executes
-# playwright test shell.spec.ts foundation.spec.ts --update-snapshots
+# Intentional update: RUSTX_SCREENSHOT_UPDATE=1 over the whole pnpm test:e2e
+# suite, so every screenshot-bearing spec rewrites its stable captures
 pnpm test:e2e:update
 
 # Ordinary comparison: builds and runs ALL real-server and reference tests.

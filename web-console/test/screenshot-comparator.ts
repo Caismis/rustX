@@ -18,9 +18,9 @@
  * gives an unrelated reference zero tolerance.
  *
  * `compareScreenshot` is a pure function over decoded images so the pixel
- * contract is unit-testable without launching a browser. Capture and
- * orchestration (stability waits, reference files, artifacts) live in
- * `test/e2e/screenshot.ts`. */
+ * contract is unit-testable without launching a browser. It judges only a
+ * capture already proven stable by `test/screenshot-stability.ts`; browser
+ * capture, reference files and artifacts live in `test/e2e/screenshot.ts`. */
 import { PNG } from 'pngjs';
 
 /** A decoded RGBA image: `data` holds `width * height * 4` channel bytes. */

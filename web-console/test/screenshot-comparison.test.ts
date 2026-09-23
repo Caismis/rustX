@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import {
   compareScreenshot,
@@ -24,9 +24,10 @@ import manifest from './fixtures/rasterizer-noise.json';
  * bounds, layout shifts, missing elements and dimension changes. */
 
 const noisePolicy = manifest as unknown as NoisePolicy;
-const snapshotDirectories = ['agent', 'settings-presentation', 'shell', 'trajectory'].map(spec =>
-  new URL(`./e2e/${spec}.spec.ts-snapshots/`, import.meta.url),
-);
+const e2e = new URL('./e2e/', import.meta.url);
+const snapshotDirectories = readdirSync(e2e)
+  .filter(entry => entry.endsWith('.spec.ts-snapshots'))
+  .map(entry => new URL(`${entry}/`, e2e));
 const NARROW = 'settings-agent-narrow-dark-linux.png';
 const INVENTORY = 'settings-inventory-light-linux.png';
 const GENERAL = 'settings-general-dark-linux.png';

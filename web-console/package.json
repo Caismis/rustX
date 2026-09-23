@@ -15,7 +15,7 @@
     "build": "vite build && node scripts/provenance.ts --artifact",
     "preview": "vite preview --host 127.0.0.1",
     "test:e2e": "pnpm build && bash scripts/browser-tests.sh",
-    "test:e2e:update": "pnpm build && RUSTX_SCREENSHOT_UPDATE=1 bash scripts/browser-tests.sh shell.spec.ts foundation.spec.ts agent.spec.ts settings-presentation.spec.ts",
+    "test:e2e:update": "RUSTX_SCREENSHOT_UPDATE=1 pnpm test:e2e",
     "dogfood:server": "node scripts/dogfood.ts",
     "check:provenance": "node scripts/provenance.ts && node scripts/notices.ts"
   },
