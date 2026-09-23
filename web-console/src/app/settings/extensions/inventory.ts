@@ -1,6 +1,6 @@
 import type {
-  CapabilityInspection1, ResourceFamily, SourceScope, SourceSettings,
-} from '../../../../../protocol/app-server/v18';
+  CapabilityInspection1, ResourceDiagnostic, ResourceFamily, SourceInspection, SourceScope, SourceSettings, WorkflowInspection,
+} from '../../../../../protocol/app-server/v19';
 import { resourceCapability, toolSourceId, type ResourceCapability } from '../capability';
 import type { ExtensionFamily } from '../projection';
 
@@ -34,30 +34,53 @@ export interface ExtensionEntry {
    * yet — which is what a definition this scope has just authored looks like
    * until the next inspection. Unobserved is never rendered as invalid. */
   readonly valid?: boolean;
-  /** Native preparation/runtime status, present only where native observes
-   * one. It is never inferred from validity and never produced by probing. */
-  readonly preparation?: string;
+  /** The native preparation status of an MCP or Managed Python source, or the
+   * native admission status of a Workflow, exactly as native published it.
+   * `undefined` is not a negative status: it is the distinct fact that native
+   * published no observation for this identity. It is never inferred from
+   * validity and never produced by probing. */
+  readonly preparation?: Preparation;
   /** Whether the root/default Agent may use this resource, as the native
    * capability inspection reports it. `undefined` is not "no": it is the
    * distinct fact that native published no root inspection to read it from. */
   readonly selected?: boolean;
+  /** The diagnostics native attributes to exactly this identity. A sibling
+   * defined in the same file never contributes one. */
   readonly diagnostics: readonly string[];
   readonly capability: ResourceCapability;
 }
+
+/** A native preparation or admission status, never a presentation state. */
+export type Preparation = SourceInspection['status'] | WorkflowInspection['status'];
 
 export function validityLabel(entry: ExtensionEntry): string {
   return entry.valid === undefined ? 'Validity not observed' : entry.valid ? 'Valid definition' : 'Invalid definition';
 }
 
-const resourceFamilies: readonly ResourceFamily[] = ['mcp', 'skill', 'agent', 'workflow', 'managed_python'];
+export const resourceFamilies: readonly ResourceFamily[] = ['mcp', 'skill', 'agent', 'workflow', 'managed_python'];
 
-function preparationOf(resources: CapabilityInspection1, family: ResourceFamily, name: string): string | undefined {
-  if (family === 'mcp' || family === 'managed_python') return resources.sources[toolSourceId(family, name)]?.status ?? 'unprepared';
-  if (family === 'workflow') {
-    const inspection = resources.workflows[name];
-    return inspection ? inspection.status : 'not inspected';
-  }
+/** The native observation for this identity, or `undefined` when native
+ * published none. Absence stays absence: it is never read as `unprepared`,
+ * `disabled` or any other status native did not say. */
+function preparationOf(resources: CapabilityInspection1, family: ResourceFamily, name: string): Preparation | undefined {
+  if (family === 'mcp' || family === 'managed_python') return resources.sources[toolSourceId(family, name)]?.status;
+  if (family === 'workflow') return resources.workflows[name]?.status;
   return undefined;
+}
+
+/** The diagnostics native attributed to exactly this resource identity. */
+function diagnosticsOf(resources: CapabilityInspection1, family: ResourceFamily, name: string): readonly string[] {
+  return resources.resource_diagnostics
+    .filter(item => item.subject.kind === 'resource' && item.subject.family === family && item.subject.name === name)
+    .map(item => item.reason);
+}
+
+/** The diagnostics of one family's source documents or collections as a whole.
+ * Native attributes them to no identity, so they are presented for the family
+ * and never copied onto the resources that family's documents hold. */
+export function collectionDiagnostics(source: SourceSettings | undefined, families: readonly ResourceFamily[]): readonly ResourceDiagnostic[] {
+  return (source?.prospective_resources?.resource_diagnostics ?? [])
+    .filter(item => item.subject.kind === 'collection' && families.includes(item.subject.family));
 }
 
 function selectedOf(resources: CapabilityInspection1, family: ResourceFamily, name: string): boolean | undefined {
@@ -92,9 +115,7 @@ export function extensionEntries(source: SourceSettings | undefined, scope: Sour
       valid: entry.valid,
       ...(capability.preparation ? { preparation: preparationOf(resources, family, entry.name) } : {}),
       ...(capability.selection !== 'none' ? { selected: selectedOf(resources, family, entry.name) } : {}),
-      diagnostics: resources.resource_diagnostics
-        .filter(item => item.identity === entry.name || item.file === entry.location.path)
-        .map(item => item.reason),
+      diagnostics: diagnosticsOf(resources, family, entry.name),
       capability,
     };
   });
@@ -148,14 +169,24 @@ export function relationshipLabel(entry: ExtensionEntry, scope: SourceScope): st
         : 'Shadowed by the Workspace definition';
 }
 
+/** What a Workflow's observation is called: native admits a Workflow program,
+ * and prepares an MCP or Managed Python source. */
+export function preparationTitle(entry: ExtensionEntry): string {
+  return entry.family === 'workflow' ? 'Admission' : 'Preparation';
+}
+
 export function preparationLabel(entry: ExtensionEntry): string | undefined {
-  if (entry.preparation === undefined) return undefined;
-  return entry.preparation === 'ready' ? 'Prepared'
-    : entry.preparation === 'unprepared' ? 'Not prepared'
-      : entry.preparation === 'unavailable' ? 'Preparation unavailable'
-        : entry.preparation === 'enabled' ? 'Admitted'
-          : entry.preparation === 'disabled' ? 'Not admitted'
-            : 'Preparation not observed';
+  if (!entry.capability.preparation) return undefined;
+  // Native published no observation for this identity, so its status is
+  // unknown. Unknown is never rendered as a negative status.
+  if (entry.preparation === undefined) return `${preparationTitle(entry)} not observed`;
+  switch (entry.preparation) {
+    case 'ready': return 'Prepared';
+    case 'unprepared': return 'Not prepared';
+    case 'unavailable': return 'Preparation unavailable';
+    case 'enabled': return 'Admitted';
+    case 'disabled': return 'Not admitted';
+  }
 }
 
 export function selectionLabel(entry: ExtensionEntry): string | undefined {

@@ -1,13 +1,17 @@
 import { useState } from 'react';
-import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v18';
+import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v19';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
+import { NativeFacts } from '../../components/NativeFacts';
 import { admitsAuthoring } from '../capability';
-import { FilterTabs, ResourceList, Search, type ResourceRow } from '../primitives/aria';
+import { Advanced, FilterTabs, ResourceList, Search, type ResourceRow } from '../primitives/aria';
 import { documentAuthoring, extensionFamilyLabel, type ExtensionFamily } from '../projection';
 import type { PageFocus } from '../machines/navigation';
 import { TextField } from '../forms/controls';
-import { allExtensionEntries, extensionEntries, preparationLabel, relationshipLabel, selectionLabel, validityLabel, type ExtensionEntry } from './inventory';
+import {
+  allExtensionEntries, collectionDiagnostics, extensionEntries, preparationLabel, relationshipLabel, resourceFamilies,
+  selectionLabel, validityLabel, type ExtensionEntry,
+} from './inventory';
 import { ExtensionDetail } from './ExtensionDetail';
 import { NativeExtensions } from './NativeExtensions';
 import css from '../../../presentation/settings/SettingsContent.module.css';
@@ -71,8 +75,7 @@ export function ExtensionsPage({ source, scope, revision, models, focus, onFocus
               open={name => onFocus({ kind: 'extension', family: filter as ExtensionFamily, name })} />}
           {filter !== 'all' && !admitsAuthoring(filter as ExtensionFamily)
             && <p className={css.hint}>This protocol has no operation that authors a {extensionFamilyLabel(filter as ExtensionFamily)} definition. Inventory, diagnostics and root selection are supported; authoring belongs to the native resource source.</p>}
-          {filter === 'all' && !!source.prospective_resources?.skill_diagnostics.length
-            && <p className={css.hint}>Skill package diagnostics are reported on the Skills filter and on each Skill's detail.</p>}
+          <CollectionDiagnostics source={source} families={filter === 'all' ? resourceFamilies : [filter as ResourceFamily]} />
         </>}
     </FilterTabs>
   </section>;
@@ -101,6 +104,26 @@ function extensionRow(entry: ExtensionEntry, scope: SourceScope): ResourceRow {
       {entry.diagnostics.map((reason, index) => <p className={css.error} key={index}>{reason}</p>)}
     </>,
   };
+}
+
+/** Diagnostics native attributes to a family's source document or collection
+ * rather than to any one identity — a resource document that does not parse,
+ * an unreadable directory, an exceeded catalog bound. They belong to the
+ * family, so they are listed once here and never on the rows of the resources
+ * those documents hold. Skill discovery reports its own typed diagnostics,
+ * which name packages rather than Skill identities, so they are listed here on
+ * the same terms. */
+function CollectionDiagnostics({ source, families }: { source: SourceSettings; families: readonly ResourceFamily[] }) {
+  const diagnostics = collectionDiagnostics(source, families);
+  const skills = families.includes('skill') ? source.prospective_resources?.skill_diagnostics ?? [] : [];
+  if (!diagnostics.length && !skills.length) return null;
+  return <section aria-label="Source diagnostics">
+    <h4>Source diagnostics</h4>
+    {diagnostics.map((item, index) => <p className={css.error} key={index}>
+      {extensionFamilyLabel(item.subject.family)} source{item.file ? ` ${item.file}` : ''}: {item.reason}
+    </p>)}
+    {!!skills.length && <Advanced title={`Skill discovery diagnostics (${skills.length})`}><NativeFacts value={skills} /></Advanced>}
+  </section>;
 }
 
 function NewResource({ family, exists, open }: { family: ExtensionFamily; exists: readonly string[]; open: (name: string) => void }) {

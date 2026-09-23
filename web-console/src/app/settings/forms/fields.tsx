@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Choice, Toggle } from '../primitives/aria';
 import type { TypedUnitForm } from './bridge';
@@ -203,15 +203,46 @@ export function RequestParameterRows({ value, change }: { value: Record<string, 
     <p className={css.hint}>Each value is a JSON scalar, array, or object. Native Rust validates protected keys and protocol support. Do not enter secrets.</p>
   </fieldset>;
 }
+/** One request parameter's JSON value.
+ *
+ * The parsed value belongs to the unit's transaction actor, through the form.
+ * The text is a transient buffer for exactly one thing the actor cannot hold:
+ * input that is not yet a complete JSON value, such as `{"budget":`. Only a
+ * complete value is ever emitted, so incomplete text stays local and never
+ * reaches the draft.
+ *
+ * The buffer follows its owner. When `value` changes to anything other than
+ * what this input itself last emitted, the owner changed it — a discarded
+ * draft, a reviewed revision, a commit dropping the confirmed draft — and the
+ * text, its parse error and the input's custom validity are replaced by the
+ * owner's value. Following the owner never emits, so a stale buffer can never
+ * be written back over a newer value. */
 function JsonValue({ value, change }: { value: unknown; change: (value: unknown) => void }) {
-  const [text, setText] = useState(() => JSON.stringify(value) ?? '');
+  const serialized = JSON.stringify(value) ?? '';
+  const [text, setText] = useState(serialized);
   const [error, setError] = useState('');
+  const input = useRef<HTMLInputElement>(null);
+  // The serialized value this buffer currently reflects: the owner's, or the
+  // one this input last emitted into it.
+  const reflected = useRef(serialized);
+  useLayoutEffect(() => {
+    if (serialized === reflected.current) return;
+    reflected.current = serialized;
+    setText(serialized);
+    setError('');
+  }, [serialized]);
+  // Custom validity is a projection of the local parse error, so it is cleared
+  // by exactly the transitions that clear the error.
+  useLayoutEffect(() => { input.current?.setCustomValidity(error); }, [error]);
   return <>
-    <input value={text} aria-invalid={!!error || undefined} onChange={event => {
+    <input ref={input} value={text} aria-invalid={!!error || undefined} onChange={event => {
       const next = event.target.value;
       setText(next);
-      try { change(JSON.parse(next)); event.target.setCustomValidity(''); setError(''); }
-      catch { event.target.setCustomValidity('Enter a complete JSON value before saving.'); setError('Enter a complete JSON value before saving.'); }
+      let parsed: unknown;
+      try { parsed = JSON.parse(next); } catch { setError('Enter a complete JSON value before saving.'); return; }
+      setError('');
+      reflected.current = JSON.stringify(parsed);
+      change(parsed);
     }} />
     {error && <span role="alert">{error}</span>}
   </>;

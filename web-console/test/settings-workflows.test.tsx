@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { CapabilityInspection1, Model, Request1 } from '../../protocol/app-server/v18';
+import type { CapabilityInspection1, Model, Request1 } from '../../protocol/app-server/v19';
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/app-server';
@@ -158,7 +158,7 @@ function inventory(): CapabilityInspection1 {
       { family: 'workflow', name: 'nightly', valid: true, location: { scope: 'user', path: '/home/user/rustx/.agents/workflows/nightly' } },
       { family: 'managed_python', name: 'analysis', valid: true, location: { scope: 'user', path: '/home/user/rustx/.agents/python/analysis' } },
     ],
-    resource_diagnostics: [{ identity: 'broken', file: '/home/user/rustx/.agents/mcp.toml', reason: 'missing command' }],
+    resource_diagnostics: [{ subject: { kind: 'resource', family: 'mcp', name: 'broken' }, file: '/home/user/rustx/.agents/mcp.toml', field: 'mcp_servers.broken', reason: 'missing command' }],
     main: {
       identity: 'main', tools: [], skills: [{ name: 'docs' }], agents: [], workflows: [], plugins: [], diagnostics: [],
       tool_selection: [{ source_id: 'search', origin: 'all' }],
@@ -177,12 +177,125 @@ it('S2-05 every extension row reports kind, scope, validity, preparation and roo
   expect(facts('search')).toEqual(expect.arrayContaining(['MCP', 'User', 'Valid definition', 'Prepared', 'Allowed for the root Agent']));
   // Invalid, unprepared and unselected are three facts, not one "broken" state.
   expect(facts('broken')).toEqual(expect.arrayContaining(['MCP', 'Invalid definition', 'Not prepared', 'Not allowed for the root Agent', 'missing command']));
+  // `search` is defined in the same document, and the diagnostic is not its.
+  expect(facts('search')).not.toContain('missing command');
   expect(facts('docs')).toEqual(expect.arrayContaining(['Skill', 'Valid definition', 'Visible to the root Agent']));
   // A valid Workflow can still be refused admission, and is still not selected.
   expect(facts('nightly')).toEqual(expect.arrayContaining(['Workflow', 'Valid definition', 'Not admitted', 'Not allowed for the root Agent']));
   expect(facts('analysis')).toEqual(expect.arrayContaining(['Managed Python', 'Valid definition', 'Preparation unavailable']));
   // Opening the page probed nothing.
   expect(methods(s).every(method => method === 'configuration/sourcesRead')).toBe(true);
+});
+
+/** Two MCP identities authored in one `mcp.toml`, one valid and one not. */
+function siblingInventory(): CapabilityInspection1 {
+  const mcp = '/home/user/rustx/.agents/mcp.toml';
+  return {
+    definitions: [
+      { family: 'mcp', name: 'search', valid: true, location: { scope: 'user', path: mcp } },
+      { family: 'mcp', name: 'broken', valid: false, location: { scope: 'user', path: mcp } },
+    ],
+    resource_diagnostics: [
+      // `broken`'s own diagnostic. Its file is the document `search` is also
+      // defined in, and its field names `search` — neither is an attribution.
+      { subject: { kind: 'resource', family: 'mcp', name: 'broken' }, file: mcp, field: 'search', reason: 'broken: missing command' },
+      // A failure of the document as a whole, which no identity owns.
+      { subject: { kind: 'collection', family: 'mcp' }, file: mcp, field: 'mcp_servers', reason: 'MCP catalog exceeds 128 definitions' },
+    ],
+    main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [],
+  } as never;
+}
+
+it('S2-05 a resource diagnostic stays on the identity native attributes it to, never on a same-file sibling', async () => {
+  const s = cfg3Client();
+  s.source.prospective_resources = siblingInventory();
+  await user(s, 'Extensions');
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
+  const row = (name: string) => within(screen.getByRole('row', { name }));
+  expect(row('broken').getByText('broken: missing command')).toBeTruthy();
+  expect(row('search').queryByText('broken: missing command')).toBeNull();
+  // The document's own diagnostic is the MCP family's, listed once, and on
+  // neither of the identities the document holds.
+  expect(row('broken').queryByText(/MCP catalog exceeds/)).toBeNull();
+  expect(row('search').queryByText(/MCP catalog exceeds/)).toBeNull();
+  const sources = within(screen.getByRole('region', { name: 'Source diagnostics' }));
+  expect(sources.getAllByText(/MCP catalog exceeds 128 definitions/)).toHaveLength(1);
+  expect(sources.queryByText(/missing command/)).toBeNull();
+  // The detail of each identity agrees with its row.
+  await openResourceRow('search');
+  const search = within(screen.getByRole('region', { name: 'MCP search' }));
+  expect(search.queryByText(/missing command|MCP catalog exceeds/)).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'MCP' }));
+  await openResourceRow('broken');
+  const broken = within(screen.getByRole('region', { name: 'MCP broken' }));
+  expect(broken.getByText('broken: missing command')).toBeTruthy();
+  expect(broken.queryByText(/MCP catalog exceeds/)).toBeNull();
+});
+
+/** Every native preparation and admission status, next to one identity of each
+ * observed family native published no observation for. */
+function observationInventory(): CapabilityInspection1 {
+  const at = (path: string) => ({ scope: 'user' as const, path: `/home/user/rustx/.agents/${path}` });
+  return {
+    definitions: [
+      { family: 'mcp', name: 'ready-mcp', valid: true, location: at('mcp.toml') },
+      { family: 'mcp', name: 'idle-mcp', valid: true, location: at('mcp.toml') },
+      { family: 'mcp', name: 'down-mcp', valid: true, location: at('mcp.toml') },
+      { family: 'mcp', name: 'unseen-mcp', valid: true, location: at('mcp.toml') },
+      { family: 'managed_python', name: 'analysis', valid: true, location: at('tools/analysis') },
+      { family: 'managed_python', name: 'unseen-python', valid: true, location: at('tools/unseen-python') },
+      { family: 'workflow', name: 'admitted', valid: true, location: at('workflows/admitted.yaml') },
+      { family: 'workflow', name: 'refused', valid: true, location: at('workflows/refused.yaml') },
+      { family: 'workflow', name: 'unseen-workflow', valid: true, location: at('workflows/unseen-workflow.yaml') },
+    ],
+    resource_diagnostics: [], main: null, agents: {}, skills: [], skill_diagnostics: [],
+    sources: { 'ready-mcp': { status: 'ready' }, 'idle-mcp': { status: 'unprepared' }, 'down-mcp': { status: 'unavailable' }, 'python:analysis': { status: 'ready' } },
+    workflows: { admitted: { status: 'enabled' }, refused: { status: 'disabled', diagnostics: [] } },
+  } as never;
+}
+
+it('S2-05 an identity native published no preparation or admission for is unobserved, never a negative status', async () => {
+  const s = cfg3Client();
+  s.source.prospective_resources = observationInventory();
+  await user(s, 'Extensions');
+  const facts = (name: string) => within(screen.getByRole('row', { name })).getAllByText(/./).map(node => node.textContent);
+  const negative = ['Not prepared', 'Preparation unavailable', 'Not admitted', 'Prepared', 'Admitted'];
+  // Native's own statuses, exactly.
+  expect(facts('ready-mcp')).toContain('Prepared');
+  expect(facts('idle-mcp')).toContain('Not prepared');
+  expect(facts('down-mcp')).toContain('Preparation unavailable');
+  expect(facts('analysis')).toContain('Prepared');
+  expect(facts('admitted')).toContain('Admitted');
+  expect(facts('refused')).toContain('Not admitted');
+  // No observation: unknown, and no status native did not publish.
+  for (const [name, label] of [['unseen-mcp', 'Preparation not observed'], ['unseen-python', 'Preparation not observed'], ['unseen-workflow', 'Admission not observed']]) {
+    expect(facts(name)).toContain(label);
+    for (const status of negative) expect(facts(name)).not.toContain(status);
+  }
+  // The detail names the same fact under the same title.
+  fireEvent.click(screen.getByRole('tab', { name: 'Workflows' }));
+  await openResourceRow('unseen-workflow');
+  const detail = within(screen.getByRole('region', { name: 'Workflow unseen-workflow' }));
+  expect(detail.getAllByText('Admission not observed').length).toBeGreaterThan(0);
+  expect(detail.queryByText('Not admitted')).toBeNull();
+});
+
+it('S2-05 Skill discovery diagnostics are the Skills family\'s, never shown on another Skill\'s detail', async () => {
+  const s = cfg3Client();
+  s.source.prospective_resources = inventory();
+  // A package that failed validation. It is not `docs`, and nothing in the
+  // diagnostic names a Skill identity at all.
+  s.source.prospective_resources!.skill_diagnostics = [
+    { kind: 'package_invalid', source: 'user', package: '/home/user/rustx/.agents/skills/broken', cause: { cause: 'io', path: '/home/user/rustx/.agents/skills/broken/SKILL.md' } },
+  ] as never;
+  await user(s, 'Extensions');
+  fireEvent.click(screen.getByRole('tab', { name: 'Skills' }));
+  const sources = within(screen.getByRole('region', { name: 'Source diagnostics' }));
+  expect(sources.getByRole('button', { name: 'Skill discovery diagnostics (1)' })).toBeTruthy();
+  await openResourceRow('docs');
+  expect(screen.queryByRole('region', { name: 'Source diagnostics' })).toBeNull();
+  expect(screen.queryByRole('button', { name: /Skill (package|discovery) diagnostics/ })).toBeNull();
 });
 
 // ── S2-06 Definition and selection stay independent mutations ───────────────

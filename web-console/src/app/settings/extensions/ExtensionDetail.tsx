@@ -2,7 +2,7 @@
 import type {
   AgentProfileDocument, AgentSkillSelection, McpWrite, ResourceFamily,
   SourceScope, SourceSettings, SourceToolSelection,
-} from '../../../../../protocol/app-server/v18';
+} from '../../../../../protocol/app-server/v19';
 import { mcpTransport } from '../../../bindings/mcp';
 import { Badge, Facts } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
@@ -15,7 +15,7 @@ import { Advanced, Choice } from '../primitives/aria';
 import { documentAuthoring, extensionFamilyLabel, type ExtensionFamily } from '../projection';
 import type { PageFocus } from '../machines/navigation';
 import { ModelSelection } from '../models/ModelsPage';
-import { extensionEntries, preparationLabel, relationshipLabel, selectionLabel, validityLabel } from './inventory';
+import { extensionEntries, preparationLabel, preparationTitle, relationshipLabel, selectionLabel, validityLabel } from './inventory';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 import workflow from '../../../presentation/settings/SettingsWorkflow.module.css';
 
@@ -65,7 +65,7 @@ export function ExtensionDetail(props: ExtensionDetailProps) {
       <Facts rows={[
         ['Source', entry.path],
         ...(entry.shadowed ? [['Shadows', entry.shadowed] as const] : []),
-        ...(preparation ? [['Preparation', preparation] as const] : []),
+        ...(preparation ? [[preparationTitle(entry), preparation] as const] : []),
         ...(selection ? [['Root Agent', selection] as const] : []),
       ]} />
       {entry.diagnostics.map((reason, index) => <p className={css.error} key={index}>{reason}</p>)}
@@ -246,8 +246,9 @@ function UnauthorableResource({ source, family, name }: ExtensionDetailProps) {
       {!!skill.shadowed.length && <Advanced title={`Shadowed same-identity packages (${skill.shadowed.length})`}><NativeFacts value={skill.shadowed} /></Advanced>}
     </>}
     {inspection && <Advanced title="Native inspection" expanded><NativeFacts value={inspection} /></Advanced>}
-    {family === 'skill' && !!resources?.skill_diagnostics.length
-      && <Advanced title="Skill package diagnostics" expanded><NativeFacts value={resources.skill_diagnostics} /></Advanced>}
+    {/* Skill discovery diagnostics name packages, not this Skill, so they are
+        the Skills family's and are listed on the Extensions Skills filter —
+        never here, where another package's failure would read as this one's. */}
     {family === 'workflow' && resources?.workflows[name]?.status === 'disabled'
       && <Advanced title="Workflow admission diagnostics" expanded><NativeFacts value={resources.workflows[name]} /></Advanced>}
   </section>;

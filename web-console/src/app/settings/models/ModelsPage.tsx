@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import type {
   Model, ModelLayer, Modality, ProviderView, ProviderWrite, SourceScope, SourceSettings,
-} from '../../../../../protocol/app-server/v18';
+} from '../../../../../protocol/app-server/v19';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
 import { TypedUnitForm, UnitForm, type TypedUnitForm as TypedForm } from '../forms/bridge';

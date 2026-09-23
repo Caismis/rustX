@@ -110,5 +110,25 @@
     }
   ],
   "definitions": [],
-  "resource_diagnostics": []
+  "resource_diagnostics": [
+    {
+      "subject": {
+        "kind": "resource",
+        "family": "mcp",
+        "name": "broken"
+      },
+      "file": "/work/.agents/mcp.toml",
+      "field": "mcp_servers.broken",
+      "reason": "resource is invalid or unreadable"
+    },
+    {
+      "subject": {
+        "kind": "collection",
+        "family": "workflow"
+      },
+      "file": "/work/.agents/workflows",
+      "field": "resources",
+      "reason": "resource is invalid or unreadable"
+    }
+  ]
 }

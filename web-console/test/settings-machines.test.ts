@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { assign, createActor, setup, type ActorRefFrom, type InspectionEvent } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v18';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v19';
 import { admitsSourceMutation, mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
 import { discardable, requiresReview, unitTransactionMachine } from '../src/app/settings/machines/unit-transaction';
 import { adoptionInFlight, sessionConfigurationMachine } from '../src/app/settings/machines/session-configuration';

@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
 import { shallowEqual, useSelector } from '@xstate/react';
-import type { SourceScope } from '../../../../protocol/app-server/v18';
+import type { SourceScope } from '../../../../protocol/app-server/v19';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';

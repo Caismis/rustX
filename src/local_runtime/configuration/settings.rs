@@ -694,10 +694,19 @@ impl UserConfigManager {
                         valid: mcp.definitions.get(id).is_some_and(Result::is_ok),
                     }),
             );
+        // A failed MCP document belongs to the document; a failed definition
+        // belongs to exactly its own identity, never to its siblings in the
+        // same document.
         inventory.resource_diagnostics.extend(
             mcp.invalid_scopes
                 .iter()
-                .map(ResourceDiagnostic::from_error),
+                .map(|error| ResourceDiagnostic::collection(ResourceFamily::Mcp, error))
+                .chain(mcp.definitions.iter().filter_map(|(id, definition)| {
+                    definition
+                        .as_ref()
+                        .err()
+                        .map(|error| ResourceDiagnostic::resource(ResourceFamily::Mcp, id, error))
+                })),
         );
         match super::super::agent_resources::load_authorized(workspace, &user.join("agents")) {
             Ok((catalog, sources)) => {
@@ -717,17 +726,16 @@ impl UserConfigManager {
                         },
                         valid: !catalog.invalid().contains_key(name),
                     }));
-                inventory.resource_diagnostics.extend(
-                    catalog
-                        .invalid()
-                        .values()
-                        .chain(catalog.discovery_diagnostics.iter())
-                        .map(ResourceDiagnostic::from_error),
-                );
+                inventory
+                    .resource_diagnostics
+                    .extend(ResourceDiagnostic::of_agents(&catalog));
             }
             Err(error) => inventory
                 .resource_diagnostics
-                .push(ResourceDiagnostic::from_error(&error)),
+                .push(ResourceDiagnostic::collection(
+                    ResourceFamily::Agent,
+                    &error,
+                )),
         }
         match super::super::workflow_resources::load(workspace, &user) {
             Ok(catalog) => {
@@ -744,17 +752,16 @@ impl UserConfigManager {
                                 valid: !catalog.invalid().contains_key(id),
                             }),
                     );
-                inventory.resource_diagnostics.extend(
-                    catalog
-                        .invalid()
-                        .values()
-                        .chain(catalog.discovery_diagnostics.iter())
-                        .map(ResourceDiagnostic::from_error),
-                );
+                inventory
+                    .resource_diagnostics
+                    .extend(ResourceDiagnostic::of_workflows(&catalog));
             }
             Err(error) => inventory
                 .resource_diagnostics
-                .push(ResourceDiagnostic::from_error(&error)),
+                .push(ResourceDiagnostic::collection(
+                    ResourceFamily::Workflow,
+                    &error,
+                )),
         }
         match super::super::managed_python_resources::discover(workspace, &user) {
             Ok(catalog) => {
@@ -766,21 +773,21 @@ impl UserConfigManager {
                             .iter()
                             .map(|(id, location)| ResourceDefinition {
                                 family: ResourceFamily::ManagedPython,
-                                name: id.to_string(),
+                                name: id.managed_python().expect("Python catalog identity").into(),
                                 location: location.clone(),
                                 valid: catalog.packages().get(id).is_some_and(Result::is_ok),
                             }),
                     );
-                inventory.resource_diagnostics.extend(
-                    catalog
-                        .discovery_diagnostics
-                        .iter()
-                        .map(ResourceDiagnostic::from_error),
-                );
+                inventory
+                    .resource_diagnostics
+                    .extend(ResourceDiagnostic::of_managed_python(&catalog));
             }
             Err(error) => inventory
                 .resource_diagnostics
-                .push(ResourceDiagnostic::from_error(&error)),
+                .push(ResourceDiagnostic::collection(
+                    ResourceFamily::ManagedPython,
+                    &error,
+                )),
         }
         let skills = if let Some(workspace) = workspace {
             crate::tools::workspace::Workspace::new(workspace)

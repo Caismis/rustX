@@ -9,7 +9,7 @@ import { Trajectory } from './trajectory/Trajectory';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { RuntimeClientSessionDeletePreview, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v18';
+import type { RuntimeClientSessionDeletePreview, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v19';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { NavigationEpoch } from './commands/native';
 import { available, commands } from './commands/registry';

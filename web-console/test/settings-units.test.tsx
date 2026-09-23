@@ -6,7 +6,7 @@ import { AgentPage } from '../src/app/settings/agent/AgentPage';
 import { ToolsPage } from '../src/app/settings/tools/ToolsPage';
 import { ExtensionDetail } from '../src/app/settings/extensions/ExtensionDetail';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v18';
+import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v19';
 import { chooseOption, confirmAction, renderEditor } from './settings-harness';
 afterEach(cleanup);
 
@@ -211,4 +211,63 @@ it.each([{}, { description: 'Review' }, { instructions: 'Inspect' }])('saves an 
   expect((screen.getByRole('form', { name: 'Agent optional' }) as HTMLFormElement).checkValidity()).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'Save Agent optional' }));
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'agent', name: 'optional', authored: { ...authored, tools: { builtin: ['read'] } } }, 'optional-r1'));
+});
+
+// ── A request parameter's JSON text is a buffer, never a second draft ───────
+
+/** A User Model with two explicit request parameters, opened on its detail
+ * with the request-parameter editor expanded. */
+async function requestParameters() {
+  const main = { ...cfg3Effective().document.models!.main, request_params: { temperature: 1, top_p: 0.5 } };
+  const source = catalogSource('user', { models: { main } });
+  const editor = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), { source, context: source });
+  fireEvent.click(screen.getByRole('button', { name: 'Request defaults and protocol compatibility' }));
+  return { ...editor, main, input: screen.getByLabelText('temperature') as HTMLInputElement };
+}
+const incomplete = 'Enter a complete JSON value before saving.';
+
+it('an actor-owned reset replaces a mounted JSON buffer, its error and its validity, and a later edit starts from it', async () => {
+  const { writes: write, main, input } = await requestParameters();
+  // A complete value becomes the actor's draft; incomplete text after it
+  // stays in the input with its error and its invalid state.
+  fireEvent.change(input, { target: { value: '2' } });
+  fireEvent.change(input, { target: { value: '{' } });
+  expect(input.value).toBe('{');
+  expect(screen.getByText(incomplete)).toBeTruthy();
+  expect(input.validity.valid).toBe(false);
+  // Discarding the draft is the transaction owner's reset. The parameter row
+  // keeps its key, so the same input stays mounted across it.
+  fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Discard draft' })).toBeNull());
+  expect(screen.getByLabelText('temperature')).toBe(input);
+  expect(input.value).toBe('1');
+  expect(screen.queryByText(incomplete)).toBeNull();
+  expect(input.validity.valid).toBe(true);
+  expect(input.validationMessage).toBe('');
+  // Following the owner wrote nothing back and began no draft.
+  expect((screen.getByRole('button', { name: 'Save Model main' }) as HTMLButtonElement).disabled).toBe(true);
+  // The next keystroke extends what the owner holds, not the stale buffer.
+  fireEvent.change(input, { target: { value: `${input.value}5` } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
+  await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+  expect(write.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...main, request_params: { temperature: 15, top_p: 0.5 } } } });
+});
+
+it('incomplete JSON stays visible and diagnosed locally and never reaches the draft', async () => {
+  const { writes: write, main, input } = await requestParameters();
+  fireEvent.change(input, { target: { value: '{"budget":' } });
+  expect(input.value).toBe('{"budget":');
+  expect(screen.getByText(incomplete)).toBeTruthy();
+  expect(input.validity.valid).toBe(false);
+  // No draft exists: the incomplete text was never offered to the actor.
+  expect((screen.getByRole('button', { name: 'Save Model main' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole('button', { name: 'Discard draft' })).toBeNull();
+  // Completing it is an ordinary edit; the buffer is not reset by its own echo.
+  fireEvent.change(input, { target: { value: '{"budget": 32}' } });
+  expect(input.value).toBe('{"budget": 32}');
+  expect(screen.queryByText(incomplete)).toBeNull();
+  expect(input.validity.valid).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
+  await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+  expect(write.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...main, request_params: { temperature: { budget: 32 }, top_p: 0.5 } } } });
 });

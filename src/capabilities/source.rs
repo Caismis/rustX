@@ -14,6 +14,17 @@ pub enum ToolSourceId {
     Mcp(McpServerId),
     ManagedPython(String),
 }
+impl ToolSourceId {
+    /// The Managed Python package identity, without the `python:` namespace
+    /// that only the source-selection domain carries.
+    #[must_use]
+    pub fn managed_python(&self) -> Option<&str> {
+        match self {
+            Self::ManagedPython(name) => Some(name),
+            Self::Mcp(_) => None,
+        }
+    }
+}
 impl TryFrom<String> for ToolSourceId {
     type Error = String;
     fn try_from(value: String) -> Result<Self, Self::Error> {

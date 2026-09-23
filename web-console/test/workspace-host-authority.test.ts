@@ -23,7 +23,7 @@ const native = vi.hoisted(() => {
       const request = message as ObservedRequest;
       state.requests.push(request);
       for (const waiter of state.waiters.splice(0)) waiter();
-      if (request.method === 'initialize') queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result: { type: 'initialized', protocol_version: 18, capabilities: { multi_session: true, single_writable_controller: true, headless_interactions: true, experimental_methods: [] } } }));
+      if (request.method === 'initialize') queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result: { type: 'initialized', protocol_version: 19, capabilities: { multi_session: true, single_writable_controller: true, headless_interactions: true, experimental_methods: [] } } }));
       return Promise.resolve();
     }
     onMessage(listener: (record: unknown) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
