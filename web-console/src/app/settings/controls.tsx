@@ -5,7 +5,7 @@ import { Switch } from '../../presentation/primitives/Switch';
 import { Button } from '../../presentation/primitives/Button';
 import { SourceContext } from './source-context';
 import { useSettingsActor, useUnitTransaction } from './machines/react';
-import { admitsSourceMutation } from './machines/settings-target';
+import { admitsSourceMutation, committedUnit } from './machines/settings-target';
 import { committed as unitCommitted, discardable, requiresReview } from './machines/unit-transaction';
 import { authoredStateLabel, effectiveStateLabel, provenanceLabel, revisionSelector, unitFacts } from './projection';
 import css from '../../presentation/settings/SettingsContent.module.css';
@@ -69,7 +69,10 @@ export function UnitForm<T>({ title, authored, blank, revision, mutation, childr
   // fences on native authority".
   const snapshot = useUnitTransaction(actor, identity);
   const transaction = snapshot?.context;
-  const committed = !!snapshot && unitCommitted(snapshot);
+  // A live transaction answers for its own commit. Once a settled commit's
+  // transaction has retired, the target's mutation outcome still names it.
+  const lastCommit = useSelector(actor, target => committedUnit(target));
+  const committed = snapshot ? unitCommitted(snapshot) : lastCommit === identity;
   // This unit's own mutation is in flight: its transaction owns the intent
   // until the outcome, so its controls are closed.
   const busy = !!snapshot?.matches({ mutation: 'submitting' });

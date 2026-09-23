@@ -123,8 +123,13 @@ export interface SettingsTargetContext {
    * alone — never against the current presentation observation, which every
    * `ATTACH` demotes. */
   rereadReservation?: { token: number; publication?: bigint };
-  /** One live transaction actor per native semantic unit touched in this
-   * lifetime. Owned here, not by the editors that render them. */
+  /** One live transaction actor per native semantic unit whose transaction
+   * still owns something: browser intent, a pinned CAS base or a definitive
+   * commit whose observation is owed. Owned here, not by the editors that
+   * render them. A transaction that owns nothing announces its own retirement
+   * and is stopped and removed at once, so touched units do not accumulate
+   * over a long-lived target; a later edit starts a fresh transaction from the
+   * revision the editor then presents. */
   units: Record<string, UnitTransactionRef>;
   nextToken: number;
 }
@@ -246,8 +251,9 @@ function unitRevision(projection: SourceSettings, selector: RevisionSelector): s
  *   convergence comparison from the older one can become authoritative, because
  *   the state that owned them has been left, their actor stopped and the
  *   write-owned reread reservation revoked — attached or not, and for good.
- * - *transaction* — the per-unit actors in `units` live for the whole authority
- *   lifetime, *across* generation changes, so a definitive acknowledgement
+ * - *transaction* — the per-unit actors in `units` live until they own nothing,
+ *   bounded by the authority lifetime and *across* generation changes, so a
+ *   definitive acknowledgement
  *   settles the exact transaction that submitted it even after its editor, the
  *   whole Settings dialog, or the connection it was submitted on is gone. What
  *   such a late acknowledgement may never do is publish its generation's
@@ -483,7 +489,9 @@ export const settingsTargetMachine = setup({
       const unit = context.units[(event as Extract<SettingsTargetEvent, { type: 'UNIT.DISCARD' }>).identity];
       if (unit) enqueue.sendTo(unit, { type: 'DISCARD' });
     }),
-    /** A transaction that has nothing left to own retires exactly once. */
+    /** A transaction that has nothing left to own announces it from its
+     * terminal `lifetime.retired` state, exactly once; it is stopped and
+     * removed here. */
     retireUnit: enqueueActions(({ context, event, enqueue }) => {
       const identity = (event as Extract<SettingsTargetEvent, { type: 'UNIT.RETIRED' }>).identity;
       const unit = context.units[identity];
@@ -868,6 +876,16 @@ export const settingsTargetMachine = setup({
  * submitted it. */
 export function mutationInFlight(snapshot: SnapshotFrom<typeof settingsTargetMachine>): boolean {
   return snapshot.hasTag('mutationInFlight');
+}
+
+/** The semantic unit whose definitive commit is this target's current
+ * mutation outcome. It is a fact of the `mutation` region, so it survives the
+ * retirement of the transaction that submitted the commit; only a new
+ * submission replaces it. */
+export function committedUnit(snapshot: SnapshotFrom<typeof settingsTargetMachine>): string | undefined {
+  const committed = snapshot.matches({ mutation: 'observing' }) || snapshot.matches({ mutation: 'saved' })
+    || snapshot.matches({ mutation: 'unobserved' });
+  return committed ? snapshot.context.outcomeUnit : undefined;
 }
 
 /** The `mutation` region's outcome, for presentation. */

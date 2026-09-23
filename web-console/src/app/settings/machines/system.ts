@@ -168,9 +168,11 @@ export class ConfigurationSystem {
     const key = settingsTargetKey(target);
     const existing = this.targets.get(key);
     if (existing) return existing;
-    // A Workspace port names its source scope asynchronously. Once it does, the
-    // publication level it now projects is delivered at once — to this actor
-    // only, and only while it is still a live target of this lifetime.
+    // A Workspace port names its source scope asynchronously — from its first
+    // successful configuration operation, or from the Host resolution. Once
+    // it does, the publication level it now projects is delivered at once —
+    // to this actor only, and only while it is still a live target of this
+    // lifetime, before the operation's result reaches the actor.
     const identified = () => { if (this.targets.get(key) === actor) this.deliverTarget(actor); };
     const port = createConfigurationPort({
       client: this.client, endpoint: transport.endpoint ?? '', workspaceId: target.kind === 'workspace' ? target.id : undefined, host, identified,

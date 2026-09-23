@@ -37,9 +37,20 @@ import type { RevisionSelector } from '../projection';
  * observation and any divergence it reveals, so the pinned base, the committed
  * revision and the review requirement all survive the gesture. While a
  * mutation is in flight the intent belongs to it, and the gesture is not
- * accepted. The actor announces its retirement only once it owns nothing at
- * all — no intent, no pinned base and no commit left to observe — which is a
- * fact about its regions, not about the event that led there.
+ * accepted.
+ *
+ * The fourth region, `lifetime`, is the transaction's own ownership decision.
+ * The transaction retires once it owns nothing at all — no intent, no pinned
+ * base and no commit left to observe — which is a fact about the other three
+ * regions, not about the event that led there. Two events can release the last
+ * thing it owns: the discard gesture, and the authoritative observation that
+ * settles a definitive commit. Each is answered by every region in its own
+ * microstep and then raises `RELEASE`, which XState processes as the next
+ * microstep, after all of them. Only `RELEASE` evaluates ownership, so the
+ * decision always sees the regions *after* the releasing event: a base pinned
+ * by the settled commit has already followed native authority, and a newer
+ * intent is still dirty. `lifetime.retired` has no way out, so its entry
+ * announces the retirement to the owning target exactly once.
  *
  * Memory only. Nothing here is persisted, merged with sources, or used as
  * runtime state. */
@@ -80,9 +91,8 @@ export type UnitTransactionEvent =
    * every definitive commit the owning target has recorded, so it is evidence
    * about this unit's commit rather than about the source before it. */
   | { type: 'OBSERVED'; revision: string; postCommit: boolean }
-  | { type: 'SETTLED' }
-  /** Internal: a discard has been applied to every region; retire if the
-   * transaction now owns nothing. */
+  /** Internal: a discard or a commit settlement has been answered by every
+   * region; retire if the transaction now owns nothing. */
   | { type: 'RELEASE' };
 
 export const unitTransactionMachine = setup({
@@ -189,10 +199,15 @@ export const unitTransactionMachine = setup({
           on: {
             // A pinned base never advances on an observation alone. Only a
             // confirmed commit, the explicit reviewed-revision gesture, or the
-            // settlement of a transaction that authored nothing moves it.
-            OBSERVED: { actions: 'recordObservation' },
+            // observation that settles the commit of a transaction that
+            // authored nothing since moves it. The settling observation is the
+            // same event the `mutation` region settles on, so both regions
+            // answer it in one microstep, before `RELEASE` is evaluated.
+            OBSERVED: [
+              { guard: and(['settlesCommit', 'nothingAuthored']), target: 'following', actions: ['recordObservation', 'followObservation'] },
+              { actions: 'recordObservation' },
+            ],
             REVIEW: { actions: 'reviewObservation' },
-            SETTLED: { guard: 'nothingAuthored', target: 'following', actions: 'followObservation' },
             // Abandoning a pin that is browser intent follows native authority
             // again. A committed revision awaiting its observation is not
             // intent and stays.
@@ -213,15 +228,16 @@ export const unitTransactionMachine = setup({
           },
         },
         /** The native write is definitive and `submitted.committed` names it.
-         * The transaction is retired only once an authoritative projection
-         * carries exactly the committed revision. */
+         * The transaction may retire only once an authoritative projection
+         * carries exactly the committed revision: that observation settles
+         * the mutation, and `RELEASE` then decides whether anything is left. */
         acknowledged: {
           initial: 'awaitingObservation',
           on: {
             OBSERVED: {
               guard: 'settlesCommit',
               target: 'settled',
-              actions: ['recordObservation', 'retireSubmission', raise({ type: 'SETTLED' })],
+              actions: ['recordObservation', 'retireSubmission', raise({ type: 'RELEASE' })],
             },
             SUBMIT: { target: 'submitting', actions: 'beginSubmission' },
           },
@@ -242,7 +258,8 @@ export const unitTransactionMachine = setup({
             diverged: {},
           },
         },
-        /** Committed and observed. Nothing about this unit is outstanding. */
+        /** Committed and observed. Nothing about the commit is outstanding; a
+         * transaction still here holds a newer browser intent, or is retired. */
         settled: {
           on: {
             EDIT: 'idle',
@@ -256,8 +273,17 @@ export const unitTransactionMachine = setup({
         unconfirmed: { on: { SUBMIT: { target: 'submitting', actions: 'beginSubmission' } } },
       },
     },
+    /** Whether the owning target still holds this transaction. */
+    lifetime: {
+      initial: 'live',
+      states: {
+        live: { on: { RELEASE: { guard: 'ownsNothing', target: 'retired' } } },
+        /** Terminal: the announcement is made on the one entry this state can
+         * ever have, and the owning target stops the actor on receiving it. */
+        retired: { type: 'final', entry: 'announceRetirement' },
+      },
+    },
   },
-  on: { RELEASE: { guard: 'ownsNothing', actions: 'announceRetirement' } },
 });
 
 export type UnitTransactionSnapshot = SnapshotFrom<typeof unitTransactionMachine>;

@@ -1,8 +1,8 @@
 import { expect, it, vi } from 'vitest';
-import { createActor, type InspectionEvent } from 'xstate';
+import { assign, createActor, setup, type ActorRefFrom, type InspectionEvent } from 'xstate';
 import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v18';
 import { admitsSourceMutation, mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
-import { discardable, requiresReview } from '../src/app/settings/machines/unit-transaction';
+import { discardable, requiresReview, unitTransactionMachine } from '../src/app/settings/machines/unit-transaction';
 import { adoptionInFlight, sessionConfigurationMachine } from '../src/app/settings/machines/session-configuration';
 import { settingsNavigationMachine, type OwnerResolution } from '../src/app/settings/machines/navigation';
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
@@ -73,6 +73,8 @@ function settingsActor(
   return actor;
 }
 const unitOf = (actor: ReturnType<typeof settingsActor>, identity = toolsIdentity) => actor.getSnapshot().context.units[identity];
+/** The unit's transaction settled and, owning nothing, was retired and removed. */
+const expectRetired = (actor: ReturnType<typeof settingsActor>, identity = toolsIdentity) => expect(unitOf(actor, identity)).toBeUndefined();
 const edit = (actor: ReturnType<typeof settingsActor>, value: unknown, revision: string) =>
   actor.send({ type: 'UNIT.EDIT', identity: toolsIdentity, selector: revisionSelector(toolsMutation), revision, value });
 const submit = (actor: ReturnType<typeof settingsActor>, revision: string, mutation: SourceMutation = toolsMutation) =>
@@ -191,7 +193,7 @@ it.each(['observed', 'failed'] as const)('R17 a Workspace reread of a replaced g
   await flush();
   const snapshot = actor.getSnapshot();
   expect(snapshot.context.observation?.user.revision).toBe('r2');
-  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expectRetired(actor);
   expect(snapshot.matches({ mutation: 'saved' })).toBe(true);
   expect(mutationOutcome(snapshot)).toEqual({ kind: 'saved', observed: true });
   expect(scripted.writes).toHaveLength(1);
@@ -343,7 +345,7 @@ it('R18 a Product Host commit that lands while the connection is down settles, a
   await flush();
   const reconnected = actor.getSnapshot();
   expect(reconnected.context.observation?.user.revision).toBe('r2');
-  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expectRetired(actor);
   expect(reconnected.matches({ mutation: 'saved' })).toBe(true);
   expect(scripted.writes).toHaveLength(1);
 });
@@ -382,8 +384,7 @@ it('R04 a definitive acknowledgement settles its transaction after the presentat
   expect(actor.getSnapshot().context.observation).toBeUndefined();
   scripted.reads.at(-1)!.resolve(projection('r2'));
   await flush();
-  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
-  expect(unitOf(actor).getSnapshot().context.submitted).toBeUndefined();
+  expectRetired(actor);
   expect(scripted.writes).toHaveLength(1);
 });
 
@@ -557,7 +558,7 @@ it('R22 reopening with an unobserved commit coalesces validation and post-commit
   scripted.reads[1].resolve(projection('r2'));
   await flush();
   expect(actor.getSnapshot().context.observation?.user.revision).toBe('r2');
-  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expectRetired(actor);
   expect(actor.getSnapshot().matches({ mutation: 'saved' })).toBe(true);
   // Nothing duplicates, replays or polls: one write ever, two reads ever.
   expect(scripted.reads).toHaveLength(2);
@@ -607,7 +608,7 @@ it('R22 reopening during a Workspace write keeps its reserved reread as the fres
   const snapshot = actor.getSnapshot();
   expect(snapshot.context.observation?.user.revision).toBe('r2');
   expect(snapshot.context.staleObservation).toBeUndefined();
-  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expectRetired(actor);
   expect(snapshot.matches({ mutation: 'saved' })).toBe(true);
   expect(scripted.reads).toHaveLength(1);
   expect(scripted.writes).toHaveLength(1);
@@ -641,7 +642,7 @@ it('R22 a commit landing during the reattach read supersedes it into one post-co
   await flush();
   const snapshot = actor.getSnapshot();
   expect(snapshot.context.observation?.user.revision).toBe('r2');
-  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expectRetired(actor);
   expect(snapshot.matches({ mutation: 'saved' })).toBe(true);
   expect(scripted.writes).toHaveLength(1);
 });
@@ -795,7 +796,7 @@ it.each([
   expect(snapshot.context.observation?.user.revision).toBe('r2');
   expect(snapshot.context.readError).toBe('');
   expect(snapshot.matches({ authority: { attached: 'idle' } })).toBe(true);
-  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expectRetired(actor);
   expect(snapshot.matches({ mutation: 'saved' })).toBe(true);
   expect(mutationOutcome(snapshot)).toEqual({ kind: 'saved', observed: true });
   // Editing is governed by generation 2 alone.
@@ -834,7 +835,7 @@ it.each(['observed', 'failed'] as const)('R24 a generation replaced while Settin
   const snapshot = actor.getSnapshot();
   expect(snapshot.context.observation?.user.revision).toBe('r2');
   expect(snapshot.context.readError).toBe('');
-  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expectRetired(actor);
   expect(snapshot.matches({ mutation: 'saved' })).toBe(true);
   expect(canSubmit(actor, 'r2')).toBe(true);
   expect(settlement.log).toEqual({ commits: 1, mutation: ['idle', 'submitting', 'observing', 'saved'] });
@@ -868,7 +869,7 @@ it('R24 a reservation superseded by a newer publication read is not resurrected 
   await flush();
   const snapshot = actor.getSnapshot();
   expect(snapshot.context.observation?.user.revision).toBe('r2');
-  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expectRetired(actor);
   expect(snapshot.matches({ mutation: 'saved' })).toBe(true);
   expect(scripted.writes).toHaveLength(1);
 });
@@ -947,7 +948,7 @@ it.each([
   expect(snapshot.context.observation?.user.revision).toBe('r2');
   expect(snapshot.context.readError).toBe('');
   expect(snapshot.matches({ authority: { attached: 'idle' } })).toBe(true);
-  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expectRetired(actor);
   expect(snapshot.matches({ mutation: 'saved' })).toBe(true);
   expect(mutationOutcome(snapshot)).toEqual({ kind: 'saved', observed: true });
   // Settled exactly once, never replayed, and nothing polls afterwards.
@@ -977,7 +978,7 @@ it('R25 a publication no newer than the reservation watermark never supersedes t
   // The reserved reread is the reattached presentation's fresh observation.
   const snapshot = actor.getSnapshot();
   expect(snapshot.context.observation?.user.revision).toBe('r2');
-  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expectRetired(actor);
   expect(snapshot.matches({ mutation: 'saved' })).toBe(true);
   expect(scripted.reads).toHaveLength(1);
   expect(scripted.writes).toHaveLength(1);
@@ -1267,7 +1268,7 @@ it('R28 only a deliberate new submission replaces the previous mutation outcome'
   scripted.reads.at(-1)!.resolve(projection('r2'));
   await flush();
   expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'saved', observed: true });
-  expect(unitOf(actor).getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+  expectRetired(actor);
 });
 
 // ── 11c. Post-commit observation vs. external divergence ───────────────────
@@ -1372,12 +1373,11 @@ it.each([
   expect(scripted.reads).toHaveLength(3);
   scripted.reads[2].resolve(projection(postCommit, userApplication('2')));
   await flush();
-  unit = unitOf(actor).getSnapshot();
   expect(actor.getSnapshot().matches({ mutation: 'saved' })).toBe(true);
   if (verdict === 'settles') {
-    expect(unit.matches({ mutation: 'settled' })).toBe(true);
-    expect(requiresReview(unit)).toBe(false);
+    expectRetired(actor);
   } else {
+    unit = unitOf(actor).getSnapshot();
     expect(unit.matches({ mutation: { acknowledged: 'diverged' } })).toBe(true);
     expect(unit.context.submitted?.committed).toBe('r2');
     expect(requiresReview(unit)).toBe(true);
@@ -1591,6 +1591,157 @@ it('R32 a mutation in flight owns its intent, so a discard is not accepted until
   // The conflict preserves exactly the intent that was submitted.
   expect(unitOf(actor).getSnapshot().context.draft).toEqual({ value: ['read'] });
   expect(unitOf(actor).getSnapshot().context.base).toBe('r1');
+});
+
+// ── 11e. A transaction that owns nothing retires exactly once ───────────────
+//
+// A unit transaction lives exactly as long as it owns something: browser
+// intent, a pinned CAS base, or a definitive commit whose authoritative
+// observation is owed. The observation that settles a commit is the last of
+// those for a transaction with no newer intent, so it retires there — once —
+// and its owning target stops and removes it. Touched units therefore never
+// accumulate over a long-lived target.
+
+/** Count every `UNIT.RETIRED` a target actor receives. */
+function retirementCounter() {
+  let count = 0;
+  const inspect = (inspection: InspectionEvent) => {
+    if (inspection.type === '@xstate.event' && inspection.event.type === 'UNIT.RETIRED') count += 1;
+  };
+  return { inspect, count: () => count };
+}
+
+it('R36 a successfully committed and observed transaction retires, and a later edit starts a fresh one at the committed revision', async () => {
+  const retirements = retirementCounter();
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port, undefined, false, retirements.inspect);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  const first = unitOf(actor);
+  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  await flush();
+  // Acknowledged, with its observation still owed: the transaction lives.
+  expect(unitOf(actor)).toBe(first);
+  expect(first.getSnapshot().matches({ mutation: { acknowledged: 'awaitingObservation' } })).toBe(true);
+  expect(retirements.count()).toBe(0);
+  scripted.reads[1].resolve(projection('r2'));
+  await flush();
+  expectRetired(actor);
+  expect(first.getSnapshot().status).toBe('stopped');
+  expect(retirements.count()).toBe(1);
+  expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'saved', observed: true });
+  // Editing the unit again is a new transaction, fenced on exactly the
+  // committed revision the editor now presents.
+  edit(actor, ['read', 'write'], 'r2');
+  const second = unitOf(actor);
+  expect(second).toBeDefined();
+  expect(second).not.toBe(first);
+  expect(second.getSnapshot().context).toMatchObject({ base: 'r2', observed: 'r2', draft: { value: ['read', 'write'] } });
+  expect(second.getSnapshot().matches({ intent: 'dirty', mutation: 'idle', lifetime: 'live' })).toBe(true);
+  submit(actor, 'r2');
+  await flush();
+  expect(scripted.writes[1].expected).toBe('r2');
+});
+
+it('R36 a newer browser intent survives the settlement of the older commit, so the transaction does not retire', async () => {
+  const retirements = retirementCounter();
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port, undefined, false, retirements.inspect);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  // Intent A2 is authored while A1 is still natively submitting.
+  edit(actor, ['read', 'write'], 'r1');
+  const unit = unitOf(actor);
+  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  await flush();
+  scripted.reads[1].resolve(projection('r2'));
+  await flush();
+  // A1 is committed and observed; A2 is still exactly this browser's intent.
+  expect(unitOf(actor)).toBe(unit);
+  const snapshot = unit.getSnapshot();
+  expect(snapshot.status).toBe('active');
+  expect(snapshot.matches({ intent: 'dirty', base: 'pinned', mutation: 'settled', lifetime: 'live' })).toBe(true);
+  expect(snapshot.context.draft).toEqual({ value: ['read', 'write'] });
+  expect(snapshot.context).toMatchObject({ base: 'r2', observed: 'r2', submitted: undefined });
+  expect(retirements.count()).toBe(0);
+  // A2 is submitted against the committed revision A1 produced.
+  submit(actor, 'r2');
+  await flush();
+  expect(scripted.writes[1].expected).toBe('r2');
+});
+
+it('R36 one terminal settlement retires the transaction exactly once, however many observations and gestures follow', async () => {
+  const retirements = retirementCounter();
+  const scripted = scriptedPort();
+  const actor = settingsActor(scripted.port, undefined, false, retirements.inspect);
+  await flush();
+  scripted.reads[0].resolve(projection('r1'));
+  await flush();
+  edit(actor, ['read'], 'r1');
+  submit(actor, 'r1');
+  await flush();
+  const unit = unitOf(actor);
+  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  await flush();
+  scripted.reads[1].resolve(projection('r2'));
+  await flush();
+  expectRetired(actor);
+  expect(unit.getSnapshot().status).toBe('stopped');
+  // Later authoritative observations of the same revision and gestures naming
+  // the unit reach no retired transaction and remove nothing twice.
+  actor.send({ type: 'REFRESH' });
+  await flush();
+  scripted.reads[2].resolve(projection('r2'));
+  await flush();
+  actor.send({ type: 'UNIT.DISCARD', identity: toolsIdentity });
+  actor.send({ type: 'UNIT.REVIEW', identity: toolsIdentity });
+  await flush();
+  expectRetired(actor);
+  expect(retirements.count()).toBe(1);
+});
+
+it('R36 the retirement announcement is a terminal state of the transaction itself, even if its owner never stops it', () => {
+  // An owner that only counts announcements, and never stops the child.
+  const owner = setup({
+    types: { context: {} as { retired: number; unit?: ActorRefFrom<typeof unitTransactionMachine> } },
+    actors: { unitTransaction: unitTransactionMachine },
+  }).createMachine({
+    context: { retired: 0 },
+    entry: assign({
+      unit: ({ spawn }) => spawn('unitTransaction', { input: { identity: toolsIdentity, selector: revisionSelector(toolsMutation), revision: 'r1' } }),
+    }),
+    on: { 'UNIT.RETIRED': { actions: assign({ retired: ({ context }) => context.retired + 1 }) } },
+  });
+  const parent = createActor(owner);
+  parent.start();
+  const unit = parent.getSnapshot().context.unit!;
+  unit.send({ type: 'EDIT', value: ['read'] });
+  unit.send({ type: 'SUBMIT', token: 1 });
+  unit.send({ type: 'COMMITTED', token: 1, revision: 'r2' });
+  // A post-commit observation of anything else is a divergence, not a
+  // settlement: the commit's obligation still stands.
+  unit.send({ type: 'OBSERVED', revision: 'r1', postCommit: true });
+  expect(unit.getSnapshot().matches({ lifetime: 'live' })).toBe(true);
+  expect(parent.getSnapshot().context.retired).toBe(0);
+  unit.send({ type: 'OBSERVED', revision: 'r2', postCommit: true });
+  expect(unit.getSnapshot().matches({ intent: 'clean', base: 'following', mutation: 'settled', lifetime: 'retired' })).toBe(true);
+  expect(unit.getSnapshot().context.base).toBe('r2');
+  expect(parent.getSnapshot().context.retired).toBe(1);
+  // Nothing that reaches the retired transaction announces it again.
+  unit.send({ type: 'OBSERVED', revision: 'r2', postCommit: true });
+  unit.send({ type: 'DISCARD' });
+  unit.send({ type: 'EDIT', value: ['write'] });
+  unit.send({ type: 'DISCARD' });
+  expect(unit.getSnapshot().matches({ lifetime: 'retired' })).toBe(true);
+  expect(parent.getSnapshot().context.retired).toBe(1);
 });
 
 // ── 12./13. Session configuration ───────────────────────────────────────────
@@ -2361,6 +2512,13 @@ const sessionApplication = (session: string, version: string): ConfigurationAppl
   ({ ...cfg3SourceApplication(), scope: session, version });
 const workspaceApplication = (directory: string, version: string): ConfigurationApplication =>
   ({ ...cfg3SourceApplication({ kind: 'workspace', directory }), version });
+/** A native projection of the Workspace source at `/workspace/A`: native names
+ * the exact canonical target it read, and the application version it holds. */
+const workspaceProjection = (revision: string, version: string) => {
+  const source = projection(revision, workspaceApplication('/workspace/A', version));
+  source.target = { kind: 'workspace', directory: '/workspace/A' };
+  return source;
+};
 
 it('R34 a failed User Settings read is retried by its own source publication alone', async () => {
   const native = scriptedClient();
@@ -2467,11 +2625,6 @@ it('R34 a failed Workspace Settings read is retried by the publication of its ow
   publishApplication(native, workspaceApplication('/workspace/A', '3'));
   await flush();
   expect(scripted.reads()).toHaveLength(2);
-  const workspaceProjection = (revision: string, version: string) => {
-    const source = projection(revision, workspaceApplication('/workspace/A', version));
-    source.target = { kind: 'workspace', directory: '/workspace/A' };
-    return source;
-  };
   scripted.reads()[1].resolve({ kind: 'read', projection: workspaceProjection('ws-1', '2') });
   await flush();
   expect(scripted.reads()).toHaveLength(3);
@@ -2483,7 +2636,64 @@ it('R34 a failed Workspace Settings read is retried by the publication of its ow
   expect(scripted.reads()).toHaveLength(3);
 });
 
-it('R34 a Workspace whose source scope the Product Host has not named attributes no publication, and recovery stays explicit', async () => {
+it.each(['rejects transiently', 'is still unanswered'] as const)('R34 a successful Workspace read names its own publication scope when the Host resolution %s, so its exact source publication alone drives convergence', async resolution => {
+  const native = scriptedClient();
+  const scripted = scriptedHost();
+  const target = native.system.settingsTarget(workspaceSettingsTarget('wA', 'A'), () => scripted.host);
+  target.send({ type: 'ATTACH' });
+  await flush();
+  // Native has already published version 1 of the Workspace source; nothing
+  // is attributed to the target while no answer names its scope.
+  publishApplication(native, workspaceApplication('/workspace/A', '1'));
+  await flush();
+  expect(scripted.resolutions).toHaveLength(1);
+  expect(scripted.reads()).toHaveLength(1);
+  expect(target.getSnapshot().context.publication).toBeUndefined();
+  if (resolution === 'rejects transiently') {
+    scripted.resolutions[0].reject(new Error('Host resolution temporarily unavailable'));
+    await flush();
+    expect(target.getSnapshot().context.publication).toBeUndefined();
+  }
+  // The read itself succeeds. Native answered it with the exact canonical
+  // target it read, and that — not the unanswered or failed naming RPC — names
+  // the scope before the projection becomes authoritative.
+  scripted.reads()[0].resolve({ kind: 'read', projection: workspaceProjection('ws-1', '1') });
+  await flush();
+  let snapshot = target.getSnapshot();
+  expect(snapshot.context.observation?.user.revision).toBe('ws-1');
+  expect(snapshot.context.publication).toEqual(workspaceApplication('/workspace/A', '1'));
+  expect(snapshot.matches({ authority: { attached: 'idle' } })).toBe(true);
+  expect(scripted.reads()).toHaveLength(1);
+  if (resolution === 'is still unanswered') {
+    // A late answer naming the same scope changes nothing.
+    scripted.resolutions[0].resolve({ cwd: '/workspace/A' });
+    await flush();
+    expect(scripted.reads()).toHaveLength(1);
+  }
+  // Other scopes' publications never wake it.
+  publishApplication(native, workspaceApplication('/workspace/B', '5'));
+  publishApplication(native, sessionApplication('session-1', '1'));
+  publishApplication(native, { ...cfg3SourceApplication(), version: '7' });
+  await flush();
+  expect(scripted.reads()).toHaveLength(1);
+  // The exact Workspace source publishes version 2: exactly one authoritative
+  // reread, with no refresh, reattach, reconnect or new naming request.
+  const generation = target.getSnapshot().context.generation;
+  publishApplication(native, workspaceApplication('/workspace/A', '2'));
+  await flush();
+  expect(scripted.reads()).toHaveLength(2);
+  expect(scripted.resolutions).toHaveLength(1);
+  expect(target.getSnapshot().context.generation).toBe(generation);
+  // Bounded: the read that reaches version 2 converges and starts nothing.
+  scripted.reads()[1].resolve({ kind: 'read', projection: workspaceProjection('ws-2', '2') });
+  await flush();
+  snapshot = target.getSnapshot();
+  expect(snapshot.context.observation?.user.revision).toBe('ws-2');
+  expect(snapshot.matches({ authority: { attached: 'idle' } })).toBe(true);
+  expect(scripted.reads()).toHaveLength(2);
+});
+
+it('R34 a Workspace nothing has named attributes no publication, and the next successful read names it without the Host resolution', async () => {
   const native = scriptedClient();
   const scripted = scriptedHost();
   const target = native.system.settingsTarget(workspaceSettingsTarget('wA', 'A'), () => scripted.host);
@@ -2500,14 +2710,20 @@ it('R34 a Workspace whose source scope the Product Host has not named attributes
   await flush();
   expect(scripted.reads()).toHaveLength(1);
   expect(target.getSnapshot().context.publication).toBeUndefined();
-  // An explicit refresh reads again, and asks the Host to name the scope again.
+  // With no successful answer at all, recovery is explicit. The refresh asks
+  // the Host to name the scope again, which fails again; the read succeeds and
+  // names it itself.
   target.send({ type: 'REFRESH' });
   await flush();
   expect(scripted.reads()).toHaveLength(2);
   expect(scripted.resolutions).toHaveLength(2);
-  scripted.resolutions[1].resolve({ cwd: '/workspace/A' });
+  scripted.resolutions[1].reject(new Error('Host unavailable'));
+  scripted.reads()[1].resolve({ kind: 'read', projection: workspaceProjection('ws-1', '1') });
   await flush();
-  expect(target.getSnapshot().context.publication?.version).toBe('1');
+  expect(target.getSnapshot().context.publication).toEqual(workspaceApplication('/workspace/A', '1'));
+  publishApplication(native, workspaceApplication('/workspace/A', '2'));
+  await flush();
+  expect(scripted.reads()).toHaveLength(3);
 });
 
 // ── 35. Target-wide source mutation admission ───────────────────────────────

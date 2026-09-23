@@ -75,12 +75,21 @@ fact. A Settings target never sees the map: its `ConfigurationPort` projects it
 to the one `ConfigurationApplication` of the exact native source scope that
 target owns, compared by scope and version. User is the native constant
 `source:user`. A Workspace scope names the exact canonical configuration
-directory, which only the Product Host's registration resolution
-(`resolveWorkspace`, the same resolution that names every Workspace
-configuration operation's `SourceTarget`) knows; the port asks it alongside its
-reads until it answers, and the system delivers the newly named level at once.
-Until then no publication is attributed to that target — the directory is never
-guessed from an id, a display name, a Session or a path. A Session
+directory, which only the Product Host's registration resolution knows: it
+names the `SourceTarget` of every Workspace configuration operation. A
+successful Workspace read or write is therefore self-identifying — native
+answers it with a `SourceSettings` whose `target` is the exact canonical
+`SourceTarget` it performed the I/O on, and native publishes that source under
+exactly that target's scope — so the port names its scope from the result
+itself, before the projection reaches the actor. A projection is never adopted
+as authoritative while the port cannot name the publication that owns it, and
+no separate naming request has to succeed first. The port also asks the Host's
+registration resolution (`resolveWorkspace`) alongside each read while the
+scope is unnamed, for one case only: a failed read then still knows which
+publication may retry it. The system delivers a newly named level at once.
+Until something names it no publication is attributed to that target — the
+directory is never guessed from an id, a display name, a Session or a path. A
+Session
 publication, another Workspace's or the other source's publication therefore
 cannot retry, refresh, unblock or advance a target's source reads.
 
@@ -223,6 +232,7 @@ intent     clean ⇄ dirty
 base       following ⇄ pinned
 mutation   idle → submitting → acknowledged.{awaitingObservation → diverged} → settled
                             ↘ unconfirmed
+lifetime   live → retired (terminal)
 ```
 
 A clean Remove is exactly `intent.clean` + `base.pinned`: delete intent pins the
@@ -269,9 +279,36 @@ followed by a post-commit read of the pre-save revision still ends
 `submitting`, the intent belongs to that mutation and the gesture is not
 accepted — the editor is disabled then as well.
 
-Retirement is derived, not triggered. After every discard the transaction
-retires (`UNIT.RETIRED`) only if it owns nothing: `intent.clean`,
-`base.following`, and no mutation in `submitting` or `acknowledged`.
+#### Retirement
+
+Retirement is derived, not triggered. A transaction owns something while it
+holds browser intent (`intent.dirty`), a pinned CAS base (`base.pinned`) or a
+native mutation obligation (`mutation.submitting` or `mutation.acknowledged`).
+Two events can release the last of these: a discard, and the authoritative
+observation that settles a definitive commit — the one carrying exactly the
+committed revision. Every region answers that event in one microstep: the
+`mutation` region settles, and a base pinned by that commit follows native
+authority unless a newer value draft was authored over it. The releasing
+transition then raises the internal `RELEASE`, which XState processes as the
+next microstep, after all regions have answered. Only `RELEASE` evaluates
+ownership, and only from `lifetime.live`; when the transaction owns nothing it
+enters the terminal `lifetime.retired`, whose entry announces `UNIT.RETIRED`
+exactly once, and the target stops the actor and removes it from `units`.
+
+```text
+edit A@r1 → submit → COMMITTED r2 → OBSERVED r2
+  intent clean · base following@r2 · mutation settled → RELEASE → retired
+edit A1 → submit → edit A2 → COMMITTED r2 → OBSERVED r2
+  intent dirty (A2) · base pinned@r2 · mutation settled → RELEASE → live
+```
+
+A transaction therefore lives exactly as long as it owns something, and touched
+units never accumulate over a long-lived target: editing a retired unit again
+starts a fresh transaction from the revision the editor presents. No owner
+scans or collects children. The saved notice of a retired unit's commit is the
+target's own fact — `committedUnit` answers it from the `mutation` region's
+outcome, which only a new submission replaces.
+
 `UnitForm` offers `Discard draft` only while `discardable` holds, so no gesture
 named for a draft is ever presented against a commit.
 
