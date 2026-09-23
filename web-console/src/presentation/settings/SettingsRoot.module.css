@@ -66,11 +66,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.mask {
-  position: absolute;
-  inset: 0;
+  /* React Aria's ModalOverlay is the mask element itself: it owns the
+     dismissable backdrop, so no separate mask node is rendered. */
   background: var(--dsw-alias-bg-mask-1);
   backdrop-filter: var(--dsw-mask-blur);
 }
@@ -101,6 +98,26 @@
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
+/* Dialog and Tabs seats. React Aria inserts one element for the dialog and one
+   for the tab group between the panel and its rail/content children; both are
+   pure layout pass-throughs so the figma panel geometry above is unchanged. */
+.dialog {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  width: 100%;
+  outline: none;
+}
+
+.tabsRoot {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  width: 100%;
+}
+
 /* Nav rail (figma .Setting-nav 501:29958): 188 wide, pad (12,22,12,0),
    gap 18, no own fill — the panel white shows through. */
 .nav {
@@ -108,7 +125,9 @@
   display: flex;
   flex-direction: column;
   gap: 18px;
-  width: 188px;
+  /* 188px upstream; widened so the longest product page name, "Tools &
+     Permissions", is never truncated. */
+  width: 212px;
   padding: 22px 12px 0;
   box-sizing: border-box;
 }
@@ -239,6 +258,7 @@
 .navList { overflow-y: auto; min-height: 0; padding-bottom: 20px; }
 @media (max-width: 640px) {
   .panel { flex-direction: column; max-width: calc(100vw - 24px); height: calc(100dvh - 24px); border-radius: 24px; }
+  .dialog, .tabsRoot { flex-direction: column; }
   .nav { width: 100%; padding: 16px 16px 0; gap: 8px; }
   .navList { flex-direction: row; overflow-x: auto; padding-bottom: 6px; }
   .navCell { flex: none; }

@@ -899,3 +899,14 @@ export function mutationOutcome(snapshot: SnapshotFrom<typeof settingsTargetMach
   if (snapshot.matches({ mutation: 'uncertain' })) return { kind: 'uncertain' };
   return { kind: 'none' };
 }
+
+/** The `mutation` region's outcome, attributed to exactly the unit it is about.
+ *
+ * A target reports one outcome at a time because it admits one mutation at a
+ * time, but a page shows several independent units at once. Attributing the
+ * outcome to its own unit is what lets each of them report its own result: a
+ * committed definition and a conflicted permission are two facts about two
+ * native mutations, and neither may be presented as the other's. */
+export function unitOutcome(snapshot: SnapshotFrom<typeof settingsTargetMachine>, identity: string): MutationOutcome {
+  return snapshot.context.outcomeUnit === identity ? mutationOutcome(snapshot) : { kind: 'none' };
+}

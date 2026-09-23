@@ -11,6 +11,7 @@ import {
   type RgbaImage,
 } from './screenshot-comparator';
 import manifest from './fixtures/rasterizer-noise.json';
+import frozenManifest from './fixtures/screenshot-comparator/noise.json';
 
 /** The screenshot acceptance contract, held to the pure comparator.
  *
@@ -28,6 +29,13 @@ const e2e = new URL('./e2e/', import.meta.url);
 const snapshotDirectories = readdirSync(e2e)
   .filter(entry => entry.endsWith('.spec.ts-snapshots'))
   .map(entry => new URL(`${entry}/`, e2e));
+/** The comparator's own contract is proven against frozen fixtures: three
+ * earlier Settings references and the rasterizer noise CI measured on two of
+ * them. They are copies, not live references, so a product change to a live
+ * screenshot never silently rewrites the comparator's evidence. */
+const comparatorPolicy = frozenManifest as unknown as NoisePolicy;
+const frozen = new URL('./fixtures/screenshot-comparator/', import.meta.url);
+const fixture = (name: string): RgbaImage => decodePng(readFileSync(new URL(name, frozen)));
 const NARROW = 'settings-agent-narrow-dark-linux.png';
 const INVENTORY = 'settings-inventory-light-linux.png';
 const GENERAL = 'settings-general-dark-linux.png';
@@ -54,9 +62,9 @@ const nudge = (image: RgbaImage, x: number, y: number, delta: number) => {
     before[3],
   ] as Rgba);
 };
-const compare = (actual: RgbaImage, referenceName: string, expected = reference(referenceName), policy = noisePolicy) =>
+const compare = (actual: RgbaImage, referenceName: string, expected = fixture(referenceName), policy = comparatorPolicy) =>
   compareScreenshot({ referenceName, expected, actual, noisePolicy: policy });
-const entryOf = (referenceName: string) => noisePolicy.find(entry => entry.reference === referenceName)!;
+const entryOf = (referenceName: string) => comparatorPolicy.find(entry => entry.reference === referenceName)!;
 const cells = (region: NoiseRegion): [number, number][] => {
   const found: [number, number][] = [];
   for (let y = region.y; y < region.y + region.height; y++)
@@ -64,12 +72,15 @@ const cells = (region: NoiseRegion): [number, number][] => {
   return found;
 };
 
-it('the noise manifest is measured evidence bound to bounded, disjoint regions', () => {
-  expect(noisePolicy.length).toBeGreaterThan(0);
-  for (const entry of noisePolicy) {
+it.each([
+  ['live', noisePolicy, reference],
+  ['frozen comparator', comparatorPolicy, fixture],
+] as const)('the %s noise manifest is measured evidence bound to bounded, disjoint regions', (_label, policy, image_) => {
+  expect(policy.length).toBeGreaterThan(0);
+  for (const entry of policy) {
     expect(entry.evidence).toBeTruthy();
     expect(entry.regions.length).toBeGreaterThan(0);
-    const image = reference(entry.reference);
+    const image = image_(entry.reference);
     for (const region of entry.regions) {
       expect(region.label).toBeTruthy();
       expect(region.width).toBeGreaterThan(0);
@@ -106,7 +117,7 @@ it('the noise manifest is measured evidence bound to bounded, disjoint regions',
 
 it('A: an exact baseline passes with and without a noise policy', () => {
   for (const name of [NARROW, INVENTORY, GENERAL]) {
-    const expected = reference(name);
+    const expected = fixture(name);
     const result = compare(copy(expected), name);
     expect(result.ok).toBe(true);
     expect(result.totalChanged).toBe(0);
@@ -114,10 +125,13 @@ it('A: an exact baseline passes with and without a noise policy', () => {
   }
 });
 
-it.each(noisePolicy.map(entry => [entry.reference, entry] as const))(
+it.each([
+  ...noisePolicy.map(entry => [entry.reference, entry, reference(entry.reference), noisePolicy] as const),
+  ...comparatorPolicy.map(entry => [`frozen ${entry.reference}`, entry, fixture(entry.reference), comparatorPolicy] as const),
+])(
   'B: the recorded rasterizer noise of %s passes, and only the registered policy accepts it',
-  (name, entry) => {
-    const expected = reference(name);
+  (_label, entry, expected, policy) => {
+    const name = entry.reference;
     const actual = copy(expected);
     for (const [x, y, before, after] of entry.pixels as MeasuredNoisePixel[]) {
       // The manifest describes exactly this reference; a changed reference must
@@ -125,7 +139,7 @@ it.each(noisePolicy.map(entry => [entry.reference, entry] as const))(
       expect(pixel(expected, x, y)).toEqual(before);
       paint(actual, x, y, after);
     }
-    const result = compare(actual, name);
+    const result = compare(actual, name, expected, policy);
     expect(result.ok).toBe(true);
     expect(result.totalChanged).toBe((entry.pixels as MeasuredNoisePixel[]).length);
     expect(result.changedOutsideRegions).toBe(0);
@@ -136,7 +150,7 @@ it.each(noisePolicy.map(entry => [entry.reference, entry] as const))(
 );
 
 it('C: noise may move to unrecorded coordinates inside its approved region, within both bounds', () => {
-  const expected = reference(NARROW);
+  const expected = fixture(NARROW);
   const recorded = new Set((entryOf(NARROW).pixels as MeasuredNoisePixel[]).map(([x, y]) => `${x},${y}`));
   const region = entryOf(NARROW).regions[0]; // 9x3 corner cell, budget 9, delta bound 3
   const candidates = cells(region).filter(([x, y]) => !recorded.has(`${x},${y}`));
@@ -148,7 +162,7 @@ it('C: noise may move to unrecorded coordinates inside its approved region, with
   expect(result.changedOutsideRegions).toBe(0);
   expect(result.regions[0].changedPixels).toBe(8);
   // The same freedom inside the light Settings evidence regions.
-  const light = reference(INVENTORY);
+  const light = fixture(INVENTORY);
   const lightRecorded = new Set((entryOf(INVENTORY).pixels as MeasuredNoisePixel[]).map(([x, y]) => `${x},${y}`));
   const cog = entryOf(INVENTORY).regions[0]; // budget 17, delta bound 7
   const cogCandidates = cells(cog).filter(([x, y]) => !lightRecorded.has(`${x},${y}`));
@@ -160,7 +174,7 @@ it('C: noise may move to unrecorded coordinates inside its approved region, with
 });
 
 it('D: the same low-amplitude change outside every approved region fails', () => {
-  const expected = reference(NARROW);
+  const expected = fixture(NARROW);
   expect(pixel(expected, 200, 700)).toEqual([53, 54, 56, 255]); // flat panel, far from any edge
   for (const delta of [1, 2, 3, 7]) {
     const actual = copy(expected);
@@ -172,7 +186,7 @@ it('D: the same low-amplitude change outside every approved region fails', () =>
   }
   // The measured tolerated magnitude, applied to a flat panel pixel of the
   // light reference, outside its registered cog/corner regions.
-  const light = reference(INVENTORY);
+  const light = fixture(INVENTORY);
   expect(pixel(light, 400, 400)).toEqual([255, 255, 255, 255]);
   const shifted = copy(light);
   nudge(shifted, 400, 400, 7);
@@ -181,14 +195,14 @@ it('D: the same low-amplitude change outside every approved region fails', () =>
   expect(lightResult.changedOutsideRegions).toBe(1);
   expect(lightResult.maxObservedDelta).toBe(7);
   // A reference with no manifest entry is strict: one changed pixel fails.
-  const strict = copy(reference(GENERAL));
+  const strict = copy(fixture(GENERAL));
   nudge(strict, 400, 400, 1);
   const strictResult = compare(strict, GENERAL);
   expect(strictResult.ok).toBe(false);
   expect(strictResult.report).toContain('no noise regions are registered');
   // Reference-locality: the inventory evidence gives an unrelated screenshot
   // zero tolerance, even at the exact approved coordinates and delta.
-  const unrelated = copy(reference(GENERAL));
+  const unrelated = copy(fixture(GENERAL));
   const inventoryEntry = entryOf(INVENTORY);
   for (const [x, y] of (inventoryEntry.pixels as MeasuredNoisePixel[]).map(([x, y]) => [x, y] as const))
     nudge(unrelated, x, y, inventoryEntry.regions.find(r => x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)!.maxChannelDelta);
@@ -198,7 +212,7 @@ it('D: the same low-amplitude change outside every approved region fails', () =>
 });
 
 it('E: a large-area RGB +7 regression fails (the defect the old global threshold accepted)', () => {
-  const expected = reference(NARROW);
+  const expected = fixture(NARROW);
   // A 228x252 flat panel rectangle, far from every approved noise region.
   const actual = copy(expected);
   let flat = 0;
@@ -209,7 +223,7 @@ it('E: a large-area RGB +7 regression fails (the defect the old global threshold
       nudge(actual, x, y, 7);
     }
   expect(flat).toBe(228 * 252);
-  const result = compare(actual, NARROW, expected, noisePolicy);
+  const result = compare(actual, NARROW, expected, comparatorPolicy);
   // The removed contract (per-pixel threshold 0.027, maxDiffPixels 0)
   // classified every one of these 7-level shifts as identical and passed.
   expect(result.totalChanged).toBeGreaterThanOrEqual(50_000);
@@ -217,7 +231,7 @@ it('E: a large-area RGB +7 regression fails (the defect the old global threshold
   expect(result.ok).toBe(false);
   expect(result.firstUnexpected.length).toBeLessThanOrEqual(10);
   // Failure artifacts stay bounded and mark the unexpected area red.
-  const diffed = compareScreenshot({ referenceName: NARROW, expected, actual, noisePolicy, renderDiff: true });
+  const diffed = compareScreenshot({ referenceName: NARROW, expected, actual, noisePolicy: comparatorPolicy, renderDiff: true });
   expect(diffed.ok).toBe(false);
   expect(diffed.diff).toBeDefined();
   expect(diffed.diff!.width).toBe(expected.width);
@@ -225,7 +239,7 @@ it('E: a large-area RGB +7 regression fails (the defect the old global threshold
 });
 
 it('F: a whole-image low-amplitude shift fails (the defect the old global threshold accepted)', () => {
-  const expected = reference(INVENTORY);
+  const expected = fixture(INVENTORY);
   const actual = copy(expected);
   let shiftable = 0;
   for (let y = 0; y < expected.height; y++)
@@ -246,7 +260,7 @@ it('F: a whole-image low-amplitude shift fails (the defect the old global thresh
 });
 
 it('G: a changed-pixel count beyond an approved region budget fails', () => {
-  const expected = reference(NARROW);
+  const expected = fixture(NARROW);
   const region = entryOf(NARROW).regions[0]; // budget 9, delta bound 3
   const recorded = new Set((entryOf(NARROW).pixels as MeasuredNoisePixel[]).map(([x, y]) => `${x},${y}`));
   const candidates = cells(region).filter(([x, y]) => !recorded.has(`${x},${y}`));
@@ -266,7 +280,7 @@ it('G: a changed-pixel count beyond an approved region budget fails', () => {
 });
 
 it('H: a channel delta beyond an approved region bound fails', () => {
-  const narrow = reference(NARROW);
+  const narrow = fixture(NARROW);
   const corner = entryOf(NARROW).regions[0]; // delta bound 3
   const overDelta = copy(narrow);
   nudge(overDelta, corner.x, corner.y, corner.maxChannelDelta + 1);
@@ -276,7 +290,7 @@ it('H: a channel delta beyond an approved region bound fails', () => {
   expect(narrowResult.report).toContain(`exceeds the approved bound ${corner.maxChannelDelta}`);
   // Even with an in-budget pixel count, an arbitrary colour change inside the
   // coordinate box is not rasterizer noise.
-  const light = reference(INVENTORY);
+  const light = fixture(INVENTORY);
   const cog = entryOf(INVENTORY).regions[0]; // delta bound 7
   const lightOver = copy(light);
   nudge(lightOver, cog.x, cog.y, cog.maxChannelDelta + 1);
@@ -286,7 +300,7 @@ it('H: a channel delta beyond an approved region bound fails', () => {
 });
 
 it('I: a one-pixel layout shift fails', () => {
-  const expected = reference(GENERAL);
+  const expected = fixture(GENERAL);
   const actual = copy(expected);
   for (let y = 0; y < expected.height; y++)
     for (let x = expected.width - 1; x > 0; x--) paint(actual, x, y, pixel(expected, x - 1, y));
@@ -294,7 +308,7 @@ it('I: a one-pixel layout shift fails', () => {
 });
 
 it('J: a missing element fails', () => {
-  const expected = reference(GENERAL);
+  const expected = fixture(GENERAL);
   const actual = copy(expected);
   // Paint the "Runtime · General" heading out with the surface behind it.
   const surface = pixel(expected, 205, 415);
@@ -309,8 +323,8 @@ it('J: a missing element fails', () => {
 });
 
 it('K: a dimension change fails, for strict and noise-policy references alike', () => {
-  const expected = reference(GENERAL);
-  const narrow = reference(NARROW);
+  const expected = fixture(GENERAL);
+  const narrow = fixture(NARROW);
   const cropWidth = (image: RgbaImage, width: number): RgbaImage => {
     const data = new Uint8Array(width * image.height * 4);
     for (let y = 0; y < image.height; y++) data.set(image.data.subarray(y * image.width * 4, y * image.width * 4 + width * 4), y * width * 4);

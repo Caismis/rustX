@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
+import { choose } from './shell-actions';
 for (const mode of ['empty', 'preview', 'named', 'delete', 'other-uncertain', 'background'] as const) test(`Sidebar-only Session surface: ${mode}`, async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -64,10 +65,10 @@ test('Harness shell reference states and presentation-only navigation', async ({
   await page.getByLabel('Search Session metadata').fill('Session');
   await expectStableScreenshot(page, 'workspace-session-browser.png');
   await page.getByRole('button', { name: 'Clear search' }).click();
+  // Global Settings opens at General, which holds Appearance.
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('button', { name: 'Appearance', exact: true }).click();
   await expectStableScreenshot(page, 'settings-shell-light.png');
-  await page.getByLabel('Theme', { exact: true }).selectOption('dark');
+  await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Theme', 'Dark');
   await expectStableScreenshot(page, 'settings-shell-dark.png');
   await page.getByRole('button', { name: 'Close Settings' }).click();
   await expectStableScreenshot(page, 'desktop-expanded-dark.png');
@@ -78,7 +79,6 @@ test('Harness shell reference states and presentation-only navigation', async ({
   await page.getByRole('button', { name: 'Expand Sidebar' }).click();
   await expectStableScreenshot(page, 'mobile-expanded-dark.png');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('button', { name: 'Appearance', exact: true }).click();
   await expectStableScreenshot(page, 'mobile-settings-dark.png');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

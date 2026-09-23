@@ -43,7 +43,9 @@ it('cold grouping and Workspace selection issue no attach, cancel, unload, setti
   expect(host.resolveWorkspace).not.toHaveBeenCalled(); expect(server.loaded.size).toBe(0);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(server.coldLoads.get('A')).toBe(1);
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B' })));
+  // Session focus changes beneath the Settings modal, which hides the page it
+  // covers from the accessibility tree.
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B', hidden: true })));
   expect(server.loaded.has('A')).toBe(true);
   expect(methods()).not.toContain('session/unload'); expect(methods()).not.toContain('turn/cancel');
 });
@@ -420,7 +422,9 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
   await failedSessionConfiguration([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/A' })));
   expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B' })));
+  // Session focus changes beneath the Settings modal, which hides the page it
+  // covers from the accessibility tree.
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B', hidden: true })));
   expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
 });
 

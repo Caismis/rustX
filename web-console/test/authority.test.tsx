@@ -101,14 +101,15 @@ it('authority replacement clears open/focused browser Session A before B can reu
   expect(b.requests.some(row => row.request.method === 'session/attach')).toBe(false);
   await act(async () => owner.disconnect());
 });
-it('normal Settings opens Overview, while recovery Show details opens Connection', async () => {
+it('normal Settings opens General, while recovery Show details opens the Advanced Connection sub-surface', async () => {
   const { a, client, owner } = pair();
   render(<App client={client} connection={owner} workspaceHost={a.workspaceHost} />);
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  expect(screen.getByRole('button', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
+  expect(screen.getByRole('tab', { name: 'General' }).getAttribute('aria-selected')).toBe('true');
   fireEvent.click(screen.getByRole('button', { name: 'Close Settings' }));
   fireEvent.click(screen.getByRole('button', { name: 'Show details' }));
-  expect(screen.getByRole('button', { name: 'Connection' }).getAttribute('aria-current')).toBe('page');
+  expect(screen.getByRole('tab', { name: 'Advanced' }).getAttribute('aria-selected')).toBe('true');
+  expect(screen.getByRole('region', { name: 'Connection Settings' })).toBeTruthy();
 });
 it('interaction uncertainty cannot lock the same Session/interaction on another authority', async () => {
   const { a, b, client, owner } = pair();

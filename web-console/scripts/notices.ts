@@ -10,13 +10,32 @@ function locate(from: string, name: string): string {
   }
 }
 const packages = new Map<string, string>();
+/** Reviewed packages that declare a license but publish no license file. Each
+ * is pinned to one exact version and one declared license, so an upgrade or a
+ * license change fails closed instead of inheriting this record. */
+const declaredOnly: Record<string, { license: string; notice: string }> = {
+  'client-only 0.0.1': {
+    license: 'MIT',
+    notice: 'License: MIT, as declared in the package manifest; the published package contains no license file.\n'
+      + 'An empty marker module (index.js is empty; error.js throws a fixed message) published by the React project, https://github.com/facebook/react. Required by react-aria-components.',
+  },
+};
 function visit(file: string) {
   const pkg = JSON.parse(readFileSync(file, 'utf8'));
   const key = `${pkg.name} ${pkg.version}`;
   if (packages.has(key)) return;
   const files = readdirSync(dirname(file)).filter(name => /^(license|licence|copying|notice)(\.|$)/i.test(name)).sort();
+  const declared = declaredOnly[key];
+  if (!files.length && declared) {
+    if (pkg.license !== declared.license) throw new Error(`Declared license changed: ${key}`);
+    packages.set(key, declared.notice);
+    for (const name of Object.keys(pkg.dependencies ?? {})) visit(locate(dirname(file), name));
+    return;
+  }
   if (!files.length) throw new Error(`Missing license text: ${key}`);
-  packages.set(key, files.map(name => readFileSync(join(dirname(file), name), 'utf8')).join('\n'));
+  // License text is reproduced verbatim apart from line endings: a CRLF file
+  // (tslib's) is normalized so the notice is one consistent text file.
+  packages.set(key, files.map(name => readFileSync(join(dirname(file), name), 'utf8').replace(/\r\n/g, '\n')).join('\n'));
   for (const name of Object.keys(pkg.dependencies ?? {})) visit(locate(dirname(file), name));
 }
 const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));

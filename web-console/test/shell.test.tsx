@@ -26,10 +26,14 @@ it('collapse, rail expansion, Inspector and Settings appearance gestures emit no
   fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
   expect(screen.getByRole('complementary', { name: 'Developer inspector' }).hasAttribute('data-sidebar-right-open')).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
-  fireEvent.change(screen.getByLabelText('Theme'), { target: { value: 'dark' } });
+  // Appearance lives on General, the page global Settings opens at.
+  const theme = (option: string) => {
+    fireEvent.click(screen.getByRole('button', { name: (name: string) => name.endsWith('Theme') }));
+    fireEvent.click(screen.getByRole('option', { name: option }));
+  };
+  theme('Dark');
   expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(true);
-  fireEvent.change(screen.getByLabelText('Theme'), { target: { value: 'light' } });
+  theme('Light');
   expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(false);
   expect(server.requests.slice(baseline).every(row => row.request.method === 'configuration/sourcesRead')).toBe(true);
   expect(JSON.stringify(localStorage)).not.toMatch(/workspaceId|cwd|snapshot|interaction/);

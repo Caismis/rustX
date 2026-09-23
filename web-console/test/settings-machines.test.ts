@@ -2945,7 +2945,7 @@ it.each(['resolved', 'failed'] as const)('R14 a stale owner lookup that %s after
   gate.resolve(outcome === 'resolved' ? { kind: 'resolved', id: 'wA', displayName: 'Workspace A' } : { kind: 'failed', message: 'stale owner lookup failed' });
   await flush();
   expect(actor.getSnapshot().context.target).toEqual(userSettingsTarget);
-  expect(actor.getSnapshot().context.section).toBe('overview');
+  expect(actor.getSnapshot().context.page).toBe('general');
   expect(actor.getSnapshot().context.error).toBe('');
   expect(lookup).toHaveBeenCalledTimes(1);
 });
@@ -2960,7 +2960,7 @@ it('R15 a lookup completing under a replaced authority mutates nothing', async (
   actor.send({ type: 'RETIRE' });
   gate.resolve({ kind: 'retired' });
   await flush();
-  expect(actor.getSnapshot().context.section).toBeUndefined();
+  expect(actor.getSnapshot().context.page).toBeUndefined();
   expect(actor.getSnapshot().context.error).toBe('');
   expect(actor.getSnapshot().context.target).toEqual(userSettingsTarget);
 });
@@ -2970,7 +2970,9 @@ it('R15 a current lookup still commits the exact registered owning Workspace', a
   actor.send({ type: 'OPEN.OWNER', directory: '/workspace/A' });
   await flush();
   expect(actor.getSnapshot().context.target).toEqual(workspaceSettingsTarget('wA', 'Workspace A'));
-  expect(actor.getSnapshot().context.section).toBe('overview');
+  // A Workspace surface is constrained: it has no General page and lands on Models.
+  expect(actor.getSnapshot().context.page).toBe('models');
+  expect(actor.getSnapshot().context.focus).toEqual({});
 });
 
 it('R15 an unregistered owning Workspace reports explicitly and opens nothing', async () => {
@@ -2978,6 +2980,60 @@ it('R15 an unregistered owning Workspace reports explicitly and opens nothing', 
   actor.send({ type: 'OPEN.OWNER', directory: '/workspace/revoked' });
   await flush();
   expect(actor.getSnapshot().context.error).toContain('/workspace/revoked is not registered');
-  expect(actor.getSnapshot().context.section).toBeUndefined();
+  expect(actor.getSnapshot().context.page).toBeUndefined();
   expect(actor.getSnapshot().context.target).toEqual(userSettingsTarget);
+});
+
+// ── #392 page and focus navigation ──────────────────────────────────────────
+
+it('S2-01 User Settings lands on General and a Workspace lands on its first constrained page', () => {
+  const actor = navigationActor(async () => ({ kind: 'retired' }));
+  actor.send({ type: 'OPEN', target: userSettingsTarget });
+  expect(actor.getSnapshot().context.page).toBe('general');
+  actor.send({ type: 'OPEN', target: workspaceSettingsTarget('wA', 'Workspace A') });
+  expect(actor.getSnapshot().context.page).toBe('models');
+});
+
+it('S2-09 each page keeps its own detail focus across page changes, and a new target starts with none', () => {
+  const actor = navigationActor(async () => ({ kind: 'retired' }));
+  actor.send({ type: 'OPEN', target: userSettingsTarget });
+  actor.send({ type: 'SELECT', page: 'models' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'deepseek' } });
+  actor.send({ type: 'SELECT', page: 'extensions' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'mcp', name: 'search' } });
+  actor.send({ type: 'SELECT', page: 'models' });
+  expect(actor.getSnapshot().context.focus).toEqual({
+    models: { kind: 'provider', id: 'deepseek' },
+    extensions: { kind: 'extension', family: 'mcp', name: 'search' },
+  });
+  // Leaving a detail for its list clears only that page's focus.
+  actor.send({ type: 'FOCUS' });
+  expect(actor.getSnapshot().context.focus).toEqual({ extensions: { kind: 'extension', family: 'mcp', name: 'search' } });
+  actor.send({ type: 'OPEN', target: workspaceSettingsTarget('wA', 'Workspace A') });
+  expect(actor.getSnapshot().context.focus).toEqual({});
+});
+
+it('S2-01 Connection is the Advanced sub-surface of the global client, never a seventh page', () => {
+  const actor = navigationActor(async () => ({ kind: 'retired' }));
+  actor.send({ type: 'OPEN', target: userSettingsTarget });
+  actor.send({ type: 'SELECT', page: 'models' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'deepseek' } });
+  actor.send({ type: 'OPEN.CONNECTION' });
+  expect(actor.getSnapshot().context.page).toBe('advanced');
+  expect(actor.getSnapshot().context.focus).toEqual({ models: { kind: 'provider', id: 'deepseek' }, advanced: { kind: 'connection' } });
+  // From a Workspace surface, Connection retargets to the global client and
+  // carries none of the Workspace's focus with it.
+  actor.send({ type: 'OPEN', target: workspaceSettingsTarget('wA', 'Workspace A') });
+  actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'workspace-only' } });
+  actor.send({ type: 'OPEN.CONNECTION' });
+  expect(actor.getSnapshot().context.target).toEqual(userSettingsTarget);
+  expect(actor.getSnapshot().context.focus).toEqual({ advanced: { kind: 'connection' } });
+});
+
+it('S2-01 a page cannot be selected or focused while Settings is closed', () => {
+  const actor = navigationActor(async () => ({ kind: 'retired' }));
+  actor.send({ type: 'SELECT', page: 'models' });
+  actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'deepseek' } });
+  expect(actor.getSnapshot().context.page).toBeUndefined();
+  expect(actor.getSnapshot().context.focus).toEqual({});
 });

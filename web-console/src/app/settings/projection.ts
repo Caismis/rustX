@@ -25,6 +25,64 @@ export function settingsTargetLabel(target: SettingsTarget): string {
   return target.kind === 'user' ? 'User Settings' : `Workspace Settings — ${target.displayName}`;
 }
 
+/** The six product pages Settings is organized around.
+ *
+ * They are user tasks, not native semantic-unit names: a user configures a
+ * Provider, chooses a default model, writes guidance, grants Tool access or
+ * inspects an extension without ever meeting `root_model`, `native_tools` or
+ * `source_tools`. Native identities, exact CAS writes and application facts are
+ * unchanged underneath — only what the browser groups them into is new. */
+export type SettingsPage = 'general' | 'models' | 'agent' | 'tools' | 'extensions' | 'advanced';
+export const globalSettingsPages: readonly SettingsPage[] = ['general', 'models', 'agent', 'tools', 'extensions', 'advanced'];
+export function settingsPageLabel(page: SettingsPage): string {
+  return page === 'general' ? 'General'
+    : page === 'models' ? 'Models'
+      : page === 'agent' ? 'Agent'
+        : page === 'tools' ? 'Tools & Permissions'
+          : page === 'extensions' ? 'Extensions' : 'Advanced';
+}
+/** The pages one exact owner authorizes.
+ *
+ * Workspace Settings is a constrained override surface, not a second copy of
+ * global Settings: General holds client-owned preferences that no native source
+ * authors at all, so a Workspace has no General page rather than an empty one.
+ * The constrained page set is derived here, once, from the owner — never
+ * rediscovered by a page, a card or a test. */
+export function settingsPages(target: SettingsTarget): readonly SettingsPage[] {
+  return target.kind === 'user' ? globalSettingsPages : globalSettingsPages.filter(page => page !== 'general');
+}
+/** The page an owner's Settings opens at: the first page it authorizes. */
+export function settingsLanding(target: SettingsTarget): SettingsPage {
+  return settingsPages(target)[0];
+}
+
+/** Every resource kind the one Extensions surface manages. `native` is the
+ * closed set of native extensions configured through `rustx.toml` semantic
+ * units rather than through a resource document of their own. */
+export type ExtensionFamily = ResourceFamily | 'native';
+export const extensionFamilies: readonly ExtensionFamily[] = ['mcp', 'skill', 'agent', 'workflow', 'managed_python', 'native'];
+export function extensionFamilyLabel(family: ExtensionFamily): string {
+  return family === 'mcp' ? 'MCP'
+    : family === 'skill' ? 'Skill'
+      : family === 'agent' ? 'Agent'
+        : family === 'workflow' ? 'Workflow'
+          : family === 'managed_python' ? 'Managed Python' : 'Native';
+}
+
+/** The secondary focus of one primary page.
+ *
+ * This is presentation navigation with exactly one owner, the Settings
+ * navigation machine. It carries identities only: no draft, no CAS base and no
+ * mutation lives here, so focusing, leaving and refocusing a detail can never
+ * create, migrate or discard editing intent. */
+export type SettingsFocus =
+  | { kind: 'connection' }
+  | { kind: 'provider'; id: string }
+  /** `provider` records which Provider detail the Model was opened from, so
+   * leaving the Model returns to that Provider rather than to the bare list. */
+  | { kind: 'model'; id: string; provider?: string }
+  | { kind: 'extension'; family: ExtensionFamily; name: string };
+
 /** The native application scope this source target publishes under, exactly as
  * `SourceTarget::application_scope` names it. Application versions are u64
  * counters comparable only inside one scope, authority and connection lifetime. */

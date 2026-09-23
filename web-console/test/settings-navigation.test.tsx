@@ -53,7 +53,9 @@ async function mountOwnerFailure() {
   return {
     startLookup() {
       hold = true; held = deferred<WorkspaceCatalog>();
-      fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/A' }));
+      // Some cases take this decision while the Settings modal covers the
+      // Session surface, which the modal hides from the accessibility tree.
+      fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/A', hidden: true }));
       return held;
     },
   };
@@ -143,6 +145,14 @@ it('navigation success: a delayed successful lookup is fenced by a newer navigat
   expect(screen.queryByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeNull();
 });
 
+/** Connection is the Advanced sub-surface of the global client: the Advanced
+ * page is selected and the Connection form is what it shows. */
+function connectionShown() {
+  return screen.getByRole('tab', { name: 'Advanced' }).getAttribute('aria-selected') === 'true'
+    && !!screen.queryByRole('region', { name: 'Connection Settings' });
+}
+const selected = (name: string) => screen.getByRole('tab', { name }).getAttribute('aria-selected');
+
 /** Reach the disconnected recovery surface with an owner lookup still in
  * flight. Leaving the Session view and losing the transport are not Settings
  * navigation decisions, so neither of them fences the lookup — only the
@@ -154,7 +164,7 @@ async function recoveryWithStaleLookup() {
   await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Close all views' })); });
   await act(async () => { await server.client.disconnect(); });
   fireEvent.click(await screen.findByRole('button', { name: 'Show details' }));
-  expect(screen.getByRole('button', { name: 'Connection' }).getAttribute('aria-current')).toBe('page');
+  expect(connectionShown()).toBe(true);
   return held;
 }
 
@@ -163,8 +173,8 @@ it('navigation E: recovery Show details fences a delayed successful owner lookup
   await release(held, true);
   // Connection Settings remains the selected Settings surface, and the late
   // success can neither retarget it to the owning Workspace nor reopen it.
-  expect(screen.getByRole('button', { name: 'Connection' }).getAttribute('aria-current')).toBe('page');
-  fireEvent.click(screen.getByRole('button', { name: 'Overview' }));
+  expect(connectionShown()).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Back to Advanced' }));
   expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
   expect(screen.queryByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeNull();
 });
@@ -172,15 +182,15 @@ it('navigation E: recovery Show details fences a delayed successful owner lookup
 it('navigation E: recovery Show details fences a stale owner-lookup failure', async () => {
   const held = await recoveryWithStaleLookup();
   await release(held);
-  expect(screen.getByRole('button', { name: 'Connection' }).getAttribute('aria-current')).toBe('page');
+  expect(connectionShown()).toBe(true);
   expect(screen.queryByText(/stale owner lookup failed/)).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'Overview' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Back to Advanced' }));
   expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
 });
 
-// One owner for the displayed Settings section: the navigation machine. A
+// One owner for the displayed Settings page: the navigation machine. A
 // top-level decision taken while the dialog stays mounted is what the dialog
-// shows, whatever section the user had selected inside it.
+// shows, whatever page the user had selected inside it.
 
 it('navigation F: a Connection decision while Settings stays mounted shows Connection', async () => {
   await mountOwnerFailure();
@@ -189,23 +199,27 @@ it('navigation F: a Connection decision while Settings stays mounted shows Conne
   await act(async () => { await server.client.disconnect(); });
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   await screen.findByRole('heading', { name: 'User Settings' });
-  fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
-  expect(screen.getByRole('button', { name: 'Tools' }).getAttribute('aria-current')).toBe('page');
+  fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
+  expect(selected('Tools & Permissions')).toBe('true');
   // The dialog is still mounted when the recovery surface decides otherwise.
-  fireEvent.click(screen.getByRole('button', { name: 'Show details' }));
-  expect(screen.getByRole('button', { name: 'Connection' }).getAttribute('aria-current')).toBe('page');
-  expect(screen.getByRole('button', { name: 'Tools' }).getAttribute('aria-current')).toBeNull();
+  // The modal hides the page behind it from the accessibility tree, so the
+  // decision is taken on the recovery button the dialog covers.
+  fireEvent.click(screen.getByRole('button', { name: 'Show details', hidden: true }));
+  expect(connectionShown()).toBe(true);
+  expect(selected('Tools & Permissions')).toBe('false');
 });
 
-it('navigation F: an owning-Workspace decision while Settings stays mounted opens its Overview', async () => {
+it('navigation F: an owning-Workspace decision while Settings stays mounted opens its landing page', async () => {
   const { startLookup } = await mountOwnerFailure();
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   await screen.findByRole('heading', { name: 'User Settings' });
-  fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
-  expect(screen.getByRole('button', { name: 'Tools' }).getAttribute('aria-current')).toBe('page');
+  fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
+  expect(selected('Tools & Permissions')).toBe('true');
   const held = startLookup();
   await release(held, true);
   expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
-  expect(screen.getByRole('button', { name: 'Tools' }).getAttribute('aria-current')).toBeNull();
+  // A Workspace surface is constrained: no General page, and it lands on Models.
+  expect(screen.queryByRole('tab', { name: 'General' })).toBeNull();
+  expect(selected('Models')).toBe('true');
+  expect(selected('Tools & Permissions')).toBe('false');
 });

@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 export async function closeSessionView(page: Page, id: string) {
   await page.locator(`button[data-session-id="${id}"]`).hover();
   await page.locator(`button[data-session-actions="${id}"]`).click();
@@ -23,16 +23,55 @@ export async function openWorkspaceSettings(page: Page, label: string) {
 }
 export async function connectionAction(page: Page, action: 'Disconnect' | 'Reconnect') {
   const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-  const previous = await settings.isVisible() ? await settings.locator('[aria-current="page"]').innerText() : undefined;
+  const previous = await settings.isVisible() ? await selectedSettingsPage(page) : undefined;
   await openConnectionSettings(page);
   await page.getByRole('region', { name: 'Connection Settings', exact: true }).getByRole('button', { name: action, exact: true }).click();
   if (action === 'Reconnect') await expect(page.locator('.connection-status')).toHaveText('Connected');
-  if (previous) await settings.getByRole('button', { name: previous, exact: true }).click();
-  else await closeSettings(page);
+  if (previous) {
+    await settings.getByRole('button', { name: 'Back to Advanced', exact: true }).click();
+    await openSettingsPage(page, previous);
+  } else await closeSettings(page);
 }
+/** Connection is the Advanced sub-surface of the global client's Settings. */
 export async function openConnectionSettings(page: Page) {
-  if (!await page.getByRole('dialog', { name: 'Settings', exact: true }).isVisible()) await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('button', { name: 'Connection', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  if (!await settings.isVisible()) await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  if (!await settings.getByRole('region', { name: 'Connection Settings', exact: true }).isVisible()) {
+    await openSettingsPage(page, 'Advanced');
+    await settings.getByRole('button', { name: 'Connection', exact: true }).click();
+  }
+}
+/** The primary Settings page currently selected. */
+export async function selectedSettingsPage(page: Page): Promise<string> {
+  return page.getByRole('tablist', { name: 'Settings pages', exact: true }).getByRole('tab', { selected: true }).innerText();
+}
+/** Select one of the six primary Settings pages through its tab.
+ *
+ * On a narrow viewport the tabs are a horizontal scroll strip. A user can only
+ * press a tab they have scrolled to, so the strip is scrolled first and the
+ * frame that dispatches its `scroll` event is allowed to run: React Aria
+ * restores the strip's last dispatched scroll position when focus enters it,
+ * and pressing in the same task as a programmatic scroll would race that. */
+export async function openSettingsPage(page: Page, name: string) {
+  const tab = page.getByRole('tablist', { name: 'Settings pages', exact: true }).getByRole('tab', { name, exact: true });
+  await tab.scrollIntoViewIfNeeded();
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await tab.click();
+  await expect(tab).toHaveAttribute('aria-selected', 'true');
+}
+/** Pick a value from a React Aria Select. Its trigger is named by its current
+ * value followed by its label, and its listbox opens in a popover. */
+export async function choose(scope: Locator, label: string, option: string) {
+  await scope.getByRole('button', { name: new RegExp(`${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }).click();
+  await scope.page().getByRole('listbox').getByRole('option', { name: option, exact: true }).click();
+}
+/** Complete a destructive action through its confirmation dialog. */
+export async function confirmSettingsAction(page: Page, label: string) {
+  await page.getByRole('dialog', { name: 'Settings', exact: true }).getByRole('button', { name: label, exact: true }).click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: label, exact: true }).click();
+  await expect(dialog).toHaveCount(0);
 }
 export async function connectRemote(page: Page, endpoint: string, token: string) {
   await openConnectionSettings(page);

@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, connectionAction, chooseWorkspace, closeSettings, openWorkspaceSettings } from './shell-actions';
+import { connectRemote, connectionAction, chooseWorkspace, closeSettings, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
 
 test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorization and lost-write recovery', async ({ page }) => {
@@ -17,29 +17,28 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    expect((await sessions()).sessions).toEqual([]);
    await page.getByRole('button', { name: 'Settings', exact: true }).click();
    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+   await openSettingsPage(page, 'Advanced');
    await expect(settings.getByText(/Revision:/)).toBeVisible();
-   await settings.getByRole('button', { name: 'General', exact: true }).click();
    await settings.getByLabel('max_connections', { exact: true }).fill('19');
    await settings.getByRole('button', { name: 'Save App Server policy', exact: true }).click();
-   await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();
-   await settings.getByRole('button', { name: 'Server & source diagnostics', exact: true }).click();
+   await expect(settings.getByText('App Server policy saved. Native coordination owns application.')).toBeVisible();
    await expect(settings.getByText('Saved process policy is active.')).toBeVisible();
    const source = await remote.client.call('configuration/sourcesRead', { target: { kind: 'user' } }, 'source_settings');
    expect(source.projection.process_bindings?.max_connections).toBe(19);
    expect(source.projection.workspace).toBeNull();
    await closeSettings(page);
    await openWorkspaceSettings(page, a.displayName);
-   await settings.getByRole('button', { name: 'Tools', exact: true }).click();
+   await openSettingsPage(page, 'Tools & Permissions');
    // The User source authors every Native Tool, so this Workspace displays the
    // native effective value while authoring none of it.
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-   await expect(settings.getByText('Inherited — no Workspace override')).toBeVisible();
+   await expect(settings.getByRole('form', { name: 'Native Tools', exact: true }).getByText('Inherited — no Workspace override')).toBeVisible();
    await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
    // An explicit edit against that displayed value is Workspace A's own draft.
    await settings.getByLabel('read', { exact: true }).uncheck();
    await closeSettings(page);
    await openWorkspaceSettings(page, b.displayName);
-   await settings.getByRole('button', { name: 'Tools', exact: true }).click();
+   await openSettingsPage(page, 'Tools & Permissions');
    // Workspace B is a different target: it still shows the inherited value and
    // never receives Workspace A's draft.
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
@@ -47,11 +46,11 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await settings.getByLabel('write', { exact: true }).uncheck();
    await closeSettings(page);
    await openWorkspaceSettings(page, a.displayName);
-   await settings.getByRole('button', { name: 'Tools', exact: true }).click();
+   await openSettingsPage(page, 'Tools & Permissions');
    await expect(settings.getByLabel('read', { exact: true })).not.toBeChecked();
    await expect(settings.getByLabel('write', { exact: true })).toBeChecked();
    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
-   await expect(settings.getByText(/Source saved. Native coordination/)).toBeVisible();
+   await expect(settings.getByText('Native Tools saved. Native coordination owns application.')).toBeVisible();
    const authored = await f.workspaceHost.host.configureWorkspace(a.id, f.endpoint, { kind: 'read' });
    if (authored.kind !== 'read') throw new Error('expected a read outcome');
    expect(authored.projection.workspace?.authored?.agent?.tools?.builtin).not.toContain('read');
@@ -63,11 +62,11 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    // A revoked target fences the next authored change and retains the draft.
    await settings.getByLabel('read', { exact: true }).check();
    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
-   await expect(settings.getByRole('alert').filter({ hasText: /^WorkspaceHostError: Workspace Host: Error: Unknown/ })).toBeVisible();
+   await expect(settings.getByRole('alert').filter({ hasText: /was not saved\. WorkspaceHostError: Workspace Host: Error: Unknown/ })).toBeVisible();
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
    await closeSettings(page);
    await page.getByRole('button', { name: 'Settings', exact: true }).click();
-   await settings.getByRole('button', { name: 'Tools', exact: true }).click();
+   await openSettingsPage(page, 'Tools & Permissions');
    // A fresh User lifetime carries no draft, so there is nothing to save until
    // an explicit edit changes the authored value.
    await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();

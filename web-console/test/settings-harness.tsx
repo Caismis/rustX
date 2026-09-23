@@ -1,5 +1,5 @@
 import { expect, vi } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createActor } from 'xstate';
 import { useState, type ReactNode } from 'react';
 import type { SourceMutation, SourceSettings } from '../../protocol/app-server/v18';
@@ -7,9 +7,8 @@ import { settingsTargetMachine, type SettingsTargetContext } from '../src/app/se
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
 import { SettingsActorContext } from '../src/app/settings/machines/react';
 import { SourceContext } from '../src/app/settings/source-context';
-import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
+import { settingsLanding, userSettingsTarget, workspaceSettingsTarget, type SettingsFocus, type SettingsPage } from '../src/app/settings/projection';
 import { Settings, type SettingsProps } from '../src/app/settings/Settings';
-import type { SettingsSection } from '../src/app/settings/machines/navigation';
 import { cfg3Source } from './cfg3-data';
 
 /** One acknowledgement that changes no revision, so a sequence of saves in one
@@ -84,9 +83,90 @@ export async function renderEditor(node: ReactNode, options: {
 }
 
 /** `Settings` rendered on its own, outside the product shell. In the product
- * the Settings navigation machine owns the displayed section; here the test
- * surface owns it, exactly as a controlled parent would. */
-export function SettingsSurface(props: Omit<SettingsProps, 'section' | 'onSelect'>) {
-  const [section, setSection] = useState<SettingsSection>('overview');
-  return <Settings {...props} section={section} onSelect={setSection} />;
+ * the Settings navigation machine owns the displayed page and the detail
+ * focused inside it; here the test surface owns both, exactly as a controlled
+ * parent would — including the per-page focus map, so leaving a detail for
+ * another page and returning restores it.
+ *
+ * It opens on the landing page of the exact target, which is the same rule the
+ * navigation machine applies. */
+export function SettingsSurface({ initialPage, ...props }: Omit<SettingsProps, 'page' | 'onSelect' | 'onFocus' | 'focus'> & { initialPage?: SettingsPage }) {
+  const [page, setPage] = useState<SettingsPage>(initialPage ?? settingsLanding(props.target));
+  const [focus, setFocus] = useState<Partial<Record<SettingsPage, SettingsFocus>>>({});
+  return <Settings {...props} page={page} focus={focus[page]} onSelect={setPage}
+    onFocus={next => setFocus(current => {
+      const updated = { ...current };
+      if (next) updated[page] = next; else delete updated[page];
+      return updated;
+    })} />;
+}
+
+/** Move to one primary product page through its actual tab, so a page change
+ * in a test is the same interaction a user performs. */
+export async function openSettingsPage(name: string) {
+  fireEvent.click(screen.getByRole('tab', { name }));
+  await screen.findByRole('tab', { name, selected: true });
+}
+
+/** Open a detail from a resource list through its actual row, so list/detail
+ * navigation in a test is the same interaction a user performs. */
+export async function openResourceRow(name: string) {
+  fireEvent.click(await screen.findByRole('row', { name }));
+}
+
+/** Wait until the open Settings surface holds a current authoritative
+ * observation. Source paths and revisions are diagnostics and live on
+ * Advanced, so readiness is asserted from the lifecycle itself. */
+export async function settingsReady() {
+  await screen.findByText('Authoritative source observed');
+}
+
+/** The primary page currently displayed. */
+export function currentSettingsPage(): string {
+  return screen.getByRole('tab', { selected: true }).textContent ?? '';
+}
+
+/** Native source paths, revisions and raw projections are diagnostics: they
+ * live on Advanced, not on the ordinary product pages. These read them there
+ * and return to the page the test was on, so asserting a revision never
+ * changes what the test is actually exercising. */
+export async function findOnAdvanced(pattern: RegExp) {
+  const previous = currentSettingsPage();
+  if (previous !== 'Advanced') fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
+  const node = await screen.findByText(pattern);
+  if (previous !== 'Advanced') fireEvent.click(screen.getByRole('tab', { name: previous }));
+  return node;
+}
+export function queryOnAdvanced(pattern: RegExp) {
+  const previous = currentSettingsPage();
+  if (previous !== 'Advanced') fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
+  const node = screen.queryByText(pattern);
+  if (previous !== 'Advanced') fireEvent.click(screen.getByRole('tab', { name: previous }));
+  return node;
+}
+
+/** Pick a value from a React Aria Select.
+ *
+ * The trigger's accessible name is its current value followed by its label, and
+ * the listbox opens in a portal outside the form, so the trigger is found in
+ * `scope` and the option globally. */
+export async function chooseOption(label: string, option: string, scope: { getByRole: typeof screen.getByRole } = screen) {
+  fireEvent.click(scope.getByRole('button', { name: (accessible: string) => accessible.endsWith(label) }));
+  fireEvent.click(await screen.findByRole('option', { name: option }));
+}
+
+/** Complete a destructive action through its React Aria confirmation: the
+ * trigger opens the dialog, and only the dialog's own button submits. */
+export async function confirmAction(label: string) {
+  fireEvent.click(screen.getByRole('button', { name: label }));
+  const dialog = await screen.findByRole('alertdialog');
+  fireEvent.click(within(dialog).getByRole('button', { name: label }));
+}
+
+/** Open a destructive confirmation and dismiss it without confirming. */
+export async function cancelAction(label: string) {
+  fireEvent.click(screen.getByRole('button', { name: label }));
+  const dialog = await screen.findByRole('alertdialog');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
 }
