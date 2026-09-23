@@ -285,7 +285,9 @@ fn resource_diagnostics_are_attributed_by_identity_never_by_shared_file() {
             .map(|diagnostic| diagnostic.subject.clone())
             .collect::<Vec<_>>()
     };
-    let mcp = resources.join("mcp.toml");
+    // Native publishes resolved source paths; the temporary directory may be
+    // reached through a symlink (macOS `/var` → `/private/var`).
+    let mcp = std::fs::canonicalize(resources.join("mcp.toml")).unwrap();
     let definition = |name: &str| {
         inventory
             .definitions
