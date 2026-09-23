@@ -12,7 +12,8 @@ import { TypedUnitForm, UnitForm } from '../forms/bridge';
 import { CheckboxList, Names, Selection, nativeTools } from '../forms/controls';
 import { Entries, Strings, Text } from '../forms/fields';
 import { Advanced, Choice } from '../primitives/aria';
-import { documentAuthoring, extensionFamilyLabel, type ExtensionFamily, type SettingsFocus } from '../projection';
+import { documentAuthoring, extensionFamilyLabel, type ExtensionFamily } from '../projection';
+import type { PageFocus } from '../machines/navigation';
 import { ModelSelection } from '../models/ModelsPage';
 import { extensionEntries, preparationLabel, relationshipLabel, selectionLabel, validityLabel } from './inventory';
 import css from '../../../presentation/settings/SettingsContent.module.css';
@@ -24,7 +25,7 @@ export interface ExtensionDetailProps {
    * does not parse. Root availability is a unit of that document, so it is
    * editable only while the document is; the definition documents are not. */
   revision?: string;
-  family: ExtensionFamily; name: string; onFocus: (focus?: SettingsFocus) => void;
+  family: ExtensionFamily; name: string; onFocus: (focus?: PageFocus['extensions']) => void;
 }
 
 /** One extension resource.

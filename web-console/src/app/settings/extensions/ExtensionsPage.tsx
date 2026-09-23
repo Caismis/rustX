@@ -4,7 +4,8 @@ import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
 import { admitsAuthoring } from '../capability';
 import { FilterTabs, ResourceList, Search, type ResourceRow } from '../primitives/aria';
-import { documentAuthoring, extensionFamilyLabel, type ExtensionFamily, type SettingsFocus } from '../projection';
+import { documentAuthoring, extensionFamilyLabel, type ExtensionFamily } from '../projection';
+import type { PageFocus } from '../machines/navigation';
 import { TextField } from '../forms/controls';
 import { allExtensionEntries, extensionEntries, preparationLabel, relationshipLabel, selectionLabel, validityLabel, type ExtensionEntry } from './inventory';
 import { ExtensionDetail } from './ExtensionDetail';
@@ -33,11 +34,11 @@ const filters: readonly (readonly [Filter, string])[] = [
  * resource: opening the page issues no preparation and no connection. */
 export function ExtensionsPage({ source, scope, revision, models, focus, onFocus }: {
   source: SourceSettings; scope: SourceScope; revision?: string; models: string[];
-  focus?: SettingsFocus; onFocus: (focus?: SettingsFocus) => void;
+  focus?: PageFocus['extensions']; onFocus: (focus?: PageFocus['extensions']) => void;
 }) {
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
-  if (focus?.kind === 'extension') {
+  if (focus) {
     return <ExtensionDetail source={source} scope={scope} revision={revision} models={models}
       family={focus.family} name={focus.name} onFocus={onFocus} />;
   }

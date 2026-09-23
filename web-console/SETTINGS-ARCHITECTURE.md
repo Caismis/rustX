@@ -499,10 +499,26 @@ navigation is an event on it: open User Settings, open an exact Workspace, open
 an owning Workspace, open Connection Settings — including the disconnected
 recovery "Show details" gesture — select a page inside the open dialog, focus
 a detail inside that page, close Settings, and authority replacement. The
-machine's `page` and per-page `focus` are the one owner of the displayed
-Settings surface: `Settings` receives them and sends `SELECT` / `FOCUS`, and
-holds no page state of its own, so a top-level decision taken while the dialog
-stays mounted is exactly what it shows. Focus is kept per page, so leaving a
+machine's `target`, `page` and per-page `focus` are the one owner of the
+displayed Settings surface: `Settings` takes the navigation actor itself, renders
+its state as it is and sends `SELECT` / `FOCUS` / `CLOSE`, and holds no page
+state of its own, so a top-level decision taken while the dialog stays mounted is
+exactly what it shows. The unit-test Settings surface composes the same machine
+and a real `ConnectionController`, so no test can reach or hide a navigation state
+the product could not.
+
+The machine also owns **target capability**: a Settings target can never enter a
+navigation state it does not authorize. `settingsPages(target)` and
+`admitsFocus(target, page, focus)` are the whole capability matrix — Models
+focuses a Provider or Model, Extensions an extension resource, Advanced
+Connection only for the User target, and General, Agent and Tools & Permissions
+nothing. `PageFocus` types each focus by the page that owns it. `SELECT` and
+`FOCUS` are guarded by exactly those functions, so an illegal request is refused,
+never admitted and repaired by the renderer; every transition that changes the
+target lands on that target's landing page with no focus. Whether Advanced shows
+the Connection entry is that same capability, never the presence of a
+`ConnectionController` — `App` supplies one for every target, and Workspace
+Settings still cannot expose or enter Connection. Focus is kept per page, so leaving a
 Provider detail for Extensions and returning restores that Provider; a new
 target starts with no focus, and Connection (`{ kind: 'connection' }` on
 Advanced) retargets to the global client without carrying a Workspace's focus.
@@ -579,12 +595,36 @@ inherited identity is reachable without being retyped and is reported as
 inherited rather than as an override. Whole-file resource families (MCP
 definitions, named Agent profiles) are shadowed as whole identities, so there is
 no value to merge: `prospective_resources.definitions` names the winning scope of
-each identity, and an identity owned by User is listed as inherited with an
-`Override` action. User authoring is the lowest authored source and inherits from
-nothing, so its catalogs list exactly what it authors and never present a
-Workspace-owned identity as User-overridable. Opening an inherited identity
-authors nothing, and an override always begins from a safe authoring seed — for a
-Provider that seed contains no credential at all. The same rule governs every
+each identity, and an identity owned by User is listed as inherited. User
+authoring is the lowest authored source and inherits from nothing, so its catalogs
+list exactly what it authors and never present a Workspace-owned identity as
+User-overridable. Opening an inherited identity authors nothing, and an override
+always begins from a safe authoring seed — for a Provider that seed contains no
+credential at all.
+
+The bridge models the two inheritance forms explicitly (`unitOwnership`). A
+`value` unit — a `rustx.toml` semantic unit — keeps #391's contract: the inherited
+value is displayed and an edit of it is an override of exactly that unit. An
+`identity` unit — an MCP definition or named Agent profile — has a definition
+lifecycle, `DefinitionAuthoring`:
+
+```text
+new         nothing authored or inherited; creation opened it; fields writable
+inherited   a User definition is in effect (User document or native inventory);
+            inspected read-only, no draft, edits refused by the bridge
+overriding  explicit "Override … in this Workspace" copied the secret-free seed
+            (`shadowedDefinition`) into the unit's XState draft; nothing written
+authored    this scope authors it; removal is "Use global default" when it
+            shadows a User definition, otherwise "Remove"
+```
+
+Viewing is never authoring: the only transition out of `inherited` is the
+explicit override, which is an ordinary `UNIT.EDIT` into the existing unit
+transaction, so there is still exactly one draft owner. An MCP override seed
+carries the inherited definition's shape and `$VARIABLE` references only — literal
+`env`/`headers` are dropped and nothing is retained, because retained keys can
+only name values the Workspace document holds; the withheld key names are shown.
+Definition and root availability remain two independent transactions. The same rule governs every
 named semantic-unit container reached from a list — source-tool selections, MCP
 invocation policies and environment variables — through one shared
 `reachableIdentities` projection.
@@ -946,7 +986,12 @@ ever dispatched.
 **React Aria is interaction semantics only.** It is imported only by
 `primitives/aria.tsx` and `presentation/settings/SettingsRoot.tsx`. It owns
 keyboard navigation, roving focus, dialog focus containment and restoration,
-tab/grid/select/menu/disclosure/switch semantics. No Spectrum stylesheet is
+tab/grid/select/menu/disclosure/switch semantics. The page tabs take their
+orientation from the viewport (`narrowSettingsLayout`): a vertical rail answers
+ArrowUp/ArrowDown on a wide viewport, a horizontal strip answers
+ArrowLeft/ArrowRight on a narrow one, and the strip layout is styled from React
+Aria's `data-orientation`, so keyboard semantics and the visual axis are one
+decision. No Spectrum stylesheet is
 loaded; every visual token is the existing `--dsw-*` family
 (`SettingsWorkflow.module.css`). Destructive confirmations are
 `ModalOverlay`+`Dialog role="alertdialog"` layers over the one Settings root,
@@ -955,7 +1000,9 @@ with initial focus on Cancel; the global WebUI modals are unchanged.
 **Removal semantics.** User Settings removes an authored definition
 (`data-removal="authored-removal"`, "Remove … from User configuration?").
 Workspace Settings removes only the override (`data-removal="override-removal"`,
-"Use the global default for …?"). Both send `authored: null` at the exact
+"Use the global default for …?") whenever something is inherited again; a
+Workspace resource definition that shadows no User definition is a real deletion
+and says so ("Remove … from Workspace configuration?"). Both send `authored: null` at the exact
 revision after confirmation; cancelling sends nothing.
 
 **Diagnostics.** Source paths and revisions, native unit names, application

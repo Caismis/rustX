@@ -602,17 +602,24 @@ it('S1-15 an inherited MCP definition and named Agent are discoverable from the 
   expect(within(mcp.getByRole('row', { name: 'search' })).getByText('Inherited from User · no override in this Workspace')).toBeTruthy();
   fireEvent.change(screen.getByLabelText('New MCP identity'), { target: { value: 'search' } });
   expect((screen.getByRole('button', { name: 'Add MCP' }) as HTMLButtonElement).disabled).toBe(true);
-  // Opening the inherited definition authors nothing in this Workspace.
+  // Opening the inherited definition authors nothing in this Workspace: it is
+  // inspected, and only an explicit override would begin a Workspace draft.
   await openResourceRow('search');
+  expect(screen.getByRole('form', { name: 'MCP search' }).getAttribute('data-definition')).toBe('inherited');
+  expect(screen.getByRole('button', { name: 'Override MCP search in this Workspace' })).toBeTruthy();
   expect((screen.getByRole('button', { name: 'Save MCP search' }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByRole('button', { name: /Use global default MCP search/ })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
   fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
   await openResourceRow('reviewer');
-  // The inherited profile is reported as inherited; the Workspace editor starts
-  // empty and authors nothing until the user edits it.
+  // The inherited profile is reported as inherited, from the native inventory
+  // alone: even without its User document projected it is not "new", so the
+  // Workspace editor is inert until an explicit override, which starts empty.
   const reviewer = within(screen.getByRole('region', { name: 'Agent reviewer' }));
   expect(reviewer.getByText('Inherited from User · no override in this Workspace')).toBeTruthy();
+  expect(screen.getByRole('form', { name: 'Agent reviewer' }).getAttribute('data-definition')).toBe('inherited');
+  expect(reviewer.getByText(/override starts from an empty definition/)).toBeTruthy();
+  expect((reviewer.getByLabelText('Description') as HTMLInputElement).matches(':disabled')).toBe(true);
   expect((reviewer.getByRole('button', { name: 'Save Agent reviewer' }) as HTMLButtonElement).disabled).toBe(true);
   expect(writes(s)).toHaveLength(0);
 });

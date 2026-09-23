@@ -20,20 +20,24 @@ import { ToolsPage } from './tools/ToolsPage';
 import { ExtensionsPage } from './extensions/ExtensionsPage';
 import { AdvancedPage } from './advanced/AdvancedPage';
 import {
-  catalogIdentities, configAuthoring, settingsLifecycle, settingsLifecycleLabel, settingsPageLabel,
-  settingsPages, settingsTargetKey, settingsTargetLabel, settingsTargetScope,
-  type SettingsFocus, type SettingsPage, type SettingsTarget,
+  catalogIdentities, configAuthoring, settingsLifecycle, settingsLifecycleLabel,
+  settingsTargetKey, settingsTargetLabel, settingsTargetScope, type SettingsTarget,
 } from './projection';
+import {
+  admitsFocus, connectionFocus, settingsPageLabel, settingsPages,
+  type FocusMap, type SettingsFocus, type SettingsNavigationActor, type SettingsPage,
+} from './machines/navigation';
 
 export interface SettingsProps {
-  client: AppServerClient; target: SettingsTarget; host?: ProductHostWorkspaces; onClose?: () => void;
+  client: AppServerClient; host?: ProductHostWorkspaces;
   theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void;
-  connection?: ConnectionController;
-  /** The displayed product page and the detail focused inside it, both owned by
-   * the Settings navigation machine. This component holds no navigation state. */
-  page: SettingsPage; focus?: SettingsFocus;
-  onSelect: (page: SettingsPage) => void;
-  onFocus: (focus?: SettingsFocus) => void;
+  /** The client-owned connection, rendered only where navigation admits the
+   * Connection surface. Its presence authorizes nothing. */
+  connection: ConnectionController;
+  /** The one owner of whether Settings is open, which target it is bound to,
+   * which page it shows and which detail is focused inside that page. This
+   * component holds no navigation state and renders that state as it is. */
+  navigation: SettingsNavigationActor;
 }
 
 /** The presentation of one mutation outcome that is not attributable to a
@@ -68,8 +72,20 @@ export function settingsTransactionOwners(client: AppServerClient): readonly Tra
  * authority actor this presentation attaches to. Opening, closing, changing
  * page, focusing a detail and switching target are presentation events; none of
  * them cancels a native commit or discards an editing transaction. */
-export function Settings({ client, target, host, onClose = () => {}, theme = 'light', setTheme, connection, page, focus, onSelect, onFocus }: SettingsProps) {
+export function Settings(props: SettingsProps) {
+  const view = useSelector(props.navigation, snapshot => ({
+    target: snapshot.context.target, page: snapshot.context.page, focus: snapshot.context.focus,
+  }), shallowEqual);
+  return view.page && <SettingsDialog {...props} target={view.target} page={view.page} focus={view.focus} />;
+}
+
+function SettingsDialog({ client, host, theme = 'light', setTheme, connection, navigation, target, page: current, focus }: SettingsProps & {
+  target: SettingsTarget; page: SettingsPage; focus: FocusMap;
+}) {
+  // The navigation machine admits only pages and details this owner
+  // authorizes, so the page and focus are rendered exactly as they are.
   const { actor, transport } = useSettingsTarget(client, target, host);
+  const onFocus = (next?: SettingsFocus) => navigation.send({ type: 'FOCUS', focus: next });
   const scope: SourceScope = settingsTargetScope(target);
   // The fresh authoritative observation, and the last one demoted to stale
   // presentation data by a presentation or generation boundary. Rendering the
@@ -98,17 +114,15 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
   // ones for a Workspace when resolution produced them.
   const models = catalogIdentities(source, scope, 'models');
   const lifecycle = settingsLifecycle({ connection: transport.connection, hasSource: !!observed, targetValid, readError });
-  const pages = settingsPages(target);
-  // The navigation machine owns which page is shown; a page this owner does
-  // not authorize can never be selected, so the landing page stands in only if
-  // a target change and a render race ever disagreed.
-  const current = pages.includes(page) ? page : pages[0];
   // A page change remounts the editor subtree so its local picker state does
   // not leak across pages. Editing transactions are deliberately not part of
   // that subtree, and the key deliberately carries no source revision, so
   // neither a page change nor an authoritative read can remount a dirty form.
   const editorKey = `${transport.endpoint ?? ''}|${transport.authorityRevision ?? 0}|${settingsTargetKey(target)}:${current}`;
-  const connectionFocused = current === 'advanced' && focus?.kind === 'connection' && !!connection;
+  const connectionFocused = current === 'advanced' && focus.advanced !== undefined;
+  // Whether this owner's Advanced page reaches Connection at all is the
+  // navigation capability, not whether a connection controller exists.
+  const connectionReachable = current === 'advanced' && admitsFocus(target, 'advanced', connectionFocus);
 
   // Authoring stays closed until the target holds a current authoritative
   // observation. A mutation in flight does not close it: every other unit
@@ -118,7 +132,7 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
   const structured = config.state === 'structured';
   const body = !source || !selected ? null : <fieldset disabled={!editable} className={css.editor}>
     {current === 'models' && (structured
-      ? <ModelsPage source={source} scope={scope} revision={config.revision} models={models} focus={focus} onFocus={onFocus} />
+      ? <ModelsPage source={source} scope={scope} revision={config.revision} models={models} focus={focus.models} onFocus={onFocus} />
       : <MalformedNotice config={config} />)}
     {current === 'agent' && (structured
       ? <AgentPage document={config.document} scope={scope} revision={config.revision} />
@@ -131,7 +145,7 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
         about the MCP or named-Agent documents, each of which is its own
         authority and reports its own state. */}
     {current === 'extensions' && <ExtensionsPage source={source} scope={scope}
-      revision={structured ? config.revision : undefined} models={models} focus={focus} onFocus={onFocus} />}
+      revision={structured ? config.revision : undefined} models={models} focus={focus.extensions} onFocus={onFocus} />}
     {current === 'advanced' && <AdvancedPage source={source} scope={scope}
       config={structured ? { document: config.document, revision: config.revision } : undefined}
       closed={<MalformedNotice config={config} diagnostic={false} />}
@@ -144,8 +158,8 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
     </UnitForm>}
   </fieldset>;
 
-  return <SettingsPanel pages={pages.map(id => ({ id, label: settingsPageLabel(id) }))} activeId={current}
-    onSelect={id => onSelect(id as SettingsPage)} onClose={onClose}>
+  return <SettingsPanel pages={settingsPages(target).map(id => ({ id, label: settingsPageLabel(id) }))} activeId={current}
+    onSelect={id => navigation.send({ type: 'SELECT', page: id as SettingsPage })} onClose={() => navigation.send({ type: 'CLOSE' })}>
     {/* The owner this dialog is bound to, and the state of its authoritative
         observation, identify every page alike — including the client-owned
         General page, which authors no native source but still belongs to one
@@ -167,12 +181,12 @@ export function Settings({ client, target, host, onClose = () => {}, theme = 'li
       {maintenanceError && <p role="alert">{maintenanceError}</p>}
       {scope === 'workspace' && current !== 'general' && <p className={css.hint}>Use global default removes the unit this Workspace authors, so the global value applies again. It never removes the global definition.</p>}
       {current === 'general' ? <GeneralPage theme={theme} setTheme={setTheme} /> : connectionFocused
-        ? <ConnectionSettings connection={connection!} client={client} />
+        ? <ConnectionSettings connection={connection} client={client} />
         : <SettingsActorContext value={actor}><SourceContext value={source}>
           <div key={editorKey}>{body}</div>
         </SourceContext></SettingsActorContext>}
-      {current === 'advanced' && connection && <p>
-        <Button onClick={() => onFocus(connectionFocused ? undefined : { kind: 'connection' })}>
+      {connectionReachable && <p>
+        <Button onClick={() => onFocus(connectionFocused ? undefined : connectionFocus)}>
           {connectionFocused ? 'Back to Advanced' : 'Connection'}
         </Button>
       </p>}

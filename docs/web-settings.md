@@ -27,9 +27,14 @@ Settings is organized by product task into exactly six primary pages:
 | **Extensions** | One searchable inventory of MCP servers, Skills, named Agents, Workflows and Managed Python sources, filtered by kind, with a detail per resource; plus the native Todo, Goal and Agent Status extensions under **Native**. |
 | **Advanced** | Context and runtime limits, environment identities, App Server process policy, native diagnostics (source paths, revisions, application observations, process bindings, raw projections) and **Rescan configuration files**. **Connection** is a sub-surface of Advanced, not a seventh page. |
 
+The page list is a vertical rail on a wide screen (ArrowUp/ArrowDown) and a
+horizontal strip on a narrow one (ArrowLeft/ArrowRight); the selected page is
+kept in view in the strip.
+
 Workspace Settings is a constrained surface of the same pages without General
 (everything on General is client-owned) and without the User-only App Server
-policy or Connection; it lands on Models. There is no Overview page and no alias
+policy or Connection; it lands on Models. These are navigation capabilities of
+the target, so no Workspace detail, page or action can reach them. There is no Overview page and no alias
 for any earlier section route. Each primary page and each detail inside it is a
 navigation fact of the one Settings navigation machine, so returning to a page
 restores the detail the user left, and a new target starts with none.
@@ -241,7 +246,12 @@ the identity never has to be retyped to be reached. Whole-file resource families
 inventory, which names the winning scope of each identity, so an inherited
 definition is discoverable without the browser merging two catalogs. Opening an
 inherited identity authors nothing: the displayed value is the native effective
-one, and an override begins from a safe authoring seed. A Provider is the one
+one, and an override begins from a safe authoring seed. An inherited MCP
+definition or named Agent is shown read-only; **Override … in this Workspace** is
+the only way to begin a Workspace definition, which replaces the whole User one
+when saved. Its seed never copies an inherited literal environment value or
+header. **Use global default** removes that override and the User definition
+applies again; a Workspace-only definition is removed with **Remove**. A Provider is the one
 whole unit that inherits no editing state at all — an inherited credential stays
 redacted, is never read back from the shadowed definition, and an override always
 authors a new credential. User Settings is the lowest authored source and

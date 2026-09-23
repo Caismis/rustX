@@ -256,12 +256,12 @@
 }
 
 .navList { overflow-y: auto; min-height: 0; padding-bottom: 20px; }
+/* The narrow panel geometry. The breakpoint is `narrowSettingsLayout` in
+   SettingsRoot.tsx, which also turns the page tabs horizontal; the tab strip
+   below follows that ARIA orientation rather than this breakpoint. */
 @media (max-width: 640px) {
   .panel { flex-direction: column; max-width: calc(100vw - 24px); height: calc(100dvh - 24px); border-radius: 24px; }
-  .dialog, .tabsRoot { flex-direction: column; }
-  .nav { width: 100%; padding: 16px 16px 0; gap: 8px; }
-  .navList { flex-direction: row; overflow-x: auto; padding-bottom: 6px; }
-  .navCell { flex: none; }
+  .dialog { flex-direction: column; }
   .content { min-height: 0; }
   .header { height: 44px; padding-top: 8px; }
   .options { padding: 0 16px 16px; }
@@ -269,3 +269,11 @@
 
 .group { padding: 10px 12px 2px; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
 @media (max-width: 640px) { .group { display: none; } }
+
+/* A horizontal page tab list is a strip above the content. Layout follows the
+   orientation React Aria announces, so the axis the arrow keys move along is
+   always the axis the tabs are laid out along. */
+.tabsRoot[data-orientation="horizontal"] { flex-direction: column; }
+.tabsRoot[data-orientation="horizontal"] .nav { width: 100%; padding: 16px 16px 0; gap: 8px; }
+.navList[data-orientation="horizontal"] { flex-direction: row; overflow-x: auto; padding-bottom: 6px; }
+.navList[data-orientation="horizontal"] .navCell { flex: none; }

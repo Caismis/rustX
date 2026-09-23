@@ -9,7 +9,8 @@ import { TypedUnitForm, UnitForm, type TypedUnitForm as TypedForm } from '../for
 import { Bool, Enum, Numeric, NumericText, RequestParameters, RequestParameterRows, Text } from '../forms/fields';
 import { TextField } from '../forms/controls';
 import { Advanced, Choice, ResourceList, Search, type ResourceRow } from '../primitives/aria';
-import { catalogEntries, provenanceLabel, sourceView, type CatalogEntry, type SettingsFocus } from '../projection';
+import { catalogEntries, provenanceLabel, sourceView, type CatalogEntry } from '../projection';
+import type { PageFocus } from '../machines/navigation';
 import { observedResult, observedResultLabel, unitApplication } from '../projection';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 import workflow from '../../../presentation/settings/SettingsWorkflow.module.css';
@@ -18,8 +19,8 @@ export interface ModelsPageProps {
   source: SourceSettings; scope: SourceScope; revision: string;
   /** Every model identity this scope can reach, for the selectors. */
   models: string[];
-  focus?: SettingsFocus;
-  onFocus: (focus?: SettingsFocus) => void;
+  focus?: PageFocus['models'];
+  onFocus: (focus?: PageFocus['models']) => void;
 }
 
 const emptyModel = (provider = ''): Model => ({
@@ -134,7 +135,7 @@ function NewModel({ exists, open, provider }: { exists: readonly string[]; open:
 
 /** One Provider: its connection fields, its credential, and its Models. */
 function ProviderDetail({ source, scope, revision, id, onFocus }: {
-  source: SourceSettings; scope: SourceScope; revision: string; id: string; onFocus: (focus?: SettingsFocus) => void;
+  source: SourceSettings; scope: SourceScope; revision: string; id: string; onFocus: (focus?: PageFocus['models']) => void;
 }) {
   const authored = sourceView(source, scope)?.authored ?? {};
   const providers = catalogEntries<ProviderView>(source, scope, 'providers');
@@ -196,7 +197,7 @@ function LiteralCredential({ form }: { form: TypedForm<ProviderWrite> }) {
  * are all part of the one value the transaction owns. */
 function ModelDetail({ source, scope, revision, id, provider, onFocus }: {
   source: SourceSettings; scope: SourceScope; revision: string; id: string; provider?: string;
-  onFocus: (focus?: SettingsFocus) => void;
+  onFocus: (focus?: PageFocus['models']) => void;
 }) {
   const authored = sourceView(source, scope)?.authored?.models?.[id];
   return <section aria-label={`Model ${id}`} className={workflow.detail}>

@@ -135,7 +135,7 @@
 }
 .switch[data-selected] .switchTrack::after { transform: translateX(16px); }
 
-@media (max-width: 640px) {
-  .pageTabs { flex-direction: row; overflow-x: auto; padding-bottom: 6px; }
-  .pageTab { flex: none; }
-}
+/* The page list lays out along its ARIA orientation, never along a separate
+   breakpoint, so arrow-key semantics and the visual axis cannot disagree. */
+.pageTabs[data-orientation="horizontal"] { flex-direction: row; overflow-x: auto; padding-bottom: 6px; }
+.pageTabs[data-orientation="horizontal"] .pageTab { flex: none; }

@@ -334,7 +334,7 @@
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
       "destination": "web-console/src/app/settings/models/ModelsPage.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery. Dedicated Provider/Model drill-down with explicit return to the native catalog; unsaved units retained by app draft owner. Catalog identities are enumerated from the native effective projection, with this scope's authoring and native provenance kept separate; no browser inheritance engine. #392: moved into the Models product page as Provider list → Provider detail → Model detail; complete typed Provider/Model forms are TanStack Form field mechanics bridged to the XState unit transaction; interaction hierarchy follows ZCode public docs (inspected only, no source copied).",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery. Dedicated Provider/Model drill-down with explicit return to the native catalog; unsaved units retained by app draft owner. Catalog identities are enumerated from the native effective projection, with this scope's authoring and native provenance kept separate; no browser inheritance engine. #392: moved into the Models product page as Provider list → Provider detail → Model detail; complete typed Provider/Model forms are TanStack Form field mechanics bridged to the XState unit transaction; interaction hierarchy follows ZCode public docs (inspected only, no source copied). #392 repair: Provider and Model focus are typed by the Models page from the navigation domain, so no other page's detail can reach it.",
       "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
       "retained_dependencies": [
         "../../../../../protocol/app-server/v18",
@@ -345,6 +345,7 @@
         "../forms/bridge",
         "../forms/controls",
         "../forms/fields",
+        "../machines/navigation",
         "../primitives/aria",
         "../projection",
         "react"
@@ -363,12 +364,12 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "aefebcc968bce0c046575380a996cd3ddf4267fb8019e0c02ec00c7de28bb890"
+      "local_sha256": "e0f986d39b4866dca6d5e9d0f1ecd7ffbd559cac4a7bbd4e272286294430f60d"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
       "destination": "web-console/src/app/settings/extensions/ExtensionDetail.tsx",
-      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS. infer native MCP transport for display without rewriting authored intent Inherited MCP identities are enumerated from the native resource inventory, which names each identity's winning scope; no browser catalog merge. #392: moved into the Extensions resource detail; MCP and named-Agent definitions and root availability are separate units with separate outcomes, and resource kinds without an authoring API show inventory/diagnostics/selection only.",
+      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS. infer native MCP transport for display without rewriting authored intent Inherited MCP identities are enumerated from the native resource inventory, which names each identity's winning scope; no browser catalog merge. #392: moved into the Extensions resource detail; MCP and named-Agent definitions and root availability are separate units with separate outcomes, and resource kinds without an authoring API show inventory/diagnostics/selection only. #392 repair: extension focus is typed by the Extensions page from the navigation domain.",
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
         "../../../../../protocol/app-server/v18",
@@ -382,6 +383,7 @@
         "../forms/bridge",
         "../forms/controls",
         "../forms/fields",
+        "../machines/navigation",
         "../models/ModelsPage",
         "../primitives/aria",
         "../projection",
@@ -426,12 +428,12 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "267d3345902e63d17a6f32aacf172a0c2fa8f71b5f647f06a48fccb5c8c9ec09"
+      "local_sha256": "1201f9d2d2eecbf3680f0a4b6819c5bc2437461061cd75d79ed2fe39dc84da3f"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "destination": "web-console/src/app/settings/Settings.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation. Read ordering: a Workspace write-owned reread is ordered by the identity reserved when the write operation is initiated and may replace only a projection older than the newest already accepted, and both the success and the failure of an owning-Workspace lookup are fenced by the Settings navigation epoch and App Server authority revision. Transaction settlement uses the mutation's non-sensitive revision selector, so no authored payload is retained. The displayed Settings section is owned by the Settings navigation machine; the shell holds no section state, and mutation outcomes are projected from the Settings authority actor's mutation region. #392: composes six product pages (General, Models, Agent, Tools & Permissions, Extensions, Advanced) through the navigation machine; diagnostics moved to Advanced and Connection is an Advanced sub-surface.",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation. Read ordering: a Workspace write-owned reread is ordered by the identity reserved when the write operation is initiated and may replace only a projection older than the newest already accepted, and both the success and the failure of an owning-Workspace lookup are fenced by the Settings navigation epoch and App Server authority revision. Transaction settlement uses the mutation's non-sensitive revision selector, so no authored payload is retained. The displayed Settings section is owned by the Settings navigation machine; the shell holds no section state, and mutation outcomes are projected from the Settings authority actor's mutation region. #392: composes six product pages (General, Models, Agent, Tools & Permissions, Extensions, Advanced) through the navigation machine; diagnostics moved to Advanced and Connection is an Advanced sub-surface. #392 repair: renders the navigation actor's target, page and focus as they are, with no renderer fallback; Connection is reachable only where the navigation target capability admits it, never because a ConnectionController is supplied.",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
         "../../../../protocol/app-server/v18",
@@ -447,6 +449,7 @@
         "./extensions/ExtensionsPage",
         "./forms/bridge",
         "./general/GeneralPage",
+        "./machines/navigation",
         "./machines/react",
         "./machines/settings-target",
         "./machines/system",
@@ -470,7 +473,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "5fdb23854500863a7bf08ebd4a0d09b0d7dde67d9ba2ef19e93a057a3e97798a"
+      "local_sha256": "18c963590c6d4b1fdf5bbdec394d6b7fc8ad31ce6458ea6a2109d8b15df0b4e6"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -1928,9 +1931,9 @@
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/presentation/settings/SettingsContent.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor.",
+      "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "77dd01a46d76b59eef27ab7a0c5a8ac1a03a4bc25f35a7814b9f225805a0bfa6",
+      "local_sha256": "3beb4d1ffd6dfe4a080780e42055aec2310ed86054d71fe92a45c75626547ab4",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -1957,7 +1960,7 @@
       "destination": "web-console/src/presentation/settings/SettingsRoot.module.css",
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation WEB-RESET-03: bounded category labels hidden in horizontal narrow navigation. #392: the mask moves onto the React Aria overlay and the dialog/tab roots gain layout classes.",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation WEB-RESET-03: bounded category labels hidden in horizontal narrow navigation. #392: the mask moves onto the React Aria overlay and the dialog/tab roots gain layout classes. #392 repair: the horizontal page strip is laid out from React Aria data-orientation; only the narrow panel geometry stays on the breakpoint.",
       "upstream_sha256": "52a665b2c19ce30b35811c7b8b4c73e4ee94342d86e8e6fec77e61e1ced5738b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1966,7 +1969,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "fd498e2ef10b55f168036e3aace805c5e79d8889347ea00499e663bbbee6d96a",
+      "local_sha256": "9860b03430cb7e8731ea48945bf5ff8eecbf374342eab156b82cb0b43dac30a2",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -1974,7 +1977,7 @@
       "destination": "web-console/src/presentation/settings/SettingsRoot.tsx",
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: upstream overlay/nav/content DOM with explicit section seats, body portal and modal focus isolation; native CFG3 editors and Appearance content supplied by app adapter WEB-RESET-03: optional native section group labels; unchanged single modal geometry, focus and close ownership. #392: the overlay, focus containment/restoration and vertical page tabs are React Aria Components (ModalOverlay/Modal/Dialog/Tabs) styled by the retained upstream classes; the hand-written focus trap and portal are removed.",
+      "treatment": "B: upstream overlay/nav/content DOM with explicit section seats, body portal and modal focus isolation; native CFG3 editors and Appearance content supplied by app adapter WEB-RESET-03: optional native section group labels; unchanged single modal geometry, focus and close ownership. #392: the overlay, focus containment/restoration and vertical page tabs are React Aria Components (ModalOverlay/Modal/Dialog/Tabs) styled by the retained upstream classes; the hand-written focus trap and portal are removed. #392 repair: page tab orientation follows the viewport (vertical rail, horizontal narrow strip) so arrow-key semantics match the visual axis; the render-time missing-page fallback is removed because navigation admits only listed pages. The selected tab keeps itself inside a horizontal strip once it is committed as selected, including selections that do not move focus.",
       "upstream_sha256": "7ce55121345e28bed96b01c2e08641162d7bee4569083bad46b98c1574577ecb",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1991,7 +1994,7 @@
         "react",
         "react-aria-components"
       ],
-      "local_sha256": "c80e408dbc67e7ada74e9146e747e24d0cdffb2ddd1f38daea7ba39202eaefd9",
+      "local_sha256": "75c830f92890666e97ca38215745f99438f667c198007b6533d484246309de84",
       "classification": "B"
     },
     {

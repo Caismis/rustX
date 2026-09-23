@@ -49,13 +49,23 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     const inherited = settings.getByRole('row', { name: 'local-fixture', exact: true });
     await expect(inherited).toContainText('Inherited from User');
     await inherited.click();
-    // A whole-definition override starts from a safe authoring seed; nothing of
-    // the shadowed User definition is copied into this Workspace.
-    await expect(settings.getByLabel('MCP command')).toHaveValue('');
+    // Viewing the inherited User definition is not Workspace authoring: its
+    // safe native facts are shown read-only, nothing can be saved or removed,
+    // and nothing is written.
+    const definition = settings.getByRole('form', { name: 'MCP local-fixture', exact: true });
+    await expect(definition).toHaveAttribute('data-definition', 'inherited');
+    await expect(settings.getByLabel('MCP command')).toHaveValue('python3');
+    await expect(settings.getByLabel('MCP command')).toBeDisabled();
+    await expect(settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true })).toBeDisabled();
     await expect(settings.getByRole('button', { name: 'Use global default MCP local-fixture', exact: true })).toHaveCount(0);
+    // Only the explicit override begins a Workspace definition. It replaces the
+    // whole User one when saved, against the real native Workspace document.
+    await settings.getByRole('button', { name: 'Override MCP local-fixture in this Workspace', exact: true }).click();
+    await expect(definition).toHaveAttribute('data-definition', 'overriding');
     await settings.getByLabel('MCP command').fill('unused-workspace-command');
     await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();
     await expect(settings.getByText('MCP local-fixture saved. Native coordination owns application.')).toBeVisible();
+    await expect(definition).toHaveAttribute('data-definition', 'authored');
     await settings.getByLabel('MCP command').fill('preserved-draft');
     appendFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), '\n# external edit invalidates the draft revision\n');
     await settings.getByRole('button', { name: 'Save MCP local-fixture', exact: true }).click();

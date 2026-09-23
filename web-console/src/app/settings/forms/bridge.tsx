@@ -7,7 +7,10 @@ import { SourceContext } from '../source-context';
 import { useSettingsActor, useUnitTransaction } from '../machines/react';
 import { admitsSourceMutation, committedUnit, unitOutcome, type MutationOutcome } from '../machines/settings-target';
 import { committed as unitCommitted, discardable, requiresReview } from '../machines/unit-transaction';
-import { authoredStateLabel, effectiveStateLabel, provenanceLabel, revisionSelector, unitFacts } from '../projection';
+import {
+  authoredStateLabel, effectiveStateLabel, provenanceLabel, revisionSelector, shadowedDefinition, unitFacts, unitOwnership,
+  type ShadowedDefinition,
+} from '../projection';
 import { Advanced, ConfirmAction } from '../primitives/aria';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 
@@ -39,6 +42,19 @@ function sameValue(left: unknown, right: unknown): boolean {
   return true;
 }
 
+/** Where one whole-identity resource definition's authoring stands in this
+ * scope. Each state has its own wording and its own actions; none of them is
+ * reached by rendering alone.
+ *
+ * - `new` — this scope authors nothing and inherits nothing: creating it was
+ *   the explicit gesture that opened this editor;
+ * - `inherited` — a lower scope's definition is in effect and is only
+ *   inspected. No draft exists and the fields are not writable;
+ * - `overriding` — an explicit Override began this scope's own definition from
+ *   the inherited one. It is a draft; nothing is written until Save;
+ * - `authored` — this scope authors the definition. */
+export type DefinitionAuthoring = 'new' | 'inherited' | 'overriding' | 'authored';
+
 /** Everything one semantic unit's editing surface needs, owned where it
  * belongs.
  *
@@ -47,7 +63,9 @@ function sameValue(left: unknown, right: unknown): boolean {
  * - the native **effective** value, projected from `SourceSettings.resolved`;
  * - this scope's native **authored** presence/value (`authored`);
  * - this browser's **override intent**, which exists only after an explicit
- *   Override action or an actual edit;
+ *   Override action or, for a value-inherited semantic unit, an actual edit —
+ *   an inherited whole resource definition admits no edit before its explicit
+ *   override (`DefinitionAuthoring`);
  * - the **dirty draft** carrying that intent's value;
  * - the exact **CAS base revision** the next write is fenced on.
  *
@@ -93,6 +111,18 @@ export interface UnitEditing<T> {
   readonly scope: 'user' | 'workspace';
   readonly facts: ReturnType<typeof unitFacts>;
   readonly configUnit: boolean;
+  /** The lifecycle of a whole-identity resource definition; `undefined` for a
+   * value-inherited semantic unit. */
+  readonly definition?: DefinitionAuthoring;
+  /** The lower-scope definition this scope's definition shadows or would
+   * shadow, if any. */
+  readonly shadowed?: ShadowedDefinition;
+  /** Whether the fields may change this unit's draft now. */
+  readonly writable: boolean;
+  /** The one explicit transition from inspecting an inherited definition to
+   * authoring this scope's own. Present only while `definition` is
+   * `inherited`. */
+  readonly override?: () => void;
 }
 
 export interface UnitOptions<T> {
@@ -120,7 +150,11 @@ export function useUnitEditing<T>({ authored, blank, revision, mutation, inherit
   const unitMutation = mutation(null);
   const facts = unitFacts(source, scope, unitMutation);
   const workspace = scope === 'workspace';
-  const inheritance = workspace && unitMutation.kind === 'config';
+  const ownership = unitOwnership(unitMutation);
+  const inheritance = workspace && ownership === 'value';
+  // The lower-scope definition a whole-identity resource would shadow. It is
+  // native authored fact of another document, projected without secrets.
+  const shadowed = ownership === 'identity' ? shadowedDefinition(source, scope, unitMutation) : undefined;
   const identity = JSON.stringify(unitMutation);
   const selector = revisionSelector(unitMutation);
   // The unit's live transaction, owned by the Settings authority actor.
@@ -151,19 +185,34 @@ export function useUnitEditing<T>({ authored, blank, revision, mutation, inherit
   // displayed, never copied into authoring state. A redacted unit has no value
   // to adapt, so nothing can be copied out of it by construction.
   const inheritedValue = inheritance && facts.effective.state === 'available' ? inherited(facts.effective.value) : undefined;
+  const definition: DefinitionAuthoring | undefined = ownership !== 'identity' ? undefined
+    : authoredPresent ? 'authored'
+      : !shadowed ? 'new'
+        : draft ? 'overriding' : 'inherited';
+  // The seed an explicit override begins from. It is displayed while the
+  // inherited definition is inspected and is never authoring state until the
+  // override transition copies it into a draft.
+  const overrideSeed = (shadowed?.seed ?? blank) as T;
   const displayed: T = draft ? draft.value
     : redacted ? blank
       : authored !== undefined ? authored
-        : inheritedValue !== undefined ? inheritedValue : blank;
+        : inheritedValue !== undefined ? inheritedValue
+          : definition === 'inherited' ? overrideSeed : blank;
+  const writable = definition !== 'inherited';
+  const begin = (value: T) => actor.send({ type: 'UNIT.EDIT', identity, selector, revision, value });
   return {
     identity, displayed, outcome, draft: draft !== undefined, authoredPresent,
     overriding: draft !== undefined || authoredPresent, inheritance, committed, busy, admitted,
     base, observed, scope, facts, configUnit: unitMutation.kind === 'config',
-    // An edit is an unambiguous override transition: it starts from whatever
-    // this control currently displays and becomes this browser's authored
-    // intent. The value goes to the transaction actor, never to component or
-    // form state that a remount could lose.
-    edit: (value: T) => actor.send({ type: 'UNIT.EDIT', identity, selector, revision, value }),
+    definition, shadowed, writable,
+    // For a value-inherited unit an edit is an unambiguous override
+    // transition: it starts from whatever this control displays and becomes
+    // this browser's authored intent. An inherited whole definition is only
+    // inspected, so an edit of it is refused: viewing is never authoring. The
+    // value goes to the transaction actor, never to component or form state
+    // that a remount could lose.
+    edit: (value: T) => { if (writable) begin(value); },
+    override: definition === 'inherited' ? () => begin(overrideSeed) : undefined,
     submit: (remove = false) => {
       if (!remove && !draft) return;
       // Only the mutation itself carries the authored payload; the transaction
@@ -196,7 +245,14 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
   const preserved = unit.draft ? 'Your draft and original revision are preserved.'
     : unit.committed ? 'Your committed revision is no longer the current source.'
       : 'Your removal and its original revision are preserved.';
-  return <form aria-label={title} className={css.unit} onSubmit={event => { event.preventDefault(); unit.submit(); }}>
+  // A Workspace removal restores what it shadows: a semantic unit always has an
+  // inherited value, and a resource definition has one exactly when a User
+  // definition of the same identity exists. Removing a Workspace definition
+  // that shadows nothing is a real deletion and is named as one.
+  const restoresInherited = workspace && (unit.definition === undefined || unit.shadowed !== undefined);
+  const owner = workspace ? 'Workspace' : 'User';
+  return <form aria-label={title} className={css.unit} data-definition={unit.definition}
+    onSubmit={event => { event.preventDefault(); unit.submit(); }}>
     <fieldset disabled={unit.busy}><legend>{title}</legend>
       {unit.configUnit && unit.facts.authored.state !== 'unavailable' && <>
         <p className={css.hint} data-authored={unit.facts.authored.state} data-effective={unit.facts.effective.state}>
@@ -209,7 +265,11 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
         </Advanced>}
       </>}
       {redacted && <p className={css.hint}>The authored value is never projected to the browser. Saving replaces it with exactly what you enter here.</p>}
-      {children}
+      {unit.definition && <DefinitionNotice unit={unit} owner={owner} />}
+      {/* Inspecting an inherited definition shows its safe native facts in the
+          same fields, and none of them is writable until the explicit
+          override transition. */}
+      <fieldset className={css.fields} disabled={!unit.writable}>{children}</fieldset>
       <Advanced title="Source revision & replacement">
         <p className={css.hint}>Draft base revision: {unit.base}<br />Current revision: {unit.observed}</p>
         <p>Save replaces this native semantic unit. Remove omits it from this scope. Empty selections remain explicit.</p>
@@ -224,10 +284,13 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
             the inherited value; for User it starts this scope's own authored
             value from the neutral seed. It is what makes an explicit empty
             selection authorable without an incidental edit. */}
+        {unit.override && <Button type="button" variant="primary"
+          title={`Begin a Workspace definition of ${title} from the inherited one. Nothing is written until you save.`}
+          onClick={unit.override}>Override {title} in this Workspace</Button>}
         {unit.configUnit && !unit.overriding && <Button type="button"
           title={workspace ? 'Author this unit in this Workspace. Nothing is written until you save.' : 'Author this unit in this source. Nothing is written until you save.'}
           onClick={() => unit.edit(unit.displayed)}>{workspace ? 'Override' : 'Author'} {title}</Button>}
-        {removable && unit.authoredPresent && (workspace
+        {removable && unit.authoredPresent && (restoresInherited
           // A Workspace removal is inheritance, not destruction: it removes the
           // unit this Workspace authors, through exact CAS, and the native
           // inherited value becomes effective again. The effective resource
@@ -236,10 +299,10 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
             title={`Use the global default for ${title}?`} confirm={`Use global default ${title}`}
             description={<><p>This removes the semantic unit this Workspace authors, through exact CAS. The native inherited value becomes effective again.</p><p>Nothing is removed from the global source, and no other scope is changed.</p></>}
             onConfirm={() => unit.submit(true)} /></span>
-          // A User removal really removes this scope's authored unit.
+          // Otherwise the removal really removes this scope's authored unit.
           : <span data-removal="authored-removal"><ConfirmAction label={`Remove ${title}`} disabled={!unit.admitted}
-            title={`Remove ${title} from User configuration?`} confirm={`Remove ${title}`}
-            description={<><p>This removes the value this User source authors, through exact CAS on its current revision.</p>{removalNotice ?? <p>The native default for this unit applies once it is absent.</p>}</>}
+            title={`Remove ${title} from ${owner} configuration?`} confirm={`Remove ${title}`}
+            description={<><p>This removes the value this {owner} source authors, through exact CAS on its current revision.</p>{removalNotice ?? <p>The native default for this unit applies once it is absent.</p>}</>}
             onConfirm={() => unit.submit(true)} /></span>)}
         {unit.intent && <Button type="button" onClick={unit.discard}>Discard draft</Button>}
         {unit.reviewNeeded && <Button type="button" onClick={unit.review}>Use reviewed revision</Button>}
@@ -251,6 +314,30 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
       <UnitOutcomeNotice title={title} outcome={unit.outcome} />
     </fieldset>
   </form>;
+}
+
+/** What one whole-identity resource definition is in this scope, worded for
+ * exactly its lifecycle state. */
+function DefinitionNotice<T>({ unit, owner }: { unit: UnitEditing<T>; owner: string }) {
+  const shadowed = unit.shadowed;
+  const withheld = shadowed && shadowed.withheld.length > 0 && <p className={css.hint}>
+    The User definition holds literal values for {shadowed.withheld.join(', ')}. Native never projects them, so an override does not copy them; enter them again if this Workspace needs them.
+  </p>;
+  switch (unit.definition) {
+    case 'new': return <p role="status" data-definition-state="new">New {owner} definition. Nothing is written until you save.</p>;
+    case 'inherited': return <>
+      <p role="status" data-definition-state="inherited">Inherited from User ({shadowed!.path}). This Workspace authors no definition, so these fields are read-only. Override in this Workspace to author one that replaces the whole User definition.</p>
+      {shadowed!.seed === undefined && <p role="status">The User definition's content is not available to this browser, so an override starts from an empty definition.</p>}
+      {shadowed!.diagnostic && <p role="alert">{shadowed!.diagnostic}</p>}
+      {withheld}
+    </>;
+    case 'overriding': return <>
+      <p role="status" data-definition-state="overriding">Workspace override draft. Saving creates a Workspace definition that replaces the whole User definition; discarding it keeps the User definition in effect.</p>
+      {withheld}
+    </>;
+    case 'authored': return <p role="status" data-definition-state="authored">{owner} definition{shadowed ? ' — overrides the User definition of the same identity' : ''}.</p>;
+    default: return null;
+  }
 }
 
 /** One native semantic unit's own outcome, named so it can never be read as a
@@ -314,13 +401,21 @@ export function TypedUnitForm<T>({ title, children, removable = true, removalNot
   // actor's current value against it — rather than against the form's own
   // state — is what tells an external change apart from this form's own edit.
   const reflected = useRef<T>(unit.displayed);
+  // The latest unit facts, for the change listener the form instance holds.
+  const current = useRef(unit);
+  current.current = unit;
   const form = useForm({
     defaultValues: unit.displayed,
     listeners: {
       onChange: ({ formApi }) => {
+        const { writable, displayed, edit } = current.current;
+        // An inspected inherited definition is not writable: the transaction
+        // owner refuses the edit, so the field returns to the owner's value at
+        // once rather than holding a local value no draft backs.
+        if (!writable) { formApi.reset(displayed); return; }
         const values = formApi.state.values as T;
         reflected.current = values;
-        unit.edit(values);
+        edit(values);
       },
     },
   }) as TypedUnitForm<T>;

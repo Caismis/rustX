@@ -1,5 +1,5 @@
 import type {
-  ConfigurationApplication, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
+  ConfigurationApplication, McpView, McpWrite, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
 } from '../../../../protocol/app-server/v18';
 import type { ConnectionState } from '../../client/app-server';
@@ -25,37 +25,6 @@ export function settingsTargetLabel(target: SettingsTarget): string {
   return target.kind === 'user' ? 'User Settings' : `Workspace Settings — ${target.displayName}`;
 }
 
-/** The six product pages Settings is organized around.
- *
- * They are user tasks, not native semantic-unit names: a user configures a
- * Provider, chooses a default model, writes guidance, grants Tool access or
- * inspects an extension without ever meeting `root_model`, `native_tools` or
- * `source_tools`. Native identities, exact CAS writes and application facts are
- * unchanged underneath — only what the browser groups them into is new. */
-export type SettingsPage = 'general' | 'models' | 'agent' | 'tools' | 'extensions' | 'advanced';
-export const globalSettingsPages: readonly SettingsPage[] = ['general', 'models', 'agent', 'tools', 'extensions', 'advanced'];
-export function settingsPageLabel(page: SettingsPage): string {
-  return page === 'general' ? 'General'
-    : page === 'models' ? 'Models'
-      : page === 'agent' ? 'Agent'
-        : page === 'tools' ? 'Tools & Permissions'
-          : page === 'extensions' ? 'Extensions' : 'Advanced';
-}
-/** The pages one exact owner authorizes.
- *
- * Workspace Settings is a constrained override surface, not a second copy of
- * global Settings: General holds client-owned preferences that no native source
- * authors at all, so a Workspace has no General page rather than an empty one.
- * The constrained page set is derived here, once, from the owner — never
- * rediscovered by a page, a card or a test. */
-export function settingsPages(target: SettingsTarget): readonly SettingsPage[] {
-  return target.kind === 'user' ? globalSettingsPages : globalSettingsPages.filter(page => page !== 'general');
-}
-/** The page an owner's Settings opens at: the first page it authorizes. */
-export function settingsLanding(target: SettingsTarget): SettingsPage {
-  return settingsPages(target)[0];
-}
-
 /** Every resource kind the one Extensions surface manages. `native` is the
  * closed set of native extensions configured through `rustx.toml` semantic
  * units rather than through a resource document of their own. */
@@ -68,20 +37,6 @@ export function extensionFamilyLabel(family: ExtensionFamily): string {
         : family === 'workflow' ? 'Workflow'
           : family === 'managed_python' ? 'Managed Python' : 'Native';
 }
-
-/** The secondary focus of one primary page.
- *
- * This is presentation navigation with exactly one owner, the Settings
- * navigation machine. It carries identities only: no draft, no CAS base and no
- * mutation lives here, so focusing, leaving and refocusing a detail can never
- * create, migrate or discard editing intent. */
-export type SettingsFocus =
-  | { kind: 'connection' }
-  | { kind: 'provider'; id: string }
-  /** `provider` records which Provider detail the Model was opened from, so
-   * leaving the Model returns to that Provider rather than to the bare list. */
-  | { kind: 'model'; id: string; provider?: string }
-  | { kind: 'extension'; family: ExtensionFamily; name: string };
 
 /** The native application scope this source target publishes under, exactly as
  * `SourceTarget::application_scope` names it. Application versions are u64
@@ -419,6 +374,60 @@ export function resourceIdentities(source: SourceSettings | undefined, family: R
 export function inheritedResources(source: SourceSettings | undefined, scope: SourceScope, family: ResourceFamily, authored: readonly string[]): readonly ResourceIdentity[] {
   if (scope !== 'workspace') return [];
   return resourceIdentities(source, family).filter(entry => entry.scope === 'user' && !authored.includes(entry.name));
+}
+
+/** How a scope that authors nothing for one unit inherits it.
+ *
+ * - `value` — a `rustx.toml` semantic unit. Native overlays documents unit by
+ *   unit, so the inherited value is displayed in the editor and an edit of it
+ *   is this scope's override of exactly that unit (#391).
+ * - `identity` — a whole resource definition in its own native document (MCP,
+ *   named Agent). A Workspace definition shadows the entire same-name User
+ *   definition, so there is no value to overlay: inspecting the inherited
+ *   definition is not authoring, and a Workspace definition begins only with an
+ *   explicit override that replaces it whole. */
+export type UnitOwnership = 'value' | 'identity';
+export function unitOwnership(mutation: SourceMutation): UnitOwnership {
+  return mutation.kind === 'mcp' || mutation.kind === 'agent' ? 'identity' : 'value';
+}
+
+/** The lower-scope definition one Workspace resource identity would shadow.
+ *
+ * Only a Workspace inherits, and only from a User definition of the same
+ * identity. Either native fact establishes one: the User document authoring
+ * it, or the native inventory reporting a User definition — winning, or
+ * shadowed by this Workspace's own. An identity is never treated as new merely
+ * because one projection omits it.
+ *
+ * `seed` is what an explicit override begins from: the inherited definition
+ * with every secret-bearing value removed. Native never projects an MCP literal
+ * environment value or header, and retained keys name values of the *same*
+ * document, so a Workspace override retains nothing of the User one — the
+ * withheld keys are listed so the override can say what it does not copy. A
+ * User definition whose content is not projected, or does not parse, has no
+ * seed; its override starts from the neutral authoring seed. */
+export interface ShadowedDefinition { path: string; seed?: unknown; withheld: readonly string[]; diagnostic?: string }
+export function shadowedDefinition(source: SourceSettings | undefined, scope: SourceScope, mutation: SourceMutation): ShadowedDefinition | undefined {
+  if (!source || scope !== 'workspace' || (mutation.kind !== 'mcp' && mutation.kind !== 'agent')) return undefined;
+  const name = mutation.kind === 'mcp' ? mutation.id : mutation.name;
+  const listed = resourceIdentities(source, mutation.kind).find(entry => entry.name === name);
+  const inventoried = listed?.scope === 'user' ? listed.path : listed?.shadowed;
+  if (mutation.kind === 'mcp') {
+    const view = source.user_mcp.authored?.[name];
+    if (view) return { path: source.user_mcp.path, seed: mcpOverrideSeed(view), withheld: [...view.retained_env, ...view.retained_headers] };
+    return inventoried === undefined ? undefined : { path: inventoried, withheld: [], diagnostic: source.user_mcp.diagnostic ?? undefined };
+  }
+  const user = source.agents.find(agent => agent.scope === 'user' && agent.name === name);
+  if (user) return { path: user.source.path, seed: user.source.authored ?? undefined, withheld: [], diagnostic: user.source.diagnostic ?? undefined };
+  return inventoried === undefined ? undefined : { path: inventoried, withheld: [] };
+}
+/** A Workspace MCP override seed from the inherited User definition: its
+ * non-secret shape and environment *references* only. Literal values are
+ * dropped even if a projection ever carried one, and nothing is retained,
+ * because retained keys can only name values the Workspace document holds. */
+function mcpOverrideSeed(view: McpView): McpWrite {
+  const { env: _env, headers: _headers, ...definition } = view.definition;
+  return { definition, retained_env: [], retained_headers: [] };
 }
 
 /** Owner navigation from native facts only.

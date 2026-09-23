@@ -1,13 +1,16 @@
 import { expect, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createActor } from 'xstate';
-import { useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import type { AppServerClient } from '../src/client/app-server';
+import { ConnectionController } from '../src/connection/controller';
 import type { SourceMutation, SourceSettings } from '../../protocol/app-server/v18';
 import { settingsTargetMachine, type SettingsTargetContext } from '../src/app/settings/machines/settings-target';
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
 import { SettingsActorContext } from '../src/app/settings/machines/react';
 import { SourceContext } from '../src/app/settings/source-context';
-import { settingsLanding, userSettingsTarget, workspaceSettingsTarget, type SettingsFocus, type SettingsPage } from '../src/app/settings/projection';
+import { settingsTargetKey, userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from '../src/app/settings/projection';
+import { settingsNavigationMachine, type SettingsNavigationActor, type SettingsPage } from '../src/app/settings/machines/navigation';
 import { Settings, type SettingsProps } from '../src/app/settings/Settings';
 import { cfg3Source } from './cfg3-data';
 
@@ -82,23 +85,40 @@ export async function renderEditor(node: ReactNode, options: {
   return { ...authority, view, rerender };
 }
 
-/** `Settings` rendered on its own, outside the product shell. In the product
- * the Settings navigation machine owns the displayed page and the detail
- * focused inside it; here the test surface owns both, exactly as a controlled
- * parent would — including the per-page focus map, so leaving a detail for
- * another page and returning restores it.
+/** A started Settings navigation machine, opened on one exact target exactly
+ * as the product shell's `OPEN` decision opens it. The owner lookup is never
+ * exercised by a Settings surface test, so it answers `retired`. */
+export function openSettingsNavigation(target: SettingsTarget, page?: SettingsPage): SettingsNavigationActor {
+  const navigation = createActor(settingsNavigationMachine, { input: { lookup: async () => ({ kind: 'retired' }) } });
+  navigation.start();
+  navigation.send({ type: 'OPEN', target });
+  if (page) navigation.send({ type: 'SELECT', page });
+  return navigation;
+}
+
+/** `Settings` rendered on its own, outside the product shell, but with exactly
+ * the product composition: the real Settings navigation machine owns the
+ * target, the displayed page and the detail focused inside it, and a real
+ * `ConnectionController` is supplied for every target, as `App` supplies one.
+ * No test surface can therefore reach a navigation state the product could
+ * not, nor hide one the product could.
  *
- * It opens on the landing page of the exact target, which is the same rule the
- * navigation machine applies. */
-export function SettingsSurface({ initialPage, ...props }: Omit<SettingsProps, 'page' | 'onSelect' | 'onFocus' | 'focus'> & { initialPage?: SettingsPage }) {
-  const [page, setPage] = useState<SettingsPage>(initialPage ?? settingsLanding(props.target));
-  const [focus, setFocus] = useState<Partial<Record<SettingsPage, SettingsFocus>>>({});
-  return <Settings {...props} page={page} focus={focus[page]} onSelect={setPage}
-    onFocus={next => setFocus(current => {
-      const updated = { ...current };
-      if (next) updated[page] = next; else delete updated[page];
-      return updated;
-    })} />;
+ * Rendering it again with another `target` is the product's decision to open
+ * that owner's Settings, so it is delivered to the machine as exactly that
+ * `OPEN` event. */
+export function SettingsSurface({ target, initialPage, navigation, connection, ...props }: Omit<SettingsProps, 'navigation' | 'connection'> & {
+  client: AppServerClient; target: SettingsTarget; initialPage?: SettingsPage;
+  navigation?: SettingsNavigationActor; connection?: ConnectionController;
+}) {
+  const [actor] = useState(() => navigation ?? openSettingsNavigation(target, initialPage));
+  const [controller] = useState(() => connection ?? new ConnectionController(props.client));
+  const opened = useRef(settingsTargetKey(target));
+  useLayoutEffect(() => {
+    if (opened.current === settingsTargetKey(target)) return;
+    opened.current = settingsTargetKey(target);
+    actor.send({ type: 'OPEN', target });
+  }, [actor, target]);
+  return <Settings {...props} navigation={actor} connection={controller} />;
 }
 
 /** Move to one primary product page through its actual tab, so a page change

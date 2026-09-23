@@ -6,6 +6,9 @@ import { AppServerClient } from '../src/client/app-server';
 import type { ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v18';
 import type { ProductHostWorkspaces, WorkspaceCatalog } from '../src/workspaces/host';
 import { Server, TOKEN, endpoint } from './fixture';
+import { ConnectionController } from '../src/connection/controller';
+import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
+import { openSettingsNavigation, SettingsSurface } from './settings-harness';
 
 // Deterministic owner-navigation fencing. `listWorkspaces` is the only
 // asynchronous preparation; every test drives it with an explicit deferred
@@ -222,4 +225,75 @@ it('navigation F: an owning-Workspace decision while Settings stays mounted open
   expect(screen.queryByRole('tab', { name: 'General' })).toBeNull();
   expect(selected('Models')).toBe('true');
   expect(selected('Tools & Permissions')).toBe('false');
+});
+
+// ── #392 Connection is client-owned: the real App composition ───────────────
+//
+// `App` always hands Settings a `ConnectionController`. These run the real
+// product shell, so a Workspace surface is exercised with exactly the
+// controller the product supplies — the presence of that controller must never
+// be what decides whether Connection is reachable.
+
+async function mountApp() {
+  await server.connect();
+  const connection = new ConnectionController(server.client);
+  render(<App client={server.client} workspaceHost={hostWith(async () => catalog())} connection={connection} />);
+  await screen.findByRole('button', { name: 'Workspace actions for Workspace B' });
+}
+async function openWorkspaceB() {
+  fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Workspace B', hidden: true }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace settings' }));
+  await screen.findByRole('heading', { name: 'Workspace Settings — Workspace B' });
+}
+
+it('N10 real App: User Settings → Advanced exposes Connection', async () => {
+  await mountApp();
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  await screen.findByRole('heading', { name: 'User Settings' });
+  fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
+  expect(connectionShown()).toBe(true);
+});
+
+it('N10 real App: Workspace Settings → Advanced exposes no Connection although App supplies a ConnectionController', async () => {
+  await mountApp();
+  await openWorkspaceB();
+  fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
+  expect(selected('Advanced')).toBe('true');
+  expect(screen.queryByRole('button', { name: 'Connection' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Back to Advanced' })).toBeNull();
+  expect(screen.queryByRole('region', { name: 'Connection Settings' })).toBeNull();
+});
+
+it('N10 real App: OPEN.CONNECTION from Workspace Settings retargets to User Advanced/Connection', async () => {
+  // No Session view is open, so a lost transport shows the recovery surface.
+  await mountApp();
+  await openWorkspaceB();
+  fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
+  expect(screen.queryByRole('region', { name: 'Connection Settings' })).toBeNull();
+  await act(async () => { await server.client.disconnect(); });
+  // The recovery surface's explicit Connection decision, taken while the
+  // Workspace dialog stays mounted over it.
+  fireEvent.click(screen.getByRole('button', { name: 'Show details', hidden: true }));
+  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
+  expect(screen.queryByRole('heading', { name: 'Workspace Settings — Workspace B' })).toBeNull();
+  expect(connectionShown()).toBe(true);
+});
+
+it('N11 a Workspace navigation state cannot be forced into Connection, with the product controller supplied', async () => {
+  await server.connect();
+  const navigation = openSettingsNavigation(workspaceSettingsTarget('wB', 'Workspace B'), 'advanced');
+  render(<SettingsSurface client={server.client} target={workspaceSettingsTarget('wB', 'Workspace B')} navigation={navigation}
+    connection={new ConnectionController(server.client)} host={hostWith(async () => catalog())} />);
+  await screen.findByRole('heading', { name: 'Workspace Settings — Workspace B' });
+  act(() => { navigation.send({ type: 'FOCUS', focus: { kind: 'connection' } }); });
+  expect(navigation.getSnapshot().context).toMatchObject({ page: 'advanced', focus: {} });
+  expect(screen.queryByRole('region', { name: 'Connection Settings' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Connection' })).toBeNull();
+  // The same composition on the User target does reach it, so the absence
+  // above is the capability and not a missing fixture.
+  act(() => { navigation.send({ type: 'OPEN', target: userSettingsTarget }); });
+  act(() => { navigation.send({ type: 'SELECT', page: 'advanced' }); });
+  fireEvent.click(await screen.findByRole('button', { name: 'Connection' }));
+  expect(connectionShown()).toBe(true);
 });

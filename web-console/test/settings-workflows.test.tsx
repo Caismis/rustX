@@ -266,6 +266,200 @@ it('S2-07 Workspace Settings offers only Workspace overrides, with inheritance r
   expect(methods(s).some(method => method.startsWith('session/'))).toBe(false);
 });
 
+// ── S2-07 Viewing an inherited resource is not Workspace authoring ──────────
+
+/** A literal the User MCP definition holds. Native never projects it; this
+ * fixture puts it on the wire anyway, so the browser's own refusal to copy an
+ * inherited secret is what the assertions below observe. */
+const INHERITED_SECRET = 'inherited-user-literal-value';
+
+/** A Workspace that inherits one User MCP definition and one User named Agent,
+ * over a native store that commits each Workspace definition mutation exactly
+ * as native projects it. */
+function inheritingWorkspace() {
+  const s = cfg3Client(async (op, source) => {
+    if (op.method !== 'configuration/sourceWrite' || op.params.target.kind !== 'workspace') return;
+    const mutation = op.params.mutation;
+    if (mutation.kind === 'mcp') {
+      const authored = { ...source.workspace_mcp!.authored };
+      if (mutation.authored) {
+        const { env, headers, ...definition } = mutation.authored.definition;
+        authored[mutation.id] = { definition, retained_env: Object.keys(env ?? {}), retained_headers: Object.keys(headers ?? {}) };
+      } else delete authored[mutation.id];
+      source.workspace_mcp = { ...source.workspace_mcp!, revision: `${source.workspace_mcp!.revision}+`, authored };
+    }
+    if (mutation.kind === 'agent') {
+      source.agents = source.agents.filter(agent => !(agent.scope === 'workspace' && agent.name === mutation.name));
+      if (mutation.authored) source.agents.push({ scope: 'workspace', name: mutation.name, source: { path: `/workspace/.agents/agents/${mutation.name}.toml`, revision: 'agent-ws-1', authored: mutation.authored } });
+    }
+  });
+  s.source.user_mcp!.authored = { search: {
+    definition: { type: 'stdio', command: 'search-server', args: ['--index'], sensitive_env: { API_TOKEN: '$SEARCH_TOKEN' }, env: { LITERAL_TOKEN: INHERITED_SECRET } },
+    retained_env: ['LITERAL_TOKEN'], retained_headers: [],
+  } } as never;
+  s.source.agents = [{ scope: 'user', name: 'reviewer', source: { path: '/home/user/rustx/.agents/agents/reviewer.toml', revision: 'agent-user-1', authored: { description: 'User reviewer', instructions: 'Review carefully.' } } }];
+  s.source.prospective_resources = {
+    definitions: [
+      { family: 'mcp', name: 'search', valid: true, location: { scope: 'user', path: '/home/user/rustx/.agents/mcp.toml' } },
+      { family: 'agent', name: 'reviewer', valid: true, location: { scope: 'user', path: '/home/user/rustx/.agents/agents/reviewer.toml' } },
+    ],
+    resource_diagnostics: [], agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [],
+  } as never;
+  return s;
+}
+const definition = (title: string) => screen.getByRole('form', { name: title });
+const definitionState = (title: string) => definition(title).getAttribute('data-definition');
+const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
+const disabled = (element: HTMLElement) => element.matches(':disabled');
+
+it('S2-07 an inherited MCP definition is inspected read-only; only Override begins a Workspace draft, and Save writes it once', async () => {
+  const s = inheritingWorkspace();
+  await workspace(s, 'Extensions');
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
+  await openResourceRow('search');
+  // Inspecting: the inherited safe facts are shown, nothing is writable, no
+  // Workspace draft exists and nothing is written.
+  expect(definitionState('MCP search')).toBe('inherited');
+  expect(within(definition('MCP search')).getByText(/Inherited from User \(\/home\/user\/rustx\/\.agents\/mcp\.toml\)/)).toBeTruthy();
+  expect(field('MCP command').value).toBe('search-server');
+  expect(disabled(field('MCP command'))).toBe(true);
+  expect((screen.getByRole('button', { name: 'Save MCP search' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole('button', { name: /Use global default MCP search|Remove MCP search/ })).toBeNull();
+  // Even an input that reaches the field anyway authors nothing.
+  fireEvent.change(field('MCP command'), { target: { value: 'sneaked-edit' } });
+  await waitFor(() => expect(field('MCP command').value).toBe('search-server'));
+  expect(retained(s)).not.toContain('search-server');
+  expect(retained(s)).not.toContain('sneaked-edit');
+  // The withheld literal is named, never shown or retained.
+  expect(within(definition('MCP search')).getByText(/literal values for LITERAL_TOKEN/)).toBeTruthy();
+  expect(document.body.innerHTML).not.toContain(INHERITED_SECRET);
+  expect(writes(s)).toHaveLength(0);
+
+  // The explicit transition: a Workspace draft seeded from the inherited
+  // definition, still unwritten, carrying no inherited secret.
+  fireEvent.click(screen.getByRole('button', { name: 'Override MCP search in this Workspace' }));
+  expect(definitionState('MCP search')).toBe('overriding');
+  expect(disabled(field('MCP command'))).toBe(false);
+  expect(retained(s)).toContain('search-server');
+  expect(retained(s)).not.toContain(INHERITED_SECRET);
+  expect(retained(s)).not.toContain('LITERAL_TOKEN');
+  expect(writes(s)).toHaveLength(0);
+
+  // Edit, leave the page and come back: the transaction owner kept the draft.
+  fireEvent.change(field('MCP command'), { target: { value: 'search-workspace' } });
+  await openSettingsPage('Models');
+  await openSettingsPage('Extensions');
+  expect(field('MCP command').value).toBe('search-workspace');
+  expect(definitionState('MCP search')).toBe('overriding');
+  // Root availability is a second, independent draft.
+  await chooseOption('Selection', 'All', within(screen.getByRole('form', { name: 'Source search' })));
+
+  fireEvent.click(screen.getByRole('button', { name: 'Save MCP search' }));
+  await waitFor(() => expect(writes(s)).toHaveLength(1));
+  expect(writes(s)[0].params).toEqual({
+    target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'mcp-2',
+    mutation: { kind: 'mcp', id: 'search', authored: {
+      definition: { type: 'stdio', command: 'search-workspace', args: ['--index'], sensitive_env: { API_TOKEN: '$SEARCH_TOKEN' } },
+      retained_env: [], retained_headers: [],
+    } },
+  });
+  expect(JSON.stringify(writes(s))).not.toContain(INHERITED_SECRET);
+  await waitFor(() => expect(definitionState('MCP search')).toBe('authored'));
+  // The definition save did not submit the root selection on its behalf.
+  expect(writes(s)).toHaveLength(1);
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save Source search' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Source search' }));
+  await waitFor(() => expect(writes(s)).toHaveLength(2));
+  expect(writes(s)[1].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'source_tools', id: 'search', authored: 'all' } });
+
+  // Removing the Workspace override is inheritance, not deletion: exactly one
+  // Workspace removal, and the User definition is inspected again.
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Use global default MCP search' }) as HTMLButtonElement).disabled).toBe(false));
+  expect(screen.getByRole('button', { name: 'Use global default MCP search' }).closest('[data-removal]')!.getAttribute('data-removal')).toBe('override-removal');
+  await confirmAction('Use global default MCP search');
+  await waitFor(() => expect(writes(s)).toHaveLength(3));
+  expect(writes(s)[2].params).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'mcp', id: 'search', authored: null } });
+  await waitFor(() => expect(definitionState('MCP search')).toBe('inherited'));
+  expect(s.source.user_mcp!.authored!.search).toBeTruthy();
+  expect(field('MCP command').value).toBe('search-server');
+  expect(writes(s).filter(op => op.params.target.kind === 'user')).toHaveLength(0);
+});
+
+it('S2-07 discarding a Workspace MCP override writes nothing and returns to inspection', async () => {
+  const s = inheritingWorkspace();
+  await workspace(s, 'Extensions');
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
+  await openResourceRow('search');
+  fireEvent.click(screen.getByRole('button', { name: 'Override MCP search in this Workspace' }));
+  fireEvent.change(field('MCP command'), { target: { value: 'abandoned' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }));
+  await waitFor(() => expect(definitionState('MCP search')).toBe('inherited'));
+  expect(field('MCP command').value).toBe('search-server');
+  expect(disabled(field('MCP command'))).toBe(true);
+  expect(retained(s)).not.toContain('abandoned');
+  expect(writes(s)).toHaveLength(0);
+});
+
+it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Use global default are each one explicit Workspace mutation', async () => {
+  const s = inheritingWorkspace();
+  await workspace(s, 'Extensions');
+  fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
+  await openResourceRow('reviewer');
+  expect(definitionState('Agent reviewer')).toBe('inherited');
+  expect(field('Description').value).toBe('User reviewer');
+  expect(disabled(field('Description'))).toBe(true);
+  fireEvent.change(field('Description'), { target: { value: 'sneaked-edit' } });
+  await waitFor(() => expect(field('Description').value).toBe('User reviewer'));
+  expect(retained(s)).not.toContain('User reviewer');
+  expect(writes(s)).toHaveLength(0);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Override Agent reviewer in this Workspace' }));
+  expect(definitionState('Agent reviewer')).toBe('overriding');
+  expect(retained(s)).toContain('User reviewer');
+  expect(writes(s)).toHaveLength(0);
+  fireEvent.change(field('Description'), { target: { value: 'Workspace reviewer' } });
+  fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+  await openResourceRow('reviewer');
+  expect(field('Description').value).toBe('Workspace reviewer');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Save Agent reviewer' }));
+  await waitFor(() => expect(writes(s)).toHaveLength(1));
+  expect(writes(s)[0].params).toEqual({
+    target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'missing',
+    mutation: { kind: 'agent', name: 'reviewer', authored: { description: 'Workspace reviewer', instructions: 'Review carefully.' } },
+  });
+  await waitFor(() => expect(definitionState('Agent reviewer')).toBe('authored'));
+  // The root delegation allowlist is a separate unit that nothing wrote.
+  expect(writes(s).some(op => op.params.mutation.kind === 'config')).toBe(false);
+
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Use global default Agent reviewer' }) as HTMLButtonElement).disabled).toBe(false));
+  await confirmAction('Use global default Agent reviewer');
+  await waitFor(() => expect(writes(s)).toHaveLength(2));
+  expect(writes(s)[1].params).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'agent', name: 'reviewer', authored: null } });
+  await waitFor(() => expect(definitionState('Agent reviewer')).toBe('inherited'));
+  expect(s.source.agents.filter(agent => agent.scope === 'user').map(agent => agent.name)).toEqual(['reviewer']);
+});
+
+it('S2-07 a new Workspace resource and a Workspace-only definition are worded as creation and deletion, never inheritance', async () => {
+  const s = inheritingWorkspace();
+  s.source.workspace_mcp!.authored = { local: { definition: { type: 'stdio', command: 'local-server', args: [] }, retained_env: [], retained_headers: [] } };
+  await workspace(s, 'Extensions');
+  fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
+  fireEvent.change(screen.getByLabelText('New MCP identity'), { target: { value: 'fresh' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add MCP' }));
+  // Creation is its own explicit gesture: writable at once, no override action.
+  expect(definitionState('MCP fresh')).toBe('new');
+  expect(disabled(field('MCP command'))).toBe(false);
+  expect(screen.queryByRole('button', { name: /^Override MCP fresh/ })).toBeNull();
+  expect(writes(s)).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: '← Extensions' }));
+  await openResourceRow('local');
+  // A Workspace definition that shadows nothing is removed, not "inherited again".
+  expect(definitionState('MCP local')).toBe('authored');
+  expect(screen.queryByRole('button', { name: 'Use global default MCP local' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Remove MCP local' }).closest('[data-removal]')!.getAttribute('data-removal')).toBe('authored-removal');
+});
+
 // ── S2-08 No fictitious authoring ───────────────────────────────────────────
 
 it.each([

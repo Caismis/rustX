@@ -67,15 +67,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   // overwrite a newer decision, reopen a closed dialog or publish an obsolete
   // error. Async resolution is preparation, never ongoing navigation authority.
   const navigationActor = useActorRef(settingsNavigationMachine, { input: { lookup: createOwnerLookup(workspaceHost, client) } });
-  const settingsPage = useSelector(navigationActor, snapshot => snapshot.context.page);
-  const settingsTarget = useSelector(navigationActor, snapshot => snapshot.context.target);
-  // The detail focused inside the displayed page. Focus is navigation state
-  // with one owner; it carries identities only and never an editing draft.
-  const settingsFocus = useSelector(navigationActor, snapshot => snapshot.context.page ? snapshot.context.focus[snapshot.context.page] : undefined);
   const navigationError = useSelector(navigationActor, snapshot => snapshot.context.error);
   const openSettings = (target: SettingsTarget) => navigationActor.send({ type: 'OPEN', target });
   const openConnectionSettings = () => navigationActor.send({ type: 'OPEN.CONNECTION' });
-  const closeSettings = () => navigationActor.send({ type: 'CLOSE' });
   const [sessionSettingsOpen, setSessionSettingsOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
@@ -246,7 +240,10 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     settings={wide => <SettingsTrigger wide={wide} onClick={() => openSettings(userSettingsTarget)} />} />}
     rightOpen={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} rightPanel={geometry => <RightPanel {...geometry} open={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} close={() => { setInspectorOpen(false); setArtifactPreview(undefined); }} title={artifactPreview && artifactPreview.resources === artifacts ? 'Artifact preview' : 'Developer inspector'}>{artifactPreview && artifactPreview.resources === artifacts ? <ArtifactPreview key={artifactPreview.artifact.id} artifact={artifactPreview.artifact} resources={artifacts!} /> : <Inspector log={client.log} state={state} view={view} />}</RightPanel>}
     overlay={<>
-      {settingsPage && <Settings page={settingsPage} focus={settingsFocus} onSelect={page => navigationActor.send({ type: 'SELECT', page })} onFocus={focus => navigationActor.send({ type: 'FOCUS', focus })} connection={connection} client={client} target={settingsTarget} host={workspaceHost} onClose={closeSettings} theme={theme} setTheme={setTheme} />}
+      {/* Settings renders the navigation machine's state and nothing else: which
+          target, page and detail are open is decided there, including whether
+          this target may reach the client-owned Connection surface at all. */}
+      <Settings navigation={navigationActor} connection={connection} client={client} host={workspaceHost} theme={theme} setTheme={setTheme} />
     </>}>
     {!view && <header className="console-header"><strong>rustX</strong><Button aria-label="Toggle Inspector" onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></header>}
     {!connected && !view && <section className="notice" aria-label="Connection recovery"><p>{selection.busy ? 'Connecting…' : 'Unable to connect to rustX'}</p>
