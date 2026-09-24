@@ -311,13 +311,13 @@ OsStr equality: the exact singleton enters the inherited-control-channel mode;
 the same token plus any other argument returns exit 2. Public help excludes it.
 No protocol, semantic policy, dependency or launch-normalization change is made.
 
-Unix regressions:
+OS-native regressions (Unix argv; Linux where filename materialization is required):
 
 - `cli::tests::os_argv_paths_survive_typed_conversion`: exact non-Unicode launch
   config/workspace/runtime-root and Init model-document PathBuf values.
 - `configuration_commands::os_argv_non_unicode_model_document_selects_exact_file`: real
   binary opens the invalid-UTF-8 filename, not the deliberately invalid lossy
-  sibling; normal JSON success/exit 0, exact published model, unchanged input
+  sibling on Linux; normal JSON success/exit 0, exact published model, unchanged input
   workspace and absence of runtime storage are asserted.
 - `configuration_commands::os_argv_non_unicode_text_is_a_lexical_failure`: real
   App Server text value fails via clap with invalid-UTF-8 diagnostic, empty
@@ -403,7 +403,7 @@ now uses the existing `projection_omitted` contract if a path-bearing report
 cannot be represented in JSON: projections and file labels are absent, a
 `projection_encoding` warning is present, and native validity/readiness/exit
 classification and causal diagnostic text remain unchanged. No path is rewritten.
-The real process test proves valid exact-file selection (exit 3, empty stderr),
+The Linux real process test proves valid exact-file selection (exit 3, empty stderr),
 invalid lossy-sibling selection (exit 2), normal structured reports and unchanged
 filesystem state. The non-Unicode source reaches source revision calculation.
 
@@ -419,8 +419,7 @@ when resolving Sessions, share this source-revision owner. Runtime-root bindings
 are not source-manifest keys; workspace identity already uses exact Unix bytes.
 Init model-document and App Server token-file are native file reads outside this
 manifest. Diagnostic workspace/runtime-root/provenance paths use the bounded
-projection behavior above. No equivalent JSON serialization of this manifest
-exists elsewhere; unrelated resource, protocol and filesystem identities were
+projection behavior above. Both resource resolution and configuration application use this encoding; unrelated resource, protocol and filesystem identities were
 not redesigned. No broader filesystem guarantee is claimed.
 
 
@@ -478,3 +477,92 @@ config-file and retained model-document/text/child process tests pass. Paths are
 not normalized or converted to lossy identity. Diagnostic partial projection is
 explicit and retains native outcomes. No unrelated architecture changed. All
 final executed validation gates passed; the former config panic is fixed.
+
+
+## Platform contract correction
+
+Starting head: `b4a5e708aa81e3be2730e8984411300091a2e5cd`; main remains
+`da43450b77d3c195d95b06818be8142317663c91`. The reviewed macOS job failed while
+creating two invalid-UTF-8 filenames, before rustX launched (OS error 92).
+OS-native argv representability does not imply filesystem filename representability.
+
+The exact-file config and model-document regressions are now Linux-only and
+retain all exact-byte/lossy-sibling assertions. Unix-wide typed conversion tests
+need no filesystem access and continue asserting exact OsString/PathBuf equality.
+The Unix real-binary test
+`os_argv_non_unicode_missing_config_reaches_native_owner` creates only Unicode
+fixture directories, then supplies a non-Unicode missing path as argv. It accepts
+native invalid (2) or incomplete (3) classification according to filesystem
+behavior, requires normal JSON stdout and empty stderr, preserves causal text,
+and proves zero filesystem changes. A retained non-Unicode projection must use
+`projection_omitted` and `projection_encoding`; early native rejection without a
+path-bearing projection need not omit one. No platform error prose is asserted.
+The existing path-projection unit test also runs on macOS without materializing
+a filename and proves failure classification and causal text are retained.
+
+The bounded audit found one additional configuration-application manifest hash
+using JSON path keys (`input manifest`). It now calls the same exact-byte
+`source_manifest_revision` helper as resource resolution. Linux native test
+`settings_e2e::application_capture_preserves_non_unicode_source_identity` covers
+repeatable application capture from an exact non-Unicode file. No new encoding,
+parser, path abstraction, or configuration policy was introduced.
+
+Audit of cli/configuration/diagnostics/initialization/App Server/serve and process
+tests: production argv remains args_os -> clap -> native PathBuf; no lossy identity
+conversion or pre-owner UTF-8 path coercion was added. Lossy conversions in these
+changed tests deliberately construct/assert distinct display siblings, never
+select the native source. Display formatting in existing errors is presentation,
+not identity. Only physical invalid-byte filename fixtures use Linux gates;
+text rejection, private child dispatch, typed conversion and projection tests
+retain their Unix coverage. Native filesystem owners remain authoritative about
+which paths are usable. No arbitrary-invalid-filename guarantee is made for macOS.
+
+
+### Platform correction validation
+
+Linux local results; macOS verification is owned by the new-head CI run.
+
+| Command | Result |
+| --- | --- |
+| `git diff --check` | Pass |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo check --all-targets --all-features --locked` | Pass |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | Pass |
+| `cargo build --bins --locked` | Pass |
+| `cargo +1.92 check --all-targets --all-features --locked --target-dir target/msrv` | Pass |
+| `cargo test --lib --all-features --locked local_runtime::cli::tests` | 12 passed |
+| `cargo test --lib --all-features --locked local_runtime::configuration::` | 8 passed |
+| `cargo test --lib --all-features --locked application_capture_preserves_non_unicode_source_identity` | 1 passed |
+| `cargo test --lib --all-features --locked path_projection_tests` | 1 passed |
+| `cargo test --test process --all-features --locked os_argv_non_unicode_missing_config_reaches_native_owner` | 1 passed |
+| `cargo test --test process --all-features --locked configuration_commands` | 13 passed |
+| `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | 3,075 passed; 2 ignored |
+| `cargo test --test contracts --test provider --all-features --locked` | 194 passed; 5 live-provider ignored |
+| `cargo test --lib --all-features --locked -- boundary_suites::` | 225 passed |
+
+Additional checks: fake-provider `uv sync --frozen` and `uv run --frozen pytest`
+passed (51 tests); TUI `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` passed (852);
+protocol/app-server `pnpm check` and `pnpm typecheck` passed with no fixture drift.
+Check, Clippy and MSRV were rerun after the final test assertion change and passed.
+The new missing-path test initially assumed exit 2; it was corrected to the native
+invalid/incomplete distinction (2/3), and its final run passed. Existing exact-file
+assertions were not weakened. Full Web suites and macOS were not run locally.
+The prior macOS failure was confirmed from run 36070757610, job 107870904576;
+macOS success must be verified on the pushed correction before declaring the
+platform blocker resolved.
+
+
+External gate:
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --locked --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output`
+completed with 415 passed and one timeout:
+`tools::mcp_managed::a_dependency_conflict_fails_only_its_own_managed_source`
+at `tests/tools/mcp_managed.rs:1189` exceeded its 120-second preparation guard.
+The fixture directly calls CapabilityCoordinator, without CLI parsing or the
+configuration source-revision path. Its source and capability/Python owners are
+unchanged. This unrelated liveness failure was not repaired or hidden.
+
+
+The isolated rerun
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --test tools --all-features --locked a_dependency_conflict_fails_only_its_own_managed_source`
+passed unchanged (1 test, 17.81 seconds). The original timeout remains recorded;
+its underlying cause was not established. No assertions/timeouts were relaxed.

@@ -761,10 +761,7 @@ impl UserConfigManager {
         let manifest = context
             .as_ref()
             .map_or(&revisions, |capture| &capture.source_revisions);
-        let revision = format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(manifest).expect("input manifest"))
-        );
+        let revision = source_manifest_revision(manifest);
         let policy = IndependentPolicy {
             config: policy,
             effective: policy_effective,

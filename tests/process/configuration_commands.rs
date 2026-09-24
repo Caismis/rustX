@@ -485,7 +485,8 @@ fn exact_values_reach_native_process_owners() {
     assert!(!root.path().join("home").exists());
 }
 
-#[cfg(unix)]
+// Materializing arbitrary filename bytes is a Linux filesystem fixture contract.
+#[cfg(target_os = "linux")]
 #[test]
 fn os_argv_non_unicode_model_document_selects_exact_file() {
     use std::ffi::OsString;
@@ -604,7 +605,8 @@ fn os_argv_private_child_discriminator_is_exact() {
     assert_eq!(state_tree(root.path()), before);
 }
 
-#[cfg(unix)]
+// Materializing arbitrary filename bytes is a Linux filesystem fixture contract.
+#[cfg(target_os = "linux")]
 #[test]
 fn os_argv_non_unicode_config_selects_exact_file() {
     use std::ffi::OsString;
@@ -658,5 +660,61 @@ fn os_argv_non_unicode_config_selects_exact_file() {
         2,
     );
     assert_eq!(sibling["validity"], "invalid");
+    assert_eq!(state_tree(root.path()), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn os_argv_non_unicode_missing_config_reaches_native_owner() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    // No invalid-byte filename is created. Unix argv can carry the value even
+    // when the host filesystem cannot materialize it (including macOS).
+    let missing = workspace.join(OsString::from_vec(b"missing-\xff.toml".to_vec()));
+    let before = state_tree(root.path());
+    let output = run(
+        root.path(),
+        &[
+            OsString::from("config"),
+            OsString::from("check"),
+            OsString::from("--config"),
+            missing.into_os_string(),
+            OsString::from("--json"),
+        ],
+    );
+    // The filesystem may reject this spelling or report an absent optional
+    // source. Both are native diagnostic outcomes, never a clap Unicode error.
+    let code = output.status.code().unwrap();
+    assert!(matches!(code, 2 | 3));
+    let checked = report(&output, code);
+    assert_eq!(checked["operation"], "config_check");
+    assert_eq!(
+        checked["validity"],
+        if code == 2 { "invalid" } else { "incomplete" }
+    );
+    let diagnostics = checked["diagnostics"].as_array().unwrap();
+    assert!(diagnostics.iter().any(|d| {
+        d["reason"]
+            .as_str()
+            .is_some_and(|reason| !reason.is_empty())
+            && d["category"] != "projection_encoding"
+            && d["classification"] == if code == 2 { "error" } else { "warning" }
+    }));
+    let encoding_warning = diagnostics
+        .iter()
+        .any(|d| d["category"] == "projection_encoding");
+    if code == 3 {
+        // Resolution retained the non-Unicode source in its partial projection.
+        assert!(encoding_warning);
+        assert_eq!(checked["projection_omitted"], true);
+    }
+    if encoding_warning {
+        assert_eq!(checked["projection_omitted"], true);
+        assert!(checked["launch"].is_null() && checked["partial"].is_null());
+    }
     assert_eq!(state_tree(root.path()), before);
 }
