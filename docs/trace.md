@@ -493,6 +493,16 @@ cache supplies Session/Conversation scope. The Trajectory component lifetime is
 keyed by Session, Conversation and attachment so local state cannot leak across
 authority replacement.
 
+Selection resolution uses a display universe containing base projected items plus
+current dynamic items produced by collapse/search policy, deduplicated by semantic
+display key. `CollapsedCallSummary` is a real selectable item with its own display
+identity while sharing its Assistant's detail owner. Its exact key wins while the
+summary exists; receiving detail never selects the Assistant row in its place.
+Only expansion or search that removes the summary permits same-owner/facet
+fallback, normally to the Assistant `RecordRow`. Base owner/facet targets remain
+available when search filters them out, without causing reads or stealing search
+focus. Calls construction remains solely in the display-policy projection.
+
 Detail selection stores display key, native owner, facet and optional Context
 Message ID. Structural focus is a separate local state with no detail owner.
 Click, focus, Enter or Space on a header selects that structure and closes any
@@ -539,11 +549,15 @@ runs only at the tail; content/lifecycle-only repair does not pull a reader down
 The local Inspector uses React Aria tabs and existing safe Markdown, Shiki, JSON
 and artifact primitives. SYSTEM/CONTEXT select facets of the owning Request.
 Summary is a human-readable view; Native holds IDs and allowlisted native facts.
-Tool Input, Result and Schema always disclose absent facts explicitly. Missing
-proposal arguments are unavailable at the read cut; a loaded Tool without a
-canonical result says no result is recorded at that cut; a missing bounded Tool
-payload says the result is unavailable in the projection. Missing historical
-definitions are unavailable, never blank or inferred from current configuration.
+Tool Input, Result and Schema share one historical-read state decision. A pending
+read shows loading (or not-yet-loaded); a failed read shows that facet's read error,
+without claiming absence or automatically retrying. Only a successfully loaded
+detail can establish bounded Tool-payload omission or missing individual facts.
+The former says Tool detail is unavailable in the bounded projection. With a loaded
+Tool payload, missing proposal arguments are unavailable at the read cut; a Tool
+without a canonical result says no result is recorded at that cut. Missing
+historical definitions are unavailable, never blank or inferred from current
+configuration.
 Code remains conditional on the native supported source contract.
 `react-resizable-panels@4.12.4` owns drag/keyboard resizing, constraints, container
 reconciliation and double-click reset. Default Inspector width is

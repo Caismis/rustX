@@ -544,7 +544,7 @@
           "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1"
         }
       ],
-      "local_sha256": "a17c2eb38a8a7a0c08c84d421dd6525601537165c929bf7aabd6081bf01c67d5"
+      "local_sha256": "a71afd2de30e9a6d5cbe7d7c1ccf081ddcce8b1339b40f5b137c31b9dcb26bd9"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -589,7 +589,7 @@
           "upstream_sha256": "a31b4253ba9c7c2490f942768d060c769ff1b5b4fb653ccf67ab54af1e1593b7"
         }
       ],
-      "local_sha256": "5f2b983a743832f8e5b3256b22481441504dedea51357e8706e724559acb75c5"
+      "local_sha256": "623bd9e2b497724d30e3dc628620a5e62309ac21288aa8cdbd29276530b80764"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -654,7 +654,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "6655066074dbb377a41456a274c9baad7cffe682ed86b988310326ce2ecbb3b0"
+      "local_sha256": "3fcf079a8ab624f010673738a23c0d5cce8525808a0994556712f4ddff761e06"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
@@ -2355,7 +2355,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "bd07fad77ecf192930f6c18d9424b953335dda3b558000f5ab9575edb9c69030"
+      "local_sha256": "a7d354e742ede8f97a197c055b273a95855ae6f7dca4852515ef8151c1581c45"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",

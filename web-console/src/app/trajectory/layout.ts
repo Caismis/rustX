@@ -167,6 +167,12 @@ export function visibleItems(items: readonly TrajectoryDisplayItem[], records: r
   });
 }
 
+/** Base items retain owner/facet targets even when filtered. Current policy items
+ * contribute their own identities only while that policy produces them. */
+export function displayUniverse(base: readonly TrajectoryDisplayItem[], current: readonly TrajectoryDisplayItem[]): TrajectoryDisplayItem[] {
+  return [...new Map([...base, ...current].map(item => [item.display_key, item])).values()];
+}
+
 /** Same semantic facet first, then same native owner, never a numeric position. */
 export function preferredItem(items: readonly TrajectoryDisplayItem[], owner: string, selection?: TrajectorySelection): InspectableDisplayItem | undefined {
   const candidates = items.filter((item): item is InspectableDisplayItem => isInspectable(item) && item.owner_record_id === owner);

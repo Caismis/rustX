@@ -144,3 +144,23 @@ for (const kind of ['request', 'tool']) {
     await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
   });
 }
+
+test('T1-04 Calls summary keeps its display identity until explicit expansion', async ({ page }) => {
+  await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');
+  const ledger = page.getByRole('table', { name: 'Trace ledger' });
+  await page.getByRole('toolbar').getByRole('button', { name: 'Collapse Calls' }).click();
+  const summary = ledger.locator('[data-display-type="CollapsedCallSummary"][data-owner="trace:4"]');
+  const assistant = ledger.locator('[data-display-type="RecordRow"][data-owner="trace:4"]');
+  await summary.focus(); await page.keyboard.press('Enter');
+  await expect(summary).toHaveAttribute('data-selected', 'true');
+  await expect(summary).toBeFocused();
+  await expect(assistant).toHaveAttribute('aria-selected', 'false');
+  await expect(page.getByRole('complementary')).toBeVisible();
+  await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+  await summary.getByRole('button', { name: 'Expand Calls' }).click();
+  await expect(summary).toHaveCount(0);
+  await expect(assistant).toHaveAttribute('data-selected', 'true');
+  await expect(assistant).toBeFocused();
+  await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+  await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '0');
+});

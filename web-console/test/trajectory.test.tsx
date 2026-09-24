@@ -320,14 +320,15 @@ it.each(['result', 'definition', 'arguments', 'tool'] as const)('Tool facets exp
   expect(screen.queryByRole('tab', { name: 'Code' })).toBeNull();
   const expected = {
     Input: 'The canonical proposal for this call is not loadable at this read cut.',
-    Result: missing === 'tool' ? 'Tool result unavailable in this bounded detail projection.' : 'No canonical Tool result is recorded at this read cut.',
+    Result: 'No canonical Tool result is recorded at this read cut.',
     Schema: 'The historical Tool definition is unavailable at this read cut.',
   };
   for (const facet of ['Input', 'Result', 'Schema'] as const) {
     fireEvent.click(screen.getByRole('tab', { name: facet }));
     const panel = screen.getByRole('tabpanel');
     expect(panel.textContent?.trim().length).toBeGreaterThan(0);
-    if (missing === 'tool' || (facet === 'Input' && missing === 'arguments') || (facet === 'Result' && missing === 'result') || (facet === 'Schema' && missing === 'definition')) expect(within(panel).getByText(expected[facet])).toBeDefined();
+    if (missing === 'tool') expect(within(panel).getByText('Tool detail is unavailable in this bounded detail projection.')).toBeDefined();
+    else if ((facet === 'Input' && missing === 'arguments') || (facet === 'Result' && missing === 'result') || (facet === 'Schema' && missing === 'definition')) expect(within(panel).getByText(expected[facet])).toBeDefined();
   }
 });
 
@@ -355,4 +356,123 @@ it('T1-04 timeline navigation explicitly selects its native Request after struct
   expect(load.mock.calls).toEqual([[child.id]]);
   expect(row('RequestBoundary', child.id).getAttribute('data-selected')).toBe('true');
   expect(header.hasAttribute('data-selected')).toBe(false);
+});
+
+/** All reads are explicitly completed or rejected by the test, never a timer. */
+function controlledDetails(records: TraceRecord[]) {
+  const reads: string[] = []; const selections: (string | undefined)[] = [];
+  const pending = new Map<string, { resolve: (detail: TraceDetail) => void; reject: (error: Error) => void }>();
+  const older = vi.fn();
+  function Fixture() {
+    const [cache, setCache] = useState(cacheOf(records));
+    const load = useCallback((id: string) => {
+      reads.push(id); setCache(current => beginTraceDetail(current, id));
+      void new Promise<TraceDetail>((resolve, reject) => pending.set(id, { resolve, reject })).then(
+        detail => setCache(current => completeTraceDetail(current, id, 1, detail)),
+        (error: Error) => setCache(current => completeTraceDetail(current, id, 1, undefined, error.message)),
+      );
+    }, []);
+    return <Trajectory cache={cache} onSelect={id => { selections.push(id); setCache(current => selectTrace(current, id)); }} onLoadDetail={load} loadEarlier={older} latest={noop} />;
+  }
+  render(<Fixture />);
+  return { reads, selections, pending, older };
+}
+const assistantDetail = () => requestDetail(0, { kind: 'assistant', request: null, messages: [] });
+function collapseAndSelectSummary() {
+  fireEvent.click(within(screen.getByRole('toolbar')).getByRole('button', { name: 'Collapse Calls' }));
+  const summary = row('CollapsedCallSummary');
+  expect(summary).not.toBeNull();
+  act(() => summary.focus()); fireEvent.keyDown(summary, { key: 'Enter' });
+  return summary;
+}
+
+it('T1-04 Calls summary retains display focus through delayed detail and falls back only on expansion', async () => {
+  const { reads, selections, pending } = controlledDetails([proposal(), execution(1)]);
+  const summary = collapseAndSelectSummary();
+  const key = summary.dataset.displayKey;
+  const assertSummary = () => {
+    expect(summary.dataset.displayKey).toBe(key);
+    expect(summary.getAttribute('data-selected')).toBe('true');
+    expect(summary.getAttribute('aria-selected')).toBe('true');
+    expect(row('RecordRow').getAttribute('aria-selected')).toBe('false');
+    expect(document.activeElement).toBe(summary);
+    expect(selections).toEqual(['trace:0']);
+    expect(reads).toEqual(['trace:0']);
+  };
+  assertSummary();
+  await act(async () => pending.get('trace:0')!.resolve(assistantDetail()));
+  assertSummary();
+  // Fire the explicit expansion while DOM focus is still on the summary.
+  fireEvent.click(within(summary).getByRole('button', { name: 'Expand Calls' }));
+  expect(row('CollapsedCallSummary')).toBeNull();
+  expect(row('RecordRow').getAttribute('data-selected')).toBe('true');
+  expect(document.activeElement).toBe(row('RecordRow'));
+  expect(reads).toEqual(['trace:0']);
+});
+
+it.each(['expand', 'search', 'other owner'] as const)('T1-04 pending summary detail respects newer %s display state', async transition => {
+  const { reads, selections, pending, older } = controlledDetails([proposal(), execution(1), traceRecord(2)]);
+  const summary = collapseAndSelectSummary();
+  if (transition === 'expand') fireEvent.click(within(summary).getByRole('button', { name: 'Expand Calls' }));
+  else if (transition === 'search') {
+    const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+    act(() => search.focus());
+    fireEvent.change(search, { target: { value: 'ASSISTANT' } });
+  } else {
+    fireEvent.click(row('RequestBoundary', 'trace:2'));
+    fireEvent.click(screen.getByRole('button', { name: 'View System Prompt' }));
+    act(() => row('RequestBoundary', 'trace:2').focus());
+  }
+  const focus = document.activeElement;
+  await act(async () => pending.get('trace:0')!.resolve(assistantDetail()));
+  expect(document.activeElement).toBe(focus);
+  expect(older).not.toHaveBeenCalled();
+  if (transition === 'other owner') {
+    expect(row('CollapsedCallSummary').getAttribute('aria-selected')).toBe('false');
+    expect(row('RequestBoundary', 'trace:2').getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
+    expect(selections).toEqual(['trace:0', 'trace:2']);
+    expect(reads).toEqual(['trace:0', 'trace:2']);
+  } else {
+    expect(row('CollapsedCallSummary')).toBeNull();
+    expect(row('RecordRow').getAttribute('aria-selected')).toBe('true');
+    expect(reads).toEqual(['trace:0']);
+    if (transition === 'search') {
+      fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: '' } });
+      expect(row('CollapsedCallSummary').getAttribute('aria-selected')).toBe('false');
+      expect(row('RecordRow').getAttribute('aria-selected')).toBe('true');
+    }
+  }
+});
+
+it.each(['resolve', 'reject'] as const)('Tool facets distinguish pending historical reads from %s outcomes', async outcome => {
+  const { reads, pending } = controlledDetails([traceTool(10)]);
+  fireEvent.click(row('RecordRow', 'trace:10'));
+  const facets = ['Input', 'Result', 'Schema'] as const;
+  const noAbsence = (panel: HTMLElement) => {
+    expect(within(panel).queryByText(/bounded detail projection|No canonical Tool result|canonical proposal.*not loadable|historical Tool definition is unavailable/)).toBeNull();
+  };
+  for (const facet of facets) {
+    fireEvent.click(screen.getByRole('tab', { name: facet }));
+    const panel = screen.getByRole('tabpanel');
+    expect(within(panel).getByRole('status').textContent).toBe('Loading record detail…');
+    noAbsence(panel); expect(reads).toEqual(['trace:10']);
+    expect(screen.queryByRole('tab', { name: 'Code' })).toBeNull();
+  }
+  const detail = toolDetail(10, { tool: null, truncated: true });
+  await act(async () => {
+    if (outcome === 'resolve') pending.get('trace:10')!.resolve(detail);
+    else pending.get('trace:10')!.reject(new Error('Controlled historical read failure'));
+  });
+  for (const facet of facets) {
+    fireEvent.click(screen.getByRole('tab', { name: facet }));
+    const panel = screen.getByRole('tabpanel');
+    expect(within(panel).queryByRole('status')).toBeNull();
+    if (outcome === 'resolve') expect(within(panel).getByText('Tool detail is unavailable in this bounded detail projection.')).toBeDefined();
+    else {
+      expect(within(panel).getByRole('alert').textContent).toBe(`${facet} could not be established because the historical detail read failed: Controlled historical read failure`);
+      noAbsence(panel);
+    }
+    expect(reads).toEqual(['trace:10']);
+  }
 });

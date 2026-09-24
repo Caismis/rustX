@@ -8,7 +8,7 @@ import { Input } from '../../presentation/primitives/Input';
 import { TrajectoryInspector } from './TrajectoryInspector';
 import { CellContent, CellIcon } from './TrajectoryCell';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
-import { trajectoryItems, visibleItems, preferredItem, selectionOf, isInspectable, preferredStructure, preferredDisplayItem, type InspectableDisplayItem, type FocusableDisplayItem, type StructuralDisplayItem, type TrajectoryDisplayItem, type TrajectorySelection } from './layout';
+import { trajectoryItems, visibleItems, displayUniverse, preferredItem, selectionOf, isInspectable, preferredStructure, preferredDisplayItem, type InspectableDisplayItem, type FocusableDisplayItem, type StructuralDisplayItem, type TrajectoryDisplayItem, type TrajectorySelection } from './layout';
 import { searchItems } from './search';
 import { timelineFocus, trajectoryTimeline, type TrajectoryTimeRange, type TrajectoryTimelineMode } from './timeline';
 import css from './Trajectory.module.css';
@@ -46,6 +46,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
   const allItems = useMemo(() => trajectoryItems(records, cache.page.next_cursor), [records, cache.page.next_cursor]);
   const matches = useMemo(() => searchItems(allItems, query), [allItems, query]);
   const rows = useMemo(() => visibleItems(allItems, records, attempts, calls, matches), [allItems, records, attempts, calls, matches]);
+  const selectionItems = useMemo(() => displayUniverse(allItems, rows), [allItems, rows]);
   const matchingOwners = useMemo(() => matches ? new Set(allItems.filter((item): item is InspectableDisplayItem => isInspectable(item) && matches.has(item.display_key)).map(item => item.owner_record_id)) : null, [allItems, matches]);
   const boundaryLabel = useCallback((_record: unknown, index: number) => {
     const item = allItems.find(item => item.type === 'AttemptSectionHeader' && item.display_key === JSON.stringify(['attempt-section', records[index]?.location.attempt_id, records[index]?.id]));
@@ -62,7 +63,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     overscan: 12, initialRect: { width: 800, height: 500 },
     anchorTo: 'end', followOnAppend: 'auto', scrollEndThreshold: 2,
   });
-  const selectedItem = selection ? preferredItem(allItems, selection.owner_record_id, selection) : undefined;
+  const selectedItem = selection ? preferredItem(selectionItems, selection.owner_record_id, selection) : undefined;
   const selected = selectedItem?.record ?? (cache.selection?.id === selection?.owner_record_id ? cache.selection : undefined);
   const selectedDetail = selection ? cache.details[selection.owner_record_id] : undefined;
   const select = useCallback((item?: FocusableDisplayItem) => {

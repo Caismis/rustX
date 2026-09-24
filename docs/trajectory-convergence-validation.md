@@ -341,3 +341,59 @@ The full browser run also emits the existing React warning about updating global
 warning appears at the prior reviewed HEAD's `/tmp/401-fix-e2e.log` and this run's
 `/tmp/401-structure-e2e.log`; both browser suites pass. That unrelated Settings
 warning was not changed by this correction.
+
+
+## PR #401 final display-selection and Tool read-state correction
+
+Starting HEAD: `d7fcc1bb0c07116a03b0211c278d73ea8e82c5d7`; fetched base remains
+`e8f700dae5b252e7cdf5b78a9e0000b05edeee04`. Starting CI had twelve successful
+checks and two macOS jobs still running across two runs. This correction is
+Web/docs-only; native source, protocol, generated artifacts, dependencies,
+structural ownership and timing semantics are unchanged.
+
+`visibleItems` constructs dynamic Calls summaries, but the old selection resolver
+looked only in base `trajectoryItems`, prematurely falling back to the Assistant.
+Selection now resolves in a deduplicated union of base items and current policy
+items. A current summary retains its exact key; only its actual disappearance
+permits same-owner/facet fallback. Search still overrides collapse and performs no
+reads. Base owner/facet targets may remain selected while filtered, without moving
+focus from search. No Calls construction is duplicated.
+
+Input/Result/Schema share an explicit local historical-read classifier and render
+one state: pending, read error, successfully loaded bounded Tool omission, or
+loaded Tool facts. Missing arguments/result/definition statements are rendered
+only in the last state. The first render before request dispatch says detail is
+not loaded; in-flight reads show loading. Errors remain visible and never trigger
+automatic retry. Code still requires native source evidence.
+
+| Regression | Exact test and deterministic proof |
+| --- | --- |
+| Summary identity / delayed Assistant read / expansion | `T1-04 Calls summary retains display focus through delayed detail and falls back only on expansion`: exact summary key, both selection attributes, DOM focus, unselected Assistant, exact native owner and one read before/after controlled promise completion; explicit expansion migrates to Assistant with no duplicate read. |
+| In-flight display changes and search | `T1-04 pending summary detail respects newer %s display state` for `expand`, `search`, `other owner`: controlled Assistant completion cannot replace newer display/facet/focus; search reads no history or extra detail; restoring the summary does not reselect it. |
+| Browser identity and keyboard expansion | `T1-04 Calls summary keeps its display identity until explicit expansion`: real DOM focus/Enter and expansion button, exact selection, one detail read, zero history reads. |
+| Tool loading and read failure | `Tool facets distinguish pending historical reads from %s outcomes` for `resolve` and `reject`: all three panels show only pending/error until the controlled promise settles; no false absence, no blank panel, exact one read, no speculative Code tab or retry. |
+| Successful omission / absent facts | Existing `Tool facets explicitly disclose absent %s at the read cut` for `tool`, `arguments`, `result`, `definition`: omission now uses the common bounded Tool-detail message; each individual absence remains independent. |
+
+All earlier structural, Request-facet, exact Calls scope, timing, virtualization,
+prepend and real T1-17 integration regressions remain in the executed Web suites.
+
+| Command | Result |
+| --- | --- |
+| `pnpm --dir web-console typecheck` | Passed after correcting a JSX editing error during development. |
+| `pnpm --dir web-console exec vitest run test/trajectory.test.tsx test/trajectory-timing.test.ts` | 43 passed. |
+| `pnpm --dir web-console test` | 899 passed in 50 files. |
+| `pnpm --dir web-console check:provenance` | Passed: 114 source records and notices for 131 production packages. |
+| `node web-console/scripts/provenance.ts --reference /tmp/rustx-394-harness` | Passed against the pinned Harness source. |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | 87 passed (5.2 minutes), including strict screenshots and real T1-17 provider-emulator integration; includes production build/artifact checks. No screenshot reference changes. |
+| `cargo fmt --all -- --check` | Passed. |
+| `CARGO_BUILD_JOBS=2 cargo check --all-targets --all-features` | Passed. |
+| `CARGO_BUILD_JOBS=2 cargo clippy --all-targets --all-features -- -D warnings` | Passed with warnings denied. |
+| `CARGO_BUILD_JOBS=2 cargo test --lib runtime_client::trace --all-features` | 75 passed. |
+| `pnpm --dir protocol/app-server check`; `pnpm --dir protocol/app-server typecheck` | Both passed; no generated drift. |
+| `pnpm --dir dev typecheck`; `pnpm --dir dev test` | Typecheck passed; 37 tests passed. |
+| `git diff --check`; `git diff --cached --check` | Both passed. |
+
+The full Rust workspace and TUI suites were not rerun for this Web-only correction;
+those unchanged surfaces retain the preceding correction's results and run in CI
+at the new head. No previous-head CI result is claimed for the new head. Local
+browser execution uses the repository's pinned Linux Playwright container.

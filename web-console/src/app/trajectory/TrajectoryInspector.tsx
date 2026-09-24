@@ -395,6 +395,27 @@ function PromptDiff({ record, detail }: { record: TraceRecord; detail: TraceDeta
   return <pre className={css.diff} aria-label="System prompt diff">{changes.map((change, index) => <span key={index} data-change={change.added ? 'added' : change.removed ? 'removed' : 'context'}>{change.added ? '+ ' : change.removed ? '− ' : '  '}{change.value}</span>)}</pre>;
 }
 
+type ToolDetailState =
+  | { type: 'pending'; loading: boolean }
+  | { type: 'read_error'; error: string }
+  | { type: 'loaded_missing_tool' }
+  | { type: 'loaded_tool' };
+
+/** Only a successful historical read can establish payload or fact absence. */
+function toolDetailState(detail: TraceDetail | undefined, loading: boolean | undefined, error: string | undefined): ToolDetailState {
+  if (error) return { type: 'read_error', error };
+  if (loading || !detail) return { type: 'pending', loading: loading === true };
+  return { type: detail.tool ? 'loaded_tool' : 'loaded_missing_tool' };
+}
+function ToolFacet({ state, facet, children }: { state: ToolDetailState; facet: string; children: ReactNode }) {
+  switch (state.type) {
+    case 'pending': return <p role="status" className={css.unavailable}>{state.loading ? 'Loading record detail…' : 'Historical Tool detail has not been loaded.'}</p>;
+    case 'read_error': return <p role="alert" className={css.error}>{facet} could not be established because the historical detail read failed: {state.error}</p>;
+    case 'loaded_missing_tool': return <p className={css.unavailable}>Tool detail is unavailable in this bounded detail projection.</p>;
+    case 'loaded_tool': return children;
+  }
+}
+
 /** Props for the Trajectory record inspector. */
 export interface TrajectoryInspectorProps {
   record: TraceRecord;
@@ -431,6 +452,8 @@ export function TrajectoryInspector({
   const active = sections.includes(section) ? section : 'Summary';
   const request = detail?.request ?? undefined;
   const tool = detail?.tool ?? undefined;
+  const toolState = toolDetailState(detail, loading, error);
+  const toolFactFacet = record.kind === 'tool' && ['Input', 'Result', 'Schema'].includes(active);
   const messages = detail?.messages ?? [];
   const title =
     record.kind === 'request' && record.request
@@ -451,12 +474,12 @@ export function TrajectoryInspector({
       <TabList aria-label="Record sections" className={css.tabs}>
         {sections.map(name => <Tab key={name} id={name}>{name}</Tab>)}
       </TabList>
-      {loading && (
+      {loading && !toolFactFacet && (
         <p role="status" className={css.unavailable}>
           Loading record detail…
         </p>
       )}
-      {error && (
+      {error && !toolFactFacet && (
         <p role="alert" className={css.error}>
           {error}
         </p>
@@ -682,7 +705,7 @@ export function TrajectoryInspector({
         )}
 
         {active === 'Input' && (
-          <>
+          <ToolFacet state={toolState} facet={active}>
             <h3 className={css.sectionLabelHeading}>Recorded arguments</h3>
             {tool?.arguments ? (
               <Structured value={tool.arguments} label={`${tool.name ?? tool.tool_id} arguments`} />
@@ -691,7 +714,7 @@ export function TrajectoryInspector({
                 The canonical proposal for this call is not loadable at this read cut.
               </p>
             )}
-          </>
+          </ToolFacet>
         )}
 
         {active === 'Code' && tool?.source && (
@@ -715,8 +738,8 @@ export function TrajectoryInspector({
           </>
         )}
 
-        {active === 'Result' && tool?.result && (
-          <>
+        {active === 'Result' && <ToolFacet state={toolState} facet={active}>
+          {tool?.result ? <>
             <dl className={css.facts}>
               <dt>Outcome</dt>
               <dd>{tool.result.outcome}</dd>
@@ -774,13 +797,12 @@ export function TrajectoryInspector({
               <Block key={index} block={block} />
             ))}
             <Truncated of={tool.result.blocks_truncated} />
-          </>
-        )}
+          </> : <p className={css.unavailable}>No canonical Tool result is recorded at this read cut.</p>}
+        </ToolFacet>}
 
-        {active === 'Result' && !tool?.result && <p className={css.unavailable}>
-          {tool ? 'No canonical Tool result is recorded at this read cut.' : 'Tool result unavailable in this bounded detail projection.'}
-        </p>}
-        {active === 'Schema' && (tool?.definition ? <Definition definition={tool.definition} /> : <p className={css.unavailable}>The historical Tool definition is unavailable at this read cut.</p>)}
+        {active === 'Schema' && <ToolFacet state={toolState} facet={active}>
+          {tool?.definition ? <Definition definition={tool.definition} /> : <p className={css.unavailable}>The historical Tool definition is unavailable at this read cut.</p>}
+        </ToolFacet>}
 
         {active === 'Tools' && request && (
           <>
