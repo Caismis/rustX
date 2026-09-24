@@ -1109,14 +1109,25 @@ middleware (`referenceHidden`): a reference that is fully clipped — scrolled
 out of its clipping context, or out of layout altogether, since a reference
 under a `display: none` ancestor or a detached one measures as an empty rect
 that nothing contains — is reported on the next `autoUpdate`. An open list
-whose anchor is hidden asks its owner to close through `onClose`, exactly as an
-outside press does; a keyboard it held goes where every close hands it — the
-trigger, else the anchor's first enabled button, else the nearest rendered
-ancestor that takes focus (the Settings dialog) — and never stays on a row
-about to unmount or on a hidden trigger. A submenu whose row scrolls out of its
-card closes the same way and returns a keyboard inside it to the row. Owners
-state only whether a menu is open; no owner observes the layout rules that
-decide whether its anchor is rendered. jsdom has no layout, so the unit test
+whose anchor is hidden closes exactly once through `onClose`. That close is not
+a dismissal and never refocuses the hidden anchor (focusing a trigger scrolled
+out of view would scroll it back). A keyboard the list held moves, in the effect
+of the commit that reported `referenceHidden`, while every row is still
+mounted and with `preventScroll`, to the `focusOwner` its host names; the owner
+is then asked to close and the rows unmount in the next commit. The Menu does
+not infer that owner from the DOM — a nearest `[tabindex]` ancestor may be
+missing (a Workspace Session row has none up to the page) or may itself be the
+clipped row — so a host whose anchor can disappear under normal layout names
+it: the Settings section menu names the Settings dialog, Workspace project and
+Session row menus name the Session tree, and JSON copy menus name the
+Trajectory inspector body. With no owner named, the keyboard is released to the
+document, never left on a removed row or a hidden anchor. Ordinary closes
+(Escape, Shift+Tab, selection, outside press) still return the keyboard to the
+visible trigger, and use the owner only when that trigger refuses focus. A
+submenu whose row scrolls out of its card closes the same way inside the menu:
+its parent list, the layer's own owner, takes the keyboard instead of the
+clipped row. Owners state only whether a menu is open; no owner observes the
+layout rules that decide whether its anchor is rendered. jsdom has no layout, so the unit test
 setup treats every anchor as rendered; Chromium proves the contract.
 
 **Modal mechanics stay React Aria's.** The nested-dialog and focus contracts

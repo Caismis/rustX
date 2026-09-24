@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AppFrame } from '../../src/presentation/layout/AppFrame';
 import { Button } from '../../src/presentation/primitives/Button';
@@ -29,6 +29,7 @@ function Fixture() {
   const [nested, setNested] = useState(false);
   const [nestedSelected, setNestedSelected] = useState('None');
   const [scrolled, setScrolled] = useState(false);
+  const paneOwner = useRef<HTMLButtonElement>(null);
   const [modal, setModal] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [selected, setSelected] = useState('None');
@@ -48,10 +49,16 @@ function Fixture() {
     <Modal closeLabel="Close dialog" open={modal} onClose={() => setModal(false)} title="Example dialog" footer={<Button onClick={() => setModal(false)}>Done</Button>}><Input aria-label="Dialog value" /></Modal>
     <DisclosureRow icon={null} title="Expand details" expandable open={expanded} expandOnRowClick onToggle={() => setExpanded(value => !value)}><p>Expanded content</p></DisclosureRow>
     <Button>Outside target</Button>
-    {/* A focusable scrolling pane whose menu trigger can be scrolled out of
-        its clipping region while the menu is open. */}
-    <div role="region" aria-label="Scrolled pane" tabIndex={-1} style={{ height: 160, overflowY: 'auto' }}>
-      <Menu open={scrolled} onClose={() => setScrolled(false)} autoFocus anchor={<Button onClick={() => setScrolled(!scrolled)}>Scrolled actions</Button>} items={[{ id: 'a', label: 'Alpha' }, { id: 'c', label: 'Charlie' }]} onSelect={() => setScrolled(false)} />
+    {/* A scrolling pane whose menu trigger can be scrolled out of its
+        clipping region while the menu is open. The host names where the
+        keyboard continues then: the pane's header, outside the pane and never
+        scrolled away. The trigger sits in a focusable row, as a Workspace
+        project row's does; that row scrolls out with it and is no owner. */}
+    <button type="button" ref={paneOwner}>Scrolled pane header</button>
+    <div role="region" aria-label="Scrolled pane" style={{ height: 160, overflowY: 'auto' }}>
+      <div role="group" aria-label="Scrolled row" tabIndex={0}>
+        <Menu open={scrolled} onClose={() => setScrolled(false)} autoFocus focusOwner={paneOwner} anchor={<Button onClick={() => setScrolled(!scrolled)}>Scrolled actions</Button>} items={[{ id: 'a', label: 'Alpha' }, { id: 'c', label: 'Charlie' }]} onSelect={() => setScrolled(false)} />
+      </div>
       <div style={{ height: 600 }}>Pane content</div>
     </div>
     <MarkdownText text={'# Rich content\n\n**Strong** and `inline` with [a link](https://example.com).\n\n| First | Second |\n| - | - |\n| Value | Other |\n\n```rust\nfn main() { println!("hello"); }\n```\n\nMath $E=mc^2$.'} />

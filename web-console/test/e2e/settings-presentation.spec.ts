@@ -388,7 +388,8 @@ test('an open section menu settles closed when the panel widens under it', async
   // Its owner's open state settled with it: the hidden trigger says closed.
   await expect(settings.getByRole('button', { name: /^Settings page: /, includeHidden: true })).toHaveAttribute('aria-expanded', 'false');
   // The keyboard is on no removed row, not on the hidden trigger and not on
-  // the page body: the Settings dialog holds it, as when it first opened.
+  // the page body: the Settings dialog, the focus owner the panel names for
+  // its section menu, holds it, as when it first opened.
   await expect(settings).toBeFocused();
   const focus = await page.evaluate(() => {
     const active = document.activeElement!;

@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { Dialog, Modal, ModalOverlay, Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import clsx from 'clsx';
 import { Menu } from '../primitives/Menu';
@@ -32,7 +32,10 @@ export interface SettingsPageEntry { id: string; label: string; icon: ReactNode 
  * transient fact this component holds. When the panel widens while that menu
  * is open, its trigger leaves layout and the `Menu` closes itself through
  * `onClose`, so the open state never outlives the layout that shows it and
- * this component never mirrors the container query.
+ * this component never mirrors the container query. The dialog is the menu's
+ * named focus owner: a keyboard the menu held stays in Settings, on the
+ * dialog, exactly where a freshly opened Settings starts, and Tab continues
+ * from there into the header and the rail.
  *
  * There is exactly one of these in the application. A confirmation inside a
  * page opens its own transient layer over this one; it never builds a second
@@ -48,17 +51,18 @@ export function SettingsPanel({ pages, activeId, onSelect, onClose, context, chi
   onClose: () => void; children: ReactNode;
 }) {
   const [sections, setSections] = useState(false);
+  const dialogRef = useRef<HTMLElement>(null);
   const active = pages.find(page => page.id === activeId)!;
   return (
     <ModalOverlay className={css.overlay} isOpen isDismissable onOpenChange={open => { if (!open) onClose(); }}>
       <Modal className={css.panel}>
-        <Dialog className={css.dialog} aria-label="Settings">
+        <Dialog ref={dialogRef} className={css.dialog} aria-label="Settings">
           {/* The header is deliberately outside <Tabs>: React Aria renders a
               Tabs subtree a second time into a detached collection document
               to discover its tabs, and the section menu measures real DOM. */}
           <header className={css.header}>
             <div className={css.sections}>
-              <Menu open={sections} onClose={() => setSections(false)} autoFocus
+              <Menu open={sections} onClose={() => setSections(false)} autoFocus focusOwner={dialogRef}
                 items={pages.map(page => ({ id: page.id, label: page.label, icon: page.icon }))} selectedId={activeId}
                 onSelect={id => { setSections(false); onSelect(id); }}
                 anchor={<button type="button" className={css.sectionTrigger} aria-haspopup="menu" aria-expanded={sections}

@@ -6,6 +6,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   ReactNode,
+  RefObject,
 } from 'react'
 import { IconCheckOutline16, IconCopyOutline16, IconWrapLinesOutline16 } from './icons';
 import { Menu } from './Menu';
@@ -101,11 +102,12 @@ function createCopyStore() {
   }
 }
 
-function JsonCopyAction({ store, target, persistent, labels, onCopy, onClose }: {
+function JsonCopyAction({ store, target, persistent, labels, focusOwner, onCopy, onClose }: {
   store: ReturnType<typeof createCopyStore>
   target: RowTarget
   persistent: boolean
   labels: JsonTreeLabels
+  focusOwner: RefObject<HTMLElement | null> | undefined
   onCopy: (target: RowTarget, mode: CopyMode) => Promise<void>
   onClose: () => void
 }) {
@@ -157,6 +159,7 @@ function JsonCopyAction({ store, target, persistent, labels, onCopy, onClose }: 
             void onCopy(target, mode as CopyMode)
           }}
           onClose={onClose}
+          focusOwner={focusOwner}
           getAnchorRect={() => (buttonRef.current as HTMLButtonElement).getBoundingClientRect()}
         />
       )}
@@ -678,6 +681,9 @@ export interface JsonTreeProps {
   expandTopLevel?: boolean
   /** Localized display copy supplied by the owning render site. */
   labels: JsonTreeLabels
+  /** The render site's scrolling container, where keyboard navigation
+   * continues when a row scrolls out from under its open copy menu. */
+  menuFocusOwner?: RefObject<HTMLElement | null> | undefined
 }
 
 /**
@@ -694,6 +700,7 @@ export function JsonTree({
   copyable = true,
   expandTopLevel = true,
   labels,
+  menuFocusOwner,
 }: JsonTreeProps) {
   const rootEntries = entriesOf(data)
   const firstExpandableIndex = rootEntries.findIndex(([, value]) => (
@@ -776,7 +783,7 @@ export function JsonTree({
   const [rootOpen, rootClose] = bracketOf(data)
   const renderCopy = copyable ? (target: RowTarget, persistent = false) => (
     <JsonCopyAction store={copyStore} target={target} persistent={persistent} labels={labels}
-      onCopy={copy} onClose={clearCopyTarget} />
+      focusOwner={menuFocusOwner} onCopy={copy} onClose={clearCopyTarget} />
   ) : undefined
 
   return (

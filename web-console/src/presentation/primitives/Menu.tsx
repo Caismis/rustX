@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
+import type { CSSProperties, ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { autoUpdate, flip, hide, offset, shift, size, useFloating, type Placement, type VirtualElement } from '@floating-ui/react-dom'
 import clsx from 'clsx'
@@ -92,18 +92,6 @@ function takesFocus(target: HTMLElement | null | undefined, preventScroll = fals
   return document.activeElement === target
 }
 
-/**
- * Give the keyboard to the nearest rendered ancestor of `from` that takes
- * focus, such as a containing dialog or a focusable pane, without scrolling
- * anything to it; whether one took it.
- */
-function focusContainingOwner(from: Element): boolean {
-  for (let at = from.parentElement?.closest<HTMLElement>('[tabindex]'); at !== null && at !== undefined; at = at.parentElement?.closest<HTMLElement>('[tabindex]')) {
-    if (takesFocus(at, true)) return true
-  }
-  return false
-}
-
 /** The rustX side/align vocabulary as one Floating UI placement. A side card
  * opens beside the anchor's top edge, as it always has. */
 function placementOf(side: 'bottom' | 'top' | 'right', align: 'start' | 'end'): Placement {
@@ -133,16 +121,21 @@ function placementOf(side: 'bottom' | 'top' | 'right', align: 'start' | 'end'): 
  * A surface lives only while its reference is a visible interaction anchor.
  * When the anchor leaves rendered layout while the list is open — a container
  * query hides it, an ancestor collapses, it is scrolled out of its clipping
- * context — the menu asks its owner to close through `onClose`. That close is
- * not a dismissal: a keyboard the menu held settles on the anchor's nearest
- * containing focus owner (a dialog, a focusable pane) without scrolling,
- * never on the hidden trigger — focusing a trigger that was scrolled out of
- * view would scroll it back and undo the user's scroll — and never on a row
- * that is about to unmount. A submenu whose row stops being visible closes the
- * same way, leaving the parent list open and holding the keyboard itself
- * rather than the clipped row. The owner therefore only states whether the
- * menu is open; it never mirrors the layout rules that decide whether the
- * anchor is rendered.
+ * context — the menu closes exactly once through `onClose`. That close is not
+ * a dismissal: the anchor is never refocused — focusing a trigger that was
+ * scrolled out of view would scroll it back and undo the user's scroll — and a
+ * keyboard the menu held moves, synchronously and without scrolling, to the
+ * `focusOwner` its host names, while every row is still mounted. The menu does
+ * not guess that owner from the DOM: where keyboard navigation continues after
+ * an anchor disappears is the host's decision. A host whose anchor can
+ * disappear under normal layout names one; with none named (or one that
+ * refuses focus) the menu releases the keyboard to the document rather than
+ * leave it on a hidden control or a removed row. A submenu whose row stops
+ * being visible closes the same way inside the menu, whose own list is that
+ * layer's owner: the parent list stays open and takes the keyboard instead of
+ * the clipped row. The owner therefore only states whether the menu is open;
+ * it never mirrors the layout rules that decide whether the anchor is
+ * rendered.
  * @param props.autoFocus - focus the first item on open; the arrow keys walk the list either way.
  * @param props.open - whether the list is showing (owner-controlled).
  * @param props.anchor - the trigger element (rendered in place).
@@ -173,9 +166,16 @@ function placementOf(side: 'bottom' | 'top' | 'right', align: 'start' | 'end'): 
  * (`'check'`, default — figma .Menu_cell) or the hover fill held on the row
  * with no check (`'fill'`, for icon-labelled rows where a trailing glyph
  * crowds the cell).
+ * @param props.focusOwner - the host's stable, visible element where keyboard
+ * navigation continues when this menu closes and its anchor cannot take the
+ * keyboard back: always after the anchor stopped being a visible interaction
+ * anchor, and after an ordinary close whose trigger refuses focus. It must
+ * stay rendered while the anchor scrolls or collapses away (a scrolling list
+ * that holds the anchor's row, a dialog that holds the anchor), and it is
+ * focused without scrolling.
  * @returns anchor wrapper with the conditional list.
  */
-export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, onClose, align = 'start', side = 'bottom', closeOnPointerLeave = false, dense = false, compact = false, autoFocus = false, selection = 'check', getAnchorRect, footer, className }: {
+export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, onClose, align = 'start', side = 'bottom', closeOnPointerLeave = false, dense = false, compact = false, autoFocus = false, selection = 'check', getAnchorRect, focusOwner, footer, className }: {
   open: boolean
   autoFocus?: boolean
   anchor: ReactNode
@@ -192,6 +192,7 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   compact?: boolean
   selection?: 'check' | 'fill'
   getAnchorRect?: () => DOMRect | null
+  focusOwner?: RefObject<HTMLElement | null> | undefined
   className?: string | undefined
 }) {
   const rootRef = useRef<HTMLSpanElement>(null)
@@ -208,30 +209,26 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   /**
    * Hand the keyboard back to the trigger that opened the menu — or, when the
    * anchor never held it, to the anchor's first button. When neither can take
-   * it (disabled, or out of layout with the anchor), it goes to the nearest
-   * rendered ancestor that takes focus, such as a containing dialog. Focus
-   * left on a removed row otherwise falls to the page body, where the next Tab
-   * restarts from the top of the page and a containing dialog no longer hears
-   * Escape.
+   * it (a selection disabled it), it settles on the host's focus owner.
    */
   const refocusAnchor = (): void => {
     const root = rootRef.current
     if (root === null) return
     if (takesFocus(triggerRef.current) || takesFocus(root.querySelector<HTMLButtonElement>('button:not(:disabled)'))) return
-    focusContainingOwner(root)
+    settleOnFocusOwner()
   }
 
   /**
-   * Settle a keyboard the menu held after its anchor stopped being a visible
-   * interaction anchor. The anchor is no focus target then: one scrolled out
-   * of its clipping context is still focusable, and focusing it would scroll
-   * the container back to it, undoing the scroll that hid it. The keyboard
-   * goes to the nearest containing owner instead, without scrolling; with no
-   * such owner, a keyboard on the anchor stays where it is.
+   * Give the keyboard to the host's focus owner without scrolling anything to
+   * it. With no owner named, or one that refuses focus (disabled, out of
+   * layout), a keyboard still on this menu's rows or anchor is released to the
+   * document: never left on a row that is about to unmount, and never on an
+   * anchor that is no longer a visible interaction anchor.
    */
-  const settleAfterHiddenAnchor = (): void => {
-    const root = rootRef.current
-    if (root !== null) focusContainingOwner(root)
+  const settleOnFocusOwner = (): void => {
+    if (takesFocus(focusOwner?.current, true)) return
+    const active = document.activeElement
+    if (active instanceof HTMLElement && (inSurface(active) || rootRef.current?.contains(active) === true)) active.blur()
   }
 
   /**
@@ -364,15 +361,23 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
 
   // The anchor left rendered layout (or was scrolled out of its clipping
   // context) while the list is open: settle closed. Unlike every other close,
-  // a keyboard the menu held does not go back to the anchor, which is hidden;
-  // it settles on the anchor's containing owner.
+  // a keyboard the menu held does not go back to the anchor, which is hidden.
+  // The order is the contract: Floating UI's placement of this opening
+  // reports referenceHidden; in the effect of that commit the keyboard moves
+  // to the host's owner while every row is still mounted, the owner is asked
+  // to close, and the rows unmount in the commit that close produces. No frame
+  // has the keyboard on a removed row or on the hidden anchor, and with an
+  // owner named, none has it on the body.
+  // It runs once per hidden anchor, not again for an `onClose` identity that
+  // changed before the owner's close committed.
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
   useEffect(() => {
     if (!open || !anchorHidden) return
     const active = document.activeElement
-    const held = inSurface(active) || rootRef.current?.contains(active) === true
-    onClose()
-    if (held) settleAfterHiddenAnchor()
-  }, [open, anchorHidden, onClose])
+    if (inSurface(active) || rootRef.current?.contains(active) === true) settleOnFocusOwner()
+    closeRef.current()
+  }, [open, anchorHidden])
 
   useEffect(() => {
     if (!open) {

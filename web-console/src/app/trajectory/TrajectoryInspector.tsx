@@ -13,7 +13,7 @@
  * durations, infers no outcomes and fills no missing evidence: where the
  * server said a fact is unavailable, this says so too.
  */
-import { useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type {
   TraceArtifact,
   TraceContentBlock,
@@ -84,7 +84,30 @@ function Text({ value, markdown = false }: { value: TraceText; markdown?: boolea
   );
 }
 
+/** The inspector body: the scrolling tab panel that keeps the keyboard when a
+ * JSON row scrolls out from under its open copy menu. */
+const InspectorBody = createContext<RefObject<HTMLElement | null> | undefined>(undefined);
+
+/** The inspector's scrolling tab panel, named as the focus owner of the JSON
+ * copy menus inside it. */
+function InspectorPanel({ active, children }: { active: string; children: ReactNode }) {
+  const body = useRef<HTMLDivElement>(null);
+  return (
+    <div
+      ref={body}
+      role="tabpanel"
+      id="trace-section"
+      aria-labelledby={`trace-tab-${active}`}
+      tabIndex={0}
+      className={css.inspectorBody}
+    >
+      <InspectorBody value={body}>{children}</InspectorBody>
+    </div>
+  );
+}
+
 function Structured({ value, label }: { value: TraceJson; label: string }) {
+  const body = useContext(InspectorBody);
   const data = value.value;
   if (data === null || typeof data !== 'object') {
     return (
@@ -102,6 +125,7 @@ function Structured({ value, label }: { value: TraceJson; label: string }) {
         labels={JSON_LABELS}
         collapsedStringLines={12}
         className={css.jsonTree}
+        menuFocusOwner={body}
       />
       <Truncated of={value.truncated} />
     </>
@@ -442,13 +466,7 @@ export function TrajectoryInspector({
           {error}
         </p>
       )}
-      <div
-        role="tabpanel"
-        id="trace-section"
-        aria-labelledby={`trace-tab-${active}`}
-        tabIndex={0}
-        className={css.inspectorBody}
-      >
+      <InspectorPanel active={active}>
         {active === 'Summary' && (
           <>
           <div className={css.summaryPreview}><MarkdownText text={previewOf(record)} /></div>
@@ -854,7 +872,7 @@ export function TrajectoryInspector({
         {active === 'Artifacts' && (
           <Attachments artifacts={[...record.attachments, ...(tool?.result?.attachments ?? [])]} />
         )}
-      </div>
+      </InspectorPanel>
     </aside>
   );
 }

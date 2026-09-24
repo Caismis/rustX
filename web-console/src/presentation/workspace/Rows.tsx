@@ -7,7 +7,7 @@
  * visual-only except workspace Rename/Delete and session Rename/Fork/Delete; the
  * session and workspace hover cards are suppressed while a menu is open.
  */
-import { useRef, useState } from 'react'
+import { useRef, useState, type RefObject } from 'react'
 import clsx from 'clsx'
 import { HoverCard } from '../primitives/HoverCard';
 import { Menu } from '../primitives/Menu';
@@ -100,10 +100,12 @@ function WorkspaceHoverContent({ label, cwd, createdAt, t }: {
  * @param props.containsCurrentDescendant - highlight an ancestor even when its subtree is collapsed.
  * @param props.onToggle - expand/collapse the group.
  * @param props.onCreate - create a native Session inside this Workspace.
+ * @param props.menuFocusOwner - the scrolling tree that keeps the keyboard
+ * when this row scrolls out from under its open actions menu.
  * @param props.t - the browser root's locale seat.
  * @returns the row element.
  */
-export function ProjectRowItem({ group, containsCurrentDescendant = false, onToggle, onCreate, onSelect, actions, t }: {
+export function ProjectRowItem({ group, containsCurrentDescendant = false, onToggle, onCreate, onSelect, actions, menuFocusOwner, t }: {
   group: GroupNode
   containsCurrentDescendant?: boolean
   onSelect?: () => void
@@ -111,6 +113,7 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
   onCreate: () => void
   /** Real-Workspace actions; absent for the ungrouped bucket (no menu shown). */
   actions?: { rename: () => void; delete: () => void; settings?: () => void } | undefined
+  menuFocusOwner: RefObject<HTMLElement | null>
   t: RowTranslate
 }) {
   const row = group
@@ -159,10 +162,13 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
               else actions.delete()
             }}
             closeOnPointerLeave
+            focusOwner={menuFocusOwner}
             anchor={(
               <button
                 type="button"
                 className={css.iconButton}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
                 aria-label={t('actions.workspace.aria', { name: label })}
                 onClick={(e) => { e.stopPropagation(); setMenuOpen(v => !v) }}
               >
@@ -345,11 +351,13 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
  * @param props.onFork - fork a session at its last completed turn.
  * @param props.onDelete - open native deletion preview.
  * @param props.flat - omit the empty status slot in the hierarchy-free flat list.
+ * @param props.menuFocusOwner - the scrolling tree that keeps the keyboard
+ * when this row scrolls out from under its open actions menu.
  * @param props.t - the browser root's locale seat.
  * @returns the session row.
  */
 export function SessionNodeItem({
-  node, currentId, now, onOpen, onRename, onFork, onDelete, onClose, flat = false, t,
+  node, currentId, now, onOpen, onRename, onFork, onDelete, onClose, flat = false, menuFocusOwner, t,
 }: {
   node: SessionNode
   currentId: string | undefined
@@ -364,6 +372,7 @@ export function SessionNodeItem({
   onClose?: (id: SessionNode['id']) => void
   /** The row is rendered without a parent Workspace header. */
   flat?: boolean | undefined
+  menuFocusOwner: RefObject<HTMLElement | null>
   t: RowTranslate
 }) {
   const row = node
@@ -419,10 +428,13 @@ export function SessionNodeItem({
               if (id === 'close') onClose?.(node.id)
             }}
             closeOnPointerLeave
+            focusOwner={menuFocusOwner}
             anchor={(
               <button
                 type="button"
                 className={css.iconButton}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
                 data-session-actions={node.id} aria-label={t('actions.session.aria', { name: title })}
                 onClick={(e) => { e.stopPropagation(); setMenuOpen(v => !v) }}
               >

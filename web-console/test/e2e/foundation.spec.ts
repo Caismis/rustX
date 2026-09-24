@@ -228,22 +228,24 @@ test('Menu submenu flips, bounds its height, scrolls and follows its row', async
 
 /** A floating surface lives only while its reference is a visible
  * interaction anchor: when the reference leaves rendered layout, the surface
- * settles closed and keeps no keyboard. */
+ * settles closed. This menu's host names no focus owner, so the keyboard the
+ * menu held is released to the document — the one generic fallback — rather
+ * than left on a removed row or on the hidden trigger. */
 test('Menu surfaces close when their anchor leaves layout', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
   const trigger = page.getByRole('button', { name: 'Actions', exact: true });
   const hideAnchor = (hidden: boolean) => page.getByRole('button', { name: 'Actions', exact: true, includeHidden: true }).evaluate((el, value) => { el.parentElement!.style.display = value ? 'none' : ''; }, hidden);
-  const keyboard = () => page.evaluate(() => { const active = document.activeElement!; return { menuitem: active.getAttribute('role') === 'menuitem', rendered: active === document.body || active.getClientRects().length > 0 }; });
+  const keyboard = () => page.evaluate(() => { const active = document.activeElement!; return active === document.body ? 'body' : active.getAttribute('role') ?? active.textContent; });
 
   // The anchor leaves layout while the list holds the keyboard: the list
-  // closes through its owner, and the keyboard stays on no row and on no
-  // hidden trigger.
+  // closes through its owner, and with no owner named the keyboard is
+  // released: on no row and not on the hidden trigger.
   await trigger.click(); await expect(page.getByRole('menuitem', { name: 'Alpha' })).toBeFocused();
   await hideAnchor(true);
   await expect(page.getByRole('menu')).toHaveCount(0);
-  expect(await keyboard()).toEqual({ menuitem: false, rendered: true });
+  expect(await keyboard()).toBe('body');
   // The owner's state settled closed with it: the anchor back in layout does
   // not bring the list back, and one press opens it again.
   await hideAnchor(false);
@@ -256,25 +258,29 @@ test('Menu surfaces close when their anchor leaves layout', async ({ page }) => 
 /** A trigger scrolled out of its clipping region is still mounted and
  * focusable, but it is no longer a visible anchor: its menu settles closed
  * without handing the keyboard back to it, because focusing it would scroll
- * the pane back and undo the scroll that hid it. */
+ * the pane back and undo the scroll that hid it. The keyboard goes to the
+ * owner the host named — not to the focusable row around the trigger, which
+ * scrolled out with it, and not to the page body. */
 test('a Menu whose trigger scrolls out of view closes without undoing the scroll', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
   const pane = page.getByRole('region', { name: 'Scrolled pane' });
   const trigger = pane.getByRole('button', { name: 'Scrolled actions', exact: true });
+  const owner = page.getByRole('button', { name: 'Scrolled pane header' });
   await trigger.scrollIntoViewIfNeeded();
   await expect(trigger).toBeInViewport();
   /** The pane's scroll and on-screen position, whether the trigger lies wholly
    * above the pane's clipping region, and where the keyboard is. */
   const observe = () => pane.evaluate(el => {
     const trigger = Array.from(el.querySelectorAll('button')).find(button => button.textContent === 'Scrolled actions')!;
+    const row = el.querySelector('[aria-label="Scrolled row"]')!;
     const active = document.activeElement!;
     return {
       scrollTop: el.scrollTop,
       paneTop: el.getBoundingClientRect().top,
       clipped: trigger.getBoundingClientRect().bottom <= el.getBoundingClientRect().top,
-      keyboard: active === el ? 'pane' : active === trigger ? 'trigger' : active === document.body ? 'body' : active.getAttribute('role') ?? active.tagName,
+      keyboard: active.textContent === 'Scrolled pane header' ? 'owner' : active === row ? 'row' : active === trigger ? 'trigger' : active === document.body ? 'body' : active.getAttribute('role') ?? active.tagName,
     };
   });
 
@@ -289,9 +295,13 @@ test('a Menu whose trigger scrolls out of view closes without undoing the scroll
   expect(scrolledTo).toBe(300);
   await expect(page.getByRole('menu')).toHaveCount(0);
   // The scroll stands, the page did not move to the trigger, and the keyboard
-  // is on the containing pane: not the clipped trigger, no removed row, not
-  // the page body.
-  expect(await observe()).toEqual({ scrollTop: 300, paneTop: opened.paneTop, clipped: true, keyboard: 'pane' });
+  // is on the named owner: not the clipped trigger or its clipped row, no
+  // removed row, not the page body.
+  expect(await observe()).toEqual({ scrollTop: 300, paneTop: opened.paneTop, clipped: true, keyboard: 'owner' });
+  await expect(owner).toBeFocused(); await expect(owner).toBeInViewport();
+  // The keyboard continues from the owner: Tab enters the pane's content.
+  await page.keyboard.press('Tab');
+  await expect(pane.getByRole('group', { name: 'Scrolled row' })).toBeFocused();
 
   // An ordinary close still hands the keyboard back to a visible trigger.
   await pane.evaluate(el => { el.scrollTop = 0; });
