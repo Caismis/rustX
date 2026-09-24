@@ -227,9 +227,8 @@ test('Menu submenu flips, bounds its height, scrolls and follows its row', async
 });
 
 /** A floating surface lives only while its reference is a visible
- * interaction anchor: when the reference leaves rendered layout, or scrolls
- * out of its clipping context, the surface settles closed and keeps no
- * keyboard. */
+ * interaction anchor: when the reference leaves rendered layout, the surface
+ * settles closed and keeps no keyboard. */
 test('Menu surfaces close when their anchor leaves layout', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -251,26 +250,107 @@ test('Menu surfaces close when their anchor leaves layout', async ({ page }) => 
   await expect(page.getByRole('menu')).toHaveCount(0);
   await trigger.click(); await expect(page.getByRole('menuitem', { name: 'Alpha' })).toBeFocused();
   await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0); await expect(trigger).toBeFocused();
+  expect(errors).toEqual([]);
+});
 
-  // A submenu's row scrolled out of the parent card: only the submenu closes.
+/** A trigger scrolled out of its clipping region is still mounted and
+ * focusable, but it is no longer a visible anchor: its menu settles closed
+ * without handing the keyboard back to it, because focusing it would scroll
+ * the pane back and undo the scroll that hid it. */
+test('a Menu whose trigger scrolls out of view closes without undoing the scroll', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
+  const pane = page.getByRole('region', { name: 'Scrolled pane' });
+  const trigger = pane.getByRole('button', { name: 'Scrolled actions', exact: true });
+  await trigger.scrollIntoViewIfNeeded();
+  await expect(trigger).toBeInViewport();
+  /** The pane's scroll and on-screen position, whether the trigger lies wholly
+   * above the pane's clipping region, and where the keyboard is. */
+  const observe = () => pane.evaluate(el => {
+    const trigger = Array.from(el.querySelectorAll('button')).find(button => button.textContent === 'Scrolled actions')!;
+    const active = document.activeElement!;
+    return {
+      scrollTop: el.scrollTop,
+      paneTop: el.getBoundingClientRect().top,
+      clipped: trigger.getBoundingClientRect().bottom <= el.getBoundingClientRect().top,
+      keyboard: active === el ? 'pane' : active === trigger ? 'trigger' : active === document.body ? 'body' : active.getAttribute('role') ?? active.tagName,
+    };
+  });
+
+  // Opened from the keyboard: a row of the list holds focus.
+  await trigger.focus(); await page.keyboard.press('Enter');
+  await expect(page.getByRole('menuitem', { name: 'Alpha' })).toBeFocused();
+  const opened = await observe();
+  expect(opened).toMatchObject({ scrollTop: 0, clipped: false });
+
+  // The pane scrolls the trigger wholly out of its clipping region.
+  const scrolledTo = await pane.evaluate(el => { el.scrollTop = 300; return el.scrollTop; });
+  expect(scrolledTo).toBe(300);
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  // The scroll stands, the page did not move to the trigger, and the keyboard
+  // is on the containing pane: not the clipped trigger, no removed row, not
+  // the page body.
+  expect(await observe()).toEqual({ scrollTop: 300, paneTop: opened.paneTop, clipped: true, keyboard: 'pane' });
+
+  // An ordinary close still hands the keyboard back to a visible trigger.
+  await pane.evaluate(el => { el.scrollTop = 0; });
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await trigger.focus(); await page.keyboard.press('Enter');
+  await expect(page.getByRole('menuitem', { name: 'Alpha' })).toBeFocused();
+  await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0); await expect(trigger).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+/** A submenu row scrolled out of the parent list closes only the submenu. The
+ * keyboard settles on the still-open list, not on the clipped row, so the
+ * list's scroll stands; Escape then closes the list as usual. */
+test('a submenu whose row scrolls out of the list closes without undoing the scroll', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 900, height: 300 });
+  await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
   const menu = nestedMenu(page);
   await menu.pin('position: fixed; left: 200px; top: 8px;');
+  /** Scroll the parent's rows to their end, returning where they landed. */
+  const scrollRowsAway = () => menu.parent.evaluate(el => { const rows = el.firstElementChild!; rows.scrollTop = rows.scrollHeight; return rows.scrollTop; });
+  /** The parent rows' scroll, whether the Sort by row lies wholly above
+   * their clipping region, and where the keyboard is. */
+  const observe = () => menu.parent.evaluate(el => {
+    const rows = el.firstElementChild!;
+    const row = Array.from(el.querySelectorAll('[role="menuitem"]')).find(item => item.textContent === 'Sort by')!;
+    const active = document.activeElement!;
+    return {
+      scrollTop: rows.scrollTop,
+      clipped: row.getBoundingClientRect().bottom <= rows.getBoundingClientRect().top,
+      keyboard: active === el ? 'list' : active === row ? 'row' : active === document.body ? 'body' : active.textContent,
+    };
+  });
   await menu.open();
+
+  // The keyboard inside the submenu: scrolling its row away closes only the
+  // submenu, the scroll stands, and the keyboard is on the list.
   await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown');
-  await expect(menu.row('Sort by')).toBeFocused(); await expect(menu.submenu).toBeVisible();
-  await menu.parent.evaluate(el => { el.firstElementChild!.scrollTop = el.firstElementChild!.scrollHeight; });
+  await expect(menu.row('Sort by')).toBeFocused();
+  await page.keyboard.press('ArrowRight'); await expect(menu.row('Name')).toBeFocused();
+  const away = await scrollRowsAway();
+  expect(away).toBeGreaterThan(0);
   await expect(menu.submenu).toHaveCount(0);
   await expect(menu.row('Sort by')).toHaveAttribute('aria-expanded', 'false');
   await expect(menu.parent).toBeVisible();
-  // With the keyboard inside the submenu, it goes back to the row.
+  expect(await observe()).toEqual({ scrollTop: away, clipped: true, keyboard: 'list' });
+
+  // The keyboard on the row, its submenu shown by focus: the same close
+  // moves the keyboard off the clipped row to the list.
   await menu.parent.evaluate(el => { el.firstElementChild!.scrollTop = 0; });
-  await menu.row('Sort by').focus(); await page.keyboard.press('ArrowRight');
-  await expect(menu.row('Name')).toBeFocused();
-  await menu.parent.evaluate(el => { el.firstElementChild!.scrollTop = el.firstElementChild!.scrollHeight; });
+  await menu.row('Sort by').focus(); await expect(menu.submenu).toBeVisible();
+  expect(await scrollRowsAway()).toBe(away);
   await expect(menu.submenu).toHaveCount(0);
-  await expect(menu.row('Sort by')).toBeFocused();
+  await expect(menu.row('Sort by')).toHaveAttribute('aria-expanded', 'false');
   await expect(menu.parent).toBeVisible();
+  expect(await observe()).toEqual({ scrollTop: away, clipped: true, keyboard: 'list' });
+
+  // The list still owns the keyboard: Escape closes it and returns focus to
+  // its trigger.
   await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0); await expect(menu.trigger).toBeFocused();
   expect(errors).toEqual([]);
 });

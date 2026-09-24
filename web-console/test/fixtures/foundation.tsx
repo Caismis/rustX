@@ -28,6 +28,7 @@ function Fixture() {
   const [menu, setMenu] = useState(false);
   const [nested, setNested] = useState(false);
   const [nestedSelected, setNestedSelected] = useState('None');
+  const [scrolled, setScrolled] = useState(false);
   const [modal, setModal] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [selected, setSelected] = useState('None');
@@ -47,6 +48,12 @@ function Fixture() {
     <Modal closeLabel="Close dialog" open={modal} onClose={() => setModal(false)} title="Example dialog" footer={<Button onClick={() => setModal(false)}>Done</Button>}><Input aria-label="Dialog value" /></Modal>
     <DisclosureRow icon={null} title="Expand details" expandable open={expanded} expandOnRowClick onToggle={() => setExpanded(value => !value)}><p>Expanded content</p></DisclosureRow>
     <Button>Outside target</Button>
+    {/* A focusable scrolling pane whose menu trigger can be scrolled out of
+        its clipping region while the menu is open. */}
+    <div role="region" aria-label="Scrolled pane" tabIndex={-1} style={{ height: 160, overflowY: 'auto' }}>
+      <Menu open={scrolled} onClose={() => setScrolled(false)} autoFocus anchor={<Button onClick={() => setScrolled(!scrolled)}>Scrolled actions</Button>} items={[{ id: 'a', label: 'Alpha' }, { id: 'c', label: 'Charlie' }]} onSelect={() => setScrolled(false)} />
+      <div style={{ height: 600 }}>Pane content</div>
+    </div>
     <MarkdownText text={'# Rich content\n\n**Strong** and `inline` with [a link](https://example.com).\n\n| First | Second |\n| - | - |\n| Value | Other |\n\n```rust\nfn main() { println!("hello"); }\n```\n\nMath $E=mc^2$.'} />
   </AppFrame>;
 }
