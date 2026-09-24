@@ -122,6 +122,62 @@ function nestedMenu(page: Page) {
   return { trigger, row, parent, submenu, rect, pin, open, inside, scrolls, besideRow };
 }
 
+/**
+ * A frame-level probe of one floating surface while its anchor is taken away.
+ * It samples in requestAnimationFrame: after the frame's scroll events, and so
+ * after Floating UI's placement for them, and before the frame is painted. At
+ * each sample it records whether the anchor lies wholly outside its clipping
+ * region (the geometry Floating UI's `referenceHidden` reports), whether the
+ * surface is live — rendered and visible, so it can be seen, hit and focused —
+ * and where the keyboard is. Between samples it records every focus move: the
+ * element that took the keyboard, or `released` when it fell to the document.
+ * `stop` ends the probe and returns both records.
+ */
+async function anchorProbe(page: Page, { surface, anchor, clip }: {
+  /** The surface's selector. */
+  surface: string
+  /** The anchor's exact text, among buttons. */
+  anchor: string
+  /** The anchor's clipping region's selector. */
+  clip: string
+}) {
+  await page.evaluate(({ surface, anchor, clip }) => {
+    type Frame = { anchorHidden: boolean; surfaceLive: boolean; keyboard: string };
+    const record = { frames: [] as Frame[], moves: [] as string[], watching: true };
+    (window as unknown as { rustxAnchorProbe: typeof record }).rustxAnchorProbe = record;
+    const anchorElement = () => Array.from(document.querySelectorAll('button')).find(button => button.textContent === anchor) ?? null;
+    const describe = (node: Element | null): string => {
+      if (node === null || node === document.body) return 'body';
+      if (node === anchorElement()) return 'anchor';
+      if (document.querySelector(surface)?.contains(node) === true) return 'surface';
+      if (node.getAttribute('role') === 'menu') return 'menu';
+      return node.getAttribute('aria-label') ?? node.textContent ?? node.tagName;
+    };
+    document.addEventListener('focusin', event => { if (record.watching) record.moves.push(describe(event.target as Element)); });
+    document.addEventListener('focusout', event => { if (record.watching && event.relatedTarget === null) record.moves.push('released'); });
+    const frame = () => {
+      if (!record.watching) return;
+      const target = anchorElement(), region = document.querySelector(clip);
+      const a = target?.getBoundingClientRect(), c = region?.getBoundingClientRect();
+      const anchorHidden = a === undefined || c === undefined || a.bottom <= c.top || a.top >= c.bottom;
+      const card = document.querySelector(surface);
+      record.frames.push({ anchorHidden, surfaceLive: card !== null && card.checkVisibility({ visibilityProperty: true }), keyboard: describe(document.activeElement) });
+      requestAnimationFrame(frame);
+    };
+    // Armed once it has sampled the frame before the transition.
+    return new Promise<void>(resolve => requestAnimationFrame(() => { frame(); resolve(); }));
+  }, { surface, anchor, clip });
+  return {
+    /** Stop after the next two frames have been sampled, so the record ends on the settled state. */
+    stop: () => page.evaluate(async () => {
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      const record = (window as unknown as { rustxAnchorProbe: { frames: { anchorHidden: boolean; surfaceLive: boolean; keyboard: string }[]; moves: string[]; watching: boolean } }).rustxAnchorProbe;
+      record.watching = false;
+      return { frames: record.frames, moves: record.moves };
+    }),
+  };
+}
+
 /** Design dimensions decide the card; the viewport can only take room away. */
 test('portaled Menu keeps its 218–360px design width inside the viewport', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
@@ -290,10 +346,27 @@ test('a Menu whose trigger scrolls out of view closes without undoing the scroll
   const opened = await observe();
   expect(opened).toMatchObject({ scrollTop: 0, clipped: false });
 
-  // The pane scrolls the trigger wholly out of its clipping region.
+  // The pane scrolls the trigger wholly out of its clipping region, under a
+  // frame probe.
+  const probe = await anchorProbe(page, { surface: '[role="menu"]', anchor: 'Scrolled actions', clip: '[aria-label="Scrolled pane"]' });
   const scrolledTo = await pane.evaluate(el => { el.scrollTop = 300; return el.scrollTop; });
   expect(scrolledTo).toBe(300);
   await expect(page.getByRole('menu')).toHaveCount(0);
+  const { frames, moves } = await probe.stop();
+  // The probe saw the list live, holding the keyboard, over its visible
+  // trigger; from the first frame whose placement finds the trigger clipped,
+  // no frame has the list live or the keyboard in it, on the trigger or on
+  // the body: the keyboard is already on the owner.
+  expect(frames[0]).toEqual({ anchorHidden: false, surfaceLive: true, keyboard: 'surface' });
+  const hidden = frames.filter(frame => frame.anchorHidden);
+  expect(hidden.length).toBeGreaterThan(0);
+  expect(frames.slice(frames.indexOf(hidden[0]!))).toEqual(hidden);
+  expect(new Set(hidden.map(frame => JSON.stringify(frame)))).toEqual(new Set([JSON.stringify({ anchorHidden: true, surfaceLive: false, keyboard: 'Scrolled pane header' })]));
+  // The keyboard moved exactly once, straight to the owner: never released to
+  // the document and never back to the hidden trigger. The owner was asked to
+  // close exactly once.
+  expect(moves).toEqual(['Scrolled pane header']);
+  await expect(page.getByLabel('Scrolled closes')).toHaveText('1');
   // The scroll stands, the page did not move to the trigger, and the keyboard
   // is on the named owner: not the clipped trigger or its clipped row, no
   // removed row, not the page body.
@@ -309,6 +382,7 @@ test('a Menu whose trigger scrolls out of view closes without undoing the scroll
   await trigger.focus(); await page.keyboard.press('Enter');
   await expect(page.getByRole('menuitem', { name: 'Alpha' })).toBeFocused();
   await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0); await expect(trigger).toBeFocused();
+  await expect(page.getByLabel('Scrolled closes')).toHaveText('2');
   expect(errors).toEqual([]);
 });
 
@@ -342,9 +416,22 @@ test('a submenu whose row scrolls out of the list closes without undoing the scr
   await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown');
   await expect(menu.row('Sort by')).toBeFocused();
   await page.keyboard.press('ArrowRight'); await expect(menu.row('Name')).toBeFocused();
+  const probe = await anchorProbe(page, { surface: '[role="menu"]:not([tabindex])', anchor: 'Sort by', clip: '[role="menu"][tabindex="-1"] > [role="presentation"]:first-child' });
   const away = await scrollRowsAway();
   expect(away).toBeGreaterThan(0);
   await expect(menu.submenu).toHaveCount(0);
+  const { frames, moves } = await probe.stop();
+  // The probe saw the submenu live, holding the keyboard, beside its visible
+  // row; from the first frame whose placement finds the row clipped, no frame
+  // has the submenu live or the keyboard in it, on the row or on the body:
+  // the keyboard is already on the parent list.
+  expect(frames[0]).toEqual({ anchorHidden: false, surfaceLive: true, keyboard: 'surface' });
+  const hidden = frames.filter(frame => frame.anchorHidden);
+  expect(hidden.length).toBeGreaterThan(0);
+  expect(frames.slice(frames.indexOf(hidden[0]!))).toEqual(hidden);
+  expect(new Set(hidden.map(frame => JSON.stringify(frame)))).toEqual(new Set([JSON.stringify({ anchorHidden: true, surfaceLive: false, keyboard: 'menu' })]));
+  // One keyboard move, straight to the list; the list itself stayed open.
+  expect(moves).toEqual(['menu']);
   await expect(menu.row('Sort by')).toHaveAttribute('aria-expanded', 'false');
   await expect(menu.parent).toBeVisible();
   expect(await observe()).toEqual({ scrollTop: away, clipped: true, keyboard: 'list' });
@@ -429,5 +516,102 @@ test('Menu submenu keyboard layers, pointer crossing and focus return', async ({
   const card = await menu.rect(menu.parent);
   await page.mouse.click(card.left - 20, card.bottom - 10);
   await expect(page.getByRole('menu')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+/** A submenu the keyboard has entered belongs to the keyboard: passive pointer
+ * movement across the parent's other rows — one with its own submenu, one
+ * with none — never replaces or closes it. Only a pointer press on a parent
+ * row takes it over, and that press moves the keyboard to the pressed row
+ * first. */
+test('a keyboard-owned submenu survives passive pointer hover until a pointer press takes it over', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
+  const menu = nestedMenu(page);
+  const selection = page.getByLabel('Nested choice');
+  await menu.pin('position: fixed; left: 300px; top: 8px;');
+  // Every keyboard move from here on: the element that took it, or
+  // `released` when it fell to the document.
+  await page.evaluate(() => {
+    const record = window as unknown as { rustxMoves: string[] };
+    record.rustxMoves = [];
+    document.addEventListener('focusin', event => { record.rustxMoves.push((event.target as Element).textContent ?? ''); });
+    document.addEventListener('focusout', event => { if (event.relatedTarget === null) record.rustxMoves.push('released'); });
+  });
+  const moves = () => page.evaluate(() => { const record = window as unknown as { rustxMoves: string[] }; return record.rustxMoves.splice(0); });
+  /** Move the pointer onto a row's middle in steps, crossing every row on the way. */
+  const glide = async (name: string) => {
+    const r = await menu.rect(menu.row(name));
+    await page.mouse.move(r.left + 24, (r.top + r.bottom) / 2, { steps: 12 });
+    expect(await menu.row(name).evaluate(el => el.matches(':hover'))).toBe(true);
+  };
+  const hovered = (name: string) => menu.row(name).evaluate(el => el.matches(':hover'));
+
+  // The keyboard enters Sort by's submenu.
+  await menu.open();
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown');
+  await expect(menu.row('Sort by')).toBeFocused();
+  await page.keyboard.press('ArrowRight'); await expect(menu.row('Name')).toBeFocused();
+  await moves();
+
+  // The pointer glides from above the card over More options (a row with its
+  // own submenu) and Sort by down to Tango (a row with none), and then back
+  // up onto More options. Each crossing would have replaced or closed the
+  // submenu; none does, and the keyboard never moves.
+  const card = await menu.rect(menu.parent);
+  await page.mouse.move(card.left + 24, card.top - 4);
+  await glide('Tango');
+  await expect(menu.submenu).toBeVisible(); await expect(menu.row('Name')).toBeFocused();
+  await expect(menu.row('Sort by')).toHaveAttribute('aria-expanded', 'true');
+  await glide('More options');
+  await expect(menu.submenu).toBeVisible(); await expect(menu.row('Name')).toBeFocused();
+  await expect(menu.row('Option 1')).toHaveCount(0);
+  await expect(menu.row('Sort by')).toHaveAttribute('aria-expanded', 'true');
+  await expect(menu.row('More options')).toHaveAttribute('aria-expanded', 'false');
+  // The pointer leaves both cards altogether: still the keyboard's.
+  await page.mouse.move(card.left - 40, card.bottom + 40, { steps: 6 });
+  await expect(menu.submenu).toBeVisible(); await expect(menu.row('Name')).toBeFocused();
+  expect(await moves()).toEqual([]);
+
+  // The keyboard still drives the submenu: the arrows walk it past its
+  // disabled row, and ArrowLeft closes only it and returns to its row.
+  await page.keyboard.press('ArrowDown'); await expect(menu.row('Date')).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
+  await expect(menu.row('Sort by')).toBeFocused(); await expect(menu.submenu).toHaveCount(0);
+  await expect(menu.parent).toBeVisible();
+  expect(await moves()).toEqual(['Date', 'Sort by']);
+
+  // With the keyboard back on the parent list, hover shows submenus again.
+  await glide('More options'); await expect(menu.row('Option 1')).toBeVisible();
+  await glide('Tango'); await expect(menu.submenu).toHaveCount(0);
+
+  // Pointer takeover: with the keyboard inside Sort by's submenu, a press on
+  // More options moves the keyboard to that row, then shows its submenu in
+  // place of Sort by's. The row, not the document, holds the keyboard.
+  await menu.row('Sort by').focus(); await page.keyboard.press('ArrowRight');
+  await expect(menu.row('Name')).toBeFocused();
+  await moves();
+  await menu.row('More options').click();
+  await expect(menu.row('More options')).toBeFocused();
+  await expect(menu.row('Option 1')).toBeVisible();
+  await expect(menu.row('Name')).toHaveCount(0);
+  await expect(menu.row('More options')).toHaveAttribute('aria-expanded', 'true');
+  await expect(menu.row('Sort by')).toHaveAttribute('aria-expanded', 'false');
+  expect(await moves()).toEqual(['More options']);
+  // That submenu is the pointer's: hover moves on from it as usual, and the
+  // keyboard continues from the pressed row.
+  await glide('Tango'); await expect(menu.submenu).toHaveCount(0);
+  await expect(menu.row('More options')).toBeFocused();
+  await page.keyboard.press('ArrowDown'); await expect(menu.row('Sort by')).toBeFocused();
+  await expect(menu.row('Name')).toBeVisible();
+
+  // A press on a row with no submenu, from inside a keyboard-owned submenu,
+  // selects it; both layers close and the keyboard returns to the trigger.
+  await page.keyboard.press('ArrowRight'); await expect(menu.row('Name')).toBeFocused();
+  expect(await hovered('Tango')).toBe(true);
+  await menu.row('Tango').click();
+  await expect(selection).toHaveText('tango'); await expect(page.getByRole('menu')).toHaveCount(0);
+  await expect(menu.trigger).toBeFocused();
   expect(errors).toEqual([]);
 });

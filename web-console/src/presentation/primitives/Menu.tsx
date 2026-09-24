@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { autoUpdate, flip, hide, offset, shift, size, useFloating, type Placement, type VirtualElement } from '@floating-ui/react-dom'
@@ -78,10 +78,12 @@ const availableRoom = size({
  * interaction anchor. `referenceHidden` is set once the reference is fully
  * clipped: scrolled out of its clipping context, or out of layout altogether —
  * a reference under a `display: none` ancestor, or a detached one, measures as
- * an empty rect that no clipping context contains. A surface whose reference
- * is hidden settles closed (see `Menu` and `Submenu`); it is never left
- * floating, or holding the keyboard, over a layout that no longer has its
- * anchor.
+ * an empty rect that no clipping context contains. It is the only liveness
+ * signal: the Menu never measures its anchors itself. The render that carries
+ * a placement reporting it no longer presents the surface, and the layout
+ * phase of that commit settles the keyboard and closes it (see `Menu` and
+ * `Submenu`), so no painted frame shows a surface over a layout that no longer
+ * has its anchor.
  */
 const anchorLiveness = hide({ strategy: 'referenceHidden' })
 
@@ -116,26 +118,37 @@ function placementOf(side: 'bottom' | 'top' | 'right', align: 'start' | 'end'): 
  * the row (Enter, Space, Tab) or ArrowRight moves the keyboard into it. The
  * arrows, Home and End walk only the layer that holds the keyboard, and
  * Escape or ArrowLeft inside a submenu closes just that layer and hands the
- * keyboard back to its row.
+ * keyboard back to its row. A submenu the keyboard holds — it is being
+ * entered, or focus is inside its card — belongs to the keyboard: passive
+ * pointer movement never replaces or closes it, whichever rows the pointer
+ * crosses. Only three things end it: a key that closes or selects from it,
+ * its row ceasing to be a visible anchor, or a pointer press on a parent row,
+ * which moves the keyboard to the pressed row before its own submenu (or
+ * selection) takes over. Once the keyboard is back on the parent list, hover
+ * shows submenus again.
  *
- * A surface lives only while its reference is a visible interaction anchor.
- * When the anchor leaves rendered layout while the list is open — a container
- * query hides it, an ancestor collapses, it is scrolled out of its clipping
- * context — the menu closes exactly once through `onClose`. That close is not
- * a dismissal: the anchor is never refocused — focusing a trigger that was
- * scrolled out of view would scroll it back and undo the user's scroll — and a
- * keyboard the menu held moves, synchronously and without scrolling, to the
- * `focusOwner` its host names, while every row is still mounted. The menu does
- * not guess that owner from the DOM: where keyboard navigation continues after
- * an anchor disappears is the host's decision. A host whose anchor can
- * disappear under normal layout names one; with none named (or one that
- * refuses focus) the menu releases the keyboard to the document rather than
- * leave it on a hidden control or a removed row. A submenu whose row stops
- * being visible closes the same way inside the menu, whose own list is that
- * layer's owner: the parent list stays open and takes the keyboard instead of
- * the clipped row. The owner therefore only states whether the menu is open;
- * it never mirrors the layout rules that decide whether the anchor is
- * rendered.
+ * A surface lives only while its reference is a visible interaction anchor,
+ * and Floating UI alone says whether it is. The render whose placement first
+ * reports the anchor hidden — a container query took it out of layout, an
+ * ancestor collapsed, it was scrolled out of its clipping context — no longer
+ * presents the list (or its submenu): they stay mounted but invisible, so they
+ * can be neither seen, hit nor focused, and answer no input. In the layout
+ * phase of that same commit, before the browser paints and while every row is
+ * still mounted, a keyboard the menu held moves without scrolling to the
+ * `focusOwner` its host names, and the menu asks its owner to close exactly
+ * once through `onClose`. That close is not a dismissal: the anchor is never
+ * refocused — focusing a trigger that was scrolled out of view would scroll it
+ * back and undo the user's scroll. The menu does not guess the owner from the
+ * DOM: where keyboard navigation continues after an anchor disappears is the
+ * host's decision. A host whose anchor can disappear under normal layout names
+ * one; with none named (or one that refuses focus) the menu releases the
+ * keyboard to the document rather than leave it on a hidden control or a
+ * removed row. A submenu whose row stops being visible settles the same way
+ * inside the menu, whose own list is that layer's owner: the card stops being
+ * presented, a keyboard in it or on the clipped row moves to the still-open
+ * list, and only the submenu closes. The owner therefore only states whether
+ * the menu is open; it never mirrors the layout rules that decide whether the
+ * anchor is rendered.
  * @param props.autoFocus - focus the first item on open; the arrow keys walk the list either way.
  * @param props.open - whether the list is showing (owner-controlled).
  * @param props.anchor - the trigger element (rendered in place).
@@ -247,29 +260,46 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   }
   const openRef = useRef(open)
   openRef.current = open
-  const [openSubmenuId, setOpenSubmenuId] = useState<string | null>(null)
+  /**
+   * The open submenu: its row's id, and whether the keyboard is moving into
+   * it — set by a keyboard activation of the row, cleared once the placed
+   * card has focused its first enabled row.
+   */
+  const [submenu, setSubmenu] = useState<{ id: string; entering: boolean } | null>(null)
   /** The open submenu's card, while it is mounted. */
   const submenuRef = useRef<HTMLDivElement | null>(null)
-  /** The submenu the keyboard is moving into, focused once it is placed. */
-  const [enteringSubmenuId, setEnteringSubmenuId] = useState<string | null>(null)
-  const entered = useCallback(() => { setEnteringSubmenuId(null) }, [])
+  /**
+   * Whether the open submenu holds the keyboard: the keyboard is moving into
+   * it, or document focus is inside its card. That is the one ownership fact
+   * the pointer answers to.
+   */
+  const submenuHoldsKeyboard = (): boolean => submenu?.entering === true || submenuRef.current?.contains(document.activeElement) === true
+  /** Show a row's submenu, or none, without moving the keyboard. */
+  const showSubmenu = (id: string | null): void => {
+    setSubmenu(current => (current?.id === id ? current : id === null ? null : { id, entering: false }))
+  }
+  const entered = useCallback(() => {
+    setSubmenu(current => (current?.entering === true ? { id: current.id, entering: false } : current))
+  }, [])
   /** Close the open submenu on request (Escape, ArrowLeft): a keyboard inside
    * it goes back to its row, the visible anchor it was entered from. */
   const collapseSubmenu = useCallback((): void => {
     const inside = submenuRef.current?.contains(document.activeElement) === true
     const row = listRef.current?.querySelector<HTMLButtonElement>('[aria-expanded="true"]')
-    setOpenSubmenuId(null)
+    setSubmenu(null)
     if (inside) row?.focus()
   }, [])
-  /** Close the open submenu because its row was scrolled out of the list. A
-   * keyboard inside the submenu, or on that row, settles on the still-open
-   * list rather than on the clipped row: focusing the row would scroll the
-   * list back to it, undoing the scroll that hid it. */
+  /** Close the open submenu because Floating UI reports its row clipped out
+   * of the list. Runs in the layout phase of the commit that stopped
+   * presenting the card, so a keyboard inside the card, or on that row,
+   * settles on the still-open list before anything is painted — not on the
+   * clipped row: focusing the row would scroll the list back to it, undoing
+   * the scroll that hid it. */
   const releaseHiddenSubmenu = useCallback((): void => {
     const active = document.activeElement
     const row = listRef.current?.querySelector<HTMLButtonElement>('[aria-expanded="true"]')
     if (submenuRef.current?.contains(active) === true || (row !== null && row === active)) takesFocus(listRef.current, true)
-    setOpenSubmenuId(null)
+    setSubmenu(null)
   }, [])
   const submenuId = useId()
   const { arm: armClose, cancel: cancelClose } = usePointerGrace(onClose)
@@ -333,11 +363,20 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   // never lands on an unplaced row. A host-owned anchor that has never supplied
   // a rect has nothing to place against, so that list stays invisible.
   const placed = isPositioned && (!hostAnchored || hostRect.current !== null)
-  const listStyle: CSSProperties = !hostAnchored || hostRect.current !== null ? floatingStyles : { ...floatingStyles, visibility: 'hidden' }
   // Read only from a placement of this opening: an unplaced list's data is the
   // previous opening's, and a host anchor that has not supplied a rect yet
   // has not been measured at all.
   const anchorHidden = placed && middlewareData.hide?.referenceHidden === true
+  // A list whose anchor is hidden stops being presented in the very render
+  // that carries the placement saying so: it stays mounted until its owner
+  // closes it, but invisible, so no frame shows it and nothing can hit or
+  // focus it. The same holds while a host anchor has never supplied a rect.
+  const presented = !anchorHidden && (!hostAnchored || hostRect.current !== null)
+  const listStyle: CSSProperties = presented ? floatingStyles : { ...floatingStyles, visibility: 'hidden' }
+  /** Whether the anchor is hidden, for the document listeners: a surface that
+   * is no longer presented answers no input while its close is pending. */
+  const anchorHiddenRef = useRef(anchorHidden)
+  anchorHiddenRef.current = anchorHidden
 
   // Opening remembers where the keyboard was, so closing can hand it back to
   // that control — an anchor wrapping several (a split button) cannot be asked
@@ -353,26 +392,29 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   }, [open])
 
   useEffect(() => {
-    if (!open || !autoFocus || !placed) return
+    if (!open || !autoFocus || !placed || anchorHidden) return
     const first = listRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')
     walkIndex.current = first === undefined || first === null ? null : 0
     first?.focus()
-  }, [open, autoFocus, placed])
+  }, [open, autoFocus, placed, anchorHidden])
 
   // The anchor left rendered layout (or was scrolled out of its clipping
   // context) while the list is open: settle closed. Unlike every other close,
   // a keyboard the menu held does not go back to the anchor, which is hidden.
-  // The order is the contract: Floating UI's placement of this opening
-  // reports referenceHidden; in the effect of that commit the keyboard moves
-  // to the host's owner while every row is still mounted, the owner is asked
-  // to close, and the rows unmount in the commit that close produces. No frame
-  // has the keyboard on a removed row or on the hidden anchor, and with an
-  // owner named, none has it on the body.
+  // The order is the contract. Floating UI commits a placement of this
+  // opening that reports referenceHidden, and that render already stopped
+  // presenting the list and its submenu. In the layout phase of the same
+  // commit — synchronously, before the browser paints — the keyboard moves to
+  // the host's owner while every row is still mounted, and the owner is asked
+  // to close; the rows unmount in the commit that close produces. No painted
+  // frame shows the list over the hidden anchor or has the keyboard on a
+  // hidden row, a removed row or the hidden anchor, and with an owner named,
+  // none has it on the body.
   // It runs once per hidden anchor, not again for an `onClose` identity that
   // changed before the owner's close committed.
   const closeRef = useRef(onClose)
   closeRef.current = onClose
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open || !anchorHidden) return
     const active = document.activeElement
     if (inSurface(active) || rootRef.current?.contains(active) === true) settleOnFocusOwner()
@@ -381,19 +423,19 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
 
   useEffect(() => {
     if (!open) {
-      setOpenSubmenuId(null)
-      setEnteringSubmenuId(null)
+      setSubmenu(null)
       walkIndex.current = null
       return
     }
     const onPointerDown = (e: PointerEvent) => {
-      if (!(e.target instanceof Node)) return
+      if (anchorHiddenRef.current || !(e.target instanceof Node)) return
       // The portaled surfaces are outside the anchor subtree; check all.
       if (rootRef.current?.contains(e.target) === true) return
       if (inSurface(e.target)) return
       onClose()
     }
     const onKeyDown = (e: KeyboardEvent) => {
+      if (anchorHiddenRef.current) return
       // Where the keyboard is, computed once: the menu owns it when it holds a
       // row of either layer or sits on its anchor region.
       const focused = document.activeElement
@@ -497,7 +539,7 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
     // instead. Only that case closes: an app or tab switch leaves the
     // document's focus where it was, so activeElement is not an iframe.
     const onWindowBlur = () => {
-      if (document.activeElement instanceof HTMLIFrameElement) onClose()
+      if (!anchorHiddenRef.current && document.activeElement instanceof HTMLIFrameElement) onClose()
     }
     document.addEventListener('pointerdown', onPointerDown)
     document.addEventListener('keydown', onKeyDown, true)
@@ -525,14 +567,16 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
       return <div key={entry.id} className={css.label} role="presentation">{entry.text}</div>
     }
     const hasSub = entry.submenu !== undefined && entry.submenu.length > 0
-    const subOpen = hasSub && openSubmenuId === entry.id
+    const subOpen = hasSub && submenu?.id === entry.id
     const openSubmenu = subOpen ? entry.submenu : undefined
     const selected = entry.id === selectedId || selectedIds?.includes(entry.id) === true
     return (
       <ItemCell
         key={entry.id}
-        onMouseEnter={() => { setOpenSubmenuId(hasSub ? entry.id : null) }}
-        onMouseLeave={() => { setOpenSubmenuId(null) }}
+        // Hover is passive: it shows and hides pointer submenus, and never
+        // replaces or closes one the keyboard holds.
+        onMouseEnter={() => { if (!submenuHoldsKeyboard()) showSubmenu(hasSub ? entry.id : null) }}
+        onMouseLeave={() => { if (!submenuHoldsKeyboard()) showSubmenu(null) }}
         submenu={openSubmenu === undefined ? undefined : (row => (
           <Submenu
             id={submenuId}
@@ -540,7 +584,8 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
             items={openSubmenu}
             dense={dense}
             compact={compact}
-            enter={enteringSubmenuId === entry.id}
+            presented={!anchorHidden}
+            enter={submenu?.entering === true}
             onEntered={entered}
             onRowHidden={releaseHiddenSubmenu}
             cardRef={submenuRef}
@@ -559,15 +604,23 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
           aria-haspopup={hasSub ? 'menu' : undefined}
           aria-expanded={hasSub ? subOpen : undefined}
           aria-controls={subOpen ? submenuId : undefined}
-          // Focus shows a row's submenu — except the keyboard coming back from
-          // that submenu, which has just closed it.
-          onFocus={(e) => { if (!(e.relatedTarget instanceof Node && submenuRef.current?.contains(e.relatedTarget) === true)) setOpenSubmenuId(hasSub ? entry.id : null) }}
+          // Focus shows a row's submenu — except focus arriving from the open
+          // submenu: the keyboard coming back from it has just closed it, and
+          // a pointer press taking it over decides in its click.
+          onFocus={(e) => { if (!(e.relatedTarget instanceof Node && submenuRef.current?.contains(e.relatedTarget) === true)) showSubmenu(hasSub ? entry.id : null) }}
           onClick={(e) => {
             if (hasSub) {
-              setOpenSubmenuId(entry.id)
               // A keyboard activation (Enter, Space, Tab, ArrowRight: no
               // pointer detail) also moves the keyboard into the submenu.
-              if (e.detail === 0) setEnteringSubmenuId(entry.id)
+              if (e.detail === 0) {
+                setSubmenu({ id: entry.id, entering: true })
+                return
+              }
+              // A pointer press takes over: a keyboard the open submenu holds
+              // moves to the pressed row before that submenu is replaced, so
+              // it never goes down with the card.
+              if (submenuHoldsKeyboard()) e.currentTarget.focus()
+              showSubmenu(entry.id)
               return
             }
             onSelect(entry.id)
@@ -660,20 +713,25 @@ function ItemCell({ onMouseEnter, onMouseLeave, submenu, children }: {
  * inside it), and follows the row through scroll, resize and layout changes.
  * The card is a React child of the row, so the pointer moving from row to
  * card never leaves the row; its bridge spans the gap between them. Like the
- * list, the card lives only while its row is a visible anchor: a row scrolled
- * out of the list closes it.
+ * list, the card lives only while its row is a visible anchor: the render
+ * whose placement reports the row clipped out of the list stops presenting
+ * it, and the layout phase of that commit asks the menu to close it. It is
+ * also not presented while the list itself is not.
  */
-function Submenu({ id, row, items, dense, compact, enter, onEntered, onRowHidden, cardRef, onSelect }: {
+function Submenu({ id, row, items, dense, compact, presented, enter, onEntered, onRowHidden, cardRef, onSelect }: {
   id: string
   row: HTMLDivElement | null
   items: readonly MenuItem[]
   /** The parent's row spacing and typography: the card is not its descendant. */
   dense: boolean
   compact: boolean
+  /** Whether the parent list is presented; the card is not while it is not. */
+  presented: boolean
   /** Move the keyboard to the first enabled row once the card is placed. */
   enter: boolean
   onEntered: () => void
-  /** The row stopped being a visible anchor: close this card. */
+  /** The row stopped being a visible anchor: settle the keyboard and close
+   * this card. Called in the layout phase of the commit that reported it. */
   onRowHidden: () => void
   cardRef: { current: HTMLDivElement | null }
   onSelect: (id: string) => void
@@ -694,7 +752,7 @@ function Submenu({ id, row, items, dense, compact, enter, onEntered, onRowHidden
     ],
   })
   const rowHidden = isPositioned && middlewareData.hide?.referenceHidden === true
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (rowHidden) onRowHidden()
   }, [rowHidden, onRowHidden])
   const setCard = useCallback((node: HTMLDivElement | null) => {
@@ -702,11 +760,11 @@ function Submenu({ id, row, items, dense, compact, enter, onEntered, onRowHidden
     refs.setFloating(node)
   }, [cardRef, refs])
   useEffect(() => {
-    if (!enter || !isPositioned) return
+    if (!enter || !isPositioned || rowHidden || !presented) return
     elements.floating?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
     onEntered()
-  }, [enter, isPositioned, elements.floating, onEntered])
-  const style = { ...floatingStyles, '--menu-submenu-gap': `${SUBMENU_GAP}px` } as CSSProperties
+  }, [enter, isPositioned, rowHidden, presented, elements.floating, onEntered])
+  const style = { ...floatingStyles, '--menu-submenu-gap': `${SUBMENU_GAP}px`, ...(presented && !rowHidden ? {} : { visibility: 'hidden' }) } as CSSProperties
   return createPortal(
     <div
       ref={setCard}

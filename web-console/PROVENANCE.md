@@ -21,10 +21,14 @@ only, each with a new local hash, import closure and a `#393` treatment note:
   modal, and the selected row is announced. Its callers drop the `portal` prop.
   Every surface lives only while its reference is a visible anchor (Floating
   UI `hide`): a list whose anchor leaves layout closes through `onClose`, a
-  submenu whose row scrolls out closes. A keyboard the list held moves, without
-  scrolling, to the `focusOwner` its host names (never inferred from the DOM),
-  and a keyboard in a hidden submenu to the parent list, never to a hidden
-  control or a removed row.
+  submenu whose row scrolls out closes. The render carrying that placement
+  stops presenting the surface, and the layout phase of its commit settles the
+  keyboard and closes it once, before paint. A keyboard the list held moves,
+  without scrolling, to the `focusOwner` its host names (never inferred from
+  the DOM), and a keyboard in a hidden submenu to the parent list, never to a
+  hidden control or a removed row. Passive hover never replaces or closes a
+  submenu the keyboard holds; a pointer press on a parent row takes it over
+  with the keyboard on that row.
 - `presentation/settings/SettingsRoot.tsx` and `SettingsRoot.module.css` keep
   the Harness mask/panel/rail/content frame and classes. The viewport
   media-query store, the horizontal tab orientation and the strip-scrolling tab

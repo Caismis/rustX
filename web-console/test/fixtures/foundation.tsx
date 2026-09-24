@@ -29,6 +29,7 @@ function Fixture() {
   const [nested, setNested] = useState(false);
   const [nestedSelected, setNestedSelected] = useState('None');
   const [scrolled, setScrolled] = useState(false);
+  const [scrolledCloses, setScrolledCloses] = useState(0);
   const paneOwner = useRef<HTMLButtonElement>(null);
   const [modal, setModal] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -57,10 +58,12 @@ function Fixture() {
     <button type="button" ref={paneOwner}>Scrolled pane header</button>
     <div role="region" aria-label="Scrolled pane" style={{ height: 160, overflowY: 'auto' }}>
       <div role="group" aria-label="Scrolled row" tabIndex={0}>
-        <Menu open={scrolled} onClose={() => setScrolled(false)} autoFocus focusOwner={paneOwner} anchor={<Button onClick={() => setScrolled(!scrolled)}>Scrolled actions</Button>} items={[{ id: 'a', label: 'Alpha' }, { id: 'c', label: 'Charlie' }]} onSelect={() => setScrolled(false)} />
+        <Menu open={scrolled} onClose={() => { setScrolledCloses(count => count + 1); setScrolled(false); }} autoFocus focusOwner={paneOwner} anchor={<Button onClick={() => setScrolled(!scrolled)}>Scrolled actions</Button>} items={[{ id: 'a', label: 'Alpha' }, { id: 'c', label: 'Charlie' }]} onSelect={() => setScrolled(false)} />
       </div>
       <div style={{ height: 600 }}>Pane content</div>
     </div>
+    {/* How many times the scrolled menu asked its owner to close. */}
+    <output aria-label="Scrolled closes">{scrolledCloses}</output>
     <MarkdownText text={'# Rich content\n\n**Strong** and `inline` with [a link](https://example.com).\n\n| First | Second |\n| - | - |\n| Value | Other |\n\n```rust\nfn main() { println!("hello"); }\n```\n\nMath $E=mc^2$.'} />
   </AppFrame>;
 }

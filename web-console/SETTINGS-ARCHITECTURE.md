@@ -1114,7 +1114,14 @@ viewport and a narrow one never pushes a card outside it; every surface
 scrolls its own rows. A submenu is its own keyboard layer: ArrowRight, Enter,
 Space or Tab on its row enter it, the arrows walk only the layer holding the
 keyboard, and Escape or ArrowLeft inside it close only it and return to its
-row. Inside a React Aria modal each surface is marked
+row. Passive pointer hover never unmounts the submenu that holds the keyboard
+— one being entered, or with focus inside its card: moving the pointer across
+the parent's other rows, with or without submenus of their own, leaves it
+open and focused. It ends only by a key that closes or selects from it, by its
+row ceasing to be a visible anchor, or by a pointer press on a parent row,
+which moves the keyboard to the pressed row before that row's submenu or
+selection replaces it; with the keyboard back on the parent list, hover shows
+submenus again. Inside a React Aria modal each surface is marked
 `data-react-aria-top-layer`, the attribute React Aria's modal focus containment,
 `ariaHideOutside` and interact-outside detection honour, and Escape on an open
 menu is stopped in the document capture phase so the modal never also sees it.
@@ -1125,13 +1132,21 @@ visible interaction anchor. Every surface carries Floating UI's `hide`
 middleware (`referenceHidden`): a reference that is fully clipped — scrolled
 out of its clipping context, or out of layout altogether, since a reference
 under a `display: none` ancestor or a detached one measures as an empty rect
-that nothing contains — is reported on the next `autoUpdate`. An open list
-whose anchor is hidden closes exactly once through `onClose`. That close is not
-a dismissal and never refocuses the hidden anchor (focusing a trigger scrolled
-out of view would scroll it back). A keyboard the list held moves, in the effect
-of the commit that reported `referenceHidden`, while every row is still
-mounted and with `preventScroll`, to the `focusOwner` its host names; the owner
-is then asked to close and the rows unmount in the next commit. The Menu does
+that nothing contains — is reported on the next `autoUpdate`. Floating UI is
+the only liveness authority: the Menu measures no anchor itself, and adds no
+observer of its own. The render that carries a placement reporting
+`referenceHidden` no longer presents the surface — it stays mounted, but
+`visibility: hidden`, so it can be neither seen, hit nor focused — and in
+the layout phase of that
+same commit, before the browser paints and while every row is still mounted,
+a keyboard the list held moves with `preventScroll` to the `focusOwner` its
+host names, and the owner is asked to close exactly once through `onClose`;
+the rows unmount in the commit that close produces. So once Floating UI has
+established that an anchor is hidden, no painted frame shows its surface or
+has the keyboard in it. That close is not a dismissal and never refocuses the
+hidden anchor (focusing a trigger scrolled out of view would scroll it back).
+The guarantee starts at Floating UI's placement: a layout change reaches it
+on `autoUpdate`'s next scroll, resize or layout-shift signal. The Menu does
 not infer that owner from the DOM — a nearest `[tabindex]` ancestor may be
 missing (a Workspace Session row has none up to the page) or may itself be the
 clipped row — so a host whose anchor can disappear under normal layout names
@@ -1141,9 +1156,11 @@ Trajectory inspector body. With no owner named, the keyboard is released to the
 document, never left on a removed row or a hidden anchor. Ordinary closes
 (Escape, Shift+Tab, selection, outside press) still return the keyboard to the
 visible trigger, and use the owner only when that trigger refuses focus. A
-submenu whose row scrolls out of its card closes the same way inside the menu:
-its parent list, the layer's own owner, takes the keyboard instead of the
-clipped row. Owners state only whether a menu is open; no owner observes the
+submenu whose row scrolls out of its card settles the same way inside the
+menu: the render reporting the row hidden stops presenting the card, and the
+layout phase of that commit moves a keyboard in the card or on the clipped row
+to its parent list, the layer's own owner, and closes only the submenu; the
+parent stays open and its rows keep their scroll. Owners state only whether a menu is open; no owner observes the
 layout rules that decide whether its anchor is rendered. jsdom has no layout, so the unit test
 setup treats every anchor as rendered; Chromium proves the contract.
 
@@ -1211,9 +1228,17 @@ axe (`@axe-core/playwright`, WCAG 2.1 A/AA tags, serious/critical as failures,
 no rule disabled) on each. `test/e2e/foundation.spec.ts` proves Floating UI
 placement, flip, shift, bounded height and anchor tracking on the shared Menu,
 the 218–360px design width within narrow viewports, a submenu's own flip,
-bounded scrolling height, row tracking and keyboard/pointer layer contract, and
-anchor liveness: an anchor out of layout closes its list, a row scrolled out of
-its card closes its submenu, and neither keeps the keyboard. The Settings spec
+bounded scrolling height, row tracking and keyboard/pointer layer contract —
+including a keyboard-held submenu that survives the pointer gliding across
+rows with and without submenus and outside both cards, and a pointer press
+that takes it over with the keyboard on the pressed row — and anchor
+liveness: an anchor out of layout closes its list, a row scrolled out of its
+card closes its submenu, and neither keeps the keyboard. For both scroll
+paths a per-frame probe proves that from the first frame whose anchor is
+clipped the surface is never live and the keyboard is already on its owner
+(the named owner, or the parent list), that the keyboard moved exactly once
+and never to the body or the hidden anchor, that the owner was asked to close
+exactly once, and that the scroll stands. The Settings spec
 widens a narrow panel under an open section menu and proves that the menu closes,
 the Settings dialog holds the keyboard and wide navigation works; it narrows the
 panel under a focused rail tab and widens it under a focused closed section
