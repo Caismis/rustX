@@ -407,3 +407,39 @@ fn launch_normalization_is_explicit_after_exact_lexical_parsing() {
     };
     assert_eq!(request.model.as_deref(), Some("local/model"));
 }
+
+#[cfg(unix)]
+#[test]
+fn os_argv_paths_survive_typed_conversion() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let path = OsString::from_vec(b"/tmp/rustx-\xff ".to_vec());
+    let Command::Launch(request) = parse_command([
+        OsString::from("--config"),
+        path.clone(),
+        OsString::from("--workspace"),
+        path.clone(),
+        OsString::from("--runtime-root"),
+        path.clone(),
+    ])
+    .unwrap() else {
+        panic!()
+    };
+    for actual in [request.config, request.workspace, request.runtime_root] {
+        assert_eq!(actual.unwrap().as_os_str(), path);
+    }
+    let Command::Init { request, .. } = parse_command([
+        OsString::from("init"),
+        OsString::from("--template=custom"),
+        OsString::from("--provider=local"),
+        OsString::from("--endpoint=http://localhost"),
+        OsString::from("--credential-env=KEY"),
+        OsString::from("--model-document"),
+        path.clone(),
+    ])
+    .unwrap() else {
+        panic!()
+    };
+    assert_eq!(request.model_document.unwrap().as_os_str(), path);
+}

@@ -36,6 +36,8 @@ use std::io::Write;
 
 use crate::runtime_client::transport::stdio::{StdioSessionEnd, serve_stdio_jsonl};
 
+use std::ffi::{OsStr, OsString};
+
 use super::cli::parse_arguments;
 use super::composition::{
     LocalConversationInspection, LocalRuntimeDependencies, LocalSessionClient, StartupSession,
@@ -83,7 +85,9 @@ enum ServingRuntime {
 ///
 /// Returns the terminal outcome instead of exiting, so the binary owns the
 /// single exit point and tests can drive the same code path.
-pub async fn serve(arguments: impl IntoIterator<Item = String>) -> ProcessOutcome {
+pub async fn serve(
+    arguments: impl IntoIterator<Item = impl Into<OsString> + Clone>,
+) -> ProcessOutcome {
     let request = match parse_arguments(arguments) {
         Ok(paths) => paths,
         Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
@@ -145,14 +149,14 @@ async fn serve_request(request: super::launch::LaunchRequest) -> ProcessOutcome 
 /// the normal mode stdout carries protocol records and nothing else; in
 /// the internal `--subagent-child` mode stdout is instead owned by the
 /// Activity observation IPC (Issue #178).
-pub async fn run_process(arguments: impl IntoIterator<Item = String>) -> i32 {
-    let arguments: Vec<String> = arguments.into_iter().collect();
+pub async fn run_process(arguments: impl IntoIterator<Item = impl Into<OsString> + Clone>) -> i32 {
+    let arguments: Vec<OsString> = arguments.into_iter().map(Into::into).collect();
     // The internal subagent-child mode (Issue #60): one exact flag, no
     // paths — the typed startup specification arrives over the inherited
     // control channel (fd 0).
     if arguments
         .iter()
-        .any(|argument| argument == "--subagent-child")
+        .any(|argument| argument == OsStr::new("--subagent-child"))
     {
         if arguments.len() != 1 {
             let mut stderr = std::io::stderr();

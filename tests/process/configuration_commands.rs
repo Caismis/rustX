@@ -2,7 +2,7 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
-fn run(root: &Path, arguments: &[&str]) -> Output {
+fn run(root: &Path, arguments: &[impl AsRef<std::ffi::OsStr>]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_rustx"))
         .current_dir(root.join("workspace"))
         .env_clear()
@@ -483,4 +483,123 @@ fn exact_values_reach_native_process_owners() {
         String::from_utf8_lossy(&transport.stderr).contains("listen must be stdio or ws://IP:PORT")
     );
     assert!(!root.path().join("home").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn os_argv_non_unicode_model_document_selects_exact_file() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let exact = workspace.join(OsString::from_vec(b"model-\xff.toml".to_vec()));
+    let lossy = std::path::PathBuf::from(exact.to_string_lossy().into_owned());
+    assert_ne!(exact, lossy);
+    std::fs::write(&lossy, "unknown_field = true").unwrap();
+    let fixture: toml::Value = toml::from_str(include_str!(
+        "../../examples/local-runtime/minimal/rustx.toml"
+    ))
+    .unwrap();
+    std::fs::write(
+        &exact,
+        toml::to_string(&fixture["models"]["example/demo-model"]).unwrap(),
+    )
+    .unwrap();
+    let before = state_tree(&workspace);
+    let output = run(
+        root.path(),
+        &[
+            OsString::from("init"),
+            OsString::from("--template=custom"),
+            OsString::from("--provider=example"),
+            OsString::from("--endpoint=http://localhost"),
+            OsString::from("--credential-env=RUSTX_TEST_KEY"),
+            OsString::from("--model-document"),
+            exact.into_os_string(),
+            OsString::from("--json"),
+        ],
+    );
+    let initialized = report(&output, 0);
+    assert_eq!(
+        initialized["initialization"]["written"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let published: toml::Value = toml::from_str(
+        &std::fs::read_to_string(root.path().join("home/rustx/rustx.toml")).unwrap(),
+    )
+    .unwrap();
+    for (field, expected) in fixture["models"]["example/demo-model"].as_table().unwrap() {
+        assert_eq!(&published["models"]["example/demo-model"][field], expected);
+    }
+    assert_eq!(state_tree(&workspace), before);
+    assert!(!root.path().join("home/.local/state").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn os_argv_non_unicode_text_is_a_lexical_failure() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("workspace")).unwrap();
+    let before = state_tree(root.path());
+    let output = run(
+        root.path(),
+        &[
+            OsString::from("app-server"),
+            OsString::from("--listen"),
+            OsString::from_vec(b"stdio-\xff".to_vec()),
+        ],
+    );
+    lexical_failure(&output);
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("invalid UTF-8"), "{error}");
+    assert!(!error.contains("panicked"));
+    assert_eq!(state_tree(root.path()), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn os_argv_private_child_discriminator_is_exact() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("workspace")).unwrap();
+    let before = state_tree(root.path());
+    let child = OsString::from("--subagent-child");
+    // Without an inherited control socket, the exact mode reaches its native
+    // startup failure. It must not reach public clap parsing.
+    let output = run(root.path(), std::slice::from_ref(&child));
+    lexical_failure(&output);
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("subagent child:")
+    );
+    let invalid = OsString::from_vec(vec![0xff]);
+    for args in [vec![child.clone(), invalid.clone()], vec![invalid, child]] {
+        let output = run(root.path(), &args);
+        lexical_failure(&output);
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("internal mode")
+        );
+    }
+    let output = run(root.path(), &[OsString::from("--help")]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(
+        !String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("subagent-child")
+    );
+    assert_eq!(state_tree(root.path()), before);
 }

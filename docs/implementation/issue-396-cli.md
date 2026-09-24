@@ -30,6 +30,10 @@ switch remover could treat `--json` as a value; diagnostic error routing was a
 separate token scan. Root help was stdout, server help stderr, nested help
 mostly failed. These incidental differences are replaced together:
 
+- The production entry uses `std::env::args_os()`: OS-native arguments reach
+  fallible clap parsing without prior Unicode conversion. PathBuf values retain
+  exact OS-native paths. Text fields require valid Unicode; invalid Unicode text
+  returns the normal stderr-only lexical error (exit 2), without a pre-clap panic.
 - Every public grammar uses clap; no alternate parser. No defaults manufacture
   model, workspace, Session, source, or transport intent.
 - Both `--flag value` and `--flag=value` work. A dash-leading value requires
@@ -291,3 +295,91 @@ No macOS execution, ignored live-provider tests or performance benchmarks were
 run locally. The remaining validation failure is the unrelated reproducible Web
 Settings unit test documented above. All requested Rust gates passed on the
 rebased correction; initial failures and reruns remain disclosed.
+
+
+## Review correction: OS-native argv
+
+Starting head: `9bbfee07d73950e5536d78e5787b671d17400d82`; base remains
+`da43450b77d3c195d95b06818be8142317663c91`. The previous outer `env::args()`
+could panic on non-Unicode Unix argv before clap saw a path. Main now uses
+`args_os()`. `serve`, `run_process`, `parse_arguments` and `parse_command` accept
+bounded `Into<OsString> + Clone` items. They never coerce the argv vector to
+Unicode; the one fallible clap grammar still constructs typed native intent.
+
+Only the private child discriminator examines raw argv before clap, using
+OsStr equality: the exact singleton enters the inherited-control-channel mode;
+the same token plus any other argument returns exit 2. Public help excludes it.
+No protocol, semantic policy, dependency or launch-normalization change is made.
+
+Unix regressions:
+
+- `cli::tests::os_argv_paths_survive_typed_conversion`: exact non-Unicode launch
+  config/workspace/runtime-root and Init model-document PathBuf values.
+- `configuration_commands::os_argv_non_unicode_model_document_selects_exact_file`: real
+  binary opens the invalid-UTF-8 filename, not the deliberately invalid lossy
+  sibling; normal JSON success/exit 0, exact published model, unchanged input
+  workspace and absence of runtime storage are asserted.
+- `configuration_commands::os_argv_non_unicode_text_is_a_lexical_failure`: real
+  App Server text value fails via clap with invalid-UTF-8 diagnostic, empty
+  stdout, exit 2 and unchanged filesystem.
+- `configuration_commands::os_argv_private_child_discriminator_is_exact`: exact
+  OsString child token reaches native control-channel validation; non-Unicode
+  extras on either side are rejected, and generated help keeps the mode private.
+
+The previous exact-value and CLI-01–CLI-10 assertions remain unchanged.
+
+
+The initial config-file variant of the real-process regression exposed a
+separate native limitation: `configuration.rs` serializes a PathBuf-keyed source
+revision map with `serde_json::to_vec(...).expect("source manifest")`, which
+panics for a non-Unicode path after it has reached the native owner. The final
+successful path regression uses Init's model-document read/publication path.
+This correction does not redesign configuration revision encoding and does not
+claim that every native subsystem supports non-Unicode paths. The CLI preserves
+them exactly; the pre-clap argv decoding panic is removed.
+
+
+### OS-native correction validation
+
+Linux only. Current CI was inspected. No dependency or generated protocol changes.
+
+| Command | Result |
+| --- | --- |
+| `git diff --check` | Pass |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo check --all-targets --all-features --locked` | Pass |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | Pass |
+| `cargo build --bins --locked` | Pass |
+| `cargo +1.92 check --all-targets --all-features --locked --target-dir target/msrv` | Pass |
+| `cargo test --lib --all-features --locked local_runtime::cli::tests` | 12 passed |
+| `cargo test --test process --all-features --locked os_argv_` | Final: 3 passed |
+| `cargo test --test process --all-features --locked configuration_commands` | 11 passed |
+| `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | 3,071 passed; 2 ignored |
+| `cargo test --test contracts --test provider --all-features --locked` | 28 + 166 passed; 5 live-provider ignored |
+| fake-provider: `uv sync --frozen`; `uv run --frozen pytest` | Pass; 51 tests |
+| tui: `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | 852 passed |
+| protocol/app-server: `pnpm check`; `pnpm typecheck` | Pass; no generated drift |
+| web-console: `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh test/e2e/dev-launcher.spec.ts test/e2e/workspaces.spec.ts` | 2 passed; real binaries/hosts |
+
+The first new-process run exposed the native config-manifest limitation above
+(2 passed, 1 failed). The first Init variant also needed its assertion corrected
+for native-added default fields; the final assertion checks every declared model
+field and the final run passed all 3. Existing assertions were not weakened.
+
+Full Web unit/screenshot suites were not repeated for this bounded Rust entry
+change; affected real-binary launcher cases were run. The previous local Web
+Settings failure remains recorded in the earlier validation history; all seven
+remote CI jobs on the starting head had since passed. No macOS or ignored live
+provider tests were run locally for this correction.
+
+
+- `cargo test --lib --all-features --locked -- boundary_suites::`: 225 passed.
+- `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --locked --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output`: 414 passed (129 durable, 59 process, 43 subagent, 130 tools, 22 conformance, 26 catalog, 5 managed-output).
+
+Final source review confirms: main uses args_os; no pre-clap Unicode/lossy argv
+conversion; PathBuf values stay OS-native; text Unicode checks belong to clap;
+child dispatch uses OsStr equality only; one public parser; no path normalization;
+protocol stdout stays clean; help/error exits are unchanged; native semantic
+owners and the prior PR architecture remain intact. All final executed gates
+passed. The native config-manifest limitation discovered during development is
+explicitly recorded above and remains outside this argv-boundary correction.

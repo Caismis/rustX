@@ -1,5 +1,5 @@
 //! Public lexical grammar. Native owners resolve intent and perform effects.
-use std::path::PathBuf;
+use std::{ffi::OsString, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum, builder::NonEmptyStringValueParser};
 
@@ -305,9 +305,11 @@ impl std::error::Error for ArgumentError {}
 /// # Errors
 /// Returns lexical or launch-intent failures; accepted diagnostic intent owns JSON.
 pub fn parse_command(
-    arguments: impl IntoIterator<Item = String>,
+    arguments: impl IntoIterator<Item = impl Into<OsString> + Clone>,
 ) -> Result<Command, ArgumentError> {
-    let parsed = match Cli::try_parse_from(std::iter::once("rustx".to_owned()).chain(arguments)) {
+    let parsed = match Cli::try_parse_from(
+        std::iter::once(OsString::from("rustx")).chain(arguments.into_iter().map(Into::into)),
+    ) {
         Ok(parsed) => parsed,
         Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp => {
             return Ok(Command::Help(error.to_string()));
@@ -356,7 +358,7 @@ pub fn parse_command(
 /// # Errors
 /// Rejects non-launch commands as well as invalid launch arguments.
 pub fn parse_arguments(
-    arguments: impl IntoIterator<Item = String>,
+    arguments: impl IntoIterator<Item = impl Into<OsString> + Clone>,
 ) -> Result<LaunchRequest, ArgumentError> {
     match parse_command(arguments)? {
         Command::Launch(request) => Ok(request),
