@@ -89,7 +89,7 @@ export function HoverCard({
   }, [])
 
   // Fixed-position from the anchor rect before paint; track the anchor while
-  // open (capture-phase scroll catches nested panes), as in Menu portal mode.
+  // open (capture-phase scroll catches nested panes).
   useLayoutEffect(() => {
     if (!open) { setPos(null); return }
     const place = () => {

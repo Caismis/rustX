@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { autoUpdate, flip, offset, shift, size, useFloating, type Placement, type VirtualElement } from '@floating-ui/react-dom'
@@ -17,7 +17,9 @@ export interface MenuItem {
   icon?: ReactNode
   /** Destructive row: error-colored text/icon and danger hover fill. */
   danger?: boolean
-  /** Nested card opened to the right on hover/focus. */
+  /** Nested card opened beside the row on hover/focus (right, or left when
+   * the right does not fit); the keyboard enters it with ArrowRight, Enter,
+   * Space or Tab on the row. */
   submenu?: readonly MenuItem[]
 }
 
@@ -45,8 +47,31 @@ function isLabel(entry: MenuEntry): entry is MenuLabel {
   return 'type' in entry && entry.type === 'label'
 }
 
-/** Distance a portaled list keeps from the viewport edges. */
+/** Distance a floating menu surface keeps from the viewport edges. */
 const VIEWPORT_MARGIN = 12
+
+/** Row edge to submenu card: the parent card's 4px inset plus the 6px between
+ * the two cards' outer edges (figma 419:16920). The card's pointer bridge
+ * spans the same gap. */
+const SUBMENU_GAP = 10
+
+/** A submenu card ends 4px below its row — the parent card's inset — so a
+ * submenu of the last row bottom-aligns with the parent card. */
+const SUBMENU_DROP = 4
+
+/**
+ * Floating UI's measure of the room the viewport leaves a menu surface,
+ * published as `--menu-available-width` / `--menu-available-height`.
+ * Menu.module.css applies the design bounds within it, so the design decides
+ * the card's size and the viewport only ever takes room away.
+ */
+const availableRoom = size({
+  padding: VIEWPORT_MARGIN,
+  apply({ availableWidth, availableHeight, elements }) {
+    elements.floating.style.setProperty('--menu-available-width', `${Math.max(0, availableWidth)}px`)
+    elements.floating.style.setProperty('--menu-available-height', `${Math.max(0, availableHeight)}px`)
+  },
+})
 
 /** The rustX side/align vocabulary as one Floating UI placement. A side card
  * opens beside the anchor's top edge, as it always has. */
@@ -55,12 +80,24 @@ function placementOf(side: 'bottom' | 'top' | 'right', align: 'start' | 'end'): 
 }
 
 /**
- * Render an anchored dropdown menu. While the list is open its keys mirror the
+ * Render an anchored dropdown menu. The list is rendered into document.body as
+ * a fixed, Floating UI-placed top layer, so no ancestor's overflow clipping
+ * crops it: it flips to the other side and shifts along it to stay 12px inside
+ * the viewport, keeps its design size within the room the viewport leaves
+ * (its rows scroll inside it), and follows its anchor through scroll, resize
+ * and layout changes while open. A submenu is placed the same way against its
+ * row. While the list is open its keys mirror the
  * composer's: Tab settles the focused row — from the trigger, Tab enters the
  * list instead — and Escape or Shift+Tab close it and return focus to the
  * anchor's first button, and selecting a row does the same — the rows unmount
  * with the list. Only a keyboard on the trigger or inside the list is
  * intercepted; Tab presses elsewhere on the page stay the browser's.
+ *
+ * A submenu is its own layer. Focusing or hovering its row shows it; settling
+ * the row (Enter, Space, Tab) or ArrowRight moves the keyboard into it. The
+ * arrows, Home and End walk only the layer that holds the keyboard, and
+ * Escape or ArrowLeft inside a submenu closes just that layer and hands the
+ * keyboard back to its row.
  * @param props.autoFocus - focus the first item on open; the arrow keys walk the list either way.
  * @param props.open - whether the list is showing (owner-controlled).
  * @param props.anchor - the trigger element (rendered in place).
@@ -73,20 +110,13 @@ function placementOf(side: 'bottom' | 'top' | 'right', align: 'start' | 'end'): 
  * cross-origin iframe leaves).
  * @param props.align - list alignment against the anchor (default 'start').
  * @param props.side - open below (`bottom`, default) or above (`top`) the anchor.
- * @param props.portal - render the list into document.body as a fixed,
- * Floating UI-placed top layer: it flips to the other side and shifts along
- * it to stay 12px inside the viewport, a scrollable list takes only the
- * height the viewport leaves, and it follows its anchor through scroll,
- * resize and layout changes while open. Use when an ancestor's overflow
- * clipping would crop the in-place list; default false keeps the pure-CSS
- * in-place behavior.
  * @param props.closeOnPointerLeave - close the list once the pointer has left
  * both trigger and list for the pointer grace (default false keeps it open
  * until outside click/Escape/selection). The grace makes the 4px trigger->list
  * gap and a brief overshoot survivable; coming back cancels the close.
  * @param props.dense - reduce vertical row spacing without changing the standard typography or card width.
  * @param props.compact - use reduced menu typography and spacing.
- * @param props.getAnchorRect - portal mode only: supply the anchor rect
+ * @param props.getAnchorRect - supply the anchor rect
  * directly (e.g. from a host-owned trigger button) instead of measuring the
  * Menu's own wrapper span. Required when the wrapper isn't itself laid out at
  * the trigger (render-prop anchors, effect-positioned proxies — measuring the
@@ -100,7 +130,7 @@ function placementOf(side: 'bottom' | 'top' | 'right', align: 'start' | 'end'): 
  * crowds the cell).
  * @returns anchor wrapper with the conditional list.
  */
-export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, onClose, align = 'start', side = 'bottom', portal = false, closeOnPointerLeave = false, dense = false, compact = false, autoFocus = false, selection = 'check', getAnchorRect, footer, className }: {
+export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, onClose, align = 'start', side = 'bottom', closeOnPointerLeave = false, dense = false, compact = false, autoFocus = false, selection = 'check', getAnchorRect, footer, className }: {
   open: boolean
   autoFocus?: boolean
   anchor: ReactNode
@@ -112,7 +142,6 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   onClose: () => void
   align?: 'start' | 'end'
   side?: 'bottom' | 'top' | 'right'
-  portal?: boolean
   closeOnPointerLeave?: boolean
   dense?: boolean
   compact?: boolean
@@ -157,23 +186,28 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
     queueMicrotask(() => {
       if (openRef.current) return
       const active = document.activeElement
-      if (active === null || active === document.body || listRef.current?.contains(active) === true) refocusAnchor()
+      if (active === null || active === document.body || inSurface(active)) refocusAnchor()
     })
   }
   const openRef = useRef(open)
   openRef.current = open
   const [openSubmenuId, setOpenSubmenuId] = useState<string | null>(null)
+  /** The open submenu's card, while it is mounted. */
+  const submenuRef = useRef<HTMLDivElement | null>(null)
+  /** The submenu the keyboard is moving into, focused once it is placed. */
+  const [enteringSubmenuId, setEnteringSubmenuId] = useState<string | null>(null)
+  const entered = useCallback(() => { setEnteringSubmenuId(null) }, [])
+  const submenuId = useId()
   const { arm: armClose, cancel: cancelClose } = usePointerGrace(onClose)
 
-  // The submenu card is absolutely positioned outside the list box; the
-  // scroll clip would crop it, so only submenu-free menus get the height cap.
-  const scrollable = !items.some(entry => !isSeparator(entry) && !isLabel(entry) && entry.submenu !== undefined && entry.submenu.length > 0)
+  /** Whether a node is inside one of this menu's surfaces: the list or its open submenu. */
+  const inSurface = (node: Node | null): boolean => listRef.current?.contains(node) === true || submenuRef.current?.contains(node) === true
 
-  // Portal geometry is Floating UI's, and only Floating UI's: anchor
+  // Menu geometry is Floating UI's, and only Floating UI's: anchor
   // measurement, the side/align placement, flipping to the other side and
-  // shifting along it to stay VIEWPORT_MARGIN inside the viewport, the height
-  // the viewport leaves for a scrollable list, and repositioning whenever an
-  // ancestor scrolls, the viewport resizes or either element's layout changes.
+  // shifting along it to stay VIEWPORT_MARGIN inside the viewport, the room
+  // the viewport leaves the card, and repositioning whenever an ancestor
+  // scrolls, the viewport resizes or either element's layout changes.
   // getAnchorRect trumps measuring the wrapper span: a child layout effect runs
   // before the parent's, so a wrapper the host positions in its own effect
   // measures stale — the host callback owns the truth, as a virtual reference.
@@ -201,37 +235,30 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
     }
   }, [hostAnchored, anchorElement])
   const { refs, floatingStyles, isPositioned } = useFloating({
-    open: open && portal,
+    open,
     placement: placementOf(side, align),
     strategy: 'fixed',
     transform: false,
-    elements: { reference: portal ? reference : null },
+    elements: { reference },
     whileElementsMounted: autoUpdate,
     middleware: [
       offset(4),
       flip({ padding: VIEWPORT_MARGIN }),
       shift({ padding: VIEWPORT_MARGIN }),
-      size({
-        padding: VIEWPORT_MARGIN,
-        apply({ availableWidth, availableHeight, elements }) {
-          elements.floating.style.maxWidth = `${Math.max(0, availableWidth)}px`
-          // A list with submenu rows is never clipped: the side card would be.
-          elements.floating.style.maxHeight = scrollable ? `${Math.max(0, availableHeight)}px` : ''
-        },
-      }),
+      availableRoom,
     ],
   })
   const setList = useCallback((node: HTMLDivElement | null) => {
     listRef.current = node
     refs.setFloating(node)
   }, [refs])
-  // Floating UI places a portaled list in the commit that opens it: its first
+  // Floating UI places the list in the commit that opens it: its first
   // computation resolves within the same task and is flushed synchronously,
   // before the browser paints. autoFocus still waits for that placement, so it
   // never lands on an unplaced row. A host-owned anchor that has never supplied
   // a rect has nothing to place against, so that list stays invisible.
-  const placed = !portal || (isPositioned && (!hostAnchored || hostRect.current !== null))
-  const portalStyle: CSSProperties = !hostAnchored || hostRect.current !== null ? floatingStyles : { ...floatingStyles, visibility: 'hidden' }
+  const placed = isPositioned && (!hostAnchored || hostRect.current !== null)
+  const listStyle: CSSProperties = !hostAnchored || hostRect.current !== null ? floatingStyles : { ...floatingStyles, visibility: 'hidden' }
 
   // Opening remembers where the keyboard was, so closing can hand it back to
   // that control — an anchor wrapping several (a split button) cannot be asked
@@ -256,21 +283,30 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   useEffect(() => {
     if (!open) {
       setOpenSubmenuId(null)
+      setEnteringSubmenuId(null)
       walkIndex.current = null
       return
     }
     const onPointerDown = (e: PointerEvent) => {
       if (!(e.target instanceof Node)) return
-      // The portaled list is outside the anchor subtree; check both.
+      // The portaled surfaces are outside the anchor subtree; check all.
       if (rootRef.current?.contains(e.target) === true) return
-      if (listRef.current?.contains(e.target) === true) return
+      if (inSurface(e.target)) return
       onClose()
+    }
+    /** Close the open submenu and hand the keyboard back to its row. */
+    const collapseSubmenu = () => {
+      const row = listRef.current?.querySelector<HTMLButtonElement>('[aria-expanded="true"]')
+      setOpenSubmenuId(null)
+      row?.focus()
     }
     const onKeyDown = (e: KeyboardEvent) => {
       // Where the keyboard is, computed once: the menu owns it when it holds a
-      // row or sits on its anchor region.
+      // row of either layer or sits on its anchor region.
       const focused = document.activeElement
-      const insideList = listRef.current?.contains(focused) === true
+      const submenu = submenuRef.current
+      const inSubmenu = submenu !== null && submenu.contains(focused)
+      const insideList = listRef.current?.contains(focused) === true || inSubmenu
       const anchored = rootRef.current?.contains(focused) === true || insideList
       if (e.key === 'Escape') {
         // Escape belongs to this menu before its containing modal. The rustX
@@ -280,6 +316,11 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
         // the document capture phase, before any of them sees it.
         e.preventDefault()
         e.stopPropagation()
+        // A submenu is the topmost layer: Escape inside it closes only it.
+        if (inSubmenu) {
+          collapseSubmenu()
+          return
+        }
         // Closing hands the keyboard back when the menu had it — and, as this
         // primitive always did for autoFocus menus, when it held the keyboard
         // and lost it again (a row that unmounted under it).
@@ -299,10 +340,11 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
           refocusAnchor()
           return
         }
-        // Tab settles the row it is on; from anywhere else in the menu region
-        // it enters the list. A focused control that is not a row (a retry
-        // button inside an error strip) and a list with no enabled row keep the
-        // browser's traversal instead of being swallowed.
+        // Tab settles the row it is on (a submenu row settles by entering its
+        // submenu); from anywhere else in the menu region it enters the list.
+        // A focused control that is not a row (a retry button inside an error
+        // strip) and a list with no enabled row keep the browser's traversal
+        // instead of being swallowed.
         if (insideList) {
           if (focused instanceof Element && focused.getAttribute('role') === 'menuitem') {
             e.preventDefault()
@@ -324,11 +366,27 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
       // from where it last put focus, not from `document.activeElement`: a row
       // that refused focus (a hidden portal frame, a detached node) would
       // otherwise re-enter at the near end on every press and the walk would
-      // alternate between two rows.
+      // alternate between two rows. A submenu is walked on its own, from
+      // the row that holds the keyboard.
+      if (e.key === 'ArrowRight') {
+        // A submenu row enters its submenu, as settling it does.
+        if (insideList && !inSubmenu && focused instanceof HTMLElement && focused.getAttribute('aria-haspopup') === 'menu') {
+          e.preventDefault()
+          focused.click()
+        }
+        return
+      }
+      if (e.key === 'ArrowLeft') {
+        if (inSubmenu) {
+          e.preventDefault()
+          collapseSubmenu()
+        }
+        return
+      }
       if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
-      const list = listRef.current
-      if (list === null || !anchored) return
-      const buttons = Array.from(list.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+      const layer = inSubmenu ? submenu : listRef.current
+      if (layer === null || !anchored) return
+      const buttons = Array.from(layer.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
       if (buttons.length === 0) return
       const index = buttons.indexOf(focused as HTMLButtonElement)
       const from = index >= 0 ? index : walkIndex.current
@@ -337,7 +395,7 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
           ? (e.key === 'ArrowDown' ? 0 : buttons.length - 1)
           : (from + (e.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
       e.preventDefault()
-      walkIndex.current = next
+      if (!inSubmenu) walkIndex.current = next
       buttons[next]?.focus()
     }
     // A pointerdown inside a cross-origin iframe (a sandboxed HTML preview)
@@ -374,13 +432,26 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
     }
     const hasSub = entry.submenu !== undefined && entry.submenu.length > 0
     const subOpen = hasSub && openSubmenuId === entry.id
+    const openSubmenu = subOpen ? entry.submenu : undefined
     const selected = entry.id === selectedId || selectedIds?.includes(entry.id) === true
     return (
-      <div
+      <ItemCell
         key={entry.id}
-        className={css.itemWrap}
         onMouseEnter={() => { setOpenSubmenuId(hasSub ? entry.id : null) }}
         onMouseLeave={() => { setOpenSubmenuId(null) }}
+        submenu={openSubmenu === undefined ? undefined : (row => (
+          <Submenu
+            id={submenuId}
+            row={row}
+            items={openSubmenu}
+            dense={dense}
+            compact={compact}
+            enter={enteringSubmenuId === entry.id}
+            onEntered={entered}
+            cardRef={submenuRef}
+            onSelect={(id) => { onSelect(id); refocusAfterSelection() }}
+          />
+        ))}
       >
         <button
           type="button"
@@ -392,10 +463,16 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
           aria-current={selected ? 'true' : undefined}
           aria-haspopup={hasSub ? 'menu' : undefined}
           aria-expanded={hasSub ? subOpen : undefined}
-          onFocus={() => { setOpenSubmenuId(hasSub ? entry.id : null) }}
-          onClick={() => {
+          aria-controls={subOpen ? submenuId : undefined}
+          // Focus shows a row's submenu — except the keyboard coming back from
+          // that submenu, which has just closed it.
+          onFocus={(e) => { if (!(e.relatedTarget instanceof Node && submenuRef.current?.contains(e.relatedTarget) === true)) setOpenSubmenuId(hasSub ? entry.id : null) }}
+          onClick={(e) => {
             if (hasSub) {
               setOpenSubmenuId(entry.id)
+              // A keyboard activation (Enter, Space, Tab, ArrowRight: no
+              // pointer detail) also moves the keyboard into the submenu.
+              if (e.detail === 0) setEnteringSubmenuId(entry.id)
               return
             }
             onSelect(entry.id)
@@ -407,39 +484,21 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
           {/* Selection marker is a trailing check (figma .Menu_cell) unless the fill mode carries it. */}
           {selected && selection === 'check' && <IconCheckOutline16 className={css.check} />}
         </button>
-        {subOpen && entry.submenu !== undefined && (
-          <div className={clsx(css.submenu, compact && css.compactList)} role="menu">
-            {entry.submenu.map(sub => (
-              <button
-                key={sub.id}
-                type="button"
-                role="menuitem"
-                className={css.item}
-                disabled={sub.disabled}
-                onClick={() => { onSelect(sub.id); refocusAfterSelection() }}
-              >
-                {sub.icon !== undefined && <span className={css.itemIcon}>{sub.icon}</span>}
-                <span className={css.itemLabel}>{sub.label}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+      </ItemCell>
     )
   }
 
-  // The first painted frame of a portal list is already at its final position
-  // (with getAnchorRect never returning a rect the list stays hidden). A
-  // portaled list is a top
-  // layer: a React Aria modal that contains its anchor keeps it visible to
-  // assistive technology, lets focus enter it and does not treat a press
-  // inside it as an interaction outside the modal.
+  // The first painted frame of the list is already at its final position
+  // (with getAnchorRect never returning a rect the list stays hidden). The
+  // list is a top layer: a React Aria modal that contains its anchor keeps it
+  // visible to assistive technology, lets focus enter it and does not treat a
+  // press inside it as an interaction outside the modal.
   const list = open && (
     <div
       ref={setList}
-      className={clsx(css.list, dense && css.denseList, compact && css.compactList, scrollable && css.scrollable, portal && css.portal, side === 'top' && !portal && css.sideTop, align === 'end' && !portal && css.alignEnd)}
-      style={portal ? portalStyle : undefined}
-      data-react-aria-top-layer={portal ? true : undefined}
+      className={clsx(css.list, dense && css.denseList, compact && css.compactList)}
+      style={listStyle}
+      data-react-aria-top-layer
       role="menu"
       // React portals bubble synthetic events through the REACT tree: without
       // this stop, an item click re-fires the anchor row's own onClick
@@ -469,7 +528,104 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
       onPointerLeave={closeOnPointerLeave ? () => { if (open) armClose() } : undefined}
     >
       {anchor}
-      {portal ? (list !== false && createPortal(list, document.body)) : list}
+      {list !== false && createPortal(list, document.body)}
     </span>
+  )
+}
+
+/**
+ * One item's cell: its row and, while open, the submenu anchored to it. The
+ * cell holds its own element, so a submenu is only ever placed against the
+ * row it belongs to.
+ */
+function ItemCell({ onMouseEnter, onMouseLeave, submenu, children }: {
+  onMouseEnter: () => void
+  onMouseLeave: () => void
+  submenu: ((row: HTMLDivElement | null) => ReactNode) | undefined
+  children: ReactNode
+}) {
+  const [row, setRow] = useState<HTMLDivElement | null>(null)
+  return (
+    <div ref={setRow} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}>
+      {children}
+      {submenu?.(row)}
+    </div>
+  )
+}
+
+/**
+ * A submenu's card: a top layer of its own, Floating UI-placed against its
+ * row exactly as the list is against its anchor. It opens beside the
+ * row's end (bottom-aligned with the row's card inset), flips to the other
+ * side when that one lacks the room, shifts along the row to stay inside the
+ * viewport, keeps its design size within the room left (its rows scroll
+ * inside it), and follows the row through scroll, resize and layout changes.
+ * The card is a React child of the row, so the pointer moving from row to
+ * card never leaves the row; its bridge spans the gap between them.
+ */
+function Submenu({ id, row, items, dense, compact, enter, onEntered, cardRef, onSelect }: {
+  id: string
+  row: HTMLDivElement | null
+  items: readonly MenuItem[]
+  /** The parent's row spacing and typography: the card is not its descendant. */
+  dense: boolean
+  compact: boolean
+  /** Move the keyboard to the first enabled row once the card is placed. */
+  enter: boolean
+  onEntered: () => void
+  cardRef: { current: HTMLDivElement | null }
+  onSelect: (id: string) => void
+}) {
+  const { refs, floatingStyles, placement, isPositioned, elements } = useFloating({
+    placement: 'right-end',
+    strategy: 'fixed',
+    transform: false,
+    elements: { reference: row },
+    whileElementsMounted: autoUpdate,
+    middleware: [
+      offset({ mainAxis: SUBMENU_GAP, crossAxis: SUBMENU_DROP }),
+      // Only the side flips; the vertical fit is shift's and the size's.
+      flip({ padding: VIEWPORT_MARGIN, crossAxis: false, flipAlignment: false }),
+      shift({ padding: VIEWPORT_MARGIN }),
+      availableRoom,
+    ],
+  })
+  const setCard = useCallback((node: HTMLDivElement | null) => {
+    cardRef.current = node
+    refs.setFloating(node)
+  }, [cardRef, refs])
+  useEffect(() => {
+    if (!enter || !isPositioned) return
+    elements.floating?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+    onEntered()
+  }, [enter, isPositioned, elements.floating, onEntered])
+  const style = { ...floatingStyles, '--menu-submenu-gap': `${SUBMENU_GAP}px` } as CSSProperties
+  return createPortal(
+    <div
+      ref={setCard}
+      id={id}
+      className={clsx(css.submenu, dense && css.denseList, compact && css.compactList)}
+      style={style}
+      data-side={placement.split('-')[0]}
+      data-react-aria-top-layer
+      role="menu"
+    >
+      <div className={css.viewport} role="presentation">
+        {items.map(sub => (
+          <button
+            key={sub.id}
+            type="button"
+            role="menuitem"
+            className={css.item}
+            disabled={sub.disabled}
+            onClick={() => { onSelect(sub.id) }}
+          >
+            {sub.icon !== undefined && <span className={css.itemIcon}>{sub.icon}</span>}
+            <span className={css.itemLabel}>{sub.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>,
+    document.body,
   )
 }

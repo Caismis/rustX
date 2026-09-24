@@ -1072,17 +1072,29 @@ wide window is narrow. Only the modal shell's own viewport bound stays on a
 media query. The deleted horizontal page strip, its `aria-orientation` styling
 and its strip-scrolling tab label have no replacement.
 
-**Section menu.** The narrow page selector is the shared rustX `Menu` (portaled,
-`autoFocus`), whose rows are the same six pages with the same glyphs; selecting a
+**Section menu.** The narrow page selector is the shared rustX `Menu`
+(`autoFocus`), whose rows are the same six pages with the same glyphs; selecting a
 row sends the same `SELECT` the rail sends, the current row is marked with a
 check and `aria-current`, and the trigger names the current page. Its
 open/closed flag is the one transient state `SettingsPanel` holds.
 
-**Floating geometry is Floating UI's.** `Menu`'s portal placement, flip, shift,
-available size and anchor tracking are `@floating-ui/react-dom` (`offset`,
-`flip`, `shift`, `size`, `autoUpdate`, fixed strategy); `side`/`align` map to one
-placement and `getAnchorRect` is a virtual reference. There is no other
-positioning path. Inside a React Aria modal a portaled list is marked
+**Floating geometry is Floating UI's.** Every `Menu` surface — the list and
+each open submenu — is portaled to the body and placed by
+`@floating-ui/react-dom` (`offset`, `flip`, `shift`, `size`, `autoUpdate`, fixed
+strategy): anchor measurement, placement, flip, shift, available size and
+anchor tracking. `side`/`align` map to one placement and `getAnchorRect` is a
+virtual reference; a submenu's reference is its own row (`right-end`, flipping
+to `left-end`). There is no other positioning path: the in-place CSS list (and
+its `portal` prop) and the CSS side card are removed. Design dimensions define
+the card; the viewport only takes room away: `size` publishes the room left as
+`--menu-available-width`/`--menu-available-height` and `Menu.module.css`
+applies `min(design bound, room)` — 218px minimum (a submenu 163px, compact
+164px) and 360px maximum — so a long label truncates at 360px on a wide
+viewport and a narrow one never pushes a card outside it; every surface
+scrolls its own rows. A submenu is its own keyboard layer: ArrowRight, Enter,
+Space or Tab on its row enter it, the arrows walk only the layer holding the
+keyboard, and Escape or ArrowLeft inside it close only it and return to its
+row. Inside a React Aria modal each surface is marked
 `data-react-aria-top-layer`, the attribute React Aria's modal focus containment,
 `ariaHideOutside` and interact-outside detection honour, and Escape on an open
 menu is stopped in the document capture phase so the modal never also sees it.
@@ -1127,4 +1139,7 @@ geometry, frame stability, clipped and unclipped horizontal overflow, focus,
 Escape ownership, touch, reduced motion and exact adoption requests, and runs
 axe (`@axe-core/playwright`, WCAG 2.1 A/AA tags, serious/critical as failures,
 no rule disabled) on each. `test/e2e/foundation.spec.ts` proves Floating UI
-placement, flip, shift, bounded height and anchor tracking on the shared Menu.
+placement, flip, shift, bounded height and anchor tracking on the shared Menu,
+the 218–360px design width within narrow viewports, and a submenu's own flip,
+bounded scrolling height, row tracking and keyboard/pointer layer contract;
+`agent.spec.ts` proves the ModelSelect submenus inside a 390px viewport.

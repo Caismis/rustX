@@ -12,8 +12,13 @@ only, each with a new local hash, import closure and a `#393` treatment note:
   hand-written portal geometry — anchor and list measurement, viewport
   clamping, capture-phase scroll and resize listeners and the hidden
   measurement pass — is deleted and replaced by Floating UI, the one geometry
-  owner. The portaled list is marked as a React Aria top layer, stops Escape
-  before a containing React Aria modal, and announces its selected row.
+  owner, and so are the CSS-positioned in-place list (with its `portal` prop)
+  and the CSS-positioned submenu card: the list and each open submenu are
+  body-portaled Floating UI surfaces, the submenu anchored to its own row.
+  Floating UI publishes the room the viewport leaves; the CSS keeps the design
+  bounds within it. A submenu is its own keyboard layer. Every surface is
+  marked as a React Aria top layer, Escape stops before a containing React Aria
+  modal, and the selected row is announced. Its callers drop the `portal` prop.
 - `presentation/settings/SettingsRoot.tsx` and `SettingsRoot.module.css` keep
   the Harness mask/panel/rail/content frame and classes. The viewport
   media-query store, the horizontal tab orientation and the strip-scrolling tab
@@ -277,8 +282,8 @@ locally. Full paths and hashes are in the JSON; no compatibility export tree exi
   rustX Inspector supplies its header and scrolling body. No docking runtime,
   terminal/file authority or floating-window manager was included.
 - Menu retains portaled rendering, submenus, pointer grace and keyboard behavior;
-  its portal geometry is Floating UI's since #393, and autofocus waits for that
-  placement. Modal retains upstream DOM/chrome with
+  all of its geometry, submenus included, is Floating UI's since #393, and
+  autofocus waits for that placement. Modal retains upstream DOM/chrome with
   focus restoration, nested-layer Escape/background isolation and bounded report
   scrolling. Clipboard uses the async browser API only.
 - Localization retains the required English workspace dictionary and parameter

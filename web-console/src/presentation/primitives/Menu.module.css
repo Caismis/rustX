@@ -26,57 +26,34 @@
      ui-theme styles/scrollbar.css for the rebinding contract). */
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+  /* Design size within the room the viewport leaves. The design owns the
+   * bounds (--menu-min-width per card, 360 max); Floating UI owns the room
+   * and the position: it publishes --menu-available-width/height and fixed
+   * coordinates for every surface it places (Menu.tsx), and a bound never
+   * exceeds that room, so a card never leaves the viewport. A long label
+   * therefore truncates at the design cap rather than widening the card.
+   * Until the first placement, before any paint, the design bounds alone
+   * apply. */
+  min-width: min(var(--menu-min-width), var(--menu-available-width, var(--menu-min-width)));
+  max-width: min(360px, var(--menu-available-width, 360px));
+  max-height: var(--menu-available-height, none);
+  /* Floating surfaces layer above modal overlays (z 1000) — an anchor inside
+   * a dialog still expects its menu on top. */
+  z-index: 1100;
 }
 
 /* Primary card is 218 wide in the design across both hosts. */
 .list {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 100;
-  min-width: 218px;
-  max-width: 360px;
+  --menu-min-width: 218px;
 }
 
-/* Portal mode: fixed in the viewport; Floating UI supplies the coordinates
- * and the available max-width/max-height inline (the in-place offset rules
- * above don't apply). Portaled lists must layer above modal overlays (z 1000)
- * — an anchor inside a dialog still expects its menu on top. */
-.portal {
-  position: fixed;
-  top: auto;
-  left: auto;
-  z-index: 1100;
-}
-
-/* Open above the anchor (empty-state workspace chip: figma 122:9481). */
-.sideTop {
-  top: auto;
-  bottom: calc(100% + 4px);
-}
-
-.alignEnd {
-  left: auto;
-  right: 0;
-}
-
-/* Viewport fit for an in-place list: the card stops 12px short of the
- * viewport's top/bottom edges and taller content scrolls inside .viewport, so
- * a pinned .footer stays visible. A portaled list is capped tighter, inline,
- * by the height Floating UI's size middleware reports available. Menus with
- * submenu rows skip this class — the overflow clip would crop the side card,
- * so they rely on staying short. */
-.scrollable {
-  max-height: calc(100vh - 24px);
-}
-
+/* Rows taller than the card's height scroll here, so a pinned .footer stays
+ * visible. A submenu card is a surface of its own, never a descendant this
+ * clip could crop. */
 .viewport {
   display: flex;
   flex-direction: column;
   min-height: 0;
-}
-
-.scrollable .viewport {
   overflow-y: auto;
 }
 
@@ -89,10 +66,6 @@
   margin-top: 4px;
   padding-top: 4px;
   border-top: 0.5px solid var(--dsw-alias-border-l2);
-}
-
-.itemWrap {
-  position: relative;
 }
 
 /* Menu cell (figma .Menu_cell): min-h 40, r10, pad 10/8, 14/22 primary,
@@ -137,7 +110,7 @@
 
 .list.compactList,
 .submenu.compactList {
-  min-width: 164px;
+  --menu-min-width: 164px;
   padding: 2px;
   border-radius: 7px;
 }
@@ -238,26 +211,26 @@
   background: var(--dsw-alias-border-l1);
 }
 
-/* Nested card to the right of the parent row (figma 419:16920).
- * Bottom-aligned with the parent menu card (grows upward): itemWrap sits in
- * .list's 4px pad, so bottom: -4px matches the list's outer bottom edge.
- * Horizontal: list pad (4px) + 6px card gap = 10px past itemWrap — plain
- * `100% + 6px` collapses to ~2px between outer card edges.
- * ::before bridges the full gap so the pointer can cross without mouseLeave. */
+/* Nested card beside its row (figma 419:16920), a floating surface of its
+ * own: Floating UI supplies its side (data-side) as well (Menu.tsx Submenu).
+ * Later in the document than its parent card, so it paints above it at the
+ * same layer. */
 .submenu {
-  position: absolute;
-  top: auto;
-  bottom: -4px;
-  left: calc(100% + 10px);
-  z-index: 101;
-  min-width: 163px;
+  --menu-min-width: 163px;
 }
 
+/* The bridge spans the row-to-card gap on whichever side the card opened, so
+ * the pointer crosses it without leaving the row. */
 .submenu::before {
   content: '';
   position: absolute;
   top: 0;
   bottom: 0;
-  left: -10px;
-  width: 10px;
+  right: 100%;
+  width: var(--menu-submenu-gap);
+}
+
+.submenu[data-side='left']::before {
+  right: auto;
+  left: 100%;
 }

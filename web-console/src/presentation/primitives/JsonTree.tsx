@@ -130,7 +130,6 @@ function JsonCopyAction({ store, target, persistent, labels, onCopy, onClose }: 
         <Menu
           open={snapshot?.menuOpen === true}
           compact
-          portal
           align="end"
           anchor={(
             <button

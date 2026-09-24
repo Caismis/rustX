@@ -15,7 +15,7 @@ export function ModelSelect({ choices, current, profile, disabled, loading, erro
  const items: MenuEntry[] = [{ id: 'models', label: 'Model', submenu: choices.map(choice => ({ id: `model:${choice.id}`, label: choice.id, disabled: disabled || loading })) }];
  if (selected?.profiles.length) items.push({ id: 'profiles', label: 'Reasoning profile', submenu: selected.profiles.map(choice => ({ id: `profile:${choice.id}`, label: choice.label, disabled: disabled || loading })) });
  return <div className={css.root}>
- <Menu open={open} portal side="top" align="end" autoFocus items={items}
+ <Menu open={open} side="top" align="end" autoFocus items={items}
  selectedIds={[`model:${current}`, `profile:${effectiveProfile}`]} onClose={() => setOpen(false)}
  onSelect={id => { if (disabled || loading) return; if (id.startsWith('model:')) choose(id.slice(6)); else if (current && id.startsWith('profile:')) choose(current, id.slice(8)); }}
  anchor={<button className={css.trigger} type="button" aria-label="Model and reasoning" aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => { setOpen(v => !v); if (!open) load(); }}><IconDataOutline16 size={16}/><span className={css.triggerLabel}>{current ?? 'Choose model'}</span>{effectiveProfile && <span className={css.triggerEffort}>{effectiveProfile}</span>}<IconChevronDownOutline14/></button>}/>

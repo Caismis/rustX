@@ -55,7 +55,7 @@ export function SettingsPanel({ pages, activeId, onSelect, onClose, context, chi
               to discover its tabs, and the section menu measures real DOM. */}
           <header className={css.header}>
             <div className={css.sections}>
-              <Menu open={sections} onClose={() => setSections(false)} portal autoFocus
+              <Menu open={sections} onClose={() => setSections(false)} autoFocus
                 items={pages.map(page => ({ id: page.id, label: page.label, icon: page.icon }))} selectedId={activeId}
                 onSelect={id => { setSections(false); onSelect(id); }}
                 anchor={<button type="button" className={css.sectionTrigger} aria-haspopup="menu" aria-expanded={sections}

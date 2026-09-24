@@ -164,3 +164,42 @@ test('restored Session-scoped drafts are measured on mount and shrink on identit
   await expect(input).toHaveValue(/Restored line 39/);
   await expect.poll(() => input.evaluate(node => node.clientHeight === parseFloat(getComputedStyle(node).maxHeight))).toBe(true);
 });
+
+/** The composer's model/profile menu is the product's submenu user: on a
+ * phone-width viewport both of its layers stay inside the viewport, the page
+ * never scrolls sideways, and keyboard and pointer both reach the profiles. */
+test('ModelSelect submenus stay usable inside a narrow viewport', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('http://127.0.0.1:5174/test/fixtures/agent.html?mode=selectors');
+  const trigger = page.getByRole('button', { name: 'Model and reasoning' });
+  const profile = page.getByRole('menuitem', { name: 'Reasoning profile' });
+  const submenu = page.getByRole('menu').filter({ has: page.getByRole('menuitem', { name: 'deliberate' }) });
+  /** Whether a surface lies wholly inside the viewport's 12px margin, and the page still has no horizontal scroll. */
+  const contained = (locator: typeof submenu) => locator.evaluate(el => {
+    const r = el.getBoundingClientRect();
+    return r.left >= 11.5 && r.top >= 11.5 && r.right <= innerWidth - 11.5 && r.bottom <= innerHeight - 11.5 && document.documentElement.scrollWidth <= innerWidth;
+  });
+
+  // Keyboard: the menu opens on Model, the arrows reach the profile row, and
+  // ArrowRight enters its submenu.
+  await trigger.focus(); await page.keyboard.press('Enter');
+  await expect(page.getByText('Reading native models…')).toHaveCount(0);
+  await expect(page.getByRole('menuitem', { name: 'Model', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowDown'); await expect(profile).toBeFocused();
+  await page.keyboard.press('ArrowRight'); await expect(page.getByRole('menuitem', { name: 'deliberate' })).toBeFocused();
+  expect(await contained(submenu)).toBe(true);
+  await page.keyboard.press('ArrowDown'); await expect(page.getByRole('menuitem', { name: 'brief' })).toBeFocused();
+  // Escape closes the submenu first, then the menu, and focus returns to the trigger.
+  await page.keyboard.press('Escape'); await expect(submenu).toHaveCount(0); await expect(profile).toBeFocused();
+  await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0); await expect(trigger).toBeFocused();
+
+  // Pointer: the same submenu opens from a click, inside the viewport.
+  await trigger.click(); await profile.click();
+  await expect(page.getByRole('menuitem', { name: 'brief' })).toBeVisible();
+  expect(await contained(submenu)).toBe(true);
+  await page.getByRole('menuitem', { name: 'brief' }).hover();
+  await expect(submenu).toBeVisible();
+  await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0); await expect(trigger).toBeFocused();
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+});

@@ -233,9 +233,10 @@ React Aria Components provide the interaction semantics of the Settings dialog
 (modal focus containment and restoration, page and filter tabs, resource grids,
 selects, menus, disclosures, switches and confirmation dialogs) inside the one
 Settings modal root; every visual decision stays in the existing rustX token
-family. The narrow section menu is the shared rustX Menu, whose portal
-geometry — placement, flip, shift, available height and following its anchor —
-is Floating UI's. Neither library holds a page, target or draft: they own
+family. The narrow section menu is the shared rustX Menu, whose
+geometry — placement, flip, shift, available size and following its anchor, for
+the list and for every submenu — is Floating UI's, within the Menu's design
+dimensions. Neither library holds a page, target or draft: they own
 browser mechanics only. TanStack Form provides field mechanics for the complete typed Provider,
 Model, MCP and named-Agent forms only: every change is reflected into the unit's
 XState transaction, the form is rehydrated from that actor-owned draft, and Save

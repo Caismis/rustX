@@ -158,7 +158,6 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
               if (id === 'rename') actions.rename()
               else actions.delete()
             }}
-            portal
             closeOnPointerLeave
             anchor={(
               <button
@@ -419,7 +418,6 @@ export function SessionNodeItem({
               if (id === 'delete') onDelete(node.id)
               if (id === 'close') onClose?.(node.id)
             }}
-            portal
             closeOnPointerLeave
             anchor={(
               <button
