@@ -64,7 +64,7 @@ pub mod supervisor;
 mod workflow_inspection;
 pub(crate) mod workflow_resources;
 
-pub use cli::{ArgumentError, USAGE, parse_arguments};
+pub use cli::{ArgumentError, parse_arguments};
 pub use composition::{
     HeadlessConversationRuntime, LocalConversationCore, LocalConversationInspection,
     LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError, LocalSessionClient,

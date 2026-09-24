@@ -198,7 +198,13 @@ impl Fixture {
             "chat_reasoning_replay = \"omit\"",
         ]
         .map(str::to_owned);
-        let mut documents = crate::local_runtime::initialization::documents(&args).unwrap();
+        let crate::local_runtime::cli::Command::Init { request, .. } =
+            crate::local_runtime::cli::parse_command(std::iter::once("init".into()).chain(args))
+                .unwrap()
+        else {
+            panic!("initialization intent")
+        };
+        let mut documents = crate::local_runtime::initialization::documents(&request).unwrap();
         // Two identities, identical text-only production adapter capabilities.
         // Admission races can change the selected model without inventing a
         // multimodal adapter or bypassing the real request validator.

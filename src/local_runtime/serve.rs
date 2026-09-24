@@ -36,7 +36,7 @@ use std::io::Write;
 
 use crate::runtime_client::transport::stdio::{StdioSessionEnd, serve_stdio_jsonl};
 
-use super::cli::{USAGE, parse_arguments};
+use super::cli::parse_arguments;
 use super::composition::{
     LocalConversationInspection, LocalRuntimeDependencies, LocalSessionClient, StartupSession,
 };
@@ -86,7 +86,7 @@ enum ServingRuntime {
 pub async fn serve(arguments: impl IntoIterator<Item = String>) -> ProcessOutcome {
     let request = match parse_arguments(arguments) {
         Ok(paths) => paths,
-        Err(error) => return ProcessOutcome::StartupFailed(format!("{error}\n{USAGE}")),
+        Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
     };
     Box::pin(serve_request(request)).await
 }
@@ -147,13 +147,6 @@ async fn serve_request(request: super::launch::LaunchRequest) -> ProcessOutcome 
 /// Activity observation IPC (Issue #178).
 pub async fn run_process(arguments: impl IntoIterator<Item = String>) -> i32 {
     let arguments: Vec<String> = arguments.into_iter().collect();
-    if arguments
-        .first()
-        .is_some_and(|argument| argument == "app-server")
-    {
-        return crate::app_server::process::run_process(arguments.into_iter().skip(1).collect())
-            .await;
-    }
     // The internal subagent-child mode (Issue #60): one exact flag, no
     // paths — the typed startup specification arrives over the inherited
     // control channel (fd 0).
@@ -172,31 +165,24 @@ pub async fn run_process(arguments: impl IntoIterator<Item = String>) -> i32 {
         }
         return Box::pin(super::subagent_child::run_subagent_child()).await;
     }
-    let json_error = super::cli::diagnostic_json_requested(&arguments);
-    let Ok(command) = super::cli::parse_command(arguments) else {
-        if json_error {
-            let report = super::diagnostics::Report::failure(
-                "command",
-                None,
-                "arguments",
-                "invalid command arguments",
-                "use the finite grammar shown by rustx --help",
-            );
-            return if writeln!(std::io::stdout(), "{}", report.render(true)).is_ok() {
+    let command = match super::cli::parse_command(arguments) {
+        Ok(command) => command,
+        Err(error) => {
+            return if writeln!(std::io::stderr(), "{error}").is_ok() {
                 2
             } else {
                 1
             };
         }
-        let _ = writeln!(
-            std::io::stderr(),
-            "rustx: invalid command arguments\n{USAGE}\n{}",
-            super::cli::CONFIG_USAGE
-        );
-        return 2;
     };
     let request = match command {
         super::cli::Command::Launch(request) => request,
+        super::cli::Command::Help(help) => {
+            return i32::from(write!(std::io::stderr(), "{help}").is_err());
+        }
+        super::cli::Command::AppServer(request) => {
+            return crate::app_server::process::run_process(request).await;
+        }
         command => return Box::pin(run_configuration_command(command)).await,
     };
     let outcome = Box::pin(serve_request(request)).await;
@@ -212,15 +198,6 @@ pub async fn run_process(arguments: impl IntoIterator<Item = String>) -> i32 {
 async fn run_configuration_command(command: super::cli::Command) -> i32 {
     use super::cli::Command;
     use super::diagnostics::{Report, Validity};
-    if matches!(command, Command::Help) {
-        let _ = writeln!(
-            std::io::stdout(),
-            "{USAGE}\n{}\n{}",
-            super::cli::CONFIG_USAGE,
-            crate::app_server::process::USAGE
-        );
-        return 0;
-    }
     let Ok(host) = super::launch::HostEnvironment::capture() else {
         let report = Report::failure(
             "command",
@@ -242,8 +219,8 @@ async fn run_configuration_command(command: super::cli::Command) -> i32 {
         };
     };
     let (report, json) = match command {
-        Command::Init { arguments, json } => {
-            let report = match super::initialization::documents(&arguments) {
+        Command::Init { request, json } => {
+            let report = match super::initialization::documents(&request) {
                 Ok(documents) => {
                     let result = super::initialization::initialize(&host, &documents);
                     let mut report = Report::new("init");
@@ -253,19 +230,13 @@ async fn run_configuration_command(command: super::cli::Command) -> i32 {
                     report.initialization = Some(result);
                     report
                 }
-                Err(reason) => {
-                    let mut report = Report::failure(
-                        "init",
-                        None,
-                        "arguments",
-                        &reason,
-                        "supply explicit declarations shown by rustx --help",
-                    );
-                    if arguments.is_empty() {
-                        report.validity = Validity::Incomplete;
-                    }
-                    report
-                }
+                Err(reason) => Report::failure(
+                    "init",
+                    None,
+                    "arguments",
+                    &reason,
+                    "supply explicit declarations shown by rustx init --help",
+                ),
             };
             (report, json)
         }
@@ -367,7 +338,7 @@ async fn run_configuration_command(command: super::cli::Command) -> i32 {
             }
             (report, json)
         }
-        Command::Help | Command::Launch(_) => unreachable!(),
+        Command::Help(_) | Command::AppServer(_) | Command::Launch(_) => unreachable!(),
     };
     let code = report.exit_code();
     if writeln!(std::io::stdout(), "{}", report.render(json)).is_err() {

@@ -66,7 +66,7 @@ Native-only startup needs neither Python nor MCP. The
 optional managed Python tools and fixed Workflows.
 
 Startup begins on a fresh/unused empty Session. Earlier Sessions remain reachable
-through `/resume`; `--continue` and `--session` request explicit selection.
+through `/resume`; `--session` requests explicit selection.
 `--name` only names the selected Session. Failed launch resolution or composition
 cannot publish another active Session.
 
@@ -193,3 +193,5 @@ produces finite admitted demand before connection or Python preparation.
 
 For typed generation diagnostics and offline Agent/Workflow inspection, see
 [capability inspection](docs/capability-inspection.md) and the [CFG3 example](examples/local-runtime/README.md).
+
+Public CLI syntax and stream rules are documented in [the CLI contract](docs/implementation/issue-396-cli.md). Use `rustx --help` or nested `--help` for the generated grammar.

@@ -18,48 +18,41 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-pub const USAGE: &str = "usage: rustx app-server [--config <absolute-path>] [--runtime-root <absolute-path>] --listen <stdio|ws://IP:PORT> [--token-file <path>]\nUser config defaults to ~/rustx/rustx.toml; User resources remain ~/rustx/.agents. Runtime storage defaults to ~/rustx/runtime. Bindings last for this process. WebSocket requires a dedicated token file; stdio requires owned pipes.";
+/// App Server lexical arguments deliberately exclude ordinary Session launch flags.
+#[derive(Debug, clap::Args)]
+pub(crate) struct AppServerArgs {
+    #[arg(long, value_parser = crate::local_runtime::cli::path_value)]
+    config: Option<PathBuf>,
+    #[arg(long, value_parser = crate::local_runtime::cli::path_value)]
+    runtime_root: Option<PathBuf>,
+    /// Explicit transport: stdio or ws://IP:PORT
+    #[arg(long, value_parser = crate::local_runtime::cli::text_value)]
+    listen: String,
+    /// Dedicated WebSocket credential file; forbidden for stdio
+    #[arg(long, value_parser = crate::local_runtime::cli::path_value)]
+    token_file: Option<PathBuf>,
+}
+impl AppServerArgs {
+    pub(crate) fn into_request(self) -> Request {
+        Request {
+            config: self.config,
+            root: self.runtime_root,
+            listen: self.listen,
+            token: self.token_file,
+        }
+    }
+}
 
-struct Options {
+/// Native process binding intent. Transport validation and composition stay here.
+#[derive(Debug)]
+pub struct Request {
     config: Option<PathBuf>,
     root: Option<PathBuf>,
     listen: String,
     token: Option<PathBuf>,
 }
-impl Options {
-    fn parse(arguments: Vec<String>) -> Result<Self, String> {
-        let mut options = Self {
-            config: None,
-            root: None,
-            listen: String::new(),
-            token: None,
-        };
-        let mut seen = std::collections::BTreeSet::new();
-        let mut arguments = arguments.into_iter();
-        while let Some(flag) = arguments.next() {
-            if !seen.insert(flag.clone()) {
-                return Err("duplicate option".into());
-            }
-            let value = arguments
-                .next()
-                .filter(|value| !value.is_empty())
-                .ok_or("option requires a value")?;
-            match flag.as_str() {
-                "--config" => options.config = Some(value.into()),
-                "--runtime-root" => options.root = Some(value.into()),
-                "--listen" => options.listen = value,
-                "--token-file" => options.token = Some(value.into()),
-                _ => return Err("unknown App Server option".into()),
-            }
-        }
-        if options.listen.is_empty() || (options.listen == "stdio" && options.token.is_some()) {
-            return Err("invalid transport selection".into());
-        }
-        Ok(options)
-    }
-}
 
-fn compose(options: &Options) -> Result<AppServerHost, String> {
+fn compose(options: &Request) -> Result<AppServerHost, String> {
     let host = HostEnvironment::capture()?;
     for (name, path) in [
         ("--config", options.config.as_ref()),
@@ -108,7 +101,7 @@ fn compose(options: &Options) -> Result<AppServerHost, String> {
 }
 
 async fn serve_transport(
-    options: Options,
+    options: Request,
     host: AppServerHost,
     shutdown: CancellationToken,
 ) -> io::Result<()> {
@@ -206,7 +199,23 @@ fn inherited_writer(
     }
 }
 
-async fn run(options: Options) -> Result<(), String> {
+async fn run(options: Request) -> Result<(), String> {
+    // Transport selection is native process policy, checked before composition.
+    if options.listen == "stdio" {
+        if options.token.is_some() {
+            return Err("stdio does not accept --token-file".into());
+        }
+    } else {
+        options
+            .listen
+            .strip_prefix("ws://")
+            .ok_or("listen must be stdio or ws://IP:PORT")?
+            .parse::<std::net::SocketAddr>()
+            .map_err(|error| error.to_string())?;
+        if options.token.is_none() {
+            return Err("WebSocket requires --token-file".into());
+        }
+    }
     // All user-scoped owners and signal listeners exist before readiness.
     let host = compose(&options)?;
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
@@ -291,23 +300,29 @@ fn force_exit(phase: &str, host: &AppServerHost) -> ! {
 }
 
 /// Run the explicit App Server command. Diagnostics never reach protocol stdout.
-pub async fn run_process(arguments: Vec<String>) -> i32 {
-    if arguments == ["--help"] {
-        eprintln!("{USAGE}");
-        return 0;
-    }
-    let options = match Options::parse(arguments) {
-        Ok(options) => options,
-        Err(error) => {
-            eprintln!("rustx app-server: {error}\n{USAGE}");
-            return 2;
-        }
-    };
+pub async fn run_process(options: Request) -> i32 {
     match run(options).await {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("rustx app-server: {error}");
             2
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cli04_app_server_omitted_bindings_stay_absent() {
+        let crate::local_runtime::cli::Command::AppServer(request) =
+            crate::local_runtime::cli::parse_command(
+                ["app-server", "--listen=stdio"].map(str::to_owned),
+            )
+            .unwrap()
+        else {
+            panic!("App Server intent")
+        };
+        assert!(request.config.is_none() && request.root.is_none() && request.token.is_none());
+        assert_eq!(request.listen, "stdio");
     }
 }

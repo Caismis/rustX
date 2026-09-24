@@ -549,7 +549,7 @@ fn malformed_arguments_fail_with_usage_on_stderr() {
         assert!(!output.status.success(), "{arguments:?}");
         assert!(output.stdout.is_empty(), "{arguments:?} wrote to stdout");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("usage: rustx"), "{stderr:?}");
+        assert!(stderr.contains("Usage: rustx"), "{stderr:?}");
     }
 }
 

@@ -14,6 +14,7 @@ fn run(root: &Path, arguments: &[&str]) -> Output {
 }
 
 fn report(output: &Output, exit: i32) -> serde_json::Value {
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
     assert_eq!(
         output.status.code(),
         Some(exit),
@@ -87,20 +88,17 @@ workflows = ['human_plan']
                 .stdout
                 .starts_with(format!("workflow_{operation}:").as_bytes())
         );
-        report(
-            &run(
-                root.path(),
-                &[
-                    "workflow",
-                    operation,
-                    "human_plan",
-                    "--trust",
-                    "grant",
-                    "--json",
-                ],
-            ),
-            2,
-        );
+        lexical_failure(&run(
+            root.path(),
+            &[
+                "workflow",
+                operation,
+                "human_plan",
+                "--trust",
+                "grant",
+                "--json",
+            ],
+        ));
         assert_eq!(std::fs::read(&file).unwrap(), valid);
     }
     std::fs::write(&file, "description: [\n").unwrap();
@@ -130,8 +128,7 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
     assert_eq!(incomplete["validity"], "incomplete");
     assert!(incomplete["launch"].is_null());
     assert!(incomplete["partial"].is_object());
-    let arguments_error = report(&run(root.path(), &["config", "show", "--json"]), 2);
-    assert_eq!(arguments_error["diagnostics"][0]["path"], "arguments");
+    lexical_failure(&run(root.path(), &["config", "show", "--json"]));
     let arguments = [
         "init",
         "--template",
@@ -199,7 +196,7 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
     assert!(!Path::new(runtime_root).exists());
     let help = run(root.path(), &["--help"]);
     assert!(help.status.success());
-    assert!(String::from_utf8_lossy(&help.stdout).contains("3 incomplete or unresolved"));
+    assert!(String::from_utf8_lossy(&help.stderr).contains("3 incomplete or unresolved"));
 }
 
 #[test]
@@ -305,4 +302,122 @@ fn cfg275_agent_inspection_and_removed_flags_are_offline() {
         );
     }
     assert_eq!(before, state_tree(&root.path().join("home")));
+}
+
+fn lexical_failure(output: &Output) {
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty(), "{:?}", output.stdout);
+    assert!(!output.stderr.is_empty());
+    assert!(!output.stderr.contains(&0x1b));
+}
+
+#[test]
+fn cli01_cli02_cli06_cli07_public_entry_stream_matrix() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("workspace")).unwrap();
+    for args in [
+        vec!["--model"],
+        vec!["--model="],
+        vec!["--model=a", "--model=b"],
+        vec!["--unknown"],
+        vec!["--", "--model=x"],
+        vec!["config", "check", "--workspace", "--json"],
+        vec!["config", "check", "--unknown", "--json"],
+        vec!["config", "check", "--json", "--unknown"],
+        vec!["config", "unknown", "--json"],
+        vec!["config", "show", "--agent", "--json"],
+        vec!["doctor", "--prepare", "--json"],
+        vec!["workflow", "check", "--json"],
+        vec!["workflow", "check", "review", "--runtime-root=x", "--json"],
+        vec!["init", "--json"],
+        vec!["init", "--template=unknown", "--json"],
+        vec!["app-server", "--listen"],
+        vec!["app-server", "--listen=stdio", "--workspace=x"],
+    ] {
+        lexical_failure(&run(root.path(), &args));
+    }
+    let human = run(root.path(), &["config", "check", "--workspace=--json"]);
+    assert_eq!(human.status.code(), Some(2));
+    assert!(human.stderr.is_empty());
+    assert!(human.stdout.starts_with(b"config_check:"));
+    report(
+        &run(
+            root.path(),
+            &["config", "check", "--workspace=--json", "--json"],
+        ),
+        2,
+    );
+    for args in [
+        vec!["--config=/nonexistent/rustx.toml"],
+        vec![
+            "app-server",
+            "--listen=stdio",
+            "--config=/nonexistent/rustx.toml",
+        ],
+        vec!["app-server", "--listen=invalid"],
+        vec!["app-server", "--listen=stdio", "--token-file=x"],
+    ] {
+        lexical_failure(&run(root.path(), &args));
+    }
+    assert!(!root.path().join("home").exists());
+}
+
+#[test]
+fn cli07_cli08_help_precedes_host_capture_and_has_no_effects() {
+    let root = tempfile::tempdir().unwrap();
+    for args in [
+        vec!["--help"],
+        vec!["-h"],
+        vec!["config", "--help"],
+        vec!["config", "check", "--help"],
+        vec!["config", "show", "--help"],
+        vec!["workflow", "--help"],
+        vec!["workflow", "check", "--help"],
+        vec!["workflow", "explain", "--help"],
+        vec!["doctor", "--help"],
+        vec!["init", "--help"],
+        vec!["app-server", "--help"],
+        vec!["help", "config", "show"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_rustx"))
+            .current_dir(root.path())
+            .env_clear()
+            .env("HOME", "relative-invalid-home")
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {:?}",
+            output.stderr
+        );
+        assert!(output.stdout.is_empty());
+        let help = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            help.contains("Usage:") && !help.contains("subagent-child") && !help.contains('\u{1b}')
+        );
+    }
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn cli09_internal_child_rejects_all_extra_arguments() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("workspace")).unwrap();
+    for args in [
+        vec!["--subagent-child", "--help"],
+        vec!["--subagent-child", "--model=x"],
+        vec!["app-server", "--subagent-child"],
+        vec!["--subagent-child", "--subagent-child"],
+    ] {
+        let output = run(root.path(), &args);
+        lexical_failure(&output);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("internal mode"));
+    }
+    let output = run(root.path(), &["--subagent-child"]);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("Usage:"));
+    assert!(!root.path().join("home").exists());
 }

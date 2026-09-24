@@ -10,19 +10,29 @@ use serde::Serialize;
 use super::launch::HostEnvironment;
 use crate::model::catalog::ModelCatalog;
 
-pub(super) const VALUE_FLAGS: &[&str] = &[
-    "--template",
-    "--provider",
-    "--model-id",
-    "--endpoint",
-    "--credential-env",
-    "--context-window",
-    "--max-output",
-    "--tool-calls",
-    "--reasoning",
-    "--compat",
-    "--model-document",
-];
+/// Native initialization declarations, independent of command-line parsing.
+#[derive(Debug)]
+pub struct InitializationRequest {
+    pub template: Template,
+    pub provider: String,
+    pub endpoint: String,
+    pub credential_env: String,
+    pub model_id: Option<String>,
+    pub context_window: Option<u64>,
+    pub max_output: Option<u32>,
+    pub tool_calls: Option<bool>,
+    pub reasoning: Option<bool>,
+    pub compat: Option<String>,
+    pub model_document: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Template {
+    OpenaiChat,
+    OpenaiResponses,
+    Anthropic,
+    Custom,
+}
 
 /// Exact publication outcome, including files published before a later failure.
 #[derive(Debug, Serialize)]
@@ -36,81 +46,45 @@ pub struct InitializationResult {
 /// Build the minimal CFG3 document from explicit declarations.
 /// No model capability is inferred from identity or endpoint.
 #[allow(clippy::too_many_lines)] // finite explicit template declarations, not an extensible wizard
-pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 1], String> {
-    let mut options = BTreeMap::new();
-    let mut arguments = arguments.iter();
-    while let Some(flag) = arguments.next() {
-        if !VALUE_FLAGS.contains(&flag.as_str()) {
-            return Err("unknown initialization option; see rustx --help".into());
-        }
-        let value = arguments
-            .next()
-            .ok_or("initialization option requires a value")?;
-        if options.insert(flag.as_str(), value.as_str()).is_some() {
-            return Err("initialization options must not repeat".into());
-        }
-    }
-    let required = |flag| {
-        options
-            .get(flag)
-            .copied()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| format!("init requires {flag}; see rustx --help"))
-    };
-    let provider = required("--provider")?;
-    let credential = required("--credential-env")?;
+pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1], String> {
+    let provider = request.provider.as_str();
+    let credential = request.credential_env.as_str();
     if !crate::credentials::valid_environment_name(credential) {
         return Err(
             "--credential-env requires an environment variable name, never a key value".into(),
         );
     }
-    let template = required("--template")?;
-    let model: Model = if template == "custom" {
-        if options.keys().any(|key| {
-            matches!(
-                *key,
-                "--model-id"
-                    | "--context-window"
-                    | "--max-output"
-                    | "--tool-calls"
-                    | "--reasoning"
-                    | "--compat"
-            )
-        }) {
+    let model: Model = if request.template == Template::Custom {
+        if request.model_id.is_some()
+            || request.context_window.is_some()
+            || request.max_output.is_some()
+            || request.tool_calls.is_some()
+            || request.reasoning.is_some()
+            || request.compat.is_some()
+        {
             return Err("custom uses --model-document for the complete model declaration".into());
         }
-        crate::toml_authoring::parse(&crate::bounded_file::read_bounded(Path::new(required(
-            "--model-document",
-        )?))?)
-        .map_err(|_| "invalid custom model document".to_owned())?
+        let path = request
+            .model_document
+            .as_ref()
+            .ok_or("custom requires --model-document")?;
+        crate::toml_authoring::parse(&crate::bounded_file::read_bounded(path)?)
+            .map_err(|_| "invalid custom model document".to_owned())?
     } else {
-        if options.contains_key("--model-document") {
+        if request.model_document.is_some() {
             return Err("--model-document requires --template custom".into());
         }
-        let protocol = match template {
-            "openai-chat" => crate::model::ModelProtocol::OpenAiChatCompletions,
-            "openai-responses" => crate::model::ModelProtocol::OpenAiResponses,
-            "anthropic" => crate::model::ModelProtocol::AnthropicMessages,
-            _ => {
-                return Err(
-                    "template must be openai-chat, openai-responses, anthropic, or custom".into(),
-                );
-            }
+        let protocol = match request.template {
+            Template::OpenaiChat => crate::model::ModelProtocol::OpenAiChatCompletions,
+            Template::OpenaiResponses => crate::model::ModelProtocol::OpenAiResponses,
+            Template::Anthropic => crate::model::ModelProtocol::AnthropicMessages,
+            Template::Custom => unreachable!(),
         };
-        let number = |flag| {
-            required(flag)?
-                .parse::<u64>()
-                .map_err(|_| format!("{flag} requires a positive integer"))
-        };
-        let boolean = |flag| {
-            required(flag)?
-                .parse::<bool>()
-                .map_err(|_| format!("{flag} requires true or false"))
-        };
-        let compat = if template != "anthropic" || options.contains_key("--compat") {
+        let compat = if request.template != Template::Anthropic || request.compat.is_some() {
             crate::toml_authoring::parse::<Compat>(
-                options
-                    .get("--compat")
+                request
+                    .compat
+                    .as_ref()
                     .ok_or("init requires --compat")?
                     .as_bytes(),
             )
@@ -120,16 +94,17 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 1], String> {
         };
         Model {
             provider: provider.into(),
-            id: required("--model-id")?.into(),
+            id: request.model_id.clone().ok_or("init requires --model-id")?,
             protocol,
-            context_window: number("--context-window")?,
-            max_output_tokens: u32::try_from(number("--max-output")?)
-                .map_err(|_| "--max-output exceeds u32")?,
+            context_window: request
+                .context_window
+                .ok_or("init requires --context-window")?,
+            max_output_tokens: request.max_output.ok_or("init requires --max-output")?,
             capabilities: Capabilities {
                 input_modalities: [crate::model::catalog::Modality::Text].into(),
                 output_modalities: [crate::model::catalog::Modality::Text].into(),
-                tool_calls: boolean("--tool-calls")?,
-                reasoning: boolean("--reasoning")?,
+                tool_calls: request.tool_calls.ok_or("init requires --tool-calls")?,
+                reasoning: request.reasoning.ok_or("init requires --reasoning")?,
             },
             request_params: crate::toml_authoring::RequestParamsToml::default(),
             reasoning: None,
@@ -144,7 +119,7 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 1], String> {
         providers: BTreeMap::from([(
             provider.into(),
             Provider {
-                base_url: required("--endpoint")?.into(),
+                base_url: request.endpoint.clone(),
                 api_key: crate::model::catalog::CredentialSource::parse(
                     &format!("${credential}"),
                     &crate::model::catalog::ProviderId::new(provider),
@@ -367,14 +342,18 @@ mod tests {
 
     #[test]
     fn cfg235_templates_are_explicit_and_deterministic() {
-        for template in ["openai-chat", "openai-responses", "anthropic"] {
+        for template in [
+            Template::OpenaiChat,
+            Template::OpenaiResponses,
+            Template::Anthropic,
+        ] {
             let mut flags = declarations();
-            flags[1] = template.into();
-            if template == "openai-responses" {
-                *flags.last_mut().unwrap() = String::new();
+            flags.template = template;
+            if template == Template::OpenaiResponses {
+                flags.compat = Some(String::new());
             }
-            if template == "anthropic" {
-                flags.truncate(flags.len() - 2);
+            if template == Template::Anthropic {
+                flags.compat = None;
             }
             let first = documents(&flags).unwrap();
             assert_eq!(first, documents(&flags).unwrap());
@@ -387,38 +366,72 @@ mod tests {
             assert!(!output.contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
         }
         let mut flags = declarations();
-        flags.truncate(flags.len() - 2);
+        flags.compat = None;
         assert!(
             documents(&flags).is_err(),
             "OpenAI compatibility is required explicitly"
         );
     }
 
-    fn declarations() -> Vec<String> {
-        [
-            "--template",
-            "openai-chat",
-            "--provider",
-            "local",
-            "--model-id",
-            "declared",
-            "--endpoint",
-            "http://127.0.0.1:9/v1",
-            "--credential-env",
-            "RUSTX_TEST_KEY",
-            "--context-window",
-            "128000",
-            "--max-output",
-            "4096",
-            "--tool-calls",
-            "true",
-            "--reasoning",
-            "false",
-            "--compat",
-            "chat_reasoning_replay = \"omit\"",
-        ]
-        .map(str::to_owned)
-        .to_vec()
+    fn declarations() -> InitializationRequest {
+        InitializationRequest {
+            template: Template::OpenaiChat,
+            provider: "local".into(),
+            endpoint: "http://127.0.0.1:9/v1".into(),
+            credential_env: "RUSTX_TEST_KEY".into(),
+            model_id: Some("declared".into()),
+            context_window: Some(128_000),
+            max_output: Some(4096),
+            tool_calls: Some(true),
+            reasoning: Some(false),
+            compat: Some("chat_reasoning_replay = \"omit\"".into()),
+            model_document: None,
+        }
+    }
+
+    #[test]
+    fn cli05_native_custom_model_and_declaration_policy() {
+        let root = tempfile::tempdir().unwrap();
+        let original = declarations();
+        let bytes = documents(&original).unwrap();
+        let authored: super::super::authoring::RuntimeLayer =
+            crate::toml_authoring::parse(&bytes[0]).unwrap();
+        let model = authored.models.unwrap().into_values().next().unwrap();
+        let path = root.path().join("model.toml");
+        std::fs::write(&path, toml::to_string(&model).unwrap()).unwrap();
+        let mut custom = InitializationRequest {
+            template: Template::Custom,
+            model_id: None,
+            context_window: None,
+            max_output: None,
+            tool_calls: None,
+            reasoning: None,
+            compat: None,
+            model_document: Some(path.clone()),
+            ..declarations()
+        };
+        assert_eq!(documents(&custom).unwrap(), bytes);
+        custom.tool_calls = Some(false);
+        assert!(
+            documents(&custom)
+                .unwrap_err()
+                .contains("complete model declaration")
+        );
+        custom.tool_calls = None;
+        custom.model_document = None;
+        assert!(documents(&custom).unwrap_err().contains("--model-document"));
+        for mutation in 0..6 {
+            let mut request = declarations();
+            match mutation {
+                0 => request.credential_env = "literal-key-value".into(),
+                1 => request.endpoint = "not a URL".into(),
+                2 => request.context_window = Some(0),
+                3 => request.max_output = Some(0),
+                4 => request.compat = None,
+                _ => request.model_document = Some(path.clone()),
+            }
+            assert!(documents(&request).is_err(), "mutation {mutation}");
+        }
     }
 
     #[test]
